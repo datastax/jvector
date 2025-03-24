@@ -42,8 +42,6 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
@@ -83,8 +81,6 @@ public class GraphIndexBuilder implements Closeable {
     private final ForkJoinPool parallelExecutor;
 
     private final ExplicitThreadLocal<GraphSearcher> searchers;
-
-    private final Lock lock;
 
     private final Random rng;
 
@@ -266,8 +262,6 @@ public class GraphIndexBuilder implements Closeable {
         // in scratch we store candidates in reverse order: worse candidates are first
         this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
         this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
-
-        lock = new ReentrantLock();
 
         this.rng = new Random(0);
     }
