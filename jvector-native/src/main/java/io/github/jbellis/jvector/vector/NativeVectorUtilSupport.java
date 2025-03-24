@@ -122,6 +122,14 @@ final class NativeVectorUtilSupport implements VectorUtilSupport
     }
 
     @Override
+    public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
+    {
+        assert baseOffsetsOffset == 0;
+        assert baseOffsetsLength == baseOffsets.length();
+        return assembleAndSum(data, dataBase, baseOffsets);
+    }
+
+    @Override
     public int hammingDistance(long[] v1, long[] v2) {
         return VectorSimdOps.hammingDistance(v1, v2);
     }

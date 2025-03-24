@@ -53,8 +53,8 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
             }
         }
 
-        protected float decodedSimilarity(ByteSequence<?> encoded) {
-            return VectorUtil.assembleAndSum(partialSums, cv.pq.getClusterCount(), encoded);
+        protected float decodedSimilarity(ByteSequence<?> encoded, int offset, int length) {
+            return VectorUtil.assembleAndSum(partialSums, cv.pq.getClusterCount(), encoded, offset, length);
         }
     }
 
@@ -65,7 +65,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
 
         @Override
         public float similarityTo(int node2) {
-            return (1 + decodedSimilarity(cv.get(node2))) / 2;
+            return (1 + decodedSimilarity(cv.getChunk(node2), cv.getOffsetInChunk(node2), cv.pq.getSubspaceCount())) / 2;
         }
     }
 
@@ -76,7 +76,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
 
         @Override
         public float similarityTo(int node2) {
-            return 1 / (1 + decodedSimilarity(cv.get(node2)));
+            return 1 / (1 + decodedSimilarity(cv.getChunk(node2), cv.getOffsetInChunk(node2), cv.pq.getSubspaceCount()));
         }
     }
 
@@ -132,9 +132,10 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
 
         protected float decodedCosine(int node2) {
 
-            ByteSequence<?> encoded = cv.get(node2);
+            ByteSequence<?> encoded = cv.getChunk(node2);
+            int offset = cv.getOffsetInChunk(node2);
 
-            return VectorUtil.pqDecodedCosineSimilarity(encoded, cv.pq.getClusterCount(), partialSums, aMagnitude, bMagnitude);
+            return VectorUtil.pqDecodedCosineSimilarity(encoded, offset, cv.pq.getSubspaceCount(), cv.pq.getClusterCount(), partialSums, aMagnitude, bMagnitude);
         }
     }
 }
