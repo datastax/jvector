@@ -151,9 +151,8 @@ public class CommonHeader {
         }
 
         public static List<LayerInfo> fromGraph(GraphIndex graph, OrdinalMapper mapper) {
-            int l0Size = mapper.maxOrdinal() + 1;
             return IntStream.range(0, graph.getMaxLevel() + 1)
-                    .mapToObj(i -> new LayerInfo(i == 0 ? l0Size : graph.size(i), graph.getDegree(i)))
+                    .mapToObj(i -> new LayerInfo(graph.size(i), graph.getDegree(i)))
                     .collect(Collectors.toList());
         }
 

@@ -108,8 +108,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
         long L0size = 0;
-        L0size = layerInfo.get(0).size
-                * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
         in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
