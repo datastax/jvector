@@ -95,10 +95,23 @@ public interface GraphIndex extends AutoCloseable, Accountable {
     @Override
     void close() throws IOException;
 
+    /**
+     * @return The maximum (coarser) level with that contains a vector in the graph.
+     */
     int getMaxLevel();
 
+    /**
+     * Return the maximum out-degree allowed of the given level.
+     * @param level The level of interest
+     * @return the maximum out-degree of the given level
+     */
     int getDegree(int level);
 
+    /**
+     * Return the number of vectors/nodes in the given level.
+     * @param level The level of interest
+     * @return the number of vectors in the given level
+     */
     int size(int level);
 
     /**
