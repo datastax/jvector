@@ -228,7 +228,7 @@ public class GraphIndexBuilder implements Closeable {
                              ForkJoinPool parallelExecutor)
     {
         if (maxDegrees.stream().mapToInt(i -> i).anyMatch(i -> i <= 0)) {
-            throw new IllegalArgumentException("layer degree must be positive");
+            throw new IllegalArgumentException("layer degrees must be positive");
         }
         if (maxDegrees.size() > 1 && !addHierarchy) {
             throw new IllegalArgumentException("Cannot specify multiple max degrees with addHierarchy=False");
