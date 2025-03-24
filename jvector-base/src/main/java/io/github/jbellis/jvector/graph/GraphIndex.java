@@ -115,7 +115,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
         /**
          * @return the number of nodes in the graph
          */
-        // TODO can we just remove this in favor of graph's?
+        @Deprecated
         int size();
 
         /**
@@ -148,7 +148,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
 
     static String prettyPrint(GraphIndex graph) {
         StringBuilder sb = new StringBuilder();
-        sb.append(graph); // toString looks like OnHeapGraphIndex(size=9, entryPoint=NodeAtLevel(level=4, node=6))
+        sb.append(graph);
         sb.append("\n");
 
         try (var view = graph.getView()) {
