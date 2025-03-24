@@ -113,6 +113,8 @@ public interface GraphIndex extends AutoCloseable, Accountable {
         NodesIterator getNeighborsIterator(int level, int node);
 
         /**
+         * This method is deprecated as most View usages should not need size.
+         * Where they do, they could access the graph.
          * @return the number of nodes in the graph
          */
         @Deprecated
