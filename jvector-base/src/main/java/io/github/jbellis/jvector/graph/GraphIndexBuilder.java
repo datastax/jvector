@@ -101,6 +101,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
@@ -132,6 +133,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
@@ -156,6 +158,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
@@ -187,6 +190,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
@@ -212,7 +216,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
-     * @param addHierarchy     whether we want to add an HNSW hierarchy on top of the Vamana index.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
