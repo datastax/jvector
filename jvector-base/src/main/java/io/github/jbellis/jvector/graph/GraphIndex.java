@@ -172,7 +172,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
         return sb.toString();
     }
 
-    // Comparable b/c it gets used in CSLM
+    // Comparable b/c it gets used in ConcurrentSkipListMap
     final class NodeAtLevel implements Comparable<NodeAtLevel> {
         public final int level;
         public final int node;
