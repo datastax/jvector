@@ -10,17 +10,19 @@ There are two broad categories of ANN index:
 
 Graph-based indexes tend to be simpler to implement and faster, but more importantly they can be constructed and updated incrementally.  This makes them a much better fit for a general-purpose index than partitioning approaches that only work on static datasets that are completely specified up front.  That is why all the major commercial vector indexes use graph approaches.
 
-JVector is a graph index in the DiskANN family tree.
+JVector is a graph index that takes a hybrid merging the the DiskANN and HNSW family trees.
+JVector borrows the hierarchical structure from HNSW, and uses Vamana (the algorithm behind DiskANN) within each layer.
 
 
 ## JVector Architecture
 
-JVector is a graph-based index that builds on the DiskANN design with composeable extensions.
+JVector is a graph-based index that builds on the HNSW anD DiskANN designs with composable extensions.
 
-JVector implements a single-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
+JVector implements a multi-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
 ![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)
 
-The graph is represented by an on-disk adjacency list per node, with additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
+The upper layers of the hierarchy are represnted by an in-memory adjacency list per node. This allows for quick navigation with no IOs.
+The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
 * Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
 * [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)
 * Fused ADC, where PQ codebooks are transposed and written inline with the graph adjacency list
@@ -51,7 +53,7 @@ First the code:
         int originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
-
+        
         // score provider using the raw, in-memory vectors
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
@@ -59,7 +61,8 @@ First the code:
                                                                16, // graph degree
                                                                100, // construction search depth
                                                                1.2f, // allow degree overflow during construction by this factor
-                                                               1.2f)) // relax neighbor diversity requirement by this factor
+                                                               1.2f, // relax neighbor diversity requirement by this factor (alpha)
+                                                               true)) // use a hierarchical index
         {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
@@ -86,6 +89,7 @@ Commentary:
 * For the overflow Builder parameter, the sweet spot is about 1.2 for in-memory construction and 1.5 for on-disk.  (The more overflow is allowed, the fewer recomputations of best edges are required, but the more neighbors will be consulted in every search.)
 * The alpha parameter controls the tradeoff between edge distance and diversity; usually 1.2 is sufficient for high-dimensional vectors; 2.0 is recommended for 2D or 3D datasets.  See [the DiskANN paper](https://suhasjs.github.io/files/diskann_neurips19.pdf) for more details.
 * The Bits parameter to GraphSearcher is intended for controlling your resultset based on external predicates and won’t be used in this tutorial.
+* Setting the addHierarchy parameter to true, build a multi-layer index. This approach has proven more robust in highly challenging scenarios.
 
 
 #### Step 2: more control over GraphSearcher
@@ -129,7 +133,7 @@ This is expected given the approximate nature of the index being created and the
 The code:
 ```java
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, true)) {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
             // write the index to disk with default options
@@ -218,7 +222,7 @@ Then we need to set up an OnDiskGraphIndexWriter with full control over the cons
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f);
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, true);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
              OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
                      .with(new InlineVectors(ravv.dimension()))
@@ -259,7 +263,7 @@ Commentary:
 
 ### Less-obvious points
 
-* Embeddings models product output from a consistent distribution of vectors. This means that you can save and re-use ProductQuantization codebooks, even for a different set of vectors, as long as you had a sufficiently large training set to build it the first time around. ProductQuantization.MAX_PQ_TRAINING_SET_SIZE (128,000 vectors) has proven to be sufficiently large.
+* Embeddings models produce output from a consistent distribution of vectors. This means that you can save and re-use ProductQuantization codebooks, even for a different set of vectors, as long as you had a sufficiently large training set to build it the first time around. ProductQuantization.MAX_PQ_TRAINING_SET_SIZE (128,000 vectors) has proven to be sufficiently large.
 * JDK ThreadLocal objects cannot be referenced except from the thread that created them.  This is a difficult design into which to fit caching of Closeable objects like GraphSearcher.  JVector provides the ExplicitThreadLocal class to solve this.
 * Fused ADC is only compatible with Product Quantization, not Binary Quantization.  This is no great loss since [very few models generate embeddings that are best suited for BQ](https://thenewstack.io/why-vector-size-matters/).  That said, BQ continues to be supported with non-Fused indexes.
 * JVector heavily utilizes the Panama Vector API(SIMD) for ANN indexing and search.  We have seen cases where the memory bandwidth is saturated during indexing and product quantization and can cause the process to slow down. To avoid this, the batch methods for index and PQ builds use a [PhysicalCoreExecutor](https://javadoc.io/doc/io.github.jbellis/jvector/latest/io/github/jbellis/jvector/util/PhysicalCoreExecutor.html) to limit the amount of operations to the physical core count. The default value is 1/2 the processor count seen by Java. This may not be correct in all setups (e.g. no hyperthreading or hybrid architectures) so if you wish to override the default use the `-Djvector.physical_core_count` property, or pass in your own ForkJoinPool instance.
