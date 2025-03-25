@@ -227,9 +227,9 @@ public class OnDiskGraphIndexWriter implements Closeable {
             }
 
             var neighbors = view.getNeighborsIterator(0, originalOrdinal);
-            if (neighbors.size() > graph.maxDegree()) {
+            if (neighbors.size() > graph.getDegree(0)) {
                 var msg = String.format("Node %d has more neighbors %d than the graph's max degree %d -- run Builder.cleanup()!",
-                        originalOrdinal, neighbors.size(), graph.maxDegree());
+                                        originalOrdinal, neighbors.size(), graph.getDegree(0));
                 throw new IllegalStateException(msg);
             }
             // write neighbors list
@@ -285,7 +285,9 @@ public class OnDiskGraphIndexWriter implements Closeable {
             if (isSeparated(featureEntry.getValue())) {
                 var fid = featureEntry.getKey();
                 var supplier = featureStateSuppliers.get(fid);
-                if (supplier == null) continue;
+                if (supplier == null) {
+                    throw new IllegalStateException("Supplier for feature " + fid + " not found");
+                }
 
                 // Set the offset for this feature
                 var feature = (SeparatedFeature) featureEntry.getValue();
