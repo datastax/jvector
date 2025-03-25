@@ -227,7 +227,7 @@ public class GraphIndexBuilder implements Closeable {
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
-        if (maxDegrees.stream().mapToInt(i -> i).anyMatch(i -> i <= 0)) {
+        if (maxDegrees.stream().anyMatch(i -> i <= 0)) {
             throw new IllegalArgumentException("layer degrees must be positive");
         }
         if (maxDegrees.size() > 1 && !addHierarchy) {
@@ -410,17 +410,22 @@ public class GraphIndexBuilder implements Closeable {
         return addGraphNode(node, ravv.getVector(node));
     }
 
+    /**
+     * Assigns a hierarchy level to a node at random. It follows the HNSW sampling strategy.
+     * @return The assigned level
+     */
     private int getRandomGraphLevel() {
         double ml;
+        double randDouble;
         if (addHierarchy) {
             ml = graph.getDegree(0) == 1 ? 1 : 1 / log(1.0 * graph.getDegree(0));
+            do {
+                randDouble = this.rng.nextDouble();  // avoid 0 value, as log(0) is undefined
+            } while (randDouble == 0.0);
         } else {
             ml = 0;
+            randDouble = 0;
         }
-        double randDouble;
-        do {
-            randDouble = this.rng.nextDouble();  // avoid 0 value, as log(0) is undefined
-        } while (randDouble == 0.0);
         return ((int) (-log(randDouble) * ml));
     }
 
@@ -432,12 +437,12 @@ public class GraphIndexBuilder implements Closeable {
      * other in-progress updates as neighbor candidates.
      *
      * @param node the node ID to add
+     * @return an estimate of the number of extra bytes used by the graph after adding the given node
      */
     public long addGraphNode(int node, VectorFloat<?> vector) {
+        var nodeLevel = new NodeAtLevel(getRandomGraphLevel(), node);
         // do this before adding to in-progress, so a concurrent writer checking
         // the in-progress set doesn't have to worry about uninitialized neighbor sets
-        var nodeLevel = new NodeAtLevel(getRandomGraphLevel(), node);
-
         graph.addNode(nodeLevel);
 
         insertionsInProgress.add(nodeLevel);
