@@ -203,7 +203,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         try (var reader = readerSupplier.get()) {
             int[] valid_nodes = new int[size(level)];
-            int upperBound = level == 0? getIdUpperBound() : size(level);
+            int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
             for (int node = 0; node < upperBound; node++) {
                 long node_offset = layerOffset + (node * thisLayerNodeSide);
