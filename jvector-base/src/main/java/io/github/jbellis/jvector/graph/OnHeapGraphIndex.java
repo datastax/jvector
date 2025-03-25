@@ -68,7 +68,8 @@ public class OnHeapGraphIndex implements GraphIndex {
 
     // Maximum number of neighbors (edges) per node per layer
     final IntArrayList maxDegrees;
-    // The ratio by which we can overflow the neighborhood of a node during construction. Should be higher than 1
+    // The ratio by which we can overflow the neighborhood of a node during construction. Since it is a multiplicative
+    // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
 
     public final ConcurrentMap<NodeAtLevel, VectorFloat<?>> constructionBatch;
@@ -294,8 +295,9 @@ public class OnHeapGraphIndex implements GraphIndex {
     }
 
     /**
-     * Returns the average degree computed over nodes in the base layer.
+     * Returns the average degree computed over nodes in the specified layer.
      *
+     * @param level the level of interest.
      * @return the average degree or NaN if no nodes are present.
      */
     public double getAverageDegree(int level) {
