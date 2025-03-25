@@ -430,7 +430,6 @@ public class OnDiskGraphIndexWriter implements Closeable {
 
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
-                ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
             return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
         }
