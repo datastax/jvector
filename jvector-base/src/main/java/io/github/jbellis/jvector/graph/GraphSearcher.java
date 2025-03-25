@@ -116,6 +116,15 @@ public class GraphSearcher implements Closeable {
         }
     }
 
+    /**
+     * Sets the view of the graph to be used by the searcher.
+     * <p>
+     * This method should be used when the searcher operates over a view whose contents might not reflect all changes
+     * to the underlying graph, such as {@link OnHeapGraphIndex.ConcurrentGraphIndexView}. This is an optimization over
+     * creating a new graph searcher with every update to the view.
+     *
+     * @param view the new view
+     */
     public void setView(GraphIndex.View view) {
         this.view = view;
     }
