@@ -260,14 +260,18 @@ public class NodeQueue {
         void accept(int node, float score);
     }
 
+    /**
+     * Copies the other NodeQueue to this one. If its order (MIN_HEAP or MAX_HEAP) is the same as this,
+     * it is copied verbatim. If it differs, every lement is re-inserted into this.
+     * @param other the other node queue.
+     */
     public void copyFrom(NodeQueue other) {
         if (this.order == other.order) {
             this.heap.copyFrom(other.heap);
-            return;
+        } else {
+            // can't avoid re-encoding since order influences it
+            clear();
+            other.foreach(this::push);
         }
-
-        // can't avoid re-encoding since order influences it
-        clear();
-        other.foreach(this::push);
     }
 }
