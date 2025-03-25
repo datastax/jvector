@@ -279,7 +279,6 @@ public class OnDiskGraphIndexWriter implements Closeable {
             }
         }
 
-
         // Write separated features
         for (var featureEntry : featureMap.entrySet()) {
             if (isSeparated(featureEntry.getValue())) {
