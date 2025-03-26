@@ -377,7 +377,7 @@ public class GraphIndexBuilder implements Closeable {
             gs.initializeInternal(ssp, graph.entry(), bits);
             var acceptedBits = Bits.intersectionOf(bits, gs.getView().liveNodes());
 
-            // Move downward from entry.level to 1
+            // Move downward from entry.level to 0
             for (int lvl = graph.entry().level; lvl >= 0; lvl--) {
                 // This additional call seems redundant given that we have already initialized an ssp above.
                 // However, there is a subtle interplay between the ssp of the search and the ssp used in insertDiverse.
