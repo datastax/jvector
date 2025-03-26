@@ -108,31 +108,32 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
 
     }
 
-    // TODO
-//    @Test
-//    public void testSaveAndLoad() throws IOException {
-//        int dimension = randomIntBetween(2, 32);
-//        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(randomIntBetween(10, 100), dimension, getRandom()));
-//        Supplier<GraphIndexBuilder> newBuilder = () ->
-//            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f);
-//
-//        var indexDataPath = testDirectory.resolve("index_builder.data");
-//        var builder = newBuilder.get();
-//
-//        try (var graph = TestUtil.buildSequentially(builder, ravv);
-//             var out = TestUtil.openDataOutputStream(indexDataPath))
-//        {
-//            graph.save(out);
-//        }
-//
-//        builder = newBuilder.get();
-//        try(var readerSupplier = new SimpleMappedReader.Supplier(indexDataPath)) {
-//            builder.load(readerSupplier.get());
-//        }
-//
-//        assertEquals(ravv.size(), builder.graph.size());
-//        for (int i = 0; i < ravv.size(); i++) {
-//            assertTrue(builder.graph.containsNode(i));
-//        }
-//    }
+    @Test
+    public void testSaveAndLoad() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        int size = randomIntBetween(10, 100);
+        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
+
+        Supplier<GraphIndexBuilder> newBuilder = () ->
+            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true);
+
+        var indexDataPath = testDirectory.resolve("index_builder.data");
+        var builder = newBuilder.get();
+
+        try (var graph = TestUtil.buildSequentially(builder, ravv);
+             var out = TestUtil.openDataOutputStream(indexDataPath))
+        {
+            graph.save(out);
+        }
+
+        builder = newBuilder.get();
+        try(var readerSupplier = new SimpleMappedReader.Supplier(indexDataPath)) {
+            builder.load(readerSupplier.get());
+        }
+
+        assertEquals(ravv.size(), builder.graph.size());
+        for (int i = 0; i < ravv.size(); i++) {
+            assertTrue(builder.graph.containsNode(i));
+        }
+    }
 }
