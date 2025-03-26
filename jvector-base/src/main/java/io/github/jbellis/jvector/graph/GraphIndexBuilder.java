@@ -737,6 +737,8 @@ public class GraphIndexBuilder implements Closeable {
         int entryNode = in.readInt();
         var layerDegrees = new ArrayList<Integer>(layerCount);
 
+        Map<Integer, Integer> nodeLevelMap = new HashMap<>();
+
         // Read layer info
         for (int level = 0; level < layerCount; level++) {
             int layerSize = in.readInt();
@@ -751,7 +753,13 @@ public class GraphIndexBuilder implements Closeable {
                     ca.addInOrder(neighbor, sf.similarityTo(neighbor));
                 }
                 graph.addNode(level, nodeId, ca);
+                nodeLevelMap.put(nodeId, level);
             }
+        }
+
+        for (var k : nodeLevelMap.keySet()) {
+            NodeAtLevel nal = new NodeAtLevel(nodeLevelMap.get(k), k);
+            graph.markComplete(nal);
         }
 
         graph.setDegrees(layerDegrees);
@@ -777,6 +785,7 @@ public class GraphIndexBuilder implements Closeable {
                 ca.addInOrder(neighbor, sf.similarityTo(neighbor));
             }
             graph.addNode(0, nodeId, ca);
+            graph.markComplete(new NodeAtLevel(0, nodeId));
         }
 
         graph.updateEntryNode(new NodeAtLevel(0, entryNode));
