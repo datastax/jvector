@@ -375,15 +375,24 @@ public class GraphIndexBuilder implements Closeable {
         var bits = new ExcludingBits(node);
         try (var gs = searchers.get()) {
             gs.initializeInternal(ssp, graph.entry(), bits);
+            var acceptedBits = Bits.intersectionOf(bits, gs.getView().liveNodes());
 
             // Move downward from entry.level to 1
             for (int lvl = graph.entry().level; lvl >= 0; lvl--) {
-                gs.searchOneLayer(ssp, 1, 0.0f, lvl, Bits.intersectionOf(bits, gs.getView().liveNodes()));
+                // This additional call seems redundant given that we have already initialized an ssp above.
+                // However, there is a subtle interplay between the ssp of the search and the ssp used in insertDiverse.
+                // Do not remove this line.
+                ssp = scoreProvider.searchProviderFor(node);
+
                 if (graph.layers.get(lvl).get(node) != null) {
+                    gs.searchOneLayer(ssp, beamWidth, 0.0f, lvl, acceptedBits);
+
                     var candidates = new NodeArray(gs.approximateResults.size());
                     gs.approximateResults.foreach(candidates::insertSorted);
                     var newNeighbors = graph.layers.get(lvl).insertDiverse(node, candidates);
                     graph.layers.get(lvl).backlink(newNeighbors, node, neighborOverflow);
+                } else {
+                    gs.searchOneLayer(ssp, 1, 0.0f, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
             }
