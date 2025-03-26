@@ -279,33 +279,35 @@ public class GraphIndexBuilder implements Closeable {
                 other.parallelExecutor);
 
         // Copy each node and its neighbors from the old graph to the new one
-        IntStream.range(0, other.graph.getIdUpperBound()).parallel().forEach(i -> {
-            // Find the highest layer this node exists in
-            int maxLayer = -1;
-            for (int lvl = 0; lvl < other.graph.layers.size(); lvl++) {
-                if (other.graph.getNeighbors(lvl, i) == null) {
-                    break;
+        other.parallelExecutor.submit(() -> {
+            IntStream.range(0, other.graph.getIdUpperBound()).parallel().forEach(i -> {
+                // Find the highest layer this node exists in
+                int maxLayer = -1;
+                for (int lvl = 0; lvl < other.graph.layers.size(); lvl++) {
+                    if (other.graph.getNeighbors(lvl, i) == null) {
+                        break;
+                    }
+                    maxLayer = lvl;
                 }
-                maxLayer = lvl;
-            }
-            if (maxLayer < 0) {
-                return;
-            }
+                if (maxLayer < 0) {
+                    return;
+                }
 
-            // Loop over 0..maxLayer, re-score neighbors for each layer
-            var sf = newProvider.searchProviderFor(i).scoreFunction();
-            for (int lvl = 0; lvl <= maxLayer; lvl++) {
-                var oldNeighbors = other.graph.getNeighbors(lvl, i);
-                // Copy edges, compute new scores
-                var newNeighbors = new NodeArray(oldNeighbors.size());
-                for (var it = oldNeighbors.iterator(); it.hasNext();) {
-                    int neighbor = it.nextInt();
-                    // since we're using a different score provider, use insertSorted instead of addInOrder
-                    newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
+                // Loop over 0..maxLayer, re-score neighbors for each layer
+                var sf = newProvider.searchProviderFor(i).scoreFunction();
+                for (int lvl = 0; lvl <= maxLayer; lvl++) {
+                    var oldNeighbors = other.graph.getNeighbors(lvl, i);
+                    // Copy edges, compute new scores
+                    var newNeighbors = new NodeArray(oldNeighbors.size());
+                    for (var it = oldNeighbors.iterator(); it.hasNext();) {
+                        int neighbor = it.nextInt();
+                        // since we're using a different score provider, use insertSorted instead of addInOrder
+                        newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
+                    }
+                    newBuilder.graph.addNode(lvl, i, newNeighbors);
                 }
-                newBuilder.graph.addNode(lvl, i, newNeighbors);
-            }
-        });
+            });
+        }).join();
 
         // Set the entry node
         newBuilder.graph.updateEntryNode(other.graph.entry());
