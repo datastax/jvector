@@ -65,7 +65,6 @@ public class TestADCGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier, 0))
         {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
-            TestUtil.assertGraphEquals(graph, onDiskGraph);
             try (var cachedOnDiskView = onDiskGraph.getView())
             {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
