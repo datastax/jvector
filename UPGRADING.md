@@ -19,6 +19,8 @@
 - GraphSearcher can be configured to run pruned searches using GraphSearcher.usePruning. When this is set to true,
   we do early termination of the search. In certain cases, this can accelerate the search at the potential cost of some
   accuracy. It is set to false by default.
+- The constructors of GraphIndexBuilder allow to specify different maximum out-degrees for the graphs in each layer.
+  However, this feature does not work with FusedADC in this version.
 
 ### API changes in 3.0.6
 
