@@ -35,6 +35,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.function.Supplier;
 
+import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -120,9 +121,9 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         var indexDataPath = testDirectory.resolve("index_builder.data");
         var builder = newBuilder.get();
 
-        try (var graph = TestUtil.buildSequentially(builder, ravv);
-             var out = TestUtil.openDataOutputStream(indexDataPath))
-        {
+        var graph = TestUtil.buildSequentially(builder, ravv);
+
+        try (var out = TestUtil.openDataOutputStream(indexDataPath)) {
             graph.save(out);
         }
 
@@ -135,5 +136,6 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         for (int i = 0; i < ravv.size(); i++) {
             assertTrue(builder.graph.containsNode(i));
         }
+        assertGraphEquals(graph, builder.graph);
     }
 }
