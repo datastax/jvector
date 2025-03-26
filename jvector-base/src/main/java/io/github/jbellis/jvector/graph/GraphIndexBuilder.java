@@ -715,6 +715,24 @@ public class GraphIndexBuilder implements Closeable {
             throw new IllegalStateException("Cannot load into a non-empty graph");
         }
 
+        int maybeMagic = in.readInt();
+        int version; // This is not used in V4 but may be useful in the future, putting it as a placeholder.
+        if (maybeMagic != OnHeapGraphIndex.MAGIC) {
+            // JVector 3 format, no magic or version, starts straight off with the number of nodes
+            version = 3;
+            int size = maybeMagic;
+            loadV3(in, size);
+        } else {
+            version = in.readInt();
+            loadV4(in);
+        }
+    }
+
+    private void loadV4(RandomAccessReader in) throws IOException {
+        if (graph.size(0) != 0) {
+            throw new IllegalStateException("Cannot load into a non-empty graph");
+        }
+
         int layerCount = in.readInt();
         int entryNode = in.readInt();
         var layerDegrees = new ArrayList<Integer>(layerCount);
@@ -740,12 +758,12 @@ public class GraphIndexBuilder implements Closeable {
         graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
     }
 
-    public void loadV3(RandomAccessReader in) throws IOException {
+
+    private void loadV3(RandomAccessReader in, int size) throws IOException {
         if (graph.size() != 0) {
             throw new IllegalStateException("Cannot load into a non-empty graph");
         }
 
-        int size = in.readInt();
         int entryNode = in.readInt();
         int maxDegree = in.readInt();
 
