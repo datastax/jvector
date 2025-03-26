@@ -636,14 +636,17 @@ public class GraphIndexBuilder implements Closeable {
             graph.updateEntryNode(newEntry >= 0 ? new NodeAtLevel(newLevel, newEntry) : null);
         }
 
+        long memorySize = 0;
+
         // Remove the deleted nodes from the graph
         assert toDelete.cardinality() == nRemoved : "cardinality changed";
-        int nodeLayers = 0;
         for (int i = toDelete.nextSetBit(0); i != NO_MORE_DOCS; i = toDelete.nextSetBit(i + 1)) {
-            nodeLayers += graph.removeNode(i);
+            int nDeletions = graph.removeNode(i);
+            for (var iLayer = 0; iLayer < nDeletions; iLayer++) {
+                memorySize += graph.ramBytesUsedOneNode(iLayer);
+            }
         }
-        // TODO this is not correct since different layers can use more or less ram due to different degrees
-        return nodeLayers * graph.ramBytesUsedOneNode(0);
+        return memorySize;
     }
 
     private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
