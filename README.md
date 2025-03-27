@@ -10,13 +10,13 @@ There are two broad categories of ANN index:
 
 Graph-based indexes tend to be simpler to implement and faster, but more importantly they can be constructed and updated incrementally.  This makes them a much better fit for a general-purpose index than partitioning approaches that only work on static datasets that are completely specified up front.  That is why all the major commercial vector indexes use graph approaches.
 
-JVector is a graph index that takes a hybrid merging the the DiskANN and HNSW family trees.
+JVector is a graph index that merges the DiskANN and HNSW family trees.
 JVector borrows the hierarchical structure from HNSW, and uses Vamana (the algorithm behind DiskANN) within each layer.
 
 
 ## JVector Architecture
 
-JVector is a graph-based index that builds on the HNSW anD DiskANN designs with composable extensions.
+JVector is a graph-based index that builds on the HNSW and DiskANN designs with composable extensions.
 
 JVector implements a multi-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
 ![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)

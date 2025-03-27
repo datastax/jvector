@@ -5,7 +5,7 @@
   in each vector with high accuracy by first applying a nonlinear transformation that is individually fit to each
   vector. These nonlinearities are designed to be lightweight and have a negligible impact on distance computation
   performance.
-- Support for hierarchical graph indices. These new type of indices blends HNSW and DiskANN in a novel way. An
+- Support for hierarchical graph indices. This new type of index blends HNSW and DiskANN in a novel way. An
   HNSW-like hierarchy resides in memory for quickly seeding the search. This also reduces the need for caching the
   DiskANN graph near the entrypoint. The base layer of the hierarchy is a DiskANN-like index and inherits its
   properties. This hierarchical structure can be disabled, ending up with just the base DiskANN layer.  
