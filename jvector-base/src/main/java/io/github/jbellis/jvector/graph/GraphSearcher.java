@@ -46,6 +46,11 @@ import java.io.IOException;
  * search algorithm, see {@link GraphIndex}.
  */
 public class GraphSearcher implements Closeable {
+    static class VisitationTracker {
+        int visitedCount = 0;
+        int expandedCount = 0;
+    }
+
     private boolean pruneSearch;
 
     private GraphIndex.View view;
@@ -187,22 +192,24 @@ public class GraphSearcher implements Closeable {
         }
 
         if (entry == null) {
-            return new SearchResult(new SearchResult.NodeScore[0], 0, 0, Float.POSITIVE_INFINITY);
+            return new SearchResult(new SearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
         initializeInternal(scoreProvider, entry, acceptOrds);
 
         // Move downward from entry.level to 1
-        int numVisited = 0;
+        VisitationTracker visitationTracker = new VisitationTracker();
         for (int lvl = entry.level; lvl > 0; lvl--) {
             // Search this layer with minimal parameters since we just want the best candidate
-            numVisited += searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
+            VisitationTracker visitationTrackerTemp = searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
+            visitationTracker.visitedCount += visitationTrackerTemp.visitedCount;
+            visitationTracker.expandedCount += visitationTrackerTemp.expandedCount;
             assert approximateResults.size() == 1 : approximateResults.size();
             setEntryPointsFromPreviousLayer();
         }
 
         // Now do the main search at layer 0
-        return resume(numVisited, topK, rerankK, threshold, rerankFloor);
+        return resume(visitationTracker, topK, rerankK, threshold, rerankFloor);
     }
 
     /**
@@ -283,6 +290,8 @@ public class GraphSearcher implements Closeable {
      *                            If {@link Bits#ALL}, all nodes are acceptable.
      *                            It is caller's responsibility to ensure that there are enough acceptable nodes
      *                            that we don't search the entire graph trying to satisfy topK.
+     * @return                    A little data structure that holds the number of graph nodes visited and expanded
+     *                            while performing the search in this layer.
      */
     // Since Astra / Cassandra's usage drives the design decisions here, it's worth being explicit
     // about how that works and why.
@@ -303,22 +312,23 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    int searchOneLayer(SearchScoreProvider scoreProvider,
-                       int rerankK,
-                       float threshold,
-                       int level,
-                       Bits acceptOrdsThisLayer)
+    VisitationTracker searchOneLayer(SearchScoreProvider scoreProvider,
+                                     int rerankK,
+                                     float threshold,
+                                     int level,
+                                     Bits acceptOrdsThisLayer)
     {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            int numVisited = 0;
             // track scores to predict when we are done with threshold queries
             var scoreTracker = threshold > 0
                     ? new ScoreTracker.TwoPhaseTracker(threshold)
                     : pruneSearch ? new ScoreTracker.RelaxedMonotonicityTracker(rerankK) : new ScoreTracker.NoOpTracker();
             VectorFloat<?> similarities = null;
+
+            VisitationTracker visitationTracker = new VisitationTracker();
 
             // the main search loop
             while (candidates.size() > 0) {
@@ -338,6 +348,8 @@ public class GraphSearcher implements Closeable {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
                 }
 
+                visitationTracker.expandedCount++;
+
                 // skip edge loading if we've found a local maximum and we have enough results
                 if (scoreTracker.shouldStop() && candidates.size() >= rerankK - approximateResults.size()) {
                     continue;
@@ -355,7 +367,7 @@ public class GraphSearcher implements Closeable {
                     if (!visited.add(friendOrd)) {
                         continue;
                     }
-                    numVisited++;
+                    visitationTracker.visitedCount++;
 
                     float friendSimilarity = useEdgeLoading
                             ? similarities.get(i)
@@ -365,8 +377,7 @@ public class GraphSearcher implements Closeable {
                     i++;
                 }
             }
-
-            return numVisited;
+            return visitationTracker;
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
             approximateResults.clear();
@@ -374,7 +385,7 @@ public class GraphSearcher implements Closeable {
         }
     }
 
-    SearchResult resume(int numVisited, int topK, int rerankK, float threshold, float rerankFloor) {
+    SearchResult resume(VisitationTracker visitationTracker, int topK, int rerankK, float threshold, float rerankFloor) {
         // rR is persistent to save on allocations
         rerankedResults.clear();
         rerankedResults.setMaxSize(topK);
@@ -386,8 +397,8 @@ public class GraphSearcher implements Closeable {
             ((SparseBits) previouslyEvicted).set(node);
         });
         evictedResults.clear();
-        
-        numVisited += searchOneLayer(scoreProvider, rerankK, threshold, 0, acceptOrds);
+
+        var visitationTrackerL0 = searchOneLayer(scoreProvider, rerankK, threshold, 0, acceptOrds);
 
         // rerank results
         assert approximateResults.size() <= rerankK;
@@ -423,7 +434,15 @@ public class GraphSearcher implements Closeable {
         // that should be everything
         assert popFromQueue.size() == 0;
 
-        return new SearchResult(nodes, numVisited, reranked, worstApproximateInTopK);
+        int visitedCount  = visitationTrackerL0.visitedCount;
+        int expandedCount = 0;
+        int expandedCountL0 = visitationTrackerL0.expandedCount;
+        if (visitationTracker != null) {
+            visitedCount += visitationTracker.visitedCount;
+            expandedCount += visitationTracker.expandedCount;
+        }
+
+        return new SearchResult(nodes, visitedCount, expandedCount, expandedCountL0, reranked, worstApproximateInTopK);
     }
 
     @SuppressWarnings("StatementWithEmptyBody")
@@ -455,7 +474,7 @@ public class GraphSearcher implements Closeable {
      */
     @Experimental
     public SearchResult resume(int additionalK, int rerankK) {
-        return resume(0, additionalK, rerankK, 0.0f, 0.0f);
+        return resume(null, additionalK, rerankK, 0.0f, 0.0f);
     }
 
     @Override

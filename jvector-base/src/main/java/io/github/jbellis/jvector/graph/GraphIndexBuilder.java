@@ -457,7 +457,7 @@ public class GraphIndexBuilder implements Closeable {
             var entry = graph.entry();
             SearchResult result;
             if (entry == null) {
-                result = new SearchResult(new NodeScore[] {}, 0, 0, 0);
+                result = new SearchResult(new NodeScore[] {}, 0, 0, 0, 0, 0);
             } else {
                 gs.initializeInternal(ssp, entry, bits);
 
@@ -480,7 +480,7 @@ public class GraphIndexBuilder implements Closeable {
                 }
 
                 // Now do the main search at layer 0
-                result = gs.resume(0, beamWidth, beamWidth, 0.0f, 0.0f);
+                result = gs.resume(null, beamWidth, beamWidth, 0.0f, 0.0f);
             }
 
             updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, ssp);
