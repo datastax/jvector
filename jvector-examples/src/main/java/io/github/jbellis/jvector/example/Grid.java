@@ -363,15 +363,18 @@ public class Grid {
 
     private static void testConfiguration(ConfiguredSystem cs, List<Double> efSearchOptions, List<Boolean> usePruningGrid) {
         var topK = cs.ds.groundTruth.get(0).size();
+        int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         for (var overquery : efSearchOptions) {
-            var start = System.nanoTime();
             int rerankK = (int) (topK * overquery);
             for (var usePruning : usePruningGrid) {
-                var pqr = performQueries(cs, topK, rerankK, usePruning, 2);
-                var recall = ((double) pqr.topKFound) / (2 * cs.ds.queryVectors.size() * topK);
-                System.out.format(" Query top %d/%d recall %.4f in %.2fms after %,d nodes visited with pruning=%b%n",
-                        topK, rerankK, recall, (System.nanoTime() - start) / 1_000_000.0, pqr.nodesVisited, usePruning);
+                var startTime = System.nanoTime();
+                var pqr = performQueries(cs, topK, rerankK, usePruning, queryRuns);
+                var stopTime = System.nanoTime();
+                var recall = ((double) pqr.topKFound) / (queryRuns * cs.ds.queryVectors.size() * topK);
+                System.out.format(" Query top %d/%d recall %.4f in %.2fms after %.2f nodes visited (AVG) with pruning=%b%n",
+                        topK, rerankK, recall, (stopTime - startTime) / (queryRuns * 1_000_000.0),
+                        (double) pqr.nodesVisited / (queryRuns * cs.ds.queryVectors.size()), usePruning);
             }
         }
     }
