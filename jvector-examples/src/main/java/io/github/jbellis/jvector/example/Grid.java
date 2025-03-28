@@ -370,8 +370,8 @@ public class Grid {
             for (var usePruning : usePruningGrid) {
                 var pqr = performQueries(cs, topK, rerankK, usePruning, 2);
                 var recall = ((double) pqr.topKFound) / (2 * cs.ds.queryVectors.size() * topK);
-                System.out.format(" Query top %d/%d recall %.4f in %.2fms after %,d nodes visited with pruning=%b%n",
-                        topK, rerankK, recall, (System.nanoTime() - start) / 1_000_000.0, pqr.nodesVisited, usePruning);
+                System.out.format(" Query top %d/%d recall %.4f in %.2fms after %,d nodes visited and %,d nodes expanded with pruning=%b%n",
+                        topK, rerankK, recall, (System.nanoTime() - start) / 1_000_000.0, pqr.nodesVisited, pqr.nodesExpanded, usePruning);
             }
         }
     }
@@ -433,6 +433,8 @@ public class Grid {
     private static ResultSummary performQueries(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int queryRuns) {
         LongAdder topKfound = new LongAdder();
         LongAdder nodesVisited = new LongAdder();
+        LongAdder nodesExpanded = new LongAdder();
+        LongAdder nodesExpandedBaseLayer = new LongAdder();
         for (int k = 0; k < queryRuns; k++) {
             IntStream.range(0, cs.ds.queryVectors.size()).parallel().forEach(i -> {
                 var queryVector = cs.ds.queryVectors.get(i);
@@ -447,9 +449,11 @@ public class Grid {
                 var n = topKCorrect(topK, sr.getNodes(), gt);
                 topKfound.add(n);
                 nodesVisited.add(sr.getVisitedCount());
+                nodesExpanded.add(sr.getExpandedCount());
+                nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
             });
         }
-        return new ResultSummary((int) topKfound.sum(), nodesVisited.sum());
+        return new ResultSummary((int) topKfound.sum(), nodesVisited.sum(), nodesExpanded.sum(), nodesExpandedBaseLayer.sum());
     }
 
     static class ConfiguredSystem implements AutoCloseable {
@@ -499,10 +503,14 @@ public class Grid {
     static class ResultSummary {
         final int topKFound;
         final long nodesVisited;
+        final long nodesExpanded;
+        final long nodesExpandedBaseLayer;
 
-        ResultSummary(int topKFound, long nodesVisited) {
+        ResultSummary(int topKFound, long nodesVisited, long nodesExpanded, long nodesExpandedBaseLayer) {
             this.topKFound = topKFound;
             this.nodesVisited = nodesVisited;
+            this.nodesExpanded = nodesExpanded;
+            this.nodesExpandedBaseLayer = nodesExpandedBaseLayer;
         }
     }
 }
