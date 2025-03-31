@@ -57,7 +57,7 @@ public final class SearchResult {
      * @return the total number of graph nodes expanded while performing the search
      */
     public int getExpandedCount() {
-        return expandedCount + expandedCountL0;
+        return expandedCount;
     }
 
     /**

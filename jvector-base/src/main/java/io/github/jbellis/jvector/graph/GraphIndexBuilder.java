@@ -480,7 +480,7 @@ public class GraphIndexBuilder implements Closeable {
                 }
 
                 // Now do the main search at layer 0
-                result = gs.resume(null, beamWidth, beamWidth, 0.0f, 0.0f);
+                result = gs.resume(beamWidth, beamWidth, 0.0f, 0.0f);
             }
 
             updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, ssp);
