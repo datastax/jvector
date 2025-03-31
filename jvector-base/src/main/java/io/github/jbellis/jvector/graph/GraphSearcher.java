@@ -121,6 +121,19 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
+     * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
+     * is the unique owner of the vectors instance passed in here.
+     */
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
+        try (var searcher = new GraphSearcher(graph)) {
+            var ssp = SearchScoreProvider.exact(queryVector, similarityFunction, vectors);
+            return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
      * Sets the view of the graph to be used by the searcher.
      * <p>
      * This method should be used when the searcher operates over a view whose contents might not reflect all changes
