@@ -111,6 +111,7 @@ public class TestVectorGraph extends LuceneTestCase {
                 GraphSearcher.search(
                         getTargetVector(),
                         10,
+                        20,
                         vectors.copy(),
                         similarityFunction,
                         graph,
