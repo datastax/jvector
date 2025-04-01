@@ -4,7 +4,6 @@ import io.github.jbellis.jvector.graph.SearchResult;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -27,26 +26,6 @@ public class AccuracyMetrics {
                 .mapToObj(i -> topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved))
                 .reduce(0L, Long::sum);
         return (double) correctCount / gt.size();
-    }
-
-    /**
-     * Compute kGT-recall@kRetrieved, which is the fraction of
-     * the kGT ground-truth nearest neighbors that are in the kRetrieved
-     * first search results (with kGT ≤ kRetrieved)
-     * @param gt the ground truth
-     * @param retrieved the retrieved elements
-     * @param kGT the number of considered ground truth elements
-     * @param kRetrieved the number of retrieved elements
-     * @return the recall
-     */
-    public static double recall(List<List<Integer>> gt, List<List<Integer>> retrieved, int kGT, int kRetrieved) {
-        if (gt.size() != retrieved.size()) {
-            throw new IllegalArgumentException("We should have ground truth for each result");
-        }
-        Long correctCount = IntStream.range(0, gt.size())
-                .mapToObj(i -> topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved))
-                .reduce(0L, Long::sum);
-        return (double) correctCount / (kGT * gt.size());
     }
 
     private static long topKCorrect(List<Integer> gt, List<Integer> retrieved, int kGT, int kRetrieved) {
@@ -74,4 +53,45 @@ public class AccuracyMetrics {
         int count = Math.min(list.size(), k);
         return list.subList(0, count);
     }
+
+    /**
+     * Compute the average precision at k.
+     * See the definition <a href="https://en.wikipedia.org/wiki/Evaluation_measures_(information_retrieval)#Average_precision">here</a>.
+     * @param gt the ground truth
+     * @param retrieved the retrieved elements
+     * @param k the number of retrieved elements
+     * @return the average precision
+     */
+    public static double averagePrecisionAtK(List<Integer> gt, SearchResult retrieved, int k) {
+        var retrievedTemp = Arrays.stream(retrieved.getNodes()).mapToInt(nodeScore -> nodeScore.node)
+                .boxed()
+                .collect(Collectors.toList());
+
+        var gtView = crop(gt, k);
+        var retrievedView = crop(retrievedTemp, k);
+
+        double score = 0.;
+        int num_hits = 0;
+        int i = 0;
+
+        for (var p : retrievedView) {
+            if (gtView.contains(p) && !retrievedView.subList(0, i).contains(p)) {
+                num_hits += 1.;
+                score += num_hits / (i + 1.0);
+            }
+        }
+
+        return score / gtView.size();
+    }
+
+    public static double meanAveragePrecisionAtK(List<List<Integer>> gt, List<SearchResult> retrieved, int k) {
+        if (gt.size() != retrieved.size()) {
+            throw new IllegalArgumentException("We should have ground truth for each result");
+        }
+        Double apk = IntStream.range(0, gt.size())
+                .mapToObj(i -> averagePrecisionAtK(gt.get(i), retrieved.get(i), k))
+                .reduce(0., Double::sum);
+        return apk / gt.size();
+    }
+
 }
