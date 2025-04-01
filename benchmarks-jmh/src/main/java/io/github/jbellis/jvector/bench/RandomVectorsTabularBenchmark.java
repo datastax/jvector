@@ -45,25 +45,7 @@ public class RandomVectorsTabularBenchmark extends AbstractVectorsBenchmark {
     public void setup() throws IOException {
         tableRepresentation = new TextTable();
         commonSetupRandom(numBaseVectors, numQueryVectors);
-
-        transactionCount.set(0);
-        totalLatency.set(0);
-        latencySamples.clear();
-        visitedSamples.clear();
-        recallSamples.clear();
-        startTime = System.currentTimeMillis();
-        scheduler = Executors.newScheduledThreadPool(1);
-        totalTransactions = 0;
-
-        scheduler.scheduleAtFixedRate(() -> {
-            long elapsed = (System.currentTimeMillis() - startTime) / 1000;
-            long count = transactionCount.getAndSet(0);
-            double meanLatency = (totalTransactions > 0) ? (double) totalLatency.get() / totalTransactions : 0.0;
-            double p999Latency = calculateP999Latency();
-            double meanVisited = (totalTransactions > 0) ? (double) visitedSamples.stream().mapToInt(Integer::intValue).sum() / totalTransactions : 0.0;
-            double recall = (totalTransactions > 0) ? recallSamples.stream().mapToDouble(Double::doubleValue).sum() / totalTransactions : 0.0;
-            tableRepresentation.addEntry(elapsed, count, meanLatency, p999Latency, meanVisited, recall);
-        }, 1, 1, TimeUnit.SECONDS);
+        schedule();
     }
 
     @TearDown

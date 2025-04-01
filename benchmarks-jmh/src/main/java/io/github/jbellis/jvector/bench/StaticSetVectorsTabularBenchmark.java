@@ -42,7 +42,7 @@ public class StaticSetVectorsTabularBenchmark extends AbstractVectorsBenchmark {
         baseVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_base.fvecs", siftPath));
         queryVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_query.fvecs", siftPath));
         groundTruth = SiftLoader.readIvecs(String.format("%s/siftsmall_groundtruth.ivecs", siftPath));
-        commonSetupStatic();
+        commonSetupStatic(true);
     }
 
     @TearDown

@@ -69,7 +69,7 @@ public class Hdf5VectorsTabularBenchmark extends AbstractVectorsBenchmark {
         queryVectors = dataSet.queryVectors;
         groundTruth = dataSet.groundTruth;
         tableRepresentation = getTableRepresentation();
-        commonSetupStatic();
+        commonSetupStatic(true);
     }
 
     @TearDown

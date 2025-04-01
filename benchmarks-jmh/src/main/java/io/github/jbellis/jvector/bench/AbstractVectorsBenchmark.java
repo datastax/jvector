@@ -59,7 +59,7 @@ public abstract class AbstractVectorsBenchmark {
 
     protected static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    protected void commonSetupStatic() {
+    protected void commonSetupStatic(boolean schedule) {
         log.info("base vectors size: {}, query vectors size: {}, loaded, dimensions {}",
                 baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
         originalDimension = baseVectors.get(0).length();
@@ -74,9 +74,15 @@ public abstract class AbstractVectorsBenchmark {
                 16,  // graph degree
                 100,    // construction search depth
                 1.2f,   // allow degree overflow during construction by this factor
-                1.2f);  // relax neighbor diversity requirement by this factor
+                1.2f,   // relax neighbor diversity requirement by this factor
+                true);  // relax neighbor diversity requirement by this factor
         graphIndex = graphIndexBuilder.build(ravv);
+        if (schedule) {
+            schedule();
+        }
+    }
 
+    protected void schedule() {
         totalTransactions = 0;
         transactionCount.set(0);
         totalLatency.set(0);
@@ -123,7 +129,8 @@ public abstract class AbstractVectorsBenchmark {
                 16, // graph degree
                 100, // construction search depth
                 1.2f, // allow degree overflow during construction by this factor
-                1.2f); // relax neighbor diversity requirement by this factor
+                1.2f, // relax neighbor diversity requirement by this factor
+                true); // relax neighbor diversity requirement by this factor
         graphIndex = graphIndexBuilder.build(ravv);
     }
 
