@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.graph.GraphIndex;
@@ -86,6 +87,7 @@ public class Grid {
                        List<? extends Set<FeatureId>> featureSets,
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       List<Integer> topKGrid,
                        List<Double> efSearchFactor,
                        List<Boolean> usePruningGrid) throws IOException
     {
@@ -97,7 +99,7 @@ public class Grid {
                         for (int efC : efConstructionGrid) {
                             for (var bc : buildCompressors) {
                                 var compressor = getCompressor(bc, ds);
-                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, efSearchFactor, usePruningGrid, ds, testDirectory);
+                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, topKGrid, efSearchFactor, usePruningGrid, ds, testDirectory);
                             }
                         }
                     }
@@ -123,6 +125,7 @@ public class Grid {
                             boolean addHierarchy,
                             VectorCompressor<?> buildCompressor,
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
+                            List<Integer> topKGrid,
                             List<Double> efSearchOptions,
                             List<Boolean> usePruningGrid,
                             DataSet ds,
@@ -151,7 +154,7 @@ public class Grid {
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, efSearchOptions, usePruningGrid);
+                        testConfiguration(cs, topKGrid, efSearchOptions, usePruningGrid);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -361,22 +364,23 @@ public class Grid {
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
-    private static void testConfiguration(ConfiguredSystem cs, List<Double> efSearchOptions, List<Boolean> usePruningGrid) {
-        var topK = cs.ds.groundTruth.get(0).size();
+    private static void testConfiguration(ConfiguredSystem cs, List<Integer> topKGrid, List<Double> efSearchOptions, List<Boolean> usePruningGrid) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
-        for (var overquery : efSearchOptions) {
-            int rerankK = (int) (topK * overquery);
-            for (var usePruning : usePruningGrid) {
-                var startTime = System.nanoTime();
-                var pqr = performQueries(cs, topK, rerankK, usePruning, queryRuns);
-                var stopTime = System.nanoTime();
-                var recall = ((double) pqr.topKFound) / (queryRuns * cs.ds.queryVectors.size() * topK);
-                System.out.format(" Query top %d/%d recall %.4f in %.2fms after %.2f nodes visited (AVG) and %.2f nodes expanded with pruning=%b%n",
-                        topK, rerankK, recall, (stopTime - startTime) / (queryRuns * 1_000_000.0),
-                        (double) pqr.nodesVisited / (queryRuns * cs.ds.queryVectors.size()),
-                        (double) pqr.nodesExpanded / (queryRuns * cs.ds.queryVectors.size()),
-                        usePruning);
+        for (var topK : topKGrid) {
+            for (var overquery : efSearchOptions) {
+                int rerankK = (int) (topK * overquery);
+                for (var usePruning : usePruningGrid) {
+                    var startTime = System.nanoTime();
+                    var pqr = performQueries(cs, topK, rerankK, usePruning, queryRuns);
+                    var stopTime = System.nanoTime();
+                    var recall = ((double) pqr.topKFound) / (queryRuns * cs.ds.queryVectors.size() * topK);
+                    System.out.format(" Query top %d/%d recall %.4f in %.2fms after %.2f nodes visited (AVG) and %.2f nodes expanded with pruning=%b%n",
+                            topK, rerankK, recall, (stopTime - startTime) / (queryRuns * 1_000_000.0),
+                            (double) pqr.nodesVisited / (queryRuns * cs.ds.queryVectors.size()),
+                            (double) pqr.nodesExpanded / (queryRuns * cs.ds.queryVectors.size()),
+                            usePruning);
+                }
             }
         }
     }
@@ -421,19 +425,19 @@ public class Grid {
         });
     }
 
-    private static long topKCorrect(int topK, int[] resultNodes, Set<Integer> gt) {
-        int count = Math.min(resultNodes.length, topK);
-        var resultSet = Arrays.stream(resultNodes, 0, count)
-                .boxed()
-                .collect(Collectors.toSet());
-        assert resultSet.size() == count : String.format("%s duplicate results out of %s", count - resultSet.size(), count);
-        return resultSet.stream().filter(gt::contains).count();
-    }
-
-    private static long topKCorrect(int topK, SearchResult.NodeScore[] nn, Set<Integer> gt) {
-        var a = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
-        return topKCorrect(topK, a, gt);
-    }
+//    private static long topKCorrect(int topK, int[] resultNodes, Set<Integer> gt) {
+//        int count = Math.min(resultNodes.length, topK);
+//        var resultSet = Arrays.stream(resultNodes, 0, count)
+//                .boxed()
+//                .collect(Collectors.toSet());
+//        assert resultSet.size() == count : String.format("%s duplicate results out of %s", count - resultSet.size(), count);
+//        return resultSet.stream().filter(gt::contains).count();
+//    }
+//
+//    private static long topKCorrect(int topK, SearchResult.NodeScore[] nn, Set<Integer> gt) {
+//        var a = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
+//        return topKCorrect(topK, a, gt);
+//    }
 
     private static ResultSummary performQueries(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int queryRuns) {
         LongAdder topKfound = new LongAdder();
@@ -451,7 +455,7 @@ public class Grid {
 
                 // process search result
                 var gt = cs.ds.groundTruth.get(i);
-                var n = topKCorrect(topK, sr.getNodes(), gt);
+                var n = AccuracyMetrics.topKCorrect(gt, sr, topK, topK);
                 topKfound.add(n);
                 nodesVisited.add(sr.getVisitedCount());
                 nodesExpanded.add(sr.getExpandedCount());
