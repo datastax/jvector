@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 
@@ -22,5 +22,5 @@ import java.io.Closeable;
 import java.io.IOException;
 
 public interface FeatureSource extends Closeable {
-    RandomAccessReader inlineReaderForNode(int node, FeatureId featureId) throws IOException;
+    RandomAccessReader featureReaderForNode(int node, FeatureId featureId) throws IOException;
 }

@@ -229,11 +229,12 @@ public abstract class PQVectors implements CompressedVectors {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return (node2) -> {
-                    var encoded = get(node2);
+                    var encodedChunk = getChunk(node2);
+                    var encodedOffset = getOffsetInChunk(node2);
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
                     float dp = 0;
                     for (int m = 0; m < pq.getSubspaceCount(); m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encoded.get(m));
+                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
                         dp += VectorUtil.dotProduct(pq.codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
@@ -244,12 +245,13 @@ public abstract class PQVectors implements CompressedVectors {
             case COSINE:
                 float norm1 = VectorUtil.dotProduct(centeredQuery, centeredQuery);
                 return (node2) -> {
-                    var encoded = get(node2);
+                    var encodedChunk = getChunk(node2);
+                    var encodedOffset = getOffsetInChunk(node2);
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
                     float sum = 0;
                     float norm2 = 0;
                     for (int m = 0; m < pq.getSubspaceCount(); m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encoded.get(m));
+                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
                         var codebookOffset = centroidIndex * centroidLength;
@@ -262,11 +264,12 @@ public abstract class PQVectors implements CompressedVectors {
                 };
             case EUCLIDEAN:
                 return (node2) -> {
-                    var encoded = get(node2);
+                    var encodedChunk = getChunk(node2);
+                    var encodedOffset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
                     float sum = 0;
                     for (int m = 0; m < pq.getSubspaceCount(); m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encoded.get(m));
+                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
                         sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
@@ -279,6 +282,11 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Returns a {@link ByteSequence} for the given ordinal.
+     * @param ordinal the vector's ordinal
+     * @return the {@link ByteSequence}
+     */
     public ByteSequence<?> get(int ordinal) {
         if (ordinal < 0 || ordinal >= count())
             throw new IndexOutOfBoundsException("Ordinal " + ordinal + " out of bounds for vector count " + count());
@@ -286,10 +294,37 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     static ByteSequence<?> get(ByteSequence<?>[] chunks, int ordinal, int vectorsPerChunk, int subspaceCount) {
-        int chunkIndex = ordinal / vectorsPerChunk;
         int vectorIndexInChunk = ordinal % vectorsPerChunk;
         int start = vectorIndexInChunk * subspaceCount;
-        return chunks[chunkIndex].slice(start, subspaceCount);
+        return getChunk(chunks, ordinal, vectorsPerChunk).slice(start, subspaceCount);
+    }
+
+    /**
+     * Returns a reference to the {@link ByteSequence} containing for the given ordinal. Only intended for use where
+     * the caller wants to avoid an allocation for the slice object. After getting the chunk, callers should use the
+     * {@link #getOffsetInChunk(int)} method to get the offset of the vector within the chunk and then use the pq's
+     * {@link ProductQuantization#getSubspaceCount()} to get the length of the vector.
+     * @param ordinal the vector's ordinal
+     * @return the {@link ByteSequence} chunk containing the vector
+     */
+    ByteSequence<?> getChunk(int ordinal) {
+        if (ordinal < 0 || ordinal >= count())
+            throw new IndexOutOfBoundsException("Ordinal " + ordinal + " out of bounds for vector count " + count());
+
+        return getChunk(compressedDataChunks, ordinal, vectorsPerChunk);
+    }
+
+    int getOffsetInChunk(int ordinal) {
+        if (ordinal < 0 || ordinal >= count())
+            throw new IndexOutOfBoundsException("Ordinal " + ordinal + " out of bounds for vector count " + count());
+
+        int vectorIndexInChunk = ordinal % vectorsPerChunk;
+        return vectorIndexInChunk * pq.getSubspaceCount();
+    }
+
+    static ByteSequence<?> getChunk(ByteSequence<?>[] chunks, int ordinal, int vectorsPerChunk) {
+        int chunkIndex = ordinal / vectorsPerChunk;
+        return chunks[chunkIndex];
     }
 
 

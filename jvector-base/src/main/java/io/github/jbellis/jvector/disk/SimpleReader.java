@@ -49,6 +49,11 @@ public class SimpleReader implements RandomAccessReader {
     }
 
     @Override
+    public long readLong() throws IOException {
+        return raf.readLong();
+    }
+
+    @Override
     public float readFloat() throws IOException {
         return raf.readFloat();
     }

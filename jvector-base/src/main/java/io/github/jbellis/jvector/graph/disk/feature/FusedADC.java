@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.FusedADCPQDecoder;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -53,7 +55,7 @@ public class FusedADC implements Feature {
         }
         this.maxDegree = maxDegree;
         this.pq = pq;
-        this.reusableResults = ThreadLocal.withInitial(() -> OnDiskGraphIndex.vectorTypeSupport.createFloatVector(maxDegree));
+        this.reusableResults = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(maxDegree));
         this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
     }
 
@@ -68,19 +70,20 @@ public class FusedADC implements Feature {
     }
 
     @Override
-    public int inlineSize() {
+    public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
     }
 
     static FusedADC load(CommonHeader header, RandomAccessReader reader) {
+        // TODO doesn't work with different degrees
         try {
-            return new FusedADC(header.maxDegree, ProductQuantization.load(reader));
+            return new FusedADC(header.layerInfo.get(0).degree, ProductQuantization.load(reader));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         return FusedADCPQDecoder.newDecoder(neighbors, pq, queryVector, reusableResults.get(), vsf, esf);
     }
@@ -100,7 +103,7 @@ public class FusedADC implements Feature {
         var state = (FusedADC.State) state_;
         var pqv = state.pqVectors;
 
-        var neighbors = state.view.getNeighborsIterator(state.nodeId);
+        var neighbors = state.view.getNeighborsIterator(0, state.nodeId); // TODO
         int n = 0;
         var neighborSize = neighbors.size();
         compressedNeighbors.zero();
@@ -135,9 +138,9 @@ public class FusedADC implements Feature {
 
         public ByteSequence<?> getPackedNeighbors(int node) {
             try {
-                var reader = view.inlineReaderForNode(node, FeatureId.FUSED_ADC);
+                var reader = view.featureReaderForNode(node, FeatureId.FUSED_ADC);
                 var tlNeighbors = reusableNeighbors.get();
-                OnDiskGraphIndex.vectorTypeSupport.readByteSequence(reader, tlNeighbors);
+                vectorTypeSupport.readByteSequence(reader, tlNeighbors);
                 return tlNeighbors;
             } catch (IOException e) {
                 throw new RuntimeException(e);

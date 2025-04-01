@@ -41,7 +41,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
-        <revision>4.0.0-beta.2-SNAPSHOT</revision>
+        <revision>4.0.0-hnsw.1</revision>
     </properties>
     <modules>
         <module>jvector-base</module>

@@ -238,7 +238,7 @@ public class NodeArray {
 
     public NodeArray copy(int newSize) {
         if (size > newSize) {
-            throw new IllegalArgumentException("Cannot copy to a smaller size");
+            throw new IllegalArgumentException(String.format("Cannot copy %d nodes to a smaller size %d", size, newSize));
         }
 
         NodeArray copy = new NodeArray(newSize);

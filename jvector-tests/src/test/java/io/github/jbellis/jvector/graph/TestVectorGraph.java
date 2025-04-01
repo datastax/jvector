@@ -89,12 +89,18 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testSearchWithSkewedAcceptOrds() {
+        testSearchWithSkewedAcceptOrds(false);
+        testSearchWithSkewedAcceptOrds(true);
+    }
+
+    public void testSearchWithSkewedAcceptOrds(boolean addHierarchy) {
         int nDoc = 1000;
         similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
         RandomAccessVectorValues vectors = circularVectorValues(nDoc);
         getRandom().nextInt();
-        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.0f);
+        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.0f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
+        validateIndex(graph);
 
         // Skip over half of the documents that are closest to the query vector
         FixedBitSet acceptOrds = new FixedBitSet(nDoc);
@@ -126,11 +132,18 @@ public class TestVectorGraph extends LuceneTestCase {
     @Test
     // build a random graph and check that resuming a search finds the same nodes as an equivalent from-scratch search
     public void testResume() {
+        testResume(false);
+        testResume(true);
+    }
+
+    // build a random graph and check that resuming a search finds the same nodes as an equivalent from-scratch search
+    public void testResume(boolean addHierarchy) {
         int size = 1000;
         int dim = 2;
         var vectors = vectorValues(size, dim);
-        var builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f);
+        var builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
+        validateIndex(graph);
         Bits acceptOrds = getRandom().nextBoolean() ? Bits.ALL : createRandomAcceptOrds(0, size);
 
         int initialTopK = 10;
@@ -160,11 +173,18 @@ public class TestVectorGraph extends LuceneTestCase {
     @Test
     // resuming a search should not need to rerank the nodes that were already evaluated
     public void testRerankCaching() {
+        testRerankCaching(false);
+        testRerankCaching(true);
+    }
+
+    // resuming a search should not need to rerank the nodes that were already evaluated
+    public void testRerankCaching(boolean addHierarchy) {
         int size = 1000;
         int dim = 2;
         var vectors = vectorValues(size, dim);
-        var builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f);
+        var builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
+        validateIndex(graph);
 
         var pq = ProductQuantization.compute(vectors, 2, 256, false);
         var pqv = pq.encodeAll(vectors);
@@ -187,12 +207,19 @@ public class TestVectorGraph extends LuceneTestCase {
     // If an exception is thrown during search, the next search should still function
     @Test
     public void testExceptionalTermination() {
+        testExceptionalTermination(false);
+        testExceptionalTermination(true);
+    }
+
+    // If an exception is thrown during search, the next search should still function
+    public void testExceptionalTermination(boolean addHierarchy) {
         int nDoc = 100;
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         RandomAccessVectorValues vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f);
+                new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
+        validateIndex(graph);
 
         // wrap vectors so that the second access to a vector throws an exception
         var wrappedVectors = new RandomAccessVectorValues() {
@@ -245,14 +272,29 @@ public class TestVectorGraph extends LuceneTestCase {
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
         assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
+    }
 
-        for (int i = 0; i < nDoc; i++) {
-            ConcurrentNeighborMap.Neighbors neighbors = graph.getNeighbors(i);
-            Iterator<Integer> it = neighbors.iterator();
-            while (it.hasNext()) {
-                // all neighbors should be valid node ids.
-                assertTrue(it.next() < nDoc);
+    private static void validateIndex(OnHeapGraphIndex graph) {
+        for (int level = graph.getMaxLevel(); level > 0; level--) {
+            for (var nodeIt = graph.getNodes(level); nodeIt.hasNext(); ) {
+                var nodeInLevel = nodeIt.nextInt();
+
+                // node's neighbors should also exist in the same level
+                var neighbors = graph.getNeighbors(level, nodeInLevel);
+                for (int neighbor : neighbors.copyDenseNodes()) {
+                    assertNotNull(graph.getNeighbors(level, neighbor));
+                }
+
+                // node should exist at every layer below it
+                for (int lowerLevel = level - 1; lowerLevel >= 0; lowerLevel--) {
+                    assertNotNull(graph.getNeighbors(lowerLevel, nodeInLevel));
+                }
             }
+        }
+
+        // no holes in lowest level (not true for all graphs but true for the ones constructed here)
+        for (int i = 0; i < graph.getIdUpperBound(); i++) {
+            assertNotNull(graph.getNeighbors(0, i));
         }
     }
 
@@ -261,12 +303,21 @@ public class TestVectorGraph extends LuceneTestCase {
     // oriented in the right directions
     @Test
     public void testAknnDiverse() {
+        testAknnDiverse(false);
+        testAknnDiverse(true);
+    }
+
+    // Make sure we actually approximately find the closest k elements. Mostly this is about
+    // ensuring that we have all the distance functions, comparators, priority queues and so on
+    // oriented in the right directions
+    public void testAknnDiverse(boolean addHierarchy) {
         int nDoc = 100;
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         RandomAccessVectorValues vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f);
+                new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
+        validateIndex(graph);
         // run some searches
         SearchResult.NodeScore[] nn = GraphSearcher.search(getTargetVector(),
                 10,
@@ -284,25 +335,22 @@ public class TestVectorGraph extends LuceneTestCase {
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
         assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
-
-        for (int i = 0; i < nDoc; i++) {
-            ConcurrentNeighborMap.Neighbors neighbors = graph.getNeighbors(i);
-            Iterator<Integer> it = neighbors.iterator();
-            while (it.hasNext()) {
-                // all neighbors should be valid node ids.
-                assertTrue(it.next() < nDoc);
-            }
-        }
     }
 
     @Test
     public void testSearchWithAcceptOrds() {
+        testSearchWithAcceptOrds(false);
+        testSearchWithAcceptOrds(true);
+    }
+
+    public void testSearchWithAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
         RandomAccessVectorValues vectors = circularVectorValues(nDoc);
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f);
+                new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
+        validateIndex(graph);
         // the first 10 docs must not be deleted to ensure the expected recall
         Bits acceptOrds = createRandomAcceptOrds(10, nDoc);
         SearchResult.NodeScore[] nn = GraphSearcher.search(getTargetVector(),
@@ -326,12 +374,18 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testSearchWithSelectiveAcceptOrds() {
+        testSearchWithSelectiveAcceptOrds(false);
+        testSearchWithSelectiveAcceptOrds(true);
+    }
+
+    public void testSearchWithSelectiveAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
         RandomAccessVectorValues vectors = circularVectorValues(nDoc);
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f);
+                new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
+        validateIndex(graph);
         // Only mark a few vectors as accepted
         var acceptOrds = new FixedBitSet(nDoc);
         for (int i = 0; i < nDoc; i += nextInt(15, 20)) {
@@ -364,19 +418,24 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testGraphIndexBuilderInvalid() {
+        testGraphIndexBuilderInvalid(false);
+        testGraphIndexBuilderInvalid(true);
+    }
+
+    public void testGraphIndexBuilderInvalid(boolean addHierarchy) {
         assertThrows(NullPointerException.class,
-                () -> new GraphIndexBuilder(null, null, 0, 0, 1.0f, 1.0f));
+                () -> new GraphIndexBuilder(null, null, 0, 0, 1.0f, 1.0f, addHierarchy));
         // M must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
                     RandomAccessVectorValues vectors = vectorValues(1, 1);
-                    new GraphIndexBuilder(vectors, similarityFunction, 0, 10, 1.0f, 1.0f);
+                    new GraphIndexBuilder(vectors, similarityFunction, 0, 10, 1.0f, 1.0f, addHierarchy);
                 });
         // beamWidth must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
                     RandomAccessVectorValues vectors = vectorValues(1, 1);
-                    new GraphIndexBuilder(vectors, similarityFunction, 10, 0, 1.0f, 1.0f);
+                    new GraphIndexBuilder(vectors, similarityFunction, 10, 0, 1.0f, 1.0f, addHierarchy);
                 });
     }
 
@@ -387,6 +446,11 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testDiversity() {
+        testDiversity(false);
+        testDiversity(true);
+    }
+
+    public void testDiversity(boolean addHierarchy) {
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         // Some carefully checked test cases with simple 2d vectors on the unit circle:
         VectorFloat<?>[] values = {
@@ -401,7 +465,7 @@ public class TestVectorGraph extends LuceneTestCase {
         MockVectorValues vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 4, 10, 1.0f, 1.0f);
+                new GraphIndexBuilder(vectors, similarityFunction, 4, 10, 1.0f, 1.0f, addHierarchy);
         // node 0 is added by the builder constructor
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
@@ -441,6 +505,11 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testDiversityFallback() {
+        testDiversityFallback(false);
+        testDiversityFallback(true);
+    }
+
+    public void testDiversityFallback(boolean addHierarchy) {
         similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
         // Some test cases can't be exercised in two dimensions;
         // in particular if a new neighbor displaces an existing neighbor
@@ -456,7 +525,7 @@ public class TestVectorGraph extends LuceneTestCase {
         MockVectorValues vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f);
+                new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f, addHierarchy);
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
         builder.addGraphNode(2, vectors.getVector(2));
@@ -476,6 +545,11 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testDiversity3d() {
+        testDiversity3d(false);
+        testDiversity3d(true);
+    }
+
+    public void testDiversity3d(boolean addHierarchy) {
         similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
         // test the case when a neighbor *becomes* non-diverse when a newer better neighbor arrives
         VectorFloat<?>[] values = {
@@ -487,7 +561,7 @@ public class TestVectorGraph extends LuceneTestCase {
         MockVectorValues vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
-                new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f);
+                new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f, addHierarchy);
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
         builder.addGraphNode(2, vectors.getVector(2));
@@ -507,7 +581,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     private void assertNeighbors(OnHeapGraphIndex graph, int node, int... expected) {
         Arrays.sort(expected);
-        ConcurrentNeighborMap.Neighbors nn = graph.getNeighbors(node);
+        ConcurrentNeighborMap.Neighbors nn = graph.getNeighbors(0, node); // TODO
         Iterator<Integer> it = nn.iterator();
         int[] actual = new int[nn.size()];
         for (int i = 0; i < actual.length; i++) {
@@ -520,12 +594,19 @@ public class TestVectorGraph extends LuceneTestCase {
     @Test
     // build a random graph, then check that it has at least 90% recall
     public void testRandom() {
+        testRandom(false);
+        testRandom(true);
+    }
+
+    // build a random graph, then check that it has at least 90% recall
+    public void testRandom(boolean addHierarchy) {
         int size = between(100, 150);
         int dim = between(2, 15);
         MockVectorValues vectors = vectorValues(size, dim);
         int topK = 5;
-        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f);
+        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
+        validateIndex(graph);
         Bits acceptOrds = getRandom().nextBoolean() ? Bits.ALL : createRandomAcceptOrds(0, size);
 
         int efSearch = 100;
@@ -579,22 +660,33 @@ public class TestVectorGraph extends LuceneTestCase {
 
     @Test
     public void testConcurrentNeighbors() {
+        testConcurrentNeighbors(false);
+        testConcurrentNeighbors(true);
+    }
+
+    public void testConcurrentNeighbors(boolean addHierarchy) {
         RandomAccessVectorValues vectors = circularVectorValues(100);
-        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 2, 30, 1.0f, 1.4f);
+        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 2, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
+        validateIndex(graph);
         for (int i = 0; i < vectors.size(); i++) {
-            assertTrue(graph.getNeighbors(i).size() <= 2);
+            assertTrue(graph.getNeighbors(0, i).size() <= 2); // TODO
         }
     }
 
     @Test
-    public void testZeroCentroid()
-    {
+    public void testZeroCentroid() {
+        testZeroCentroid(false);
+        testZeroCentroid(true);
+    }
+
+    public void testZeroCentroid(boolean addHierarchy) {
         var rawVectors = List.of(vectorTypeSupport.createFloatVector(new float[] {-1, -1}),
                                  vectorTypeSupport.createFloatVector(new float[] {1, 1}));
         var vectors = new ListRandomAccessVectorValues(rawVectors, 2);
-        var builder = new GraphIndexBuilder(vectors, VectorSimilarityFunction.COSINE, 2, 2, 1.0f, 1.0f);
+        var builder = new GraphIndexBuilder(vectors, VectorSimilarityFunction.COSINE, 2, 2, 1.0f, 1.0f, addHierarchy);
         try (var graph = builder.build(vectors)) {
+            validateIndex(graph);
             var qv = vectorTypeSupport.createFloatVector(new float[] {0.5f, 0.5f});
             var results = GraphSearcher.search(qv, 1, vectors, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
             assertEquals(1, results.getNodes().length);

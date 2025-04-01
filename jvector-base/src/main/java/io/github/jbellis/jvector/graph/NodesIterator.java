@@ -32,25 +32,19 @@ import java.util.PrimitiveIterator;
  * number of nodes to be iterated over. The nodes are NOT guaranteed to be presented in any
  * particular order.
  */
-public abstract class NodesIterator implements PrimitiveIterator.OfInt {
-    protected final int size;
-
-    /**
-     * Constructor for iterator based on the size
-     */
-    public NodesIterator(int size) {
-        this.size = size;
-    }
-
+public interface NodesIterator extends PrimitiveIterator.OfInt {
     /**
      * The number of elements in this iterator *
      */
-    public int size() {
-        return size;
-    }
+    int size();
 
-    public static NodesIterator fromPrimitiveIterator(PrimitiveIterator.OfInt iterator, int size) {
-        return new NodesIterator(size) {
+    static NodesIterator fromPrimitiveIterator(PrimitiveIterator.OfInt iterator, int size) {
+        return new NodesIterator() {
+            @Override
+            public int size() {
+                return size;
+            }
+
             @Override
             public int nextInt() {
                 return iterator.nextInt();
@@ -63,16 +57,22 @@ public abstract class NodesIterator implements PrimitiveIterator.OfInt {
         };
     }
 
-    public static class ArrayNodesIterator extends NodesIterator {
+    class ArrayNodesIterator implements NodesIterator {
         private final int[] nodes;
         private int cur = 0;
+        private final int size;
 
         /** Constructor for iterator based on integer array representing nodes */
         public ArrayNodesIterator(int[] nodes, int size) {
-            super(size);
             assert nodes != null;
             assert size <= nodes.length;
+            this.size = size;
             this.nodes = nodes;
+        }
+
+        @Override
+        public int size() {
+            return size;
         }
 
         public ArrayNodesIterator(int[] nodes) {

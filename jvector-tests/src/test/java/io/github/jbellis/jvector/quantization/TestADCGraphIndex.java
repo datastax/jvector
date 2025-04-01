@@ -21,7 +21,6 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.CachingGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
@@ -63,12 +62,11 @@ public class TestADCGraphIndex extends RandomizedTest {
         TestUtil.writeFusedGraph(graph, ravv, pqv, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
-             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier, 0);
-             var cachedOnDiskGraph = new CachingGraphIndex(onDiskGraph, 5))
+             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier, 0))
         {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
-            TestUtil.assertGraphEquals(graph, cachedOnDiskGraph);
-            try (var cachedOnDiskView = cachedOnDiskGraph.getView())
+            TestUtil.assertGraphEquals(graph, onDiskGraph);
+            try (var cachedOnDiskView = onDiskGraph.getView())
             {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
                     var queryVector = TestUtil.randomVector(getRandom(), 512);
@@ -78,14 +76,14 @@ public class TestADCGraphIndex extends RandomizedTest {
                         var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
                         var ordinal = getRandom().nextInt(graph.size());
                         // first pass compares fused ADC's direct similarity to reranker's similarity, used for comparisons to a specific node
-                        var neighbors = cachedOnDiskView.getNeighborsIterator(ordinal);
+                        var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal); // TODO
                         for (; neighbors.hasNext(); ) {
                             var neighbor = neighbors.next();
                             var similarity = fusedScoreFunction.similarityTo(neighbor);
                             assertEquals(reranker.similarityTo(neighbor), similarity, 0.01);
                         }
                         // second pass compares fused ADC's edge similarity prior to having enough information for quantization to PQ
-                        neighbors = cachedOnDiskView.getNeighborsIterator(ordinal);
+                        neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal); // TODO
                         var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();

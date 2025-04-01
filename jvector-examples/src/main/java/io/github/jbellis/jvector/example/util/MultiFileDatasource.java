@@ -54,6 +54,10 @@ public class MultiFileDatasource {
     }
 
     public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{
+        put("degen-200k", new MultiFileDatasource("degen-200k",
+                                                   "ada-degen/degen_base_vectors.fvec",
+                                                   "ada-degen/degen_query_vectors.fvec",
+                                                   "ada-degen/degen_ground_truth.ivec"));
         put("cohere-english-v3-100k", new MultiFileDatasource("cohere-english-v3-100k",
                                                               "wikipedia_squad/100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec",
                                                               "wikipedia_squad/100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec",

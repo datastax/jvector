@@ -28,9 +28,6 @@ package io.github.jbellis.jvector.util;
  * An AbstractLongHeap that can grow in size (unbounded, except for memory and array size limits).
  */
 public class GrowableLongHeap extends AbstractLongHeap {
-
-    protected int size = 0;
-
     /**
      * Create an empty heap with the configured initial size.
      *

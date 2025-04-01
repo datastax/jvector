@@ -54,10 +54,20 @@ public class GraphBuildBench {
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuild(Blackhole bh, Parameters p) {
         long start = System.nanoTime();
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.similarityFunction, 8, 60, 1.2f, 1.4f);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.similarityFunction, 8, 60, 1.2f, 1.4f, false);
         graphIndexBuilder.build(p.ravv);
-        var avgShortEdges = graphIndexBuilder.getAverageShortEdges();
-        System.out.format("Build M=%d ef=%d in %.2fs with %.2f short edges%n",
-                32, 600, (System.nanoTime() - start) / 1_000_000_000.0, avgShortEdges);
+        System.out.format("Build M=%d ef=%d in %.2fs%n",
+                32, 600, (System.nanoTime() - start) / 1_000_000_000.0);
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @OutputTimeUnit(TimeUnit.SECONDS)
+    public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) {
+        long start = System.nanoTime();
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.similarityFunction, 8, 60, 1.2f, 1.4f, true);
+        graphIndexBuilder.build(p.ravv);
+        System.out.format("Build M=%d ef=%d in %.2fs%n",
+                32, 600, (System.nanoTime() - start) / 1_000_000_000.0);
     }
 }

@@ -28,7 +28,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 
 /**
  * A min heap that stores longs; a primitive priority queue that like all priority queues maintains
- * a partial ordering of its elements such that the least element can always be found in constant
+ * a partial ordering of its elements such that the leastbo element can always be found in constant
  * time. Push()'s and pop()'s require log(size). {@link #push(long)} may either grow the heap or
  * replace the worst element, depending on the subclass implementation.
  * <p>
@@ -152,5 +152,17 @@ public abstract class AbstractLongHeap {
     @VisibleForTesting
     long[] getHeapArray() {
         return heap;
+    }
+
+    /**
+     * Copies the contents and current size from `other`.  Does NOT copy subclass field like BLH's maxSize
+     */
+    public void copyFrom(AbstractLongHeap other)
+    {
+        if (this.heap.length < other.size) {
+            this.heap = new long[other.heap.length];
+        }
+        System.arraycopy(other.heap, 0, this.heap, 0, other.size);
+        this.size = other.size;
     }
 }

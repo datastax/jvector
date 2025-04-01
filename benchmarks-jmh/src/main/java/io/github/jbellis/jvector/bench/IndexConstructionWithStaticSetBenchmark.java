@@ -78,7 +78,7 @@ public class IndexConstructionWithStaticSetBenchmark {
     @Benchmark
     public void buildIndexBenchmark(Blackhole blackhole) throws IOException {
         // score provider using the raw, in-memory vectors
-        try (final var graphIndexBuilder = new GraphIndexBuilder(bsp, ravv.dimension(), M, beamWidth, 1.2f, 1.2f)) {
+        try (final var graphIndexBuilder = new GraphIndexBuilder(bsp, ravv.dimension(), M, beamWidth, 1.2f, 1.2f, true)) {
             final var graphIndex = graphIndexBuilder.build(ravv);
             blackhole.consume(graphIndex);
         }

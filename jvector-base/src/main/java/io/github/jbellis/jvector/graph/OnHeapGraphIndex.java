@@ -24,55 +24,88 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
  * An {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
- * <p>To search this graph, you should use a View obtained from {@link #getView()} to perform `seek`
- * and `nextNeighbor` operations.
+ * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
+ * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
 public class OnHeapGraphIndex implements GraphIndex {
-    static final int NO_ENTRY_POINT = -1;
+    // The current entry node for searches
+    private final AtomicReference<NodeAtLevel> entryPoint;
 
-    // the current graph entry node, NO_ENTRY_POINT if not set
-    private final AtomicInteger entryPoint = new AtomicInteger(NO_ENTRY_POINT);
+    // Layers of the graph, with layer 0 as the bottom (dense) layer containing all nodes.
+    final List<ConcurrentNeighborMap> layers = new ArrayList<>();
 
-    final ConcurrentNeighborMap nodes;
+    private final CompletionTracker completions;
     private final ThreadSafeGrowableBitSet deletedNodes = new ThreadSafeGrowableBitSet(0);
-    private final AtomicInteger maxNodeId = new AtomicInteger(NO_ENTRY_POINT);
+    private final AtomicInteger maxNodeId = new AtomicInteger(-1);
 
-    // max neighbors/edges per node
-    final int maxDegree;
+    // Maximum number of neighbors (edges) per node per layer
+    final IntArrayList maxDegrees;
+    // The ratio by which we can overflow the neighborhood of a node during construction. Since it is a multiplicative
+    // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
+    private final double overflowRatio;
 
-    OnHeapGraphIndex(int M, int maxOverflowDegree, BuildScoreProvider scoreProvider, float alpha) {
-        this.maxDegree = M;
-        this.nodes = new ConcurrentNeighborMap(scoreProvider, maxDegree, maxOverflowDegree, alpha);
+    public final ConcurrentMap<NodeAtLevel, VectorFloat<?>> constructionBatch;
+
+    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, BuildScoreProvider scoreProvider, float alpha, int batchSize) {
+        this.overflowRatio = overflowRatio;
+        this.maxDegrees = new IntArrayList();
+        setDegrees(maxDegrees);
+        entryPoint = new AtomicReference<>();
+        this.completions = new CompletionTracker(1024);
+        // Initialize the base layer (layer 0) with a dense map.
+        this.layers.add(new ConcurrentNeighborMap(new DenseIntMap<>(1024),
+                                                  scoreProvider,
+                                                  getDegree(0),
+                                                  (int) (getDegree(0) * overflowRatio),
+                                                  alpha));
+        this.constructionBatch = new ConcurrentHashMap<>(batchSize);
     }
 
     /**
-     * Returns the neighbors connected to the given node, or null if the node does not exist.
+     * Returns the neighbors for the given node at the specified level, or null if the node does not exist.
      *
-     * @param node the node whose neighbors are returned, represented as an ordinal.
+     * @param level the layer
+     * @param node  the node id
+     * @return the Neighbors structure or null
      */
-    ConcurrentNeighborMap.Neighbors getNeighbors(int node) {
-        return nodes.get(node);
+    Neighbors getNeighbors(int level, int node) {
+        if (level >= layers.size()) {
+            return null;
+        }
+        return layers.get(level).get(node);
     }
 
-
     @Override
-    public int size() {
-        return nodes.size();
+    public int size(int level) {
+        return layers.get(level).size();
     }
 
     /**
@@ -85,20 +118,40 @@ public class OnHeapGraphIndex implements GraphIndex {
      * responsibility of the caller.
      *
      * <p>It is also the responsibility of the caller to ensure that each node is only added once.
-     *
-     * @param nodeId the node to add, represented as an ordinal
      */
-    public void addNode(int nodeId) {
-        nodes.addNode(nodeId);
-        maxNodeId.accumulateAndGet(nodeId, Math::max);
+    public void addNode(NodeAtLevel nodeLevel) {
+        ensureLayersExist(nodeLevel.level);
+
+        // add the node to each layer
+        for (int i = 0; i <= nodeLevel.level; i++) {
+            layers.get(i).addNode(nodeLevel.node);
+        }
+        maxNodeId.accumulateAndGet(nodeLevel.node, Math::max);
+    }
+
+    private void ensureLayersExist(int level) {
+        for (int i = layers.size(); i <= level; i++) {
+            synchronized (layers) {
+                if (i == layers.size()) { // doublecheck after locking
+                    var denseMap = layers.get(0);
+                    var map = new ConcurrentNeighborMap(new SparseIntMap<>(),
+                                                        denseMap.scoreProvider,
+                                                        getDegree(level),
+                                                        (int) (getDegree(level) * overflowRatio),
+                                                        denseMap.alpha);
+                    layers.add(map);
+                }
+            }
+        }
     }
 
     /**
      * Only for use by Builder loading a saved graph
      */
-    void addNode(int nodeId, NodeArray nodes) {
+    void addNode(int level, int nodeId, NodeArray nodes) {
         assert nodes != null;
-        this.nodes.addNode(nodeId, nodes);
+        ensureLayersExist(level);
+        this.layers.get(level).addNode(nodeId, nodes);
         maxNodeId.accumulateAndGet(nodeId, Math::max);
     }
 
@@ -109,60 +162,74 @@ public class OnHeapGraphIndex implements GraphIndex {
         deletedNodes.set(node);
     }
 
-    /** must be called after addNode once neighbors are linked */
-    void maybeSetInitialEntryNode(int node) {
-        entryPoint.accumulateAndGet(node,
-                                    (oldEntry, newEntry) -> {
-                                        if (oldEntry >= 0) {
-                                            return oldEntry;
-                                        } else {
-                                            return newEntry;
-                                        }
-                                    });
+    /** must be called after addNode once neighbors are linked in all levels. */
+    void markComplete(NodeAtLevel nodeLevel) {
+        entryPoint.accumulateAndGet(
+                nodeLevel,
+                (oldEntry, newEntry) -> {
+                    if (oldEntry == null || newEntry.level > oldEntry.level) {
+                        return newEntry;
+                    } else {
+                        return oldEntry;
+                    }
+                });
+        completions.markComplete(nodeLevel.node);
     }
 
-    void updateEntryNode(int node) {
-        entryPoint.set(node);
+    void updateEntryNode(NodeAtLevel newEntry) {
+        entryPoint.set(newEntry);
     }
 
-    @Override
-    public int maxDegree() {
-        return maxDegree;
-    }
-
-    int entry() {
+    NodeAtLevel entry() {
         return entryPoint.get();
     }
 
     @Override
-    public NodesIterator getNodes() {
-        return nodes.nodesIterator();
+    public NodesIterator getNodes(int level) {
+        return NodesIterator.fromPrimitiveIterator(nodeStream(level).iterator(),
+                                                   layers.get(level).size());
+    }
+
+    /**
+     * this does call get() internally to filter level 0, so if you're going to use it in a pipeline
+     * that also calls get(), consider using your own raw IntStream.range instead
+     */
+    IntStream nodeStream(int level) {
+        var layer = layers.get(level);
+        return level == 0
+                ? IntStream.range(0, getIdUpperBound()).filter(i -> layer.get(i) != null)
+                : ((SparseIntMap<Neighbors>) layer.neighbors).keysStream();
     }
 
     @Override
     public long ramBytesUsed() {
+        var graphBytesUsed = IntStream.range(0, layers.size()).mapToLong(this::ramBytesUsedOneLayer).sum();
+        return graphBytesUsed + completions.ramBytesUsed();
+    }
+
+    public long ramBytesUsedOneLayer(int layer) {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         var REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         var AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
 
-        long neighborSize = ramBytesUsedOneNode() * size();
+        long neighborSize = ramBytesUsedOneNode(layer) * layers.get(layer).size();
         return OH_BYTES + REF_BYTES * 2L + AH_BYTES + neighborSize;
     }
 
-    public long ramBytesUsedOneNode() {
+    public long ramBytesUsedOneNode(int layer) {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return REF_BYTES + ConcurrentNeighborMap.Neighbors.ramBytesUsed(nodes.nodeArrayLength());
+        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(layer).nodeArrayLength());
     }
 
     @Override
     public String toString() {
-        return String.format("OnHeapGraphIndex(size=%d, entryPoint=%d)", size(), entryPoint.get());
+        return String.format("OnHeapGraphIndex(size=%d, entryPoint=%s)", size(0), entryPoint.get());
     }
 
     @Override
     public void close() {
-        // no-op
+        // No resources to close.
     }
 
     /**
@@ -176,13 +243,23 @@ public class OnHeapGraphIndex implements GraphIndex {
         return new ConcurrentGraphIndexView();
     }
 
+    /**
+     * A View that assumes no concurrent modifications are made
+     */
+    public GraphIndex.View getFrozenView() {
+        return new FrozenView();
+    }
+
+    /**
+     * Validates that the current entry node has been completely added.
+     */
     void validateEntryNode() {
-        if (size() == 0) {
+        if (size(0) == 0) {
             return;
         }
-        var en = entryPoint.get();
-        if (!(en >= 0 && getNeighbors(en) != null)) {
-            throw new IllegalStateException("Entry node was incompletely added! " + en);
+        NodeAtLevel entry = getView().entryNode();
+        if (entry == null || getNeighbors(entry.level, entry.node) == null) {
+            throw new IllegalStateException("Entry node was incompletely added! " + entry);
         }
     }
 
@@ -191,14 +268,20 @@ public class OnHeapGraphIndex implements GraphIndex {
     }
 
     /**
-     * @return true iff the node was present.
+     * Removes the given node from all layers.
+     *
+     * @param node the node id to remove
+     * @return the number of layers from which it was removed
      */
-    boolean removeNode(int node) {
-        try {
-            return nodes.remove(node) != null;
-        } finally {
-            deletedNodes.clear(node);
+    int removeNode(int node) {
+        int found = 0;
+        for (var layer : layers) {
+            if (layer.remove(node) != null) {
+                found++;
+            }
         }
+        deletedNodes.clear(node);
+        return found;
     }
 
     @Override
@@ -206,38 +289,130 @@ public class OnHeapGraphIndex implements GraphIndex {
         return maxNodeId.get() + 1;
     }
 
+    @Override
     public boolean containsNode(int nodeId) {
-        return nodes.contains(nodeId);
+        return layers.get(0).contains(nodeId);
     }
 
-    public double getAverageDegree() {
-        return IntStream.range(0, getIdUpperBound())
-                .filter(this::containsNode)
-                .mapToDouble(i -> getNeighbors(i).size())
+    /**
+     * Returns the average degree computed over nodes in the specified layer.
+     *
+     * @param level the level of interest.
+     * @return the average degree or NaN if no nodes are present.
+     */
+    public double getAverageDegree(int level) {
+        return nodeStream(level)
+                .mapToDouble(i -> getNeighbors(level, i).size())
                 .average()
                 .orElse(Double.NaN);
     }
 
-    public class ConcurrentGraphIndexView implements GraphIndex.View {
-        public NodesIterator getNeighborsIterator(int node) {
-            var neighbors = getNeighbors(node);
-            assert neighbors != null : "Node " + node + " not found";
-            return neighbors.iterator();
+    @Override
+    public int getMaxLevel() {
+        for (int lvl = 0; lvl < layers.size(); lvl++) {
+            if (layers.get(lvl).size() == 0) {
+                return lvl - 1;
+            }
+        }
+        return layers.size() - 1;
+    }
+
+    @Override
+    public int getDegree(int level) {
+        if (level >= maxDegrees.size()) {
+            return maxDegrees.get(maxDegrees.size() - 1);
+        }
+        return maxDegrees.get(level);
+    }
+
+    @Override
+    public int maxDegree() {
+        return maxDegrees.stream().mapToInt(i -> i).max().orElseThrow();
+    }
+
+    public int getLayerSize(int level) {
+        return layers.get(level).size();
+    }
+
+    public void setDegrees(List<Integer> layerDegrees) {
+        maxDegrees.clear();
+        maxDegrees.addAll(layerDegrees);
+    }
+
+    /**
+     * A concurrent View of the graph that is safe to search concurrently with updates and with other
+     * searches. The View provides a limited kind of snapshot isolation: only nodes completely added
+     * to the graph at the time the View was created will be visible (but the connections between them
+     * are allowed to change, so you could potentially get different top K results from the same query
+     * if concurrent updates are in progress.)
+     */
+    public class ConcurrentGraphIndexView extends FrozenView {
+        // It is tempting, but incorrect, to try to provide "adequate" isolation by
+        // (1) keeping a bitset of complete nodes and giving that to the searcher as nodes to
+        // accept -- but we need to keep incomplete nodes out of the search path entirely,
+        // not just out of the result set, or
+        // (2) keeping a bitset of complete nodes and restricting the View to those nodes
+        // -- but we needs to consider neighbor diversity separately for concurrent
+        // inserts and completed nodes; this allows us to keep the former out of the latter,
+        // but not the latter out of the former (when a node completes while we are working,
+        // that was in-progress when we started.)
+        // The only really foolproof solution is to implement snapshot isolation as
+        // we have done here.
+        private final int timestamp = completions.clock();
+
+        @Override
+        public NodesIterator getNeighborsIterator(int level, int node) {
+            var it = getNeighbors(level, node).iterator();
+            return new NodesIterator() {
+                int nextNode = advance();
+
+                private int advance() {
+                    while (it.hasNext()) {
+                        int n = it.nextInt();
+                        if (completions.completedAt(n) < timestamp) {
+                            return n;
+                        }
+                    }
+                    return Integer.MIN_VALUE;
+                }
+
+                @Override
+                public int size() {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public int nextInt() {
+                    int current = nextNode;
+                    if (current == Integer.MIN_VALUE) {
+                        throw new IndexOutOfBoundsException();
+                    }
+                    nextNode = advance();
+                    return current;
+                }
+
+                @Override
+                public boolean hasNext() {
+                    return nextNode != Integer.MIN_VALUE;
+                }
+            };
+        }
+    }
+
+    private class FrozenView implements View {
+        @Override
+        public NodesIterator getNeighborsIterator(int level, int node) {
+            return getNeighbors(level, node).iterator();
         }
 
         @Override
         public int size() {
-            return OnHeapGraphIndex.this.size();
+            return OnHeapGraphIndex.this.size(0);
         }
 
         @Override
-        public int entryNode() {
+        public NodeAtLevel entryNode() {
             return entryPoint.get();
-        }
-
-        @Override
-        public String toString() {
-            return "OnHeapGraphIndexView(size=" + size() + ", entryPoint=" + entryPoint.get();
         }
 
         @Override
@@ -254,37 +429,121 @@ public class OnHeapGraphIndex implements GraphIndex {
 
         @Override
         public void close() {
+            // No resources to close
+        }
+
+        @Override
+        public String toString() {
+            NodeAtLevel entry = entryNode();
+            return String.format("%s(size=%d, entryNode=%s)", getClass().getSimpleName(), size(), entry);
         }
     }
 
+    /**
+     * Saves the graph to the given DataOutput for reloading into memory later
+     */
     public void save(DataOutput out) {
         if (deletedNodes.cardinality() > 0) {
-            throw new IllegalStateException("Cannot save a graph that has deleted nodes.  Call cleanup() first");
+            throw new IllegalStateException("Cannot save a graph that has deleted nodes. Call cleanup() first");
         }
 
-        // graph-level properties
         try (var view = getView()) {
-            out.writeInt(size());
-            out.writeInt(view.entryNode());
-            out.writeInt(maxDegree());
+            // Write graph-level properties.
+            out.writeInt(layers.size());
+            assert view.entryNode().level == getMaxLevel();
+            out.writeInt(view.entryNode().node);
 
-            // neighbors
-            nodes.forEach((nodeId, value) -> {
-                try {
-                    var neighbors = value.iterator();
-                    out.writeInt(nodeId);
+            for (int level = 0; level < layers.size(); level++) {
+                out.writeInt(size(level));
+                out.writeInt(getDegree(level));
 
-                    out.writeInt(neighbors.size());
-                    for (int n = 0; n < neighbors.size(); n++) {
-                        out.writeInt(neighbors.nextInt());
+                // Save neighbors from the layer.
+                var baseLayer = layers.get(level);
+                baseLayer.forEach((nodeId, neighbors) -> {
+                    try {
+                        NodesIterator iterator = neighbors.iterator();
+                        out.writeInt(nodeId);
+                        out.writeInt(iterator.size());
+                        for (int n = 0; n < iterator.size(); n++) {
+                            out.writeInt(iterator.nextInt());
+                        }
+                        assert !iterator.hasNext();
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
                     }
-                    assert !neighbors.hasNext();
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
+                });
+            }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * A helper class that tracks completion times for nodes.
+     */
+    static final class CompletionTracker implements Accountable {
+        private final AtomicInteger logicalClock = new AtomicInteger();
+        private volatile AtomicIntegerArray completionTimes;
+        private final StampedLock sl = new StampedLock();
+
+        public CompletionTracker(int initialSize) {
+            completionTimes = new AtomicIntegerArray(initialSize);
+            for (int i = 0; i < initialSize; i++) {
+                completionTimes.set(i, Integer.MAX_VALUE);
+            }
+        }
+
+        void markComplete(int node) {
+            int completionClock = logicalClock.getAndIncrement();
+            ensureCapacity(node);
+            long stamp;
+            do {
+                stamp = sl.tryOptimisticRead();
+                completionTimes.set(node, completionClock);
+            } while (!sl.validate(stamp));
+        }
+
+        int clock() {
+            return logicalClock.get();
+        }
+
+        public int completedAt(int node) {
+            AtomicIntegerArray ct = completionTimes;
+            if (node >= ct.length()) {
+                return Integer.MAX_VALUE;
+            }
+            return ct.get(node);
+        }
+
+        @Override
+        public long ramBytesUsed() {
+            int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+            return REF_BYTES + Integer.BYTES + REF_BYTES +
+                    (long) Integer.BYTES * completionTimes.length();
+        }
+
+        private void ensureCapacity(int node) {
+            if (node < completionTimes.length()) {
+                return;
+            }
+            long stamp = sl.writeLock();
+            try {
+                AtomicIntegerArray oldArray = completionTimes;
+                if (node >= oldArray.length()) {
+                    int newSize = (node + 1) * 2;
+                    AtomicIntegerArray newArr = new AtomicIntegerArray(newSize);
+                    for (int i = 0; i < newSize; i++) {
+                        if (i < oldArray.length()) {
+                            newArr.set(i, oldArray.get(i));
+                        } else {
+                            newArr.set(i, Integer.MAX_VALUE);
+                        }
+                    }
+                    completionTimes = newArr;
+                }
+            } finally {
+                sl.unlockWrite(stamp);
+            }
         }
     }
 }
