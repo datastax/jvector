@@ -18,14 +18,14 @@ public class AccuracyMetrics {
      * @param kRetrieved the number of retrieved elements
      * @return the recall
      */
-    public static double recallFromSearchResults(List<List<Integer>> gt, List<SearchResult> retrieved, int kGT, int kRetrieved) {
+    public static double recallFromSearchResults(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int kGT, int kRetrieved) {
         if (gt.size() != retrieved.size()) {
             throw new IllegalArgumentException("We should have ground truth for each result");
         }
         Long correctCount = IntStream.range(0, gt.size())
                 .mapToObj(i -> topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved))
                 .reduce(0L, Long::sum);
-        return (double) correctCount / gt.size();
+        return (double) correctCount / (kGT * gt.size());
     }
 
     private static long topKCorrect(List<Integer> gt, List<Integer> retrieved, int kGT, int kRetrieved) {
@@ -84,7 +84,7 @@ public class AccuracyMetrics {
         return score / gtView.size();
     }
 
-    public static double meanAveragePrecisionAtK(List<List<Integer>> gt, List<SearchResult> retrieved, int k) {
+    public static double meanAveragePrecisionAtK(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int k) {
         if (gt.size() != retrieved.size()) {
             throw new IllegalArgumentException("We should have ground truth for each result");
         }
