@@ -56,7 +56,6 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -371,14 +370,11 @@ public class Grid {
             for (var overquery : efSearchOptions) {
                 int rerankK = (int) (topK * overquery);
                 for (var usePruning : usePruningGrid) {
-                    var startTime = System.nanoTime();
                     var pqr = performQueries(cs, topK, rerankK, usePruning, queryRuns);
-                    var stopTime = System.nanoTime();
-                    var recall = ((double) pqr.topKFound) / (queryRuns * cs.ds.queryVectors.size() * topK);
                     System.out.format(" Query top %d/%d recall %.4f in %.2fms after %.2f nodes visited (AVG) and %.2f nodes expanded with pruning=%b%n",
-                            topK, rerankK, recall, (stopTime - startTime) / (queryRuns * 1_000_000.0),
-                            (double) pqr.nodesVisited / (queryRuns * cs.ds.queryVectors.size()),
-                            (double) pqr.nodesExpanded / (queryRuns * cs.ds.queryVectors.size()),
+                            topK, rerankK, pqr.recall, pqr.runtime / (1_000_000.0),
+                            (double) pqr.nodesVisited / cs.ds.queryVectors.size(),
+                            (double) pqr.nodesExpanded / cs.ds.queryVectors.size(),
                             usePruning);
                 }
             }
@@ -425,44 +421,36 @@ public class Grid {
         });
     }
 
-//    private static long topKCorrect(int topK, int[] resultNodes, Set<Integer> gt) {
-//        int count = Math.min(resultNodes.length, topK);
-//        var resultSet = Arrays.stream(resultNodes, 0, count)
-//                .boxed()
-//                .collect(Collectors.toSet());
-//        assert resultSet.size() == count : String.format("%s duplicate results out of %s", count - resultSet.size(), count);
-//        return resultSet.stream().filter(gt::contains).count();
-//    }
-//
-//    private static long topKCorrect(int topK, SearchResult.NodeScore[] nn, Set<Integer> gt) {
-//        var a = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
-//        return topKCorrect(topK, a, gt);
-//    }
-
     private static ResultSummary performQueries(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int queryRuns) {
-        LongAdder topKfound = new LongAdder();
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
+        LongAdder runtime = new LongAdder();
+        double recall = 0;
+
         for (int k = 0; k < queryRuns; k++) {
-            IntStream.range(0, cs.ds.queryVectors.size()).parallel().forEach(i -> {
+            var startTime = System.nanoTime();
+            List<SearchResult> listSR = IntStream.range(0, cs.ds.queryVectors.size()).parallel().mapToObj(i -> {
                 var queryVector = cs.ds.queryVectors.get(i);
                 SearchResult sr;
                 var searcher = cs.getSearcher();
                 searcher.usePruning(usePruning);
                 var sf = cs.scoreProviderFor(queryVector, searcher.getView());
                 sr = searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+                return sr;
+            }).collect(Collectors.toList());
+            var stopTime = System.nanoTime();
 
-                // process search result
-                var gt = cs.ds.groundTruth.get(i);
-                var n = AccuracyMetrics.topKCorrect(gt, sr, topK, topK);
-                topKfound.add(n);
+            runtime.add(stopTime - startTime);
+            // process search result
+            listSR.stream().parallel().forEach(sr -> {
                 nodesVisited.add(sr.getVisitedCount());
                 nodesExpanded.add(sr.getExpandedCount());
                 nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
             });
+            recall += AccuracyMetrics.recallFromSearchResults(cs.ds.groundTruth, listSR, topK, topK);
         }
-        return new ResultSummary((int) topKfound.sum(), nodesVisited.sum(), nodesExpanded.sum(), nodesExpandedBaseLayer.sum());
+        return new ResultSummary(recall / queryRuns, nodesVisited.sum() / queryRuns, nodesExpanded.sum() / queryRuns, nodesExpandedBaseLayer.sum() / queryRuns, runtime.sum() / queryRuns);
     }
 
     static class ConfiguredSystem implements AutoCloseable {
@@ -510,16 +498,18 @@ public class Grid {
     }
 
     static class ResultSummary {
-        final int topKFound;
+        final double recall;
         final long nodesVisited;
         final long nodesExpanded;
         final long nodesExpandedBaseLayer;
+        final long runtime;
 
-        ResultSummary(int topKFound, long nodesVisited, long nodesExpanded, long nodesExpandedBaseLayer) {
-            this.topKFound = topKFound;
+        ResultSummary(double recall, long nodesVisited, long nodesExpanded, long nodesExpandedBaseLayer, long runtime) {
+            this.recall = recall;
             this.nodesVisited = nodesVisited;
             this.nodesExpanded = nodesExpanded;
             this.nodesExpandedBaseLayer = nodesExpandedBaseLayer;
+            this.runtime = runtime;
         }
     }
 }
