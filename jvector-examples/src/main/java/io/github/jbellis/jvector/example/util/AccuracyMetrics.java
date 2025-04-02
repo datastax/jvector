@@ -92,9 +92,10 @@ public class AccuracyMetrics {
 
         for (var p : retrievedView) {
             if (gtView.contains(p) && !retrievedView.subList(0, i).contains(p)) {
-                num_hits += 1.;
+                num_hits += 1;
                 score += num_hits / (i + 1.0);
             }
+            i++;
         }
 
         return score / gtView.size();
