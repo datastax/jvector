@@ -58,17 +58,13 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
-import static java.lang.Math.min;
 
 // this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
 public class SiftSmall {
@@ -360,27 +356,25 @@ public class SiftSmall {
                                    SearchScoreProvider> sspFactory)
             throws IOException
     {
-        AtomicInteger topKfound = new AtomicInteger(0);
+        double recall = 0;
         int topK = 100;
         String graphType = graph.getClass().getSimpleName();
         try (ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> new GraphSearcher(graph))) {
-            IntStream.range(0, queryVectors.size()).parallel().forEach(i -> {
+            List<SearchResult> listSR = IntStream.range(0, queryVectors.size()).parallel().mapToObj(i -> {
                 VectorFloat<?> queryVector = queryVectors.get(i);
                 try (GraphSearcher searcher = searchers.get()) {
                     SearchScoreProvider ssp = sspFactory.apply(queryVector);
                     int rerankK = ssp.scoreFunction().isExact() ? topK : 2 * topK; // hardcoded overquery factor of 2x when reranking
-                    SearchResult sr = searcher.search(ssp, rerankK, Bits.ALL);
-
-                    long n = AccuracyMetrics.topKCorrect(groundTruth.get(i), sr, topK, topK);
-                    topKfound.addAndGet((int) n);
+                    return searcher.search(ssp, rerankK, Bits.ALL);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-            });
+            }).collect(Collectors.toList());
+            recall = AccuracyMetrics.recallFromSearchResults(groundTruth, listSR, topK, topK);
         } catch (Exception e) {
             ExceptionUtils.throwIoException(e);
         }
-        System.out.printf("(%s) Recall: %.4f%n", graphType, (double) topKfound.get() / (queryVectors.size() * topK));
+        System.out.printf("(%s) Recall: %.4f%n", graphType, recall);
     }
 
     public static void main(String[] args) throws IOException {
