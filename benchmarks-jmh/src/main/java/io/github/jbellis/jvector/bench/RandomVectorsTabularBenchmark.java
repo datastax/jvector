@@ -13,37 +13,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package io.github.jbellis.jvector.bench;
 
+import io.github.jbellis.jvector.bench.output.TextTable;
 import io.github.jbellis.jvector.example.SiftSmall;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
-@BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@BenchmarkMode(Mode.Throughput)
+@OutputTimeUnit(TimeUnit.SECONDS)
 @State(Scope.Thread)
 @Fork(1)
 @Warmup(iterations = 2)
 @Measurement(iterations = 5)
 @Threads(1)
-public class RandomVectorsBenchmark extends AbstractVectorsBenchmark {
-    private static final Logger log = LoggerFactory.getLogger(RandomVectorsBenchmark.class);
+public class RandomVectorsTabularBenchmark extends AbstractVectorsBenchmark {
     @Param({"1000", "10000", "100000", "1000000"})
     int numBaseVectors;
+
     @Param({"10"})
     int numQueryVectors;
 
     @Setup
     public void setup() throws IOException {
+        tableRepresentation = new TextTable();
         commonSetupRandom(numBaseVectors, numQueryVectors);
+        schedule();
     }
 
     @TearDown
@@ -51,18 +53,29 @@ public class RandomVectorsBenchmark extends AbstractVectorsBenchmark {
         baseVectors.clear();
         queryVectors.clear();
         graphIndexBuilder.close();
+        scheduler.shutdown();
+        tableRepresentation.print();
     }
 
     @Benchmark
     public void testOnHeapRandomVectors(Blackhole blackhole) {
+        long start = System.nanoTime();
         var queryVector = SiftSmall.randomVector(originalDimension);
-        // Your benchmark code here
         var searchResult = GraphSearcher.search(queryVector,
-                10, // number of results
-                ravv, // vectors we're searching, used for scoring
+                10,                            // number of results
+                ravv,                               // vectors we're searching, used for scoring
                 VectorSimilarityFunction.EUCLIDEAN, // how to score
                 graphIndex,
-                Bits.ALL); // valid ordinals to consider
+                Bits.ALL);                          // valid ordinals to consider
         blackhole.consume(searchResult);
+        long duration = System.nanoTime() - start;
+        long durationMicro = TimeUnit.NANOSECONDS.toMicros(duration);
+
+        visitedSamples.add(searchResult.getVisitedCount());
+        transactionCount.incrementAndGet();
+        totalLatency.addAndGet(durationMicro);
+        latencySamples.add(durationMicro);
+        totalTransactions++;
     }
+
 }
