@@ -29,12 +29,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Set;
+import java.util.List;
 
 public class SiftLoader {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    public static ArrayList<VectorFloat<?>> readFvecs(String filePath) throws IOException {
+    public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
             while (dis.available() > 0) {
@@ -53,13 +53,13 @@ public class SiftLoader {
         return vectors;
     }
 
-    public static ArrayList<Set<Integer>> readIvecs(String filename) {
-        var groundTruthTopK = new ArrayList<Set<Integer>>();
+    public static List<List<Integer>> readIvecs(String filename) {
+        var groundTruthTopK = new ArrayList<List<Integer>>();
 
         try (var dis = new DataInputStream(new FileInputStream(filename))) {
             while (dis.available() > 0) {
                 var numNeighbors = Integer.reverseBytes(dis.readInt());
-                var neighbors = new HashSet<Integer>(numNeighbors);
+                var neighbors = new ArrayList<Integer>(numNeighbors);
 
                 for (var i = 0; i < numNeighbors; i++) {
                     var neighbor = Integer.reverseBytes(dis.readInt());

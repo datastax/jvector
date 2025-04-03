@@ -24,8 +24,8 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -57,7 +57,7 @@ public class DataSetCreator {
             float[] q = new float[] {gridWidth * R.nextFloat(), gridWidth * R.nextFloat()};
 
             // Compute the ground truth within a bounding box around the query point
-            Set<Integer> gt = IntStream.range(0, baseVectors.size())
+            List<Integer> gt = IntStream.range(0, baseVectors.size())
                 .filter(j -> {
                     VectorFloat<?> v = baseVectors.get(j);
                     return v.get(0) >= q[0] - topK && v.get(0) <= q[0] + topK && v.get(1) >= q[1] - topK && v.get(1) <= q[1] + topK;
@@ -65,7 +65,7 @@ public class DataSetCreator {
                 .boxed() // allows sorting with custom comparator
                 .sorted(Comparator.comparingDouble((Integer j) -> VectorSimilarityFunction.EUCLIDEAN.compare(vectorTypeSupport.createFloatVector(q), baseVectors.get(j))).reversed())
                 .limit(topK)
-                .collect(Collectors.toSet());
+                .collect(Collectors.toList());
 
             return new AbstractMap.SimpleEntry<>(vectorTypeSupport.createFloatVector(q), gt);
         }).collect(Collectors.toConcurrentMap(Map.Entry::getKey, Map.Entry::getValue)).entrySet();

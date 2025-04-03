@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -57,24 +58,20 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
-import static java.lang.Math.min;
 
 // this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
 public class SiftSmall {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     // hello world
-    public static void siftInMemory(ArrayList<VectorFloat<?>> baseVectors) throws IOException {
+    public static void siftInMemory(List<VectorFloat<?>> baseVectors) throws IOException {
         // infer the dimensionality from the first vector
         int originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
@@ -108,7 +105,7 @@ public class SiftSmall {
     }
 
     // show how to use explicit GraphSearcher objects
-    public static void siftInMemoryWithSearcher(ArrayList<VectorFloat<?>> baseVectors) throws IOException {
+    public static void siftInMemoryWithSearcher(List<VectorFloat<?>> baseVectors) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -129,7 +126,7 @@ public class SiftSmall {
     }
 
     // call out to testRecall instead of doing manual searches
-    public static void siftInMemoryWithRecall(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftInMemoryWithRecall(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -143,7 +140,7 @@ public class SiftSmall {
     }
 
     // write and load index to and from disk
-    public static void siftPersisted(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftPersisted(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -167,7 +164,7 @@ public class SiftSmall {
     }
 
     // diskann-style index with PQ
-    public static void siftDiskAnn(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnn(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -211,7 +208,7 @@ public class SiftSmall {
         }
     }
 
-    public static void siftDiskAnnLTM(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnnLTM(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -272,7 +269,7 @@ public class SiftSmall {
         }
     }
 
-    public static void siftDiskAnnLTMWithNVQ(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnnLTMWithNVQ(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -354,33 +351,30 @@ public class SiftSmall {
 
     private static void testRecall(GraphIndex graph,
                                    List<VectorFloat<?>> queryVectors,
-                                   List<Set<Integer>> groundTruth,
+                                   List<List<Integer>> groundTruth,
                                    Function<VectorFloat<?>,
                                    SearchScoreProvider> sspFactory)
             throws IOException
     {
-        AtomicInteger topKfound = new AtomicInteger(0);
+        double recall = 0;
         int topK = 100;
         String graphType = graph.getClass().getSimpleName();
         try (ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> new GraphSearcher(graph))) {
-            IntStream.range(0, queryVectors.size()).parallel().forEach(i -> {
+            List<SearchResult> listSR = IntStream.range(0, queryVectors.size()).parallel().mapToObj(i -> {
                 VectorFloat<?> queryVector = queryVectors.get(i);
                 try (GraphSearcher searcher = searchers.get()) {
                     SearchScoreProvider ssp = sspFactory.apply(queryVector);
                     int rerankK = ssp.scoreFunction().isExact() ? topK : 2 * topK; // hardcoded overquery factor of 2x when reranking
-                    SearchResult.NodeScore[] nn = searcher.search(ssp, rerankK, Bits.ALL).getNodes();
-
-                    Set<Integer> gt = groundTruth.get(i);
-                    long n = IntStream.range(0, min(topK, nn.length)).filter(j -> gt.contains(nn[j].node)).count();
-                    topKfound.addAndGet((int) n);
+                    return searcher.search(ssp, rerankK, Bits.ALL);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-            });
+            }).collect(Collectors.toList());
+            recall = AccuracyMetrics.recallFromSearchResults(groundTruth, listSR, topK, topK);
         } catch (Exception e) {
             ExceptionUtils.throwIoException(e);
         }
-        System.out.printf("(%s) Recall: %.4f%n", graphType, (double) topKfound.get() / (queryVectors.size() * topK));
+        System.out.printf("(%s) Recall: %.4f%n", graphType, recall);
     }
 
     public static void main(String[] args) throws IOException {
