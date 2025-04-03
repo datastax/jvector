@@ -25,6 +25,7 @@
 package io.github.jbellis.jvector.util;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import java.util.PrimitiveIterator;
 
 /**
  * An AbstractLongHeap with an adjustable maximum size.
@@ -65,6 +66,15 @@ public class BoundedLongHeap extends AbstractLongHeap {
         }
         add(value);
         return true;
+    }
+
+    @Override
+    public void pushAll(PrimitiveIterator.OfLong elements, int elementsSize)
+    {
+        if (elementsSize + size >= maxSize) {
+            throw new IllegalArgumentException("Cannot add more elements than maxSize");
+        }
+        addAll(elements, elementsSize);
     }
 
     /**
