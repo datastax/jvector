@@ -85,7 +85,8 @@ public abstract class AbstractLongHeap {
 
     /**
      * Bulk-adds all elements from the given iterator to this heap, then re-heapifies
-     * in O(n) time (Floyd's build-heap).
+     * in O(n) time (Floyd's build-heap). For a proof explaining the linear time
+     * complexity, see <a href="https://stackoverflow.com/a/18742428">this stackoverflow answer</a>.
      *
      * @param elements the elements to add
      * @param elementsSize the number of elements to add
