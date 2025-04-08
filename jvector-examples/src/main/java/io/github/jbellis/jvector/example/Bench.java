@@ -22,7 +22,7 @@ import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetCreator;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
-import io.github.jbellis.jvector.graph.disk.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.IOException;
@@ -43,8 +43,11 @@ public class Bench {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var searchDepthConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var overqueryGrid = List.of(1.0, 2.0); // rerankK = oq * topK
+        var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
+        var overqueryGrid = List.of(1.0, 2.0, 5.0); // rerankK = oq * topK
+        var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
+        var addHierarchyGrid = List.of(true); // List.of(false, true);
+        var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED),
                 __ -> CompressorParameters.NONE
@@ -74,7 +77,7 @@ public class Bench {
                 "nv-qa-v4-100k",
                 "colbert-1M",
                 "gecko-100k");
-        executeNw(coreFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, searchDepthConstructionGrid, overqueryGrid);
+        executeNw(coreFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, overqueryGrid, usePruningGrid);
 
         var extraFiles = List.of(
                 "openai-v3-large-3072-100k",
@@ -82,7 +85,7 @@ public class Bench {
                 "e5-small-v2-100k",
                 "e5-base-v2-100k",
                 "e5-large-v2-100k");
-        executeNw(extraFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, searchDepthConstructionGrid, overqueryGrid);
+        executeNw(extraFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, overqueryGrid, usePruningGrid);
 
         // smaller vectors from ann-benchmarks
         var hdf5Files = List.of(
@@ -99,7 +102,7 @@ public class Bench {
         for (var f : hdf5Files) {
             if (pattern.matcher(f).find()) {
                 DownloadHelper.maybeDownloadHdf5(f);
-                Grid.runAll(Hdf5Loader.load(f), mGrid, searchDepthConstructionGrid, featureSets, buildCompression, searchCompression, overqueryGrid);
+                Grid.runAll(Hdf5Loader.load(f), mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, overqueryGrid, usePruningGrid);
             }
         }
 
@@ -109,15 +112,15 @@ public class Bench {
                                               ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED));
             buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
             var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
-            Grid.runAll(grid2d, mGrid, searchDepthConstructionGrid, featureSets, buildCompression, searchCompression, overqueryGrid);
+            Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, overqueryGrid, usePruningGrid);
         }
     }
 
-    private static void executeNw(List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> searchDepthConstructionGrid, List<Double> overquerySearchGrid) throws IOException {
+    private static void executeNw(List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Double> efSearchGrid, List<Boolean> usePruningGrid) throws IOException {
         for (var nwDatasetName : coreFiles) {
             if (pattern.matcher(nwDatasetName).find()) {
                 var mfd = DownloadHelper.maybeDownloadFvecs(nwDatasetName);
-                Grid.runAll(mfd.load(), mGrid, searchDepthConstructionGrid, featureSets, buildCompression, compressionGrid, overquerySearchGrid);
+                Grid.runAll(mfd.load(), mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, efSearchGrid, usePruningGrid);
             }
         }
     }

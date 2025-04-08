@@ -101,6 +101,13 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     @Override
+    public long readLong() {
+        var l = memory.get(longLayout, position);
+        position += 8;
+        return l;
+    }
+
+    @Override
     public float readFloat() {
         var f = memory.get(floatLayout, position);
         position += 4;

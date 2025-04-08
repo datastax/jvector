@@ -74,7 +74,12 @@ public class ByteBufferReader implements RandomAccessReader {
     }
 
     @Override
-    public float readFloat() throws IOException {
+    public long readLong() {
+        return bb.getLong();
+    }
+
+    @Override
+    public float readFloat() {
         return bb.getFloat();
     }
 

@@ -153,4 +153,16 @@ public abstract class AbstractLongHeap {
     long[] getHeapArray() {
         return heap;
     }
+
+    /**
+     * Copies the contents and current size from `other`.  Does NOT copy subclass field like BLH's maxSize
+     */
+    public void copyFrom(AbstractLongHeap other)
+    {
+        if (this.heap.length < other.size) {
+            this.heap = new long[other.heap.length];
+        }
+        System.arraycopy(other.heap, 0, this.heap, 0, other.size);
+        this.size = other.size;
+    }
 }

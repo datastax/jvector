@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.IntMap;
 
 import static java.lang.Math.min;
 
@@ -31,13 +32,13 @@ import static java.lang.Math.min;
  * Encapsulates operations on a graph's neighbors.
  */
 public class ConcurrentNeighborMap {
-    private final DenseIntMap<Neighbors> neighbors;
+    final IntMap<Neighbors> neighbors;
 
     /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
-    private final float alpha;
+    final float alpha;
 
     /** used to compute diversity */
-    private final BuildScoreProvider scoreProvider;
+    final BuildScoreProvider scoreProvider;
 
     /** the maximum number of neighbors desired per node */
     public final int maxDegree;
@@ -45,11 +46,16 @@ public class ConcurrentNeighborMap {
     public final int maxOverflowDegree;
 
     public ConcurrentNeighborMap(BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
+        this(new DenseIntMap<>(1024), scoreProvider, maxDegree, maxOverflowDegree, alpha);
+    }
+
+    public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
+        assert maxDegree <= maxOverflowDegree : String.format("maxDegree %d exceeds maxOverflowDegree %d", maxDegree, maxOverflowDegree);
+        this.neighbors = neighbors;
         this.alpha = alpha;
         this.scoreProvider = scoreProvider;
         this.maxDegree = maxDegree;
         this.maxOverflowDegree = maxOverflowDegree;
-        neighbors = new DenseIntMap<>(1024);
     }
 
     public void insertEdge(int fromId, int toId, float score, float overflow) {
@@ -103,6 +109,7 @@ public class ConcurrentNeighborMap {
     public Neighbors insertDiverse(int nodeId, NodeArray candidates) {
         while (true) {
             var old = neighbors.get(nodeId);
+            assert old != null : nodeId; // graph.addNode should always be called before this method
             var next = old.insertDiverse(candidates, this);
             if (next == old || neighbors.compareAndPut(nodeId, old, next)) {
                 return next;
@@ -130,10 +137,6 @@ public class ConcurrentNeighborMap {
 
     public void addNode(int nodeId) {
         addNode(nodeId, new NodeArray(0));
-    }
-
-    public NodesIterator nodesIterator() {
-        return neighbors.keysIterator();
     }
 
     public Neighbors remove(int node) {
@@ -262,7 +265,9 @@ public class ConcurrentNeighborMap {
                 retainDiverse(merged, 0, map);
             }
             // insertDiverse usually gets called with a LOT of candidates, so trim down the resulting NodeArray
-            var nextNodes = merged.getArrayLength() <= map.nodeArrayLength() ? merged : merged.copy(map.nodeArrayLength());
+            var nextNodes = merged.getArrayLength() <= map.nodeArrayLength()
+                    ? merged
+                    : merged.copy(map.nodeArrayLength());
             return new Neighbors(nodeId, nextNodes);
         }
 
@@ -402,14 +407,18 @@ public class ConcurrentNeighborMap {
         }
     }
 
-    private static class NeighborIterator extends NodesIterator {
+    private static class NeighborIterator implements NodesIterator {
         private final NodeArray neighbors;
         private int i;
 
         private NeighborIterator(NodeArray neighbors) {
-            super(neighbors.size());
             this.neighbors = neighbors;
             i = 0;
+        }
+
+        @Override
+        public int size() {
+            return neighbors.size();
         }
 
         @Override

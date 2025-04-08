@@ -35,6 +35,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.function.Supplier;
 
+import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -55,8 +56,13 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         TestUtil.deleteQuietly(testDirectory);
     }
 
-    @Test 
+    @Test
     public void testRescore() {
+        testRescore(false);
+        testRescore(true);
+    }
+
+    public void testRescore(boolean addHierarchy) {
         // Create test vectors where each vector is [node_id, 0]
         var vectors = new ArrayList<VectorFloat<?>>();
         vectors.add(vts.createFloatVector(new float[] {0, 0}));
@@ -66,13 +72,13 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         
         // Initial score provider uses dot product, so scores will equal node IDs
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f);
+        var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, addHierarchy);
 
         // Add 3 nodes
         builder.addGraphNode(0, ravv.getVector(0));
         builder.addGraphNode(1, ravv.getVector(1));
         builder.addGraphNode(2, ravv.getVector(2));
-        var neighbors = builder.graph.getNeighbors(0);
+        var neighbors = builder.graph.getNeighbors(0, 0); // TODO
         assertEquals(1, neighbors.getNode(0));
         assertEquals(2, neighbors.getNode(1));
         assertEquals(0.5f, neighbors.getScore(0), 1E-6);
@@ -95,7 +101,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertTrue(newGraph.containsNode(2));
 
         // Check node 0's neighbors, score and order should be different
-        var newNeighbors = newGraph.getNeighbors(0);
+        var newNeighbors = newGraph.getNeighbors(0, 0); // TODO
         assertEquals(2, newNeighbors.getNode(0));
         assertEquals(1, newNeighbors.getNode(1));
         assertEquals(0.2f, newNeighbors.getScore(0), 1E-6);
@@ -106,16 +112,18 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     @Test
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
-        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(randomIntBetween(10, 100), dimension, getRandom()));
+        int size = randomIntBetween(10, 100);
+        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
+
         Supplier<GraphIndexBuilder> newBuilder = () ->
-            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f);
+            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true);
 
         var indexDataPath = testDirectory.resolve("index_builder.data");
         var builder = newBuilder.get();
 
-        try (var graph = TestUtil.buildSequentially(builder, ravv);
-             var out = TestUtil.openDataOutputStream(indexDataPath))
-        {
+        var graph = TestUtil.buildSequentially(builder, ravv);
+
+        try (var out = TestUtil.openDataOutputStream(indexDataPath)) {
             graph.save(out);
         }
 
@@ -128,5 +136,6 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         for (int i = 0; i < ravv.size(); i++) {
             assertTrue(builder.graph.containsNode(i));
         }
+        assertGraphEquals(graph, builder.graph);
     }
 }

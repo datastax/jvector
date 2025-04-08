@@ -22,10 +22,11 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.Feature;
-import io.github.jbellis.jvector.graph.disk.FeatureId;
-import io.github.jbellis.jvector.graph.disk.FusedADC;
-import io.github.jbellis.jvector.graph.disk.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -162,17 +163,17 @@ public class TestUtil {
         }
     }
 
-    public static Set<Integer> getNeighborNodes(GraphIndex.View g, int node) {
+    public static Set<Integer> getNeighborNodes(GraphIndex.View g, int level, int node) {
       Set<Integer> neighbors = new HashSet<>();
-      for (var it = g.getNeighborsIterator(node); it.hasNext(); ) {
+      for (var it = g.getNeighborsIterator(level, node); it.hasNext(); ) {
         int n = it.nextInt();
         neighbors.add(n);
       }
       return neighbors;
     }
 
-    static List<Integer> sortedNodes(GraphIndex h) {
-          var graphNodes = h.getNodes();
+    static List<Integer> sortedNodes(GraphIndex h, int level) {
+          var graphNodes = h.getNodes(level); // TODO
           List<Integer> nodes = new ArrayList<>();
           while (graphNodes.hasNext()) {
               nodes.add(graphNodes.next());
@@ -182,38 +183,41 @@ public class TestUtil {
       }
 
     public static void assertGraphEquals(GraphIndex g, GraphIndex h) {
-          // construct these up front since they call seek which will mess up our test loop
-          String prettyG = GraphIndex.prettyPrint(g);
-          String prettyH = GraphIndex.prettyPrint(h);
-          assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
-                                     prettyG,
-                                     prettyH),
-                       g.size(),
-                       h.size());
+        // construct these up front since they call seek which will mess up our test loop
+        String prettyG = GraphIndex.prettyPrint(g);
+        String prettyH = GraphIndex.prettyPrint(h);
+        assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
+                                   prettyG,
+                                   prettyH),
+                     g.size(),
+                     h.size());
 
-          // assert equal nodes in each graph
-          List<Integer> hNodes = sortedNodes(h);
-          List<Integer> gNodes = sortedNodes(g);
-          assertEquals(String.format("nodes in the graphs are different:%n%s%n%s",
-                                     prettyG,
-                                     prettyH),
-                       gNodes,
-                       hNodes);
+        assertEquals(g.getView().entryNode(), h.getView().entryNode());
+        for (int level = 0; level <= g.getMaxLevel(); level++) {
+            // assert equal nodes in each graph
+            List<Integer> hNodes = sortedNodes(h, level);
+            List<Integer> gNodes = sortedNodes(g, level);
+            assertEquals(String.format("nodes in the graphs are different:%n%s%n%s",
+                                       prettyG,
+                                       prettyH),
+                         gNodes,
+                         hNodes);
 
-          // assert equal nodes' neighbours in each graph
-          NodesIterator gNodesIterator = g.getNodes();
-          var gv = g.getView();
-          var hv = h.getView();
-          while (gNodesIterator.hasNext()) {
-              int node = gNodesIterator.nextInt();
-              assertEqualsLazy(() -> String.format("arcs differ for node %d%n%s%n%s",
-                                                   node,
-                                                   prettyG,
-                                                   prettyH),
-                               getNeighborNodes(gv, node),
-                               getNeighborNodes(hv, node));
-          }
-      }
+            // assert equal nodes' neighbours in each graph
+            NodesIterator gNodesIterator = g.getNodes(level);
+            var gv = g.getView();
+            var hv = h.getView();
+            while (gNodesIterator.hasNext()) {
+                int node = gNodesIterator.nextInt();
+                assertEqualsLazy(() -> String.format("arcs differ for node %d%n%s%n%s",
+                                                     node,
+                                                     prettyG,
+                                                     prettyH),
+                                 getNeighborNodes(gv, level, node),
+                                 getNeighborNodes(hv, level, node));
+            }
+        }
+    }
 
     /**
      * For when building the failure message is expensive
@@ -234,22 +238,31 @@ public class TestUtil {
 
     public static class FullyConnectedGraphIndex implements GraphIndex {
         private final int entryNode;
-        private final int size;
+        private final List<Integer> layerSizes;
 
         public FullyConnectedGraphIndex(int entryNode, int size) {
+            this(entryNode, List.of(size));
+        }
+
+        public FullyConnectedGraphIndex(int entryNode, List<Integer> layerSizes) {
             this.entryNode = entryNode;
-            this.size = size;
+            this.layerSizes = layerSizes;
         }
 
         @Override
-        public int size()
-        {
-            return size;
+        public int size(int level) {
+            return layerSizes.get(level);
         }
 
         @Override
-        public NodesIterator getNodes() {
-            return new NodesIterator.ArrayNodesIterator(IntStream.range(0, size).toArray(),  size);
+        public int maxDegree() {
+            return layerSizes.stream().mapToInt(i -> i).max().orElseThrow();
+        }
+
+        @Override
+        public NodesIterator getNodes(int level) {
+            int n = layerSizes.get(level);
+            return new NodesIterator.ArrayNodesIterator(IntStream.range(0, n).toArray(), n);
         }
 
         @Override
@@ -258,8 +271,13 @@ public class TestUtil {
         }
 
         @Override
-        public int maxDegree() {
-            return size - 1;
+        public int getDegree(int level) {
+            return layerSizes.get(level) - 1;
+        }
+
+        @Override
+        public int getMaxLevel() {
+            return layerSizes.size() - 1;
         }
 
         @Override
@@ -267,18 +285,20 @@ public class TestUtil {
 
         private class FullyConnectedGraphIndexView implements View {
             @Override
-            public NodesIterator getNeighborsIterator(int node) {
-                return new NodesIterator.ArrayNodesIterator(IntStream.range(0, size).filter(i -> i != node).toArray() , size - 1);
+            public NodesIterator getNeighborsIterator(int level, int node) {
+                return new NodesIterator.ArrayNodesIterator(IntStream.range(0, layerSizes.get(level))
+                                                                    .filter(i -> i != node).toArray(),
+                                                            layerSizes.get(level) - 1);
             }
 
             @Override
             public int size() {
-                return size;
+                return FullyConnectedGraphIndex.this.size(0);
             }
 
             @Override
-            public int entryNode() {
-                return entryNode;
+            public NodeAtLevel entryNode() {
+                return new NodeAtLevel(layerSizes.size() - 1, entryNode);
             }
 
             @Override
@@ -297,41 +317,60 @@ public class TestUtil {
     }
 
     public static class RandomlyConnectedGraphIndex implements GraphIndex {
-        private final int size;
-        private final Map<Integer, int[]> nodes;
+        private final List<CommonHeader.LayerInfo> layerInfo;
+        private final List<Map<Integer, int[]>> layerAdjacency;
         private final int entryNode;
 
-        public RandomlyConnectedGraphIndex(int size, int M, Random random) {
-            this.size = size;
-            this.nodes = new ConcurrentHashMap<>();
+        public RandomlyConnectedGraphIndex(List<CommonHeader.LayerInfo> layerInfo, Random random) {
+            this.layerInfo = layerInfo;
+            this.layerAdjacency = new ArrayList<>(layerInfo.size());
+            
+            // Build adjacency for each layer
+            for (int level = 0; level < layerInfo.size(); level++) {
+                int size = layerInfo.get(level).size;
+                int maxNeighbors = layerInfo.get(level).degree;
+                Map<Integer, int[]> adjacency = new ConcurrentHashMap<>();
 
-            var maxNeighbors = Math.min(M, size - 1);
-            var nodeIds = IntStream.range(0, size).boxed().collect(Collectors.toCollection(ArrayList::new));
-            Collections.shuffle(nodeIds, random);
+                // Generate node IDs in random order
+                var nodeIds = IntStream.range(0, size).boxed().collect(Collectors.toCollection(ArrayList::new));
+                Collections.shuffle(nodeIds, random);
 
-            for (int i = 0; i < size; i++) {
-                Set<Integer> neighborSet = new HashSet<>();
-                while (neighborSet.size() < maxNeighbors) {
-                    var neighborIdx = random.nextInt(size);
-                    if (neighborIdx != i) {
-                        neighborSet.add(nodeIds.get(neighborIdx));
+                // Fill adjacency
+                for (int i = 0; i < size; i++) {
+                    Set<Integer> neighborSet = new HashSet<>();
+                    while (neighborSet.size() < maxNeighbors) {
+                        int neighborIdx = random.nextInt(size);
+                        if (neighborIdx != i) {
+                            neighborSet.add(nodeIds.get(neighborIdx));
+                        }
                     }
-                    nodes.put(nodeIds.get(i), neighborSet.stream().mapToInt(Integer::intValue).toArray());
+                    adjacency.put(nodeIds.get(i), neighborSet.stream().mapToInt(Integer::intValue).toArray());
                 }
+                layerAdjacency.add(adjacency);
             }
+            
+            // Pick an entry node from the top layer
+            this.entryNode = random.nextInt(layerInfo.get(layerInfo.size() - 1).size);
+        }
 
-            this.entryNode = random.nextInt(size);
+        public RandomlyConnectedGraphIndex(int size, int M, Random random) {
+            this(List.of(new CommonHeader.LayerInfo(size, M)), random);
         }
 
         @Override
-        public int size()
-        {
-            return size;
+        public int getMaxLevel() {
+            return layerInfo.size() - 1;
         }
 
         @Override
-        public NodesIterator getNodes() {
-            return new NodesIterator.ArrayNodesIterator(IntStream.range(0, size).toArray(),  size);
+        public int size(int level) {
+            return layerInfo.get(level).size;
+        }
+
+        @Override
+        public NodesIterator getNodes(int level) {
+            int sz = layerInfo.get(level).size;
+            return new NodesIterator.ArrayNodesIterator(IntStream.range(0, sz).toArray(), sz);
         }
 
         @Override
@@ -340,8 +379,13 @@ public class TestUtil {
         }
 
         @Override
+        public int getDegree(int level) {
+            return layerInfo.get(level).degree;
+        }
+
+        @Override
         public int maxDegree() {
-            return nodes.get(0).length;
+            return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
         }
 
         @Override
@@ -349,17 +393,18 @@ public class TestUtil {
 
         private class RandomlyConnectedGraphIndexView implements View {
             @Override
-            public NodesIterator getNeighborsIterator(int node) {
-                return new NodesIterator.ArrayNodesIterator(nodes.get(node));
+            public NodesIterator getNeighborsIterator(int level, int node) {
+                var adjacency = layerAdjacency.get(level);
+                return new NodesIterator.ArrayNodesIterator(adjacency.get(node));
             }
 
             public int size() {
-                return size;
+                return layerInfo.get(0).size;
             }
 
             @Override
-            public int entryNode() {
-                return entryNode;
+            public NodeAtLevel entryNode() {
+                return new NodeAtLevel(getMaxLevel(), entryNode);
             }
 
             @Override

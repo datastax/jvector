@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import java.io.DataOutput;
 import java.io.IOException;
@@ -29,13 +29,15 @@ public interface Feature {
 
     int headerSize();
 
-    int inlineSize();
+    int featureSize();
 
     void writeHeader(DataOutput out) throws IOException;
 
-    void writeInline(DataOutput out, State state) throws IOException;
+    default void writeInline(DataOutput out, State state) throws IOException {
+        // default no-op
+    }
 
-    // Feature implementations should implement a State as well for use with writeInline
+    // Feature implementations should implement a State as well for use with writeInline/writeSeparately
     interface State {
     }
 

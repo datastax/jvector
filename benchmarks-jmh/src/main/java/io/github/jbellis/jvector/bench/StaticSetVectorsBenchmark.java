@@ -69,7 +69,8 @@ public class StaticSetVectorsBenchmark {
                 16, // graph degree
                 100, // construction search depth
                 1.2f, // allow degree overflow during construction by this factor
-                1.2f); // relax neighbor diversity requirement by this factor
+                1.2f, // relax neighbor diversity requirement by this factor
+                true); // add the hierarchy
         graphIndex = graphIndexBuilder.build(ravv);
     }
 

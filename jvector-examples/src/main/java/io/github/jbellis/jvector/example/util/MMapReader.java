@@ -54,7 +54,16 @@ public class MMapReader implements RandomAccessReader {
     }
 
     @Override
-    public float readFloat() throws IOException {
+    public long readLong() {
+        try {
+            return buffer.memory().getLong(position);
+        } finally {
+            position += Long.BYTES;
+        }
+    }
+
+    @Override
+    public float readFloat() {
         try {
             return buffer.memory().getFloat(position);
         } finally {

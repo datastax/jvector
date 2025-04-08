@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQScorer;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -53,7 +55,7 @@ public class NVQ implements Feature {
     }
 
     @Override
-    public int inlineSize() { return nvq.compressedVectorSize();}
+    public int featureSize() { return nvq.compressedVectorSize();}
 
     public int dimension() {
         return nvq.globalMean.length();
@@ -86,14 +88,14 @@ public class NVQ implements Feature {
         }
     }
 
-    ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
-                                                 VectorSimilarityFunction vsf,
-                                                 FeatureSource source) {
+    public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
+                                                        VectorSimilarityFunction vsf,
+                                                        FeatureSource source) {
         var function = scorer.scoreFunctionFor(queryVector, vsf);
 
         return node2 -> {
             try {
-                var reader = source.inlineReaderForNode(node2, FeatureId.NVQ_VECTORS);
+                var reader = source.featureReaderForNode(node2, FeatureId.NVQ_VECTORS);
                 QuantizedVector.loadInto(reader, reusableQuantizedVector.get());
             } catch (IOException e) {
                 throw new RuntimeException(e);

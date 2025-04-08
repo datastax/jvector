@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
 
 import java.util.Collections;
 import java.util.EnumSet;
@@ -32,7 +33,9 @@ import java.util.function.BiFunction;
 public enum FeatureId {
     INLINE_VECTORS(InlineVectors::load),
     FUSED_ADC(FusedADC::load),
-    NVQ_VECTORS(NVQ::load);
+    NVQ_VECTORS(NVQ::load),
+    SEPARATED_VECTORS(SeparatedVectors::load),
+    SEPARATED_NVQ(SeparatedNVQ::load);
 
     public static final Set<FeatureId> ALL = Collections.unmodifiableSet(EnumSet.allOf(FeatureId.class));
 
@@ -42,7 +45,7 @@ public enum FeatureId {
         this.loader = loader;
     }
 
-    Feature load(CommonHeader header, RandomAccessReader reader) {
+    public Feature load(CommonHeader header, RandomAccessReader reader) {
         return loader.apply(header, reader);
     }
 
