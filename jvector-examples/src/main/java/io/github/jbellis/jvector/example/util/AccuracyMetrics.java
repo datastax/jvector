@@ -48,6 +48,13 @@ public class AccuracyMetrics {
         if (kGT > kRetrieved) {
             throw new IllegalArgumentException("kGT: " + kGT + " > kRetrieved: " + kRetrieved);
         }
+        if (kGT > gt.size()) {
+            throw new IllegalArgumentException("kGT: " + kGT + " > Gt size: " + gt.size());
+        }
+        if (kRetrieved > retrieved.size()) {
+            throw new IllegalArgumentException("kRetrieved: " + kRetrieved + " > retrieved size: " + retrieved.size());
+        }
+
         var gtView = crop(gt, kGT);
         var retrievedView = crop(retrieved, kRetrieved);
 
@@ -82,6 +89,13 @@ public class AccuracyMetrics {
         var retrievedTemp = Arrays.stream(retrieved.getNodes()).mapToInt(nodeScore -> nodeScore.node)
                 .boxed()
                 .collect(Collectors.toList());
+
+        if (k > gt.size()) {
+            throw new IllegalArgumentException("k: " + k + " > Gt size: " + gt.size());
+        }
+        if (k > retrievedTemp.size()) {
+            throw new IllegalArgumentException("k: " + k + " > retrieved size: " + retrievedTemp.size());
+        }
 
         var gtView = crop(gt, k);
         var retrievedView = crop(retrievedTemp, k);
