@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.SubsetRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
@@ -38,6 +39,7 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.ImmutablePQVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -45,6 +47,7 @@ import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.BufferedOutputStream;
@@ -57,6 +60,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -64,10 +68,28 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.LinkedBlockingQueue;
+
+
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
+
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.TreeMap;
+
 
 /**
  * Tests a grid of configurations against a dataset
@@ -166,9 +188,13 @@ public class Grid {
             throws IOException
     {
         var floatVectors = ds.getBaseRavv();
+        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+        int encodingBatchSize = 300_000;
+        ImmutablePQVectors pqVectors = processPQInBatches(floatVectors, (ProductQuantization) buildCompressor, simdExecutor, encodingBatchSize);
+        System.out.println("PQ encoding complete.");
 
-        var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
+//        var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pqVectors);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, 1.5f, 1.2f);
 
         // use the inline vectors index as the score provider for graph construction
@@ -178,7 +204,7 @@ public class Grid {
         int n = 0;
         for (var features : featureSets) {
             var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor());
+            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pqVectors.getCompressor());
             var writer = bws.builder.build();
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
@@ -190,26 +216,165 @@ public class Grid {
             throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
         }
 
-        // build the graph incrementally
-        long start = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
-        PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+//        // build the graph incrementally
+//        long start = System.nanoTime();
+//        var vv = floatVectors.threadLocalSupplier();
+//        PhysicalCoreExecutor.pool().submit(() -> {
+//            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+//                writers.forEach((features, writer) -> {
+//                    try {
+//                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+//                        suppliers.get(features).forEach((featureId, supplier) -> {
+//                            stateMap.put(featureId, supplier.apply(node));
+//                        });
+//                        writer.writeInline(node, stateMap);
+//                    } catch (IOException e) {
+//                        throw new UncheckedIOException(e);
+//                    }
+//                });
+//                builder.addGraphNode(node, vv.get().getVector(node));
+//            });
+//        }).join();
+//        builder.cleanup();
+
+        long startTime = System.nanoTime();
+        var vv = floatVectors.threadLocalSupplier(); // ThreadLocal supplier for vector access
+
+        // Determine the maximum number of nodes to process concurrently based on memory.
+        int maxConcurrentNodes = 50;
+        // Create a queue with a bounded capacity.
+        // Tune based on memory vs. keeping threads busy. Start smaller.
+        int queueCapacity = maxConcurrentNodes * 4; // e.g., 200 tasks waiting in queue
+        LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(queueCapacity);
+
+        System.out.printf("Using ThreadPoolExecutor with %d threads and queue capacity %d%n",
+                maxConcurrentNodes, queueCapacity);
+
+        // Create the ThreadPoolExecutor directly
+        // corePoolSize = maxConcurrentNodes
+        // maximumPoolSize = maxConcurrentNodes (fixed size pool)
+        // keepAliveTime = 0L (doesn't matter for fixed size)
+        // workQueue = the bounded queue
+        // RejectedExecutionHandler = CallerRunsPolicy()
+        ExecutorService nodeProcessingPool = new ThreadPoolExecutor(
+                maxConcurrentNodes,
+                maxConcurrentNodes,
+                0L, TimeUnit.MILLISECONDS,
+                workQueue,
+                new ThreadPoolExecutor.CallerRunsPolicy() // Crucial for throttling!
+        );
+
+        List<Future<?>> futures = new ArrayList<>();
+        int vectorCount = floatVectors.size();
+
+        final AtomicInteger nodesProcessedCounter = new AtomicInteger(0);
+        final int reportingInterval = 100_000;
+
+        System.out.printf("Submitting %d nodes for processing (will block if queue is full)...%n", vectorCount);
+
+        // Submit one task per node to the limited pool
+        for (int i = 0; i < vectorCount; i++) {
+            final int nodeOrdinal = i; // Effectively final variable for lambda
+
+            Future<?> future = nodeProcessingPool.submit(() -> {
+                try {
+                    // 1. Load the vector (only for this node)
+                    var vector = vv.get().getVector(nodeOrdinal);
+
+                    // 2. Compute features (this part remains the same)
+                    var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+                    writers.forEach((features, writer) -> {
+                        // This inner part doesn't need explicit try-catch if
+                        // UncheckedIOException is acceptable for writer errors.
+                        // If writer errors should allow other nodes to proceed, add try-catch here.
                         suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
+                            stateMap.put(featureId, supplier.apply(nodeOrdinal));
                         });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
+                        try {
+                            writer.writeInline(nodeOrdinal, stateMap);
+                        } catch (IOException e) {
+                            // Consider logging instead of throwing to allow completion?
+                            throw new UncheckedIOException("Error writing features for node " + nodeOrdinal, e);
+                        }
+                    });
+
+                    // 3. Add the node to the graph builder
+                    // Assuming builder.addGraphNode is thread-safe AND handles ordinal correctly
+                    builder.addGraphNode(nodeOrdinal, vector);
+
+                    // At this point, 'vector' and 'stateMap' go out of scope for this task
+                    // and become eligible for garbage collection, helping manage memory.
+
+                    // Increment counter *after* main work for this node is done
+                    int count = nodesProcessedCounter.incrementAndGet();
+
+                    if (count % reportingInterval == 0) {
+                        // Simple timestamped progress message
+                        System.out.printf("[%s] Processed %d / %d nodes...%n",
+                                LocalTime.now().truncatedTo(ChronoUnit.SECONDS),
+                                count,
+                                vectorCount);
                     }
-                });
-                builder.addGraphNode(node, vv.get().getVector(node));
+
+                } catch (Exception e) {
+                    // Catch exceptions from vector loading or addGraphNode if they occur
+                    // Log or wrap them to be checked later via the Future
+                    System.err.printf("!!! Exception processing node %d: %s%n", nodeOrdinal, e.getMessage());
+                    // Wrap in a runtime exception to be retrieved by Future.get()
+                    throw new RuntimeException("Error processing node " + nodeOrdinal, e);
+                }
             });
-        }).join();
+            futures.add(future);
+        }
+
+        // Shutdown the pool gracefully - stop accepting new tasks
+        System.out.println("All node processing tasks submitted. Shutting down pool and awaiting completion...");
+        nodeProcessingPool.shutdown();
+
+        // Wait for all submitted tasks to finish
+        try {
+            // Wait a very long time for tasks to complete
+            if (!nodeProcessingPool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) {
+                System.err.println("Node processing pool termination timed out. Forcing shutdown.");
+                nodeProcessingPool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            System.err.println("Node processing pool awaiting termination interrupted. Forcing shutdown.");
+            nodeProcessingPool.shutdownNow();
+            Thread.currentThread().interrupt(); // Preserve interrupt status
+        }
+
+        System.out.println("Node processing pool finished.");
+
+        // Crucial: Check for exceptions that occurred during task execution
+        for (Future<?> f : futures) {
+            try {
+                f.get(); // This will re-throw any exception caught and wrapped inside the task's lambda
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Graph building interrupted while checking results", e);
+            } catch (java.util.concurrent.ExecutionException e) {
+                // Unwrap the actual cause thrown inside the task
+                Throwable cause = e.getCause();
+                System.err.println("Error occurred during node processing task: " + cause.getMessage());
+                if (cause instanceof RuntimeException) {
+                    throw (RuntimeException) cause;
+                } else if (cause instanceof Error) {
+                    throw (Error) cause;
+                } else {
+                    throw new RuntimeException("Unhandled error during graph building execution", cause);
+                }
+            }
+        }
+
+        System.out.println("All nodes processed successfully. Running cleanup...");
+
+        // Finally, call cleanup (assuming this needs to happen after all nodes are added)
         builder.cleanup();
+
+        long endTime = System.nanoTime();
+        System.out.printf("Graph building with controlled concurrency took %.2f seconds%n", (endTime - startTime) / 1e9);
+
         // write the edge lists and close the writers
         // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
         writers.entrySet().stream().parallel().forEach(entry -> {
@@ -219,7 +384,7 @@ public class Grid {
             if (features.contains(FeatureId.FUSED_ADC)) {
                 writeSuppliers = new EnumMap<>(FeatureId.class);
                 var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
+                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
             } else {
                 writeSuppliers = Map.of();
             }
@@ -231,7 +396,7 @@ public class Grid {
             }
         });
         builder.close();
-        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - start) / 1_000_000_000.0);
+        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - startTime) / 1_000_000_000.0);
 
         // open indexes
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
@@ -474,5 +639,66 @@ public class Grid {
             this.topKFound = topKFound;
             this.nodesVisited = nodesVisited;
         }
+    }
+
+    public void processInBatches(RandomAccessVectorValues ravv, int batchSize) {
+        // Process ravvs in batches to deal with LTM datasets.
+        int totalVectors = ravv.size();
+        for (int batchStart = 0; batchStart < totalVectors; batchStart += batchSize) {
+            int batchEnd = Math.min(batchStart + batchSize, totalVectors);
+            System.out.format("Processing batch: %d to %d%n", batchStart, batchEnd);
+        }
+    }
+
+    private static ImmutablePQVectors processPQInBatches(RandomAccessVectorValues ravv,
+                                                         ProductQuantization pq,
+                                                         ForkJoinPool simdExecutor,
+                                                         int batchSize) {
+        // List to store PQ vectors for each batch.
+        List<ImmutablePQVectors> batchPQList = new ArrayList<>();
+        int totalVectors = ravv.size();
+
+        // Loop over the dataset in batches.
+        for (int batchStart = 0; batchStart < totalVectors; batchStart += batchSize) {
+            int batchEnd = Math.min(batchStart + batchSize, totalVectors);
+            System.out.format("Processing batch: %d to %d%n", batchStart, batchEnd);
+
+            // Create a subset view for the current batch.
+            RandomAccessVectorValues batchRavv = new SubsetRandomAccessVectorValues(ravv, batchStart, batchEnd);
+
+            // Process the batch by encoding its vectors using PQVectors.encodeAndBuild.
+            ImmutablePQVectors batchPQ = PQVectors.encodeAndBuild(pq, batchRavv.size(), batchRavv, simdExecutor);
+
+            // Store the batch result.
+            batchPQList.add(batchPQ);
+        }
+
+        // Merge the batch-level PQ vectors into one final instance.
+        ImmutablePQVectors finalPQ = mergeBatchPQVectors(batchPQList);
+        return finalPQ;
+    }
+
+    /**
+     * Merge multiple ImmutablePQVectors (from different batches) into a single final instance.
+     * This method concatenates the ByteSequence chunks from each batch in the order of processing.
+     */
+    private static ImmutablePQVectors mergeBatchPQVectors(List<ImmutablePQVectors> batchPQList) {
+        // Sum total vector count from all batches.
+        int totalVectors = batchPQList.stream().mapToInt(bpq -> bpq.count()).sum();
+
+        // Assume all batches use the same ProductQuantization instance and chunk size.
+        ProductQuantization pq = batchPQList.get(0).getPQ();
+        int vectorsPerChunk = batchPQList.get(0).getVectorsPerChunk();
+
+        // Accumulate the chunks in order.
+        List<ByteSequence<?>> allChunks = new ArrayList<>();
+        for (ImmutablePQVectors bpq : batchPQList) {
+            for (ByteSequence<?> chunk : bpq.getChunks()) {
+                allChunks.add(chunk);
+            }
+        }
+        ByteSequence<?>[] finalChunks = allChunks.toArray(new ByteSequence<?>[0]);
+
+        return new ImmutablePQVectors(pq, finalChunks, totalVectors, vectorsPerChunk);
     }
 }

@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.similarity;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -141,6 +142,7 @@ public interface BuildScoreProvider {
      */
     static BuildScoreProvider pqBuildScoreProvider(VectorSimilarityFunction vsf, PQVectors pqv) {
         int dimension = pqv.getOriginalSize() / Float.BYTES;
+        final ThreadLocal<VectorFloat<?>> reusableVector = ThreadLocal.withInitial(() -> vts.createFloatVector(dimension));
 
         return new BuildScoreProvider() {
             @Override
@@ -153,7 +155,7 @@ public interface BuildScoreProvider {
                 // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
-                VectorFloat<?> v1 = vts.createFloatVector(dimension);
+                VectorFloat<?> v1 = reusableVector.get();
                 pqv.getCompressor().decode(pqv.get(node1), v1);
                 var asf = pqv.scoreFunctionFor(v1, vsf); // not precomputed!
                 return new SearchScoreProvider(asf);
@@ -161,7 +163,7 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                VectorFloat<?> decoded = vts.createFloatVector(dimension);
+                VectorFloat<?> decoded = reusableVector.get();
                 pqv.getCompressor().decode(pqv.get(node1), decoded);
                 return searchProviderFor(decoded);
             }

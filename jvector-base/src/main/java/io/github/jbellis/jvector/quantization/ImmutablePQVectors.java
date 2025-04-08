@@ -44,4 +44,17 @@ public class ImmutablePQVectors extends PQVectors {
     public int count() {
         return vectorCount;
     }
+
+    // Getters for batch processing in Bench / Grid
+    public ProductQuantization getPQ() {
+        return pq;
+    }
+
+    public int getVectorsPerChunk() {
+        return vectorsPerChunk;
+    }
+
+    public ByteSequence<?>[] getChunks() {
+        return compressedDataChunks;
+    }
 }
