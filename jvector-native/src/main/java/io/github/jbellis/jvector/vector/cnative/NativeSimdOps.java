@@ -408,6 +408,7 @@ public class NativeSimdOps {
             NativeSimdOps.C_POINTER,
             NativeSimdOps.C_INT,
             NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
             NativeSimdOps.C_INT
         );
 
@@ -419,7 +420,7 @@ public class NativeSimdOps {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsLength)
+     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
      */
     public static FunctionDescriptor assemble_and_sum_f32_512$descriptor() {
@@ -429,7 +430,7 @@ public class NativeSimdOps {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsLength)
+     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
      */
     public static MethodHandle assemble_and_sum_f32_512$handle() {
@@ -437,16 +438,16 @@ public class NativeSimdOps {
     }
     /**
      * {@snippet lang=c :
-     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsLength)
+     * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
      */
-    public static float assemble_and_sum_f32_512(MemorySegment data, int dataBase, MemorySegment baseOffsets, int baseOffsetsLength) {
+    public static float assemble_and_sum_f32_512(MemorySegment data, int dataBase, MemorySegment baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
         var mh$ = assemble_and_sum_f32_512.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("assemble_and_sum_f32_512", data, dataBase, baseOffsets, baseOffsetsLength);
+                traceDowncall("assemble_and_sum_f32_512", data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
             }
-            return (float)mh$.invokeExact(data, dataBase, baseOffsets, baseOffsetsLength);
+            return (float)mh$.invokeExact(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
         }
@@ -456,6 +457,7 @@ public class NativeSimdOps {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             NativeSimdOps.C_FLOAT,
             NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
             NativeSimdOps.C_INT,
             NativeSimdOps.C_INT,
             NativeSimdOps.C_POINTER,
@@ -471,7 +473,7 @@ public class NativeSimdOps {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
+     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
      */
     public static FunctionDescriptor pq_decoded_cosine_similarity_f32_512$descriptor() {
@@ -481,7 +483,7 @@ public class NativeSimdOps {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
+     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
      */
     public static MethodHandle pq_decoded_cosine_similarity_f32_512$handle() {
@@ -489,16 +491,16 @@ public class NativeSimdOps {
     }
     /**
      * {@snippet lang=c :
-     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
+     * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
      */
-    public static float pq_decoded_cosine_similarity_f32_512(MemorySegment baseOffsets, int baseOffsetsLength, int clusterCount, MemorySegment partialSums, MemorySegment aMagnitude, float bMagnitude) {
+    public static float pq_decoded_cosine_similarity_f32_512(MemorySegment baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, MemorySegment partialSums, MemorySegment aMagnitude, float bMagnitude) {
         var mh$ = pq_decoded_cosine_similarity_f32_512.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("pq_decoded_cosine_similarity_f32_512", baseOffsets, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+                traceDowncall("pq_decoded_cosine_similarity_f32_512", baseOffsets, baseOffsetsOffset, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
             }
-            return (float)mh$.invokeExact(baseOffsets, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+            return (float)mh$.invokeExact(baseOffsets, baseOffsetsOffset, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
         }
