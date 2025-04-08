@@ -15,10 +15,8 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.example.SiftSmall;
-import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.bench.output.TextTable;
+import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.slf4j.Logger;
@@ -34,35 +32,32 @@ import java.util.concurrent.TimeUnit;
 @Warmup(iterations = 2)
 @Measurement(iterations = 5)
 @Threads(1)
-public class RandomVectorsBenchmark extends AbstractVectorsBenchmark {
-    private static final Logger log = LoggerFactory.getLogger(RandomVectorsBenchmark.class);
-    @Param({"1000", "10000", "100000", "1000000"})
-    int numBaseVectors;
-    @Param({"10"})
-    int numQueryVectors;
+public class StaticSetVectorsTabularBenchmark extends AbstractVectorsBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(StaticSetVectorsTabularBenchmark.class);
 
     @Setup
     public void setup() throws IOException {
-        commonSetupRandom(numBaseVectors, numQueryVectors);
+        tableRepresentation = new TextTable();
+        var siftPath = "siftsmall";
+        baseVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_base.fvecs", siftPath));
+        queryVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_query.fvecs", siftPath));
+        groundTruth = SiftLoader.readIvecs(String.format("%s/siftsmall_groundtruth.ivecs", siftPath));
+        commonSetupStatic(true);
     }
 
     @TearDown
     public void tearDown() throws IOException {
         baseVectors.clear();
         queryVectors.clear();
+        groundTruth.clear();
         graphIndexBuilder.close();
+        scheduler.shutdown();
+        tableRepresentation.print();
     }
 
     @Benchmark
-    public void testOnHeapRandomVectors(Blackhole blackhole) {
-        var queryVector = SiftSmall.randomVector(originalDimension);
-        // Your benchmark code here
-        var searchResult = GraphSearcher.search(queryVector,
-                10, // number of results
-                ravv, // vectors we're searching, used for scoring
-                VectorSimilarityFunction.EUCLIDEAN, // how to score
-                graphIndex,
-                Bits.ALL); // valid ordinals to consider
-        blackhole.consume(searchResult);
+    public void testOnHeapWithStaticQueryVectors(Blackhole blackhole) {
+        commonTest(blackhole);
     }
+
 }
