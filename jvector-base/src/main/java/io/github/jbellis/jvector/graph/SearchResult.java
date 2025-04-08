@@ -25,12 +25,16 @@ import java.util.Objects;
 public final class SearchResult {
     private final NodeScore[] nodes;
     private final int visitedCount;
+    private final int expandedCount;
+    private final int expandedCountL0;
     private final int rerankedCount;
     private final float worstApproximateScoreInTopK;
 
-    public SearchResult(NodeScore[] nodes, int visitedCount, int rerankedCount, float worstApproximateScoreInTopK) {
+    public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int rerankedCount, float worstApproximateScoreInTopK) {
         this.nodes = nodes;
         this.visitedCount = visitedCount;
+        this.expandedCount = expandedCount;
+        this.expandedCountL0 = expandedCountL0;
         this.rerankedCount = rerankedCount;
         this.worstApproximateScoreInTopK = worstApproximateScoreInTopK;
     }
@@ -47,6 +51,20 @@ public final class SearchResult {
      */
     public int getVisitedCount() {
         return visitedCount;
+    }
+
+    /**
+     * @return the total number of graph nodes expanded while performing the search
+     */
+    public int getExpandedCount() {
+        return expandedCount;
+    }
+
+    /**
+     * @return the number of graph nodes expanded while performing the search in the base layer
+     */
+    public int getExpandedCountBaseLayer() {
+        return expandedCountL0;
     }
 
     /**

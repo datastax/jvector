@@ -21,7 +21,7 @@ JVector is a graph-based index that builds on the HNSW and DiskANN designs with 
 JVector implements a multi-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
 ![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)
 
-The upper layers of the hierarchy are represnted by an in-memory adjacency list per node. This allows for quick navigation with no IOs.
+The upper layers of the hierarchy are represented by an in-memory adjacency list per node. This allows for quick navigation with no IOs.
 The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
 * Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
 * [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)

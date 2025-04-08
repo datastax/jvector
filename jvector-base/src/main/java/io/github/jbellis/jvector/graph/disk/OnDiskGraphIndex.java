@@ -206,8 +206,8 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
             for (int node = 0; node < upperBound; node++) {
-                long node_offset = layerOffset + (node * thisLayerNodeSide);
-                reader.seek(node_offset);
+                long nodeOffset = layerOffset + (node * thisLayerNodeSide);
+                reader.seek(nodeOffset);
                 if (reader.readInt() != -1) {
                     validNodes[pos++] = node;
                 }

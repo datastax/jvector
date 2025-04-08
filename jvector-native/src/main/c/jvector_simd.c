@@ -289,12 +289,13 @@ float euclidean_f32(int preferred_size, const float* a, int aoffset, const float
            : euclidean_f32_256(a, aoffset, b, boffset, length);
 }
 
-float assemble_and_sum_f32_512(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsLength) {
+float assemble_and_sum_f32_512(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
     __m512 sum = _mm512_setzero_ps();
     int i = 0;
     int limit = baseOffsetsLength - (baseOffsetsLength % 16);
     __m512i indexRegister = initialIndexRegister;
     __m512i dataBaseVec = _mm512_set1_epi32(dataBase);
+    baseOffsets = baseOffsets + baseOffsetsOffset;
 
     for (; i < limit; i += 16) {
         __m128i baseOffsetsRaw = _mm_loadu_si128((__m128i *)(baseOffsets + i));
@@ -319,13 +320,14 @@ float assemble_and_sum_f32_512(const float* data, int dataBase, const unsigned c
     return res;
 }
 
-float pq_decoded_cosine_similarity_f32_512(const unsigned char* baseOffsets, int baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude) {
+float pq_decoded_cosine_similarity_f32_512(const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude) {
     __m512 sum = _mm512_setzero_ps();
     __m512 vaMagnitude = _mm512_setzero_ps();
     int i = 0;
     int limit = baseOffsetsLength - (baseOffsetsLength % 16);
     __m512i indexRegister = initialIndexRegister;
     __m512i scale = _mm512_set1_epi32(clusterCount);
+    baseOffsets = baseOffsets + baseOffsetsOffset;
 
 
     for (; i < limit; i += 16) {

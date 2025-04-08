@@ -468,7 +468,7 @@ public class GraphIndexBuilder implements Closeable {
             var entry = graph.entry();
             SearchResult result;
             if (entry == null) {
-                result = new SearchResult(new NodeScore[] {}, 0, 0, 0);
+                result = new SearchResult(new NodeScore[] {}, 0, 0, 0, 0, 0);
             } else {
                 gs.initializeInternal(ssp, entry, bits);
 
@@ -541,7 +541,7 @@ public class GraphIndexBuilder implements Closeable {
         if (nRemoved == 0) {
             return 0;
         }
-        // make a list of remaining live nodes 
+        // make a list of remaining live nodes
         var liveNodes = new IntArrayList();
         for (int i = 0; i < graph.getIdUpperBound(); i++) {
             if (graph.containsNode(i) && !toDelete.get(i)) {

@@ -78,7 +78,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         builder.addGraphNode(0, ravv.getVector(0));
         builder.addGraphNode(1, ravv.getVector(1));
         builder.addGraphNode(2, ravv.getVector(2));
-        var neighbors = builder.graph.getNeighbors(0, 0); // TODO
+        var neighbors = builder.graph.getNeighbors(0, 0);
         assertEquals(1, neighbors.getNode(0));
         assertEquals(2, neighbors.getNode(1));
         assertEquals(0.5f, neighbors.getScore(0), 1E-6);
@@ -101,7 +101,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertTrue(newGraph.containsNode(2));
 
         // Check node 0's neighbors, score and order should be different
-        var newNeighbors = newGraph.getNeighbors(0, 0); // TODO
+        var newNeighbors = newGraph.getNeighbors(0, 0);
         assertEquals(2, newNeighbors.getNode(0));
         assertEquals(1, newNeighbors.getNode(1));
         assertEquals(0.2f, newNeighbors.getScore(0), 1E-6);
