@@ -24,6 +24,8 @@
 
 package io.github.jbellis.jvector.util;
 
+import java.util.PrimitiveIterator;
+
 /**
  * An AbstractLongHeap that can grow in size (unbounded, except for memory and array size limits).
  */
@@ -46,5 +48,11 @@ public class GrowableLongHeap extends AbstractLongHeap {
     public boolean push(long element) {
         add(element);
         return true;
+    }
+
+    @Override
+    public void pushAll(PrimitiveIterator.OfLong elements, int elementsSize)
+    {
+        addAll(elements, elementsSize);
     }
 }

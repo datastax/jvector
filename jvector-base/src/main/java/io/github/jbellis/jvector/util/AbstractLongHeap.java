@@ -25,6 +25,7 @@
 package io.github.jbellis.jvector.util;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import java.util.PrimitiveIterator;
 
 /**
  * A min heap that stores longs; a primitive priority queue that like all priority queues maintains
@@ -64,6 +65,14 @@ public abstract class AbstractLongHeap {
      */
     public abstract boolean push(long element);
 
+    /**
+     * Adds all elements from the given iterator to this heap, in bulk.
+     *
+     * @param elements the elements to add
+     * @param elementsSize the number of elements to add
+     */
+    public abstract void pushAll(PrimitiveIterator.OfLong elements, int elementsSize);
+
     protected long add(long element) {
         size++;
         if (size == heap.length) {
@@ -72,6 +81,38 @@ public abstract class AbstractLongHeap {
         heap[size] = element;
         upHeap(size);
         return heap[1];
+    }
+
+    /**
+     * Bulk-adds all elements from the given iterator to this heap, then re-heapifies
+     * in O(n) time (Floyd's build-heap). For a proof explaining the linear time
+     * complexity, see <a href="https://stackoverflow.com/a/18742428">this stackoverflow answer</a>.
+     *
+     * @param elements the elements to add
+     * @param elementsSize the number of elements to add
+     */
+    protected void addAll(PrimitiveIterator.OfLong elements, int elementsSize) {
+        if (!elements.hasNext()) {
+            return; // nothing to do
+        }
+
+        // 1) Ensure we have enough capacity
+        int newSize = size + elementsSize;
+        if (newSize >= heap.length) {
+            heap = ArrayUtil.grow(heap, newSize);
+        }
+
+        // 2) Copy the new elements directly into the array
+        while (elements.hasNext()) {
+            heap[++size] = elements.nextLong();
+        }
+
+        // 3) "Bottom-up" re-heapify:
+        //    Start from the last non-leaf node (size >>> 1) down to the root (1).
+        //    This is Floyd's build-heap algorithm.
+        for (int i = size >>> 1; i >= 1; i--) {
+            downHeap(i);
+        }
     }
 
     /**
