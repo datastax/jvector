@@ -754,7 +754,7 @@ public class GraphIndexBuilder implements Closeable {
                 if (level > 0 || searchProvider.reranker() == null) {
                     sf = searchProvider.scoreFunction();
                 } else {
-                    sf = scoreProvider.searchProviderFor(nodeId).exactScoreFunction();
+                    sf = searchProvider.exactScoreFunction();
                 }
 
                 var ca = new NodeArray(nNeighbors);
@@ -794,7 +794,7 @@ public class GraphIndexBuilder implements Closeable {
             if (searchProvider.reranker() == null) {
                 sf = searchProvider.scoreFunction();
             } else {
-                sf = scoreProvider.searchProviderFor(nodeId).exactScoreFunction();
+                sf = searchProvider.exactScoreFunction();
             }
 
             var ca = new NodeArray(nNeighbors);
