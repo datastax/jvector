@@ -138,6 +138,7 @@ public interface BuildScoreProvider {
      * with reranking performed using RandomAccessVectorValues (which is intended to be
      * InlineVectorValues for building incrementally, but should technically
      * work with any RAVV implementation).
+     * This class is not thread safe, we should never its results to another thread.
      */
     static BuildScoreProvider pqBuildScoreProvider(VectorSimilarityFunction vsf, PQVectors pqv) {
         int dimension = pqv.getOriginalSize() / Float.BYTES;
