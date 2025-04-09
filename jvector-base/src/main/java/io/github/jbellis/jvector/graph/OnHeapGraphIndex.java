@@ -56,6 +56,9 @@ import java.util.stream.IntStream;
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
 public class OnHeapGraphIndex implements GraphIndex {
+    // Used for saving and loading OnHeapGraphIndex
+    public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
+
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
 
@@ -448,6 +451,9 @@ public class OnHeapGraphIndex implements GraphIndex {
         }
 
         try (var view = getView()) {
+            out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
+            out.writeInt(4); // The version
+
             // Write graph-level properties.
             out.writeInt(layers.size());
             assert view.entryNode().level == getMaxLevel();

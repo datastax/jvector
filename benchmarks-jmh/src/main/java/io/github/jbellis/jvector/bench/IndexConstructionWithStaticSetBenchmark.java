@@ -28,8 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Set;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.AverageTime)
@@ -42,9 +41,9 @@ import java.util.concurrent.TimeUnit;
 public class IndexConstructionWithStaticSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithStaticSetBenchmark.class);
     private RandomAccessVectorValues ravv;
-    private ArrayList<VectorFloat<?>> baseVectors;
-    private ArrayList<VectorFloat<?>> queryVectors;
-    private ArrayList<Set<Integer>> groundTruth;
+    private List<VectorFloat<?>> baseVectors;
+    private List<VectorFloat<?>> queryVectors;
+    private List<List<Integer>> groundTruth;
     private BuildScoreProvider bsp;
     @Param({"16", "32", "64"})
     private int M; // graph degree

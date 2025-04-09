@@ -35,14 +35,14 @@ public class DataSet {
     public final VectorSimilarityFunction similarityFunction;
     public final List<VectorFloat<?>> baseVectors;
     public final List<VectorFloat<?>> queryVectors;
-    public final List<? extends Set<Integer>> groundTruth;
+    public final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
     public DataSet(String name,
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    List<VectorFloat<?>> queryVectors,
-                   List<? extends Set<Integer>> groundTruth)
+                   List<? extends List<Integer>> groundTruth)
     {
         if (baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");
@@ -79,12 +79,12 @@ public class DataSet {
                                              VectorSimilarityFunction vsf,
                                              List<VectorFloat<?>> baseVectors,
                                              List<VectorFloat<?>> queryVectors,
-                                             List<Set<Integer>> groundTruth)
+                                             List<List<Integer>> groundTruth)
     {
         // remove zero vectors and duplicates, noting that this will change the indexes of the ground truth answers
         List<VectorFloat<?>> scrubbedBaseVectors;
         List<VectorFloat<?>> scrubbedQueryVectors;
-        List<HashSet<Integer>> gtSet;
+        List<ArrayList<Integer>> gtSet;
         scrubbedBaseVectors = new ArrayList<>(baseVectors.size());
         scrubbedQueryVectors = new ArrayList<>(queryVectors.size());
         gtSet = new ArrayList<>(groundTruth.size());
@@ -119,7 +119,7 @@ public class DataSet {
             var dupe = uniqueVectors.contains(v);
             if (valid && !dupe) {
                 scrubbedQueryVectors.add(v);
-                var gt = new HashSet<Integer>();
+                var gt = new ArrayList<Integer>();
                 for (int j : groundTruth.get(i)) {
                     gt.add(rawToScrubbed.get(j));
                 }

@@ -99,7 +99,7 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * Whe using pruning, we are using a heuristic to terminate the search earlier.
+     * When using pruning, we are using a heuristic to terminate the search earlier.
      * In certain cases, it can lead to speedups. This is set to false by default.
      * @param usage a boolean that determines whether we do early termination or not.
      */

@@ -78,7 +78,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     // offset of L0 adjacency data
     private final long neighborsOffset;
     /** For layers > 0, store adjacency fully in memory. */
-    private volatile AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
+    private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
 
     OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
@@ -202,17 +202,17 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
 
         try (var reader = readerSupplier.get()) {
-            int[] valid_nodes = new int[size(level)];
+            int[] validNodes = new int[size(level)];
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
             for (int node = 0; node < upperBound; node++) {
-                long node_offset = layerOffset + (node * thisLayerNodeSide);
-                reader.seek(node_offset);
+                long nodeOffset = layerOffset + (node * thisLayerNodeSide);
+                reader.seek(nodeOffset);
                 if (reader.readInt() != -1) {
-                    valid_nodes[pos++] = node;
+                    validNodes[pos++] = node;
                 }
             }
-            return new NodesIterator.ArrayNodesIterator(valid_nodes, size);
+            return new NodesIterator.ArrayNodesIterator(validNodes, size);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
