@@ -99,7 +99,7 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * Whe using pruning, we are using a heuristic to terminate the search earlier.
+     * When using pruning, we are using a heuristic to terminate the search earlier.
      * In certain cases, it can lead to speedups. This is set to false by default.
      * @param usage a boolean that determines whether we do early termination or not.
      */
@@ -402,10 +402,8 @@ public class GraphSearcher implements Closeable {
         rerankedResults.setMaxSize(topK);
 
         // add evicted results from the last call back to the candidates
-        var previouslyEvicted = evictedResults.size() > 0 ? new SparseBits() : Bits.NONE;
         evictedResults.foreach((node, score) -> {
             candidates.push(node, score);
-            ((SparseBits) previouslyEvicted).set(node);
         });
         evictedResults.clear();
 
