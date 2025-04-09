@@ -333,7 +333,6 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            int numVisited = 0;
             // track scores to predict when we are done with threshold queries
             var scoreTracker = threshold > 0
                     ? new ScoreTracker.TwoPhaseTracker(threshold)
