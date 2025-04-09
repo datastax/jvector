@@ -10,7 +10,7 @@
         <version>${revision}</version>
     </parent>
     <artifactId>jvector</artifactId>
-    <name>JVector</name>
+    <name>${project.artifactId}</name>
     <properties>
         <maven.install.skip>false</maven.install.skip>
     </properties>

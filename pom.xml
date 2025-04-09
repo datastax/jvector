@@ -8,8 +8,8 @@
     <version>${revision}</version>
     <packaging>pom</packaging>
     <!-- Project Metadata setup -->
-    <name>JVector parent</name>
-    <description>JVector: the most advanced embedded vector search engine</description>
+  <name>${project.artifactId}</name>
+  <description>JVector: the most advanced embedded vector search engine</description>
     <url>https://github.com/jbellis/jvector</url>
     <scm child.scm.connection.inherit.append.path="false"
          child.scm.developerConnection.inherit.append.path="false"

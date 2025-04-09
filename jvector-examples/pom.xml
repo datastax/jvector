@@ -10,12 +10,29 @@
         <version>${revision}</version>
     </parent>
     <artifactId>jvector-examples</artifactId>
-    <name>JVector Examples</name>
+    <name>${project.artifactId}</name>
     <properties>
         <awssdk.version>2.21.10</awssdk.version>
+        <maven.compiler.release>22</maven.compiler.release>
+        <maven.compiler.source>22</maven.compiler.source>
+        <maven.compiler.target>22</maven.compiler.target>
+        <mainClass>io.github.jbellis.jvector.testrig.commands.TestRig</mainClass>
     </properties>
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>22</release>
+                    <compilerArgs>
+                        <arg>--add-modules</arg>
+                        <arg>jdk.incubator.vector</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -47,6 +64,21 @@
                     <groupId>org.slf4j</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
+            <version>4.7.6</version>
+        </dependency>
+        <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>vectordata</artifactId>
+            <version>0.1.4-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>nbvectors</artifactId>
+            <version>0.1.4-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -139,6 +171,7 @@
             </dependencies>
             <build>
                 <plugins>
+
                     <plugin>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
@@ -232,6 +265,33 @@
             <build>
                 <plugins>
                     <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <version>3.7.1</version>
+                        <executions>
+                            <execution>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <addClasspath>true</addClasspath>
+                                    <mainClass>${mainClass}</mainClass>
+                                </manifest>
+                            </archive>
+                            <descriptorRefs>
+                                <!--                  <ref>assembly.xml</ref>-->
+                                <descriptorRef>jar-with-dependencies</descriptorRef>
+                                <!--            <descriptorRef>assembly</descriptorRef>-->
+                            </descriptorRefs>
+                        </configuration>
+                    </plugin>
+
+                    <plugin>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
@@ -265,6 +325,22 @@
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
                                         <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>testrig</id>
+                                <configuration>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                        <argument>--add-modules=jdk.incubator.vector</argument>
+                                        <argument>-XX:+HeapDumpOnOutOfMemoryError</argument>
+                                        <argument>-Xmx14G</argument>
+                                        <argument>-ea</argument>
+                                        <argument>io.github.jbellis.jvector.testrig.commands.TestRig</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>

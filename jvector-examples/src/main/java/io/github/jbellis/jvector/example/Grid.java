@@ -116,7 +116,7 @@ public class Grid {
         }
     }
 
-    static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
+    public static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
                             int M,
                             int efConstruction,
                             float neighborOverflow,
@@ -381,7 +381,7 @@ public class Grid {
         }
     }
 
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
+    public static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
         var cp = cpSupplier.apply(ds);
         if (!cp.supportsCaching()) {
             return cp.computeCompressor(ds);
@@ -435,7 +435,13 @@ public class Grid {
         return topKCorrect(topK, a, gt);
     }
 
-    private static ResultSummary performQueries(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int queryRuns) {
+    public static ResultSummary performQueries(
+        ConfiguredSystem cs,
+        int topK,
+        int rerankK,
+        boolean usePruning,
+        int queryRuns
+    ) {
         LongAdder topKfound = new LongAdder();
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
@@ -461,8 +467,8 @@ public class Grid {
         return new ResultSummary((int) topKfound.sum(), nodesVisited.sum(), nodesExpanded.sum(), nodesExpandedBaseLayer.sum());
     }
 
-    static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
+    public static class ConfiguredSystem implements AutoCloseable {
+        public DataSet ds;
         GraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
@@ -471,7 +477,12 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        public ConfiguredSystem(
+            DataSet ds,
+            GraphIndex index,
+            CompressedVectors cv,
+            Set<FeatureId> features
+        ) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
@@ -503,13 +514,17 @@ public class Grid {
         public void close() throws Exception {
             searchers.close();
         }
+
+        public GraphIndex getIndex() {
+            return this.index;
+        }
     }
 
-    static class ResultSummary {
-        final int topKFound;
-        final long nodesVisited;
-        final long nodesExpanded;
-        final long nodesExpandedBaseLayer;
+    public static class ResultSummary {
+        public final int topKFound;
+        public final long nodesVisited;
+        public final long nodesExpanded;
+        public final long nodesExpandedBaseLayer;
 
         ResultSummary(int topKFound, long nodesVisited, long nodesExpanded, long nodesExpandedBaseLayer) {
             this.topKFound = topKFound;

@@ -10,7 +10,7 @@
         <version>${revision}</version>
     </parent>
     <artifactId>jvector-twenty</artifactId>
-    <name>Twenty</name>
+    <name>${project.artifactId}</name>
     <build>
         <plugins>
             <plugin>

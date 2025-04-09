@@ -1,0 +1,22 @@
+#!/bin/bash
+export JAVA_OPTS="--add-modules jdk.incubator.vector"
+if [ ! -d "jvector-examples/target/classes" -o "$1" = "-r" ]
+then
+ shift
+ printf "building project before invoking testrig...\n" 1>&2
+ mvn -Pjdk22 compile package -pl :jvector-examples -am -DskipTests
+ status=$?
+ if (( status != 0 )) 
+ then
+  printf "failed build, resolve issues before trying to run testrig\n"
+  exit $status
+ else
+  printf "built project successfully, continuing...\n" 1>&2
+  echo -e "\a"
+  sleep 1
+  echo -e "\a"
+  sleep 1
+ fi
+fi
+
+java $JAVA_OPTS -Xmx32g -jar ./jvector-examples/target/jvector-examples-*-SNAPSHOT-jar-with-dependencies.jar $*

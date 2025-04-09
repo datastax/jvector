@@ -10,13 +10,22 @@
         <version>${revision}</version>
     </parent>
     <artifactId>jvector-tests</artifactId>
-    <name>Tests</name>
+    <name>${project.artifactId}</name>
     <properties>
         <skipSIMD>true</skipSIMD>
         <skipScalar>true</skipScalar>
     </properties>
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>22</release>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.0.2</version>
