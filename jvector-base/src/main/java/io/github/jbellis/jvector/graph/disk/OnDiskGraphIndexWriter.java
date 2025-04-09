@@ -186,9 +186,9 @@ public class OnDiskGraphIndexWriter implements Closeable {
                 throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
             }
         }
-        if (ordinalMapper.maxOrdinal() < graph.size() - 1) {
+        if (ordinalMapper.maxOrdinal() < graph.size(0) - 1) {
             var msg = String.format("Ordinal mapper from [0..%d] does not cover all nodes in the graph of size %d",
-                    ordinalMapper.maxOrdinal(), graph.size());
+                    ordinalMapper.maxOrdinal(), graph.size(0));
             throw new IllegalStateException(msg);
         }
 
