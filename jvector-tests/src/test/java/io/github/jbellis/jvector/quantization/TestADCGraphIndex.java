@@ -65,7 +65,6 @@ public class TestADCGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier, 0))
         {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
-            TestUtil.assertGraphEquals(graph, onDiskGraph);
             try (var cachedOnDiskView = onDiskGraph.getView())
             {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
@@ -76,14 +75,14 @@ public class TestADCGraphIndex extends RandomizedTest {
                         var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
                         var ordinal = getRandom().nextInt(graph.size());
                         // first pass compares fused ADC's direct similarity to reranker's similarity, used for comparisons to a specific node
-                        var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal); // TODO
+                        var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal);
                         for (; neighbors.hasNext(); ) {
                             var neighbor = neighbors.next();
                             var similarity = fusedScoreFunction.similarityTo(neighbor);
                             assertEquals(reranker.similarityTo(neighbor), similarity, 0.01);
                         }
                         // second pass compares fused ADC's edge similarity prior to having enough information for quantization to PQ
-                        neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal); // TODO
+                        neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal);
                         var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();

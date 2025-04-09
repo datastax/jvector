@@ -205,7 +205,7 @@ public class OnDiskGraphIndexWriter implements Closeable {
                     out.seek(out.position() + feature.featureSize());
                 }
                 out.writeInt(0);
-                for (int n = 0; n < graph.maxDegree(); n++) {
+                for (int n = 0; n < graph.getDegree(0); n++) {
                     out.writeInt(-1);
                 }
                 continue;

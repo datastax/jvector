@@ -279,33 +279,35 @@ public class GraphIndexBuilder implements Closeable {
                 other.parallelExecutor);
 
         // Copy each node and its neighbors from the old graph to the new one
-        IntStream.range(0, other.graph.getIdUpperBound()).parallel().forEach(i -> {
-            // Find the highest layer this node exists in
-            int maxLayer = -1;
-            for (int lvl = 0; lvl < other.graph.layers.size(); lvl++) {
-                if (other.graph.getNeighbors(lvl, i) == null) {
-                    break;
+        other.parallelExecutor.submit(() -> {
+            IntStream.range(0, other.graph.getIdUpperBound()).parallel().forEach(i -> {
+                // Find the highest layer this node exists in
+                int maxLayer = -1;
+                for (int lvl = 0; lvl < other.graph.layers.size(); lvl++) {
+                    if (other.graph.getNeighbors(lvl, i) == null) {
+                        break;
+                    }
+                    maxLayer = lvl;
                 }
-                maxLayer = lvl;
-            }
-            if (maxLayer < 0) {
-                return;
-            }
+                if (maxLayer < 0) {
+                    return;
+                }
 
-            // Loop over 0..maxLayer, re-score neighbors for each layer
-            var sf = newProvider.searchProviderFor(i).scoreFunction();
-            for (int lvl = 0; lvl <= maxLayer; lvl++) {
-                var oldNeighbors = other.graph.getNeighbors(lvl, i);
-                // Copy edges, compute new scores
-                var newNeighbors = new NodeArray(oldNeighbors.size());
-                for (var it = oldNeighbors.iterator(); it.hasNext();) {
-                    int neighbor = it.nextInt();
-                    // since we're using a different score provider, use insertSorted instead of addInOrder
-                    newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
+                // Loop over 0..maxLayer, re-score neighbors for each layer
+                var sf = newProvider.searchProviderFor(i).scoreFunction();
+                for (int lvl = 0; lvl <= maxLayer; lvl++) {
+                    var oldNeighbors = other.graph.getNeighbors(lvl, i);
+                    // Copy edges, compute new scores
+                    var newNeighbors = new NodeArray(oldNeighbors.size());
+                    for (var it = oldNeighbors.iterator(); it.hasNext();) {
+                        int neighbor = it.nextInt();
+                        // since we're using a different score provider, use insertSorted instead of addInOrder
+                        newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
+                    }
+                    newBuilder.graph.addNode(lvl, i, newNeighbors);
                 }
-                newBuilder.graph.addNode(lvl, i, newNeighbors);
-            }
-        });
+            });
+        }).join();
 
         // Set the entry node
         newBuilder.graph.updateEntryNode(other.graph.entry());
@@ -375,15 +377,24 @@ public class GraphIndexBuilder implements Closeable {
         var bits = new ExcludingBits(node);
         try (var gs = searchers.get()) {
             gs.initializeInternal(ssp, graph.entry(), bits);
+            var acceptedBits = Bits.intersectionOf(bits, gs.getView().liveNodes());
 
-            // Move downward from entry.level to 1
+            // Move downward from entry.level to 0
             for (int lvl = graph.entry().level; lvl >= 0; lvl--) {
-                gs.searchOneLayer(ssp, 1, 0.0f, lvl, Bits.intersectionOf(bits, gs.getView().liveNodes()));
+                // This additional call seems redundant given that we have already initialized an ssp above.
+                // However, there is a subtle interplay between the ssp of the search and the ssp used in insertDiverse.
+                // Do not remove this line.
+                ssp = scoreProvider.searchProviderFor(node);
+
                 if (graph.layers.get(lvl).get(node) != null) {
+                    gs.searchOneLayer(ssp, beamWidth, 0.0f, lvl, acceptedBits);
+
                     var candidates = new NodeArray(gs.approximateResults.size());
                     gs.approximateResults.foreach(candidates::insertSorted);
                     var newNeighbors = graph.layers.get(lvl).insertDiverse(node, candidates);
                     graph.layers.get(lvl).backlink(newNeighbors, node, neighborOverflow);
+                } else {
+                    gs.searchOneLayer(ssp, 1, 0.0f, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
             }
@@ -530,7 +541,7 @@ public class GraphIndexBuilder implements Closeable {
         if (nRemoved == 0) {
             return 0;
         }
-        // make a list of remaining live nodes 
+        // make a list of remaining live nodes
         var liveNodes = new IntArrayList();
         for (int i = 0; i < graph.getIdUpperBound(); i++) {
             if (graph.containsNode(i) && !toDelete.get(i)) {
@@ -627,14 +638,17 @@ public class GraphIndexBuilder implements Closeable {
             graph.updateEntryNode(newEntry >= 0 ? new NodeAtLevel(newLevel, newEntry) : null);
         }
 
+        long memorySize = 0;
+
         // Remove the deleted nodes from the graph
         assert toDelete.cardinality() == nRemoved : "cardinality changed";
-        int nodeLayers = 0;
         for (int i = toDelete.nextSetBit(0); i != NO_MORE_DOCS; i = toDelete.nextSetBit(i + 1)) {
-            nodeLayers += graph.removeNode(i);
+            int nDeletions = graph.removeNode(i);
+            for (var iLayer = 0; iLayer < nDeletions; iLayer++) {
+                memorySize += graph.ramBytesUsedOneNode(iLayer);
+            }
         }
-        // TODO this is not correct since different layers can use more or less ram due to different degrees
-        return nodeLayers * graph.ramBytesUsedOneNode(0);
+        return memorySize;
     }
 
     private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
@@ -703,9 +717,29 @@ public class GraphIndexBuilder implements Closeable {
             throw new IllegalStateException("Cannot load into a non-empty graph");
         }
 
+        int maybeMagic = in.readInt();
+        int version; // This is not used in V4 but may be useful in the future, putting it as a placeholder.
+        if (maybeMagic != OnHeapGraphIndex.MAGIC) {
+            // JVector 3 format, no magic or version, starts straight off with the number of nodes
+            version = 3;
+            int size = maybeMagic;
+            loadV3(in, size);
+        } else {
+            version = in.readInt();
+            loadV4(in);
+        }
+    }
+
+    private void loadV4(RandomAccessReader in) throws IOException {
+        if (graph.size(0) != 0) {
+            throw new IllegalStateException("Cannot load into a non-empty graph");
+        }
+
         int layerCount = in.readInt();
         int entryNode = in.readInt();
         var layerDegrees = new ArrayList<Integer>(layerCount);
+
+        Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 
         // Read layer info
         for (int level = 0; level < layerCount; level++) {
@@ -721,19 +755,25 @@ public class GraphIndexBuilder implements Closeable {
                     ca.addInOrder(neighbor, sf.similarityTo(neighbor));
                 }
                 graph.addNode(level, nodeId, ca);
+                nodeLevelMap.put(nodeId, level);
             }
+        }
+
+        for (var k : nodeLevelMap.keySet()) {
+            NodeAtLevel nal = new NodeAtLevel(nodeLevelMap.get(k), k);
+            graph.markComplete(nal);
         }
 
         graph.setDegrees(layerDegrees);
         graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
     }
 
-    public void loadV3(RandomAccessReader in) throws IOException {
+
+    private void loadV3(RandomAccessReader in, int size) throws IOException {
         if (graph.size() != 0) {
             throw new IllegalStateException("Cannot load into a non-empty graph");
         }
 
-        int size = in.readInt();
         int entryNode = in.readInt();
         int maxDegree = in.readInt();
 
@@ -747,6 +787,7 @@ public class GraphIndexBuilder implements Closeable {
                 ca.addInOrder(neighbor, sf.similarityTo(neighbor));
             }
             graph.addNode(0, nodeId, ca);
+            graph.markComplete(new NodeAtLevel(0, nodeId));
         }
 
         graph.updateEntryNode(new NodeAtLevel(0, entryNode));
