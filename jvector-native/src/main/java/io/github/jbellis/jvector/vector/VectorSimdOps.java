@@ -598,6 +598,26 @@ final class VectorSimdOps {
         return res;
     }
 
+    static void minInPlace(MemorySegmentVectorFloat v1, MemorySegmentVectorFloat v2) {
+        if (v1.length() != v2.length()) {
+            throw new IllegalArgumentException("Vectors must have the same length");
+        }
+
+        int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(v1.length());
+
+        // Process the vectorized part
+        for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+            var a = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, v1.get(), v1.offset(i), ByteOrder.LITTLE_ENDIAN);
+            var b = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, v2.get(), v2.offset(i), ByteOrder.LITTLE_ENDIAN);
+            a.min(b).intoMemorySegment(v1.get(), v1.offset(i), ByteOrder.LITTLE_ENDIAN);
+        }
+
+        // Process the tail
+        for (int i = vectorizedLength; i < v1.length(); i++) {
+            v1.set(i,  Math.min(v1.get(i), v2.get(i)));
+        }
+    }
+
     public static float max(MemorySegmentVectorFloat vector) {
         var accum = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, -Float.MAX_VALUE);
         int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(vector.length());
@@ -653,6 +673,7 @@ final class VectorSimdOps {
     //---------------------------------------------
     // NVQ quantization instructions start here
     //---------------------------------------------
+
     static final FloatVector const1f = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 1.f);
     static final FloatVector const05f = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 0.5f);
 
@@ -742,7 +763,7 @@ final class VectorSimdOps {
         var invLogisticScale = 255 / (logisticNQT(maxValue, scaledAlpha, scaledX0) - logisticBias);
 
         for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
-            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i, ByteOrder.LITTLE_ENDIAN);
+            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i), ByteOrder.LITTLE_ENDIAN);
             arr = logisticNQT(arr, scaledAlpha, scaledX0);
             arr = arr.sub(logisticBias).mul(invLogisticScale);
             var bytes = arr.add(const05f)
@@ -777,7 +798,7 @@ final class VectorSimdOps {
         var invLogisticScale = 1 / logisticScale;
 
         for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
-            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i, ByteOrder.LITTLE_ENDIAN);
+            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i), ByteOrder.LITTLE_ENDIAN);
             var recArr = logisticNQT(arr, scaledAlpha, scaledX0);
             recArr = recArr.sub(logisticBias).mul(invLogisticScale);
             recArr = recArr.add(const05f)
@@ -803,7 +824,7 @@ final class VectorSimdOps {
             recValue = (recValue - logisticBias) * invLogisticScale;
             recValue = Math.round(recValue);
             recValue = Math.fma(logisticScale, recValue, logisticBias);
-            recValue = logitNQT(recValue, scaledAlpha, scaledX0);
+            recValue = logitNQT(recValue, invScaledAlpha, scaledX0);
 
             squaredSum += MathUtil.square(value - recValue);
         }
@@ -813,19 +834,21 @@ final class VectorSimdOps {
 
     static float nvqUniformLoss(MemorySegmentVectorFloat vector, float minValue, float maxValue, int nBits) {
         float constant = (1 << nBits) - 1;
+        float delta = maxValue - minValue;
+
         int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(vector.length());
 
         FloatVector squaredSumVec = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
 
         for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
-            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i, ByteOrder.LITTLE_ENDIAN);
-            var recArr = arr.sub(minValue).mul(constant / (maxValue - minValue));
+            var arr = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i), ByteOrder.LITTLE_ENDIAN);
+            var recArr = arr.sub(minValue).mul(constant / delta);
             recArr = recArr.add(const05f)
                     .convert(VectorOperators.F2I, 0)
                     .reinterpretAsInts()
                     .convert(VectorOperators.I2F, 0)
                     .reinterpretAsFloats();
-            recArr = recArr.fma((maxValue - minValue) / constant, minValue);
+            recArr = recArr.fma(delta / constant, minValue);
 
             var diff = arr.sub(recArr);
             squaredSumVec = diff.fma(diff, squaredSumVec);
@@ -838,9 +861,9 @@ final class VectorSimdOps {
         for (int i = vectorizedLength; i < vector.length(); i++) {
             value = vector.get(i);
 
-            recValue = (value - minValue) / (maxValue - minValue);
+            recValue = (value - minValue) / delta;
             recValue = Math.round(constant * recValue) / constant;
-            recValue = recValue / (maxValue - minValue) + minValue;
+            recValue = recValue * delta + minValue;
 
             squaredSum += MathUtil.square(value - recValue);
         }
@@ -866,7 +889,7 @@ final class VectorSimdOps {
             var byteArr = ByteVector.fromMemorySegment(ByteVector.SPECIES_PREFERRED, quantizedVector.get(), i, ByteOrder.LITTLE_ENDIAN);
 
             for (int j = 0; j < 4; j++) {
-                var v1 = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i + floatStep * j, ByteOrder.LITTLE_ENDIAN);
+                var v1 = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i + floatStep * j), ByteOrder.LITTLE_ENDIAN);
                 var v2 = nvqDequantize8bit(byteArr, invScaledAlpha, scaledX0, logisticScale, logisticBias, j);
 
                 var diff = v1.sub(v2);
@@ -881,14 +904,13 @@ final class VectorSimdOps {
         for (int i = vectorizedLength; i < quantizedVector.length(); i++) {
             value2 = Byte.toUnsignedInt(quantizedVector.get(i));
             value2 = Math.fma(logisticScale, value2, logisticBias);
-            value2 = logitNQT(value2, scaledAlpha, scaledX0);
+            value2 = logitNQT(value2, invScaledAlpha, scaledX0);
             diff = vector.get(i) - value2;
             squaredSum += MathUtil.square(diff);
         }
 
         return squaredSum;
     }
-
 
     static float nvqDotProduct8bit(MemorySegmentVectorFloat vector, MemorySegmentByteSequence quantizedVector,
                                    float alpha, float x0, float minValue, float maxValue) {
@@ -904,12 +926,11 @@ final class VectorSimdOps {
         var logisticBias = logisticNQT(minValue, scaledAlpha, scaledX0);
         var logisticScale = (logisticNQT(maxValue, scaledAlpha, scaledX0) - logisticBias) / 255;
 
-
         for (int i = 0; i < vectorizedLength; i += ByteVector.SPECIES_PREFERRED.length()) {
             var byteArr = ByteVector.fromMemorySegment(ByteVector.SPECIES_PREFERRED, quantizedVector.get(), i, ByteOrder.LITTLE_ENDIAN);
 
             for (int j = 0; j < 4; j++) {
-                var v1 = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i + floatStep * j, ByteOrder.LITTLE_ENDIAN);
+                var v1 = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i + floatStep * j), ByteOrder.LITTLE_ENDIAN);
                 var v2 = nvqDequantize8bit(byteArr, invScaledAlpha, scaledX0, logisticScale, logisticBias, j);
                 dotProdVec = v1.fma(v2, dotProdVec);
             }
@@ -922,7 +943,7 @@ final class VectorSimdOps {
         for (int i = vectorizedLength; i < quantizedVector.length(); i++) {
             value2 = Byte.toUnsignedInt(quantizedVector.get(i));
             value2 = Math.fma(logisticScale, value2, logisticBias);
-            value2 = logitNQT(value2, scaledAlpha, scaledX0);
+            value2 = logitNQT(value2, invScaledAlpha, scaledX0);
             dotProd = Math.fma(vector.get(i), value2, dotProd);
         }
 
@@ -953,10 +974,10 @@ final class VectorSimdOps {
             var byteArr = ByteVector.fromMemorySegment(ByteVector.SPECIES_PREFERRED, quantizedVector.get(), i, ByteOrder.LITTLE_ENDIAN);
 
             for (int j = 0; j < 4; j++) {
-                var va = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), i + floatStep * j, ByteOrder.LITTLE_ENDIAN);
+                var va = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, vector.get(), vector.offset(i + floatStep * j), ByteOrder.LITTLE_ENDIAN);
                 var vb = nvqDequantize8bit(byteArr, invScaledAlpha, scaledX0, logisticScale, logisticBias, j);
 
-                var vCentroid = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, centroid.get(), i + floatStep * j, ByteOrder.LITTLE_ENDIAN);
+                var vCentroid = FloatVector.fromMemorySegment(FloatVector.SPECIES_PREFERRED, centroid.get(), centroid.offset(i + floatStep * j), ByteOrder.LITTLE_ENDIAN);
                 vb = vb.add(vCentroid);
 
                 vsum = va.fma(vb, vsum);
@@ -972,7 +993,7 @@ final class VectorSimdOps {
         for (int i = vectorizedLength; i < vector.length(); i++) {
             value2 = Byte.toUnsignedInt(quantizedVector.get(i));
             value2 = Math.fma(logisticScale, value2, logisticBias);
-            value2 = logitNQT(value2, scaledAlpha, scaledX0) + centroid.get(i);
+            value2 = logitNQT(value2, invScaledAlpha, scaledX0) + centroid.get(i);
             sum = Math.fma(vector.get(i), value2, sum);
             bMagnitude = Math.fma(value2, value2, bMagnitude);
         }
@@ -1012,6 +1033,6 @@ final class VectorSimdOps {
     }
 
     //---------------------------------------------
-    // NVQ quantization instructions end here
+    // NVQ instructions end here
     //---------------------------------------------
 }

@@ -17,13 +17,17 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import java.util.concurrent.atomic.AtomicInteger;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static java.lang.Math.max;
 
+/**
+ * A threadsafe mutable PQVectors implementation that grows dynamically as needed.
+ */
 public class MutablePQVectors extends PQVectors implements MutableCompressedVectors<VectorFloat<?>> {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
@@ -61,7 +65,7 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
         get(ordinal).zero();
     }
 
-    private void ensureChunkCapacity(int ordinal) {
+    private synchronized void ensureChunkCapacity(int ordinal) {
         int chunkOrdinal = ordinal / vectorsPerChunk;
         
         // Grow backing array if needed

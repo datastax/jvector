@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -28,10 +28,10 @@ import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.Feature;
-import io.github.jbellis.jvector.graph.disk.FeatureId;
-import io.github.jbellis.jvector.graph.disk.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.NVQ;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
@@ -58,24 +58,20 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
-import static java.lang.Math.min;
 
 // this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
 public class SiftSmall {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     // hello world
-    public static void siftInMemory(ArrayList<VectorFloat<?>> baseVectors) throws IOException {
+    public static void siftInMemory(List<VectorFloat<?>> baseVectors) throws IOException {
         // infer the dimensionality from the first vector
         int originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
@@ -88,7 +84,8 @@ public class SiftSmall {
                                                                16, // graph degree
                                                                100, // construction search depth
                                                                1.2f, // allow degree overflow during construction by this factor
-                                                               1.2f)) // relax neighbor diversity requirement by this factor
+                                                               1.2f, // relax neighbor diversity requirement by this factor
+                                                               false))
         {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
@@ -108,12 +105,12 @@ public class SiftSmall {
     }
 
     // show how to use explicit GraphSearcher objects
-    public static void siftInMemoryWithSearcher(ArrayList<VectorFloat<?>> baseVectors) throws IOException {
+    public static void siftInMemoryWithSearcher(List<VectorFloat<?>> baseVectors) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
             OnHeapGraphIndex index = builder.build(ravv);
 
             // search for a random vector using a GraphSearcher and SearchScoreProvider
@@ -129,12 +126,12 @@ public class SiftSmall {
     }
 
     // call out to testRecall instead of doing manual searches
-    public static void siftInMemoryWithRecall(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftInMemoryWithRecall(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
             OnHeapGraphIndex index = builder.build(ravv);
             // measure our recall against the (exactly computed) ground truth
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
@@ -143,13 +140,13 @@ public class SiftSmall {
     }
 
     // write and load index to and from disk
-    public static void siftPersisted(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftPersisted(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
             // write the index to disk with default options
@@ -158,21 +155,22 @@ public class SiftSmall {
 
         // on-disk indexes require a ReaderSupplier (not just a Reader) because we will want it to
         // open additional readers for searching
-        ReaderSupplier rs = ReaderSupplierFactory.open(indexPath);
-        OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        // measure our recall against the (exactly computed) ground truth
-        Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
-        testRecall(index, queryVectors, groundTruth, sspFactory);
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(indexPath)) {
+            OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
+            // measure our recall against the (exactly computed) ground truth
+            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, index.getView());
+            testRecall(index, queryVectors, groundTruth, sspFactory);
+        }
     }
 
     // diskann-style index with PQ
-    public static void siftDiskAnn(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnn(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
             OnHeapGraphIndex index = builder.build(ravv);
             OnDiskGraphIndex.write(index, ravv, indexPath);
         }
@@ -190,24 +188,27 @@ public class SiftSmall {
             pqv.write(out);
         }
 
-        ReaderSupplier rs = ReaderSupplierFactory.open(indexPath);
-        OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        // load the PQVectors that we just wrote to disk
-        try (RandomAccessReader in = new SimpleMappedReader(pqPath)) {
-            PQVectors pqv = PQVectors.load(in);
-            // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
-            // then reranks with the exact vectors that are stored on disk in the index
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
-                ApproximateScoreFunction asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                return new SearchScoreProvider(asf, reranker);
-            };
-            // measure our recall against the (exactly computed) ground truth
-            testRecall(index, queryVectors, groundTruth, sspFactory);
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(indexPath)) {
+            OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
+            // load the PQVectors that we just wrote to disk
+            try (ReaderSupplier pqSupplier = ReaderSupplierFactory.open(pqPath);
+                 RandomAccessReader in = pqSupplier.get())
+            {
+                PQVectors pqv = PQVectors.load(in);
+                // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
+                // then reranks with the exact vectors that are stored on disk in the index
+                Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
+                    ApproximateScoreFunction asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                    ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                    return new SearchScoreProvider(asf, reranker);
+                };
+                // measure our recall against the (exactly computed) ground truth
+                testRecall(index, queryVectors, groundTruth, sspFactory);
+            }
         }
     }
 
-    public static void siftDiskAnnLTM(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnnLTM(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -222,7 +223,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f);
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
              OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
                      .with(new InlineVectors(ravv.dimension()))
@@ -255,7 +256,9 @@ public class SiftSmall {
         // searching the index does not change
         ReaderSupplier rs = ReaderSupplierFactory.open(indexPath);
         OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        try (RandomAccessReader in = new SimpleMappedReader(pqPath)) {
+        try (ReaderSupplier pqSupplier = ReaderSupplierFactory.open(pqPath);
+             RandomAccessReader in = pqSupplier.get())
+        {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
@@ -266,7 +269,7 @@ public class SiftSmall {
         }
     }
 
-    public static void siftDiskAnnLTMWithNVQ(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<Set<Integer>> groundTruth) throws IOException {
+    public static void siftDiskAnnLTMWithNVQ(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
@@ -283,7 +286,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f);
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
              OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
                      .with(new NVQ(nvq))
@@ -316,7 +319,9 @@ public class SiftSmall {
         // searching the index does not change
         ReaderSupplier rs = ReaderSupplierFactory.open(indexPath);
         OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        try (RandomAccessReader in = new SimpleMappedReader(pqPath)) {
+        try (ReaderSupplier pqSupplier = ReaderSupplierFactory.open(pqPath);
+             RandomAccessReader in = pqSupplier.get())
+        {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
@@ -346,33 +351,30 @@ public class SiftSmall {
 
     private static void testRecall(GraphIndex graph,
                                    List<VectorFloat<?>> queryVectors,
-                                   List<Set<Integer>> groundTruth,
+                                   List<List<Integer>> groundTruth,
                                    Function<VectorFloat<?>,
                                    SearchScoreProvider> sspFactory)
             throws IOException
     {
-        AtomicInteger topKfound = new AtomicInteger(0);
+        double recall = 0;
         int topK = 100;
         String graphType = graph.getClass().getSimpleName();
         try (ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> new GraphSearcher(graph))) {
-            IntStream.range(0, queryVectors.size()).parallel().forEach(i -> {
+            List<SearchResult> listSR = IntStream.range(0, queryVectors.size()).parallel().mapToObj(i -> {
                 VectorFloat<?> queryVector = queryVectors.get(i);
                 try (GraphSearcher searcher = searchers.get()) {
                     SearchScoreProvider ssp = sspFactory.apply(queryVector);
                     int rerankK = ssp.scoreFunction().isExact() ? topK : 2 * topK; // hardcoded overquery factor of 2x when reranking
-                    SearchResult.NodeScore[] nn = searcher.search(ssp, rerankK, Bits.ALL).getNodes();
-
-                    Set<Integer> gt = groundTruth.get(i);
-                    long n = IntStream.range(0, min(topK, nn.length)).filter(j -> gt.contains(nn[j].node)).count();
-                    topKfound.addAndGet((int) n);
+                    return searcher.search(ssp, rerankK, Bits.ALL);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-            });
+            }).collect(Collectors.toList());
+            recall = AccuracyMetrics.recallFromSearchResults(groundTruth, listSR, topK, topK);
         } catch (Exception e) {
             ExceptionUtils.throwIoException(e);
         }
-        System.out.printf("(%s) Recall: %.4f%n", graphType, (double) topKfound.get() / (queryVectors.size() * topK));
+        System.out.printf("(%s) Recall: %.4f%n", graphType, recall);
     }
 
     public static void main(String[] args) throws IOException {

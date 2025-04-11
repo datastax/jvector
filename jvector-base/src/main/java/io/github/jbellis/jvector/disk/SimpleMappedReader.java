@@ -34,8 +34,6 @@ import java.util.logging.Logger;
 public class SimpleMappedReader extends ByteBufferReader {
     private static final Logger LOG = Logger.getLogger(SimpleMappedReader.class.getName());
 
-    private static final Unsafe unsafe = getUnsafe();
-
     private static Unsafe getUnsafe() {
         try {
             Field f = Unsafe.class.getDeclaredField("theUnsafe");
@@ -47,60 +45,45 @@ public class SimpleMappedReader extends ByteBufferReader {
         }
     }
 
-    public SimpleMappedReader(Path path) throws IOException {
-        this(path.toString());
-    }
 
-    public SimpleMappedReader(String name) throws IOException {
-        this(getMappedByteBuffer(name));
-    }
-
-    private SimpleMappedReader(MappedByteBuffer mbb) {
+    SimpleMappedReader(MappedByteBuffer mbb) {
         super(mbb);
-    }
-
-    private static MappedByteBuffer getMappedByteBuffer(String name) throws IOException {
-        var raf = new RandomAccessFile(name, "r");
-        if (raf.length() > Integer.MAX_VALUE) {
-            throw new RuntimeException("MappedRandomAccessReader doesn't support large files");
-        }
-        MappedByteBuffer mbb = raf.getChannel().map(FileChannel.MapMode.READ_ONLY, 0, raf.length());
-        mbb.load();
-        raf.close();
-        return mbb;
     }
 
     @Override
     public void close() {
-        if (unsafe != null) {
-            try {
-                unsafe.invokeCleaner(bb);
-            } catch (IllegalArgumentException e) {
-                // empty catch, this was a duplicated/indirect buffer or
-                // otherwise not cleanable
-            }
-        }
-    }
-
-    public SimpleMappedReader duplicate() {
-        return new SimpleMappedReader((MappedByteBuffer) bb.duplicate());
+        // Individual readers don't close anything
     }
 
     public static class Supplier implements ReaderSupplier {
-        private final SimpleMappedReader smr;
+        private final MappedByteBuffer buffer;
+        private static final Unsafe unsafe = getUnsafe();
 
         public Supplier(Path path) throws IOException {
-            smr = new SimpleMappedReader(path);
+            try (var raf = new RandomAccessFile(path.toString(), "r")) {
+                if (raf.length() > Integer.MAX_VALUE) {
+                    throw new RuntimeException("SimpleMappedReader doesn't support files above 2GB");
+                }
+                this.buffer = raf.getChannel().map(FileChannel.MapMode.READ_ONLY, 0, raf.length());
+                this.buffer.load();
+            }
         }
 
         @Override
-        public RandomAccessReader get() {
-            return smr.duplicate();
+        public SimpleMappedReader get() {
+            return new SimpleMappedReader((MappedByteBuffer) buffer.duplicate());
         }
 
         @Override
         public void close() {
-            smr.close();
+            if (unsafe != null) {
+                try {
+                    unsafe.invokeCleaner(buffer);
+                } catch (IllegalArgumentException e) {
+                    // empty catch, this was a duplicated/indirect buffer or
+                    // otherwise not cleanable
+                }
+            }
         }
     }
 }

@@ -32,16 +32,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
-public class TestDenseIntMap extends RandomizedTest {
+public class TestIntMap extends RandomizedTest {
 
     @Test
     public void testInsert() {
-        var map = new DenseIntMap<String>(100);
+        testInsertInternal(new DenseIntMap<>(100));
+        testInsertInternal(new SparseIntMap<>());
+    }
+
+    private void testInsertInternal(IntMap<String> map) {
         for (int i = 0; i < 3; i++) {
             Assert.assertNull(map.get(i));
             Assert.assertFalse(map.containsKey(i));
 
-            map.put(i, "value" + i);
+            map.compareAndPut(i, null, "value" + i);
             Assert.assertEquals("value" + i, map.get(i));
             Assert.assertTrue(map.containsKey(i));
             Assert.assertEquals(i + 1, map.size());
@@ -50,14 +54,18 @@ public class TestDenseIntMap extends RandomizedTest {
 
     @Test
     public void testUpdate() {
-        var map = new DenseIntMap<String>(100);
+        testUpdateInternal(new DenseIntMap<>(100));
+        testUpdateInternal(new SparseIntMap<>());
+    }
+
+    private void testUpdateInternal(IntMap<String> map) {
         for (int i = 0; i < 3; i++) {
-            map.put(i, "value" + i);
+            map.compareAndPut(i, null, "value" + i);
         }
         Assert.assertEquals(3, map.size());
 
         for (int i = 0; i < 3; i++) {
-            map.put(i, "new-value" + i);
+            map.compareAndPut(i, map.get(i), "new-value" + i);
             Assert.assertEquals("new-value" + i, map.get(i));
             Assert.assertEquals(3, map.size());
         }
@@ -65,9 +73,13 @@ public class TestDenseIntMap extends RandomizedTest {
 
     @Test
     public void testRemove() {
-        var map = new DenseIntMap<String>(100);
+        testRemoveInternal(new DenseIntMap<>(100));
+        testRemoveInternal(new SparseIntMap<>());
+    }
+
+    private void testRemoveInternal(IntMap<String> map) {
         for (int i = 0; i < 3; i++) {
-            map.put(i, "value" + i);
+            map.compareAndPut(i, null, "value" + i);
         }
         Assert.assertEquals(3, map.size());
 
@@ -82,12 +94,12 @@ public class TestDenseIntMap extends RandomizedTest {
     @Test
     public void testConcurrency() throws InterruptedException {
         for (int i = 0; i < 100; i++) {
-            testConcurrencyOnce();
+            testConcurrencyOnce(new DenseIntMap<>(100));
+            testConcurrencyOnce(new SparseIntMap<>());
         }
     }
 
-    private static void testConcurrencyOnce() throws InterruptedException {
-        var map = new DenseIntMap<String>(100);
+    private static void testConcurrencyOnce(IntMap<String> map) throws InterruptedException {
         var source = new ConcurrentHashMap<Integer, String>();
 
         int nThreads = randomIntBetween(2, 16);
@@ -103,7 +115,7 @@ public class TestDenseIntMap extends RandomizedTest {
                         } else {
                             String value = randomAsciiAlphanumOfLength(20);
                             source.put(key, value);
-                            map.put(key, value);
+                            map.compareAndPut(key, map.get(key), value);
                         }
                     }
                 } finally {

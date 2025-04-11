@@ -5,10 +5,26 @@
   in each vector with high accuracy by first applying a nonlinear transformation that is individually fit to each
   vector. These nonlinearities are designed to be lightweight and have a negligible impact on distance computation
   performance.
-
-# Upgrading from 3.0.x to 3.0.6
+- Support for hierarchical graph indices. This new type of index blends HNSW and DiskANN in a novel way. An
+  HNSW-like hierarchy resides in memory for quickly seeding the search. This also reduces the need for caching the
+  DiskANN graph near the entrypoint. The base layer of the hierarchy is a DiskANN-like index and inherits its
+  properties. This hierarchical structure can be disabled, ending up with just the base DiskANN layer.  
 
 ## API changes
+- MemorySegmentReader.Supplier and SimpleMappedReader.Supplier must now be explicitly closed, instead of being
+  closed by the first Reader created from them.
+- OnDiskGraphIndex no longer closes its ReaderSupplier
+- The constructor of GraphIndexBuilder takes an additional parameter which allows to enable or disable the use of the
+  hierarchy.
+- GraphSearcher can be configured to run pruned searches using GraphSearcher.usePruning. When this is set to true,
+  we do early termination of the search. In certain cases, this can accelerate the search at the potential cost of some
+  accuracy. It is set to false by default.
+- The constructors of GraphIndexBuilder allow to specify different maximum out-degrees for the graphs in each layer.
+  However, this feature does not work with FusedADC in this version.
+
+### API changes in 3.0.6
+
+These were released in 3.0.6 but are spiritually part of 4.0.
 
 - `VectorCompressor.encodeAll()` now returns a `CompressedVectors` object instead of a `ByteSequence<?>[]`.
   This provides better encapsulation of the compression functionality while also allowing for more efficient

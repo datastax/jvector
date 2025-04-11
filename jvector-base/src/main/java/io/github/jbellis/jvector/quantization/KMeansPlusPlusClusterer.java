@@ -181,26 +181,26 @@ public class KMeansPlusPlusClusterer {
 
         float[] distances = new float[points.length];
         Arrays.fill(distances, Float.MAX_VALUE);
+        VectorFloat<?> distancesVector = vectorTypeSupport.createFloatVector(distances);
+        int distancesLength = points.length;
 
         // Choose the first centroid randomly
         VectorFloat<?> firstCentroid = points[random.nextInt(points.length)];
         centroids.copyFrom(firstCentroid, 0, 0, firstCentroid.length());
+        VectorFloat<?> newDistancesVector = vectorTypeSupport.createFloatVector(points.length);
         for (int i = 0; i < points.length; i++) {
-            float distance1 = squareL2Distance(points[i], firstCentroid);
-            distances[i] = Math.min(distances[i], distance1);
+            newDistancesVector.set(i, squareL2Distance(points[i], firstCentroid));
         }
+        VectorUtil.minInPlace(distancesVector, newDistancesVector);
 
         // For each subsequent centroid
         for (int i = 1; i < k; i++) {
-            float totalDistance = 0;
-            for (float distance : distances) {
-                totalDistance += distance;
-            }
+            float totalDistance = VectorUtil.sum(distancesVector);
 
             float r = random.nextFloat() * totalDistance;
             int selectedIdx = -1;
-            for (int j = 0; j < distances.length; j++) {
-                r -= distances[j];
+            for (int j = 0; j < distancesLength; j++) {
+                r -= distancesVector.get(j);
                 if (r < 1e-6) {
                     selectedIdx = j;
                     break;
@@ -215,10 +215,11 @@ public class KMeansPlusPlusClusterer {
             centroids.copyFrom(nextCentroid, 0, i * nextCentroid.length(), nextCentroid.length());
 
             // Update distances, but only if the new centroid provides a closer distance
-            for (int j = 0; j < points.length; j++) {
-                float newDistance = squareL2Distance(points[j], nextCentroid);
-                distances[j] = Math.min(distances[j], newDistance);
+            // All entries of newDistancesVector is overwritten with the updated squareL2Distance value
+            for (int j = 0; j < distancesLength; j++) {
+                newDistancesVector.set(j, squareL2Distance(points[j], nextCentroid));
             }
+            VectorUtil.minInPlace(distancesVector, newDistancesVector);
         }
         assertFinite(centroids);
         return centroids;

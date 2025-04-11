@@ -62,7 +62,8 @@ public class MemorySegmentReaderTest extends RandomizedTest {
 
     @Test
     public void testReader() throws Exception {
-        try (var r = new MemorySegmentReader(tempFile)) {
+        try (var supplier = new MemorySegmentReader.Supplier(tempFile)) {
+            var r = supplier.get();
             verifyReader(r);
 
             // read 2nd time from beginning
@@ -70,35 +71,6 @@ public class MemorySegmentReaderTest extends RandomizedTest {
         }
     }
 
-    @Test
-    public void testReaderDuplicate() throws Exception {
-        try (var r = new MemorySegmentReader(tempFile)) {
-            for (int i = 0; i < 3; i++) {
-                var r2 = r.duplicate();
-                verifyReader(r2);
-            }
-        }
-    }
-
-    @Test
-    public void testReaderClose() throws Exception {
-        var r = new MemorySegmentReader(tempFile);
-        var r2 = r.duplicate();
-
-        r.close();
-
-        try {
-            r.readInt();
-            fail("Should have thrown an exception");
-        } catch (IllegalStateException _) {
-        }
-
-        try {
-            r2.readInt();
-            fail("Should have thrown an exception");
-        } catch (IllegalStateException _) {
-        }
-    }
 
     @Test
     public void testSupplierClose() throws Exception {

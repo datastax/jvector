@@ -158,8 +158,16 @@ public final class VectorUtil {
     return impl.sub(a, aOffset, b, bOffset, length);
   }
 
+  public static void minInPlace(VectorFloat<?> distances1, VectorFloat<?> distances2) {
+    impl.minInPlace(distances1, distances2);
+  }
+
   public static float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> dataOffsets) {
     return impl.assembleAndSum(data, dataBase, dataOffsets);
+  }
+
+  public static float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> dataOffsets, int dataOffsetsOffset, int dataOffsetsLength) {
+    return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
   public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {
@@ -211,6 +219,10 @@ public final class VectorUtil {
     return impl.pqDecodedCosineSimilarity(encoded, clusterCount, partialSums, aMagnitude, bMagnitude);
   }
 
+  public static float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
+    return impl.pqDecodedCosineSimilarity(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+  }
+
   public static float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue) {
     return impl.nvqDotProduct8bit(vector, bytes, growthRate, midpoint, minValue, maxValue);
   }
@@ -238,4 +250,5 @@ public final class VectorUtil {
   public static float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
     return impl.nvqUniformLoss(vector, minValue, maxValue, nBits);
   }
+
 }

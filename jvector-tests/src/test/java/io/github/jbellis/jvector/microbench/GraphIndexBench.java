@@ -96,8 +96,17 @@ public class GraphIndexBench {
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuild(Blackhole bh, Parameters p) {
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityFunction.DOT_PRODUCT, 8, 60, 1.2f, 1.4f);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityFunction.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, false);
         bh.consume(graphIndexBuilder.build(p.vectors));
     }
+
+    @Benchmark
+    @BenchmarkMode(Mode.Throughput)
+    @OutputTimeUnit(TimeUnit.SECONDS)
+    public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) {
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityFunction.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, true);
+        bh.consume(graphIndexBuilder.build(p.vectors));
+    }
+
 }
 

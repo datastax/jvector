@@ -119,6 +119,68 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
+  public void testPushAllMinHeap() {
+    // Build a NodeQueue with a GrowableLongHeap, using MIN_HEAP order
+    NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
+
+    // Let's prepare some node, score pairs
+    int[] nodes = { 5, 1, 3, 2, 8 };
+    float[] scores = { 2.2f, -1.0f, 0.5f, 2.1f, -0.9f };
+
+    // We'll create a TestNodeScoreIterator with these arrays
+    TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
+
+    // Bulk-add all pairs in one go
+    queue.pushAll(it, nodes.length);
+
+    // The queue should now contain 5 elements
+    assertEquals(5, queue.size());
+
+    // Because it's a MIN_HEAP, the top (root) should be the "smallest" score
+    // We have scores: [2.2, -1.0, 0.5, 2.1, -0.9]
+    // The minimum is -1.0. Let's see which node that corresponds to: node=1
+    assertEquals(-1.0f, queue.topScore(), 0.000001);
+    assertEquals(1, queue.topNode());
+  }
+
+  @Test
+  public void testPushAllMaxHeap() {
+    // Build a NodeQueue with a GrowableLongHeap, using MAX_HEAP order
+    NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MAX_HEAP);
+
+    // Let's prepare some node, score pairs
+    int[] nodes = { 10, 20, 30, 40, 50 };
+    float[] scores = { -2.5f, 1.0f, 0.0f, 1.5f, 3.0f };
+
+    // We'll create a TestNodeScoreIterator with these arrays
+    TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
+
+    // Bulk-add all pairs in one go
+    queue.pushAll(it, nodes.length);
+
+    // The queue should now contain 5 elements
+    assertEquals(5, queue.size());
+
+    // Because it's a MAX_HEAP, the top (root) should be the "largest" score
+    // The largest among [-2.5, 1.0, 0.0, 1.5, 3.0] is 3.0 => node=50
+    assertEquals(3.0f, queue.topScore(), 0.000001);
+    assertEquals(50, queue.topNode());
+  }
+
+  @Test
+  public void testPushAllBoundedHeapExceedsCapacity() {
+    assertThrows(IllegalArgumentException.class, () -> {
+      NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
+      queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2, 3 }, new float[] { 1, 2, 3 }), 3);
+    });
+    NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
+    queue.push(1, 1);
+    assertThrows(IllegalArgumentException.class, () -> {
+      queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
+    });
+  }
+
+  @Test
   public void testInvalidArguments() {
     assertThrows(IllegalArgumentException.class, () -> new NodeQueue(new GrowableLongHeap(0), NodeQueue.Order.MIN_HEAP));
   }
@@ -127,4 +189,36 @@ public class TestNodeQueue extends RandomizedTest {
   public void testToString() {
     assertEquals("Nodes[0]", new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP).toString());
   }
+
+  /**
+   * Simple iterator that yields a fixed array of (node, score) pairs
+   * for testing the pushAll method.
+   */
+  static class TestNodeScoreIterator implements NodeQueue.NodeScoreIterator {
+    private final int[] nodes;
+    private final float[] scores;
+    private int index = 0;
+
+    TestNodeScoreIterator(int[] nodes, float[] scores) {
+      assert nodes.length == scores.length;
+      this.nodes = nodes;
+      this.scores = scores;
+    }
+
+    @Override
+    public boolean hasNext() {
+      return index < nodes.length;
+    }
+
+    @Override
+    public int nextNode() {
+      return nodes[index];
+    }
+
+    @Override
+    public float nextScore() {
+      return scores[index++];
+    }
+  }
+
 }

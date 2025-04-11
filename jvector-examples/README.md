@@ -73,7 +73,7 @@ RESULT [2,1,0]
   
   No spaces are allowed inside vector brackets.
 
-  * `CREATE {dimensions} {similarity-function} {M} {EFConstruction}`
+  * `CREATE {dimensions} {similarity-function} {M} {searchDepthConstruction}`
     * Creates a new index for this session  
       
   * `WRITE [N,N,N] ... [N,N,N]`
@@ -82,7 +82,7 @@ RESULT [2,1,0]
     * Call when indexing is complete  
   * `MEMORY`
     * Get the in memory size of index  
-  * `SEARCH {EFSearch} {top-k} [N,N,N] ... [N,N,N]` 
+  * `SEARCH {overquerySearch} {top-k} [N,N,N] ... [N,N,N]` 
     * Search index for the top-k closest vectors (ordinals of indexed values returned per query)
   * `BULKLOAD {localpath}`
     * Bulk loads a local file in numpy format Rows x Columns

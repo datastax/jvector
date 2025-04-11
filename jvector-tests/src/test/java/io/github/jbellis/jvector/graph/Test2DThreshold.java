@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -35,37 +34,47 @@ public class Test2DThreshold extends LuceneTestCase {
     @Test
     public void testThreshold10k() throws IOException {
         for (int i = 0; i < 10; i++) {
-            testThreshold(10_000, 16);
+            testThreshold(10_000, 16, 0.85f, 0.9f, false);
+            testThreshold(10_000, 16, 0.85f, 0.9f, true);
         }
     }
 
     @Test
     public void testThreshold20k() throws IOException {
         for (int i = 0; i < 10; i++) {
-            testThreshold(20_000, 24);
+            testThreshold(20_000, 24, 0.80f, 0.9f, false);
+            testThreshold(20_000, 24, 0.80f, 0.9f, true);
         }
     }
 
-    public void testThreshold(int graphSize, int maxDegree) throws IOException {
+    public void testThreshold(int graphSize, int maxDegree, float visitedRatioThreshold, float recallThreshold, boolean addHierarchy) throws IOException {
         var R = getRandom();
 
         // build index
         VectorFloat<?>[] vectors = TestVectorGraph.createRandomFloatVectors(graphSize, 2, R);
         var ravv = new ListRandomAccessVectorValues(List.of(vectors), 2);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, maxDegree, 2 * maxDegree, 1.2f, 1.4f);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, maxDegree, 2 * maxDegree, 1.2f, 1.4f, addHierarchy);
         var onHeapGraph = builder.build(ravv);
 
         // test raw vectors
         var searcher = new GraphSearcher(onHeapGraph);
-        for (int i = 0; i < 10; i++) {
+
+        int nQueries = 100;
+        float meanVisitedRatio = 0;
+        float meanRecall = 0;
+
+        for (int i = 0; i < nQueries; i++) {
             TestParams tp = createTestParams(vectors);
 
             var sf = ravv.rerankerFor(tp.q, VectorSimilarityFunction.EUCLIDEAN);
             var result = searcher.search(new SearchScoreProvider(sf), vectors.length, tp.th, Bits.ALL);
 
-            assert result.getVisitedCount() < vectors.length : "visited all vectors for threshold " + tp.th;
-            assert result.getNodes().length >= 0.85 * tp.exactCount : "returned " + result.getNodes().length + " nodes for threshold " + tp.th + " out of " + tp.exactCount;
+            meanVisitedRatio += ((float) result.getVisitedCount()) / (vectors.length * nQueries);
+            meanRecall += ((float) result.getNodes().length) / (tp.exactCount * nQueries);
         }
+
+        assert meanVisitedRatio < visitedRatioThreshold : "visited " + meanVisitedRatio * 100 + "% of the vectors, which is more than " + visitedRatioThreshold * 100 + "%";
+        assert meanRecall > recallThreshold : "the recall is too low: " + meanRecall + " < " + recallThreshold;
 
         // test compressed
         // FIXME see https://github.com/jbellis/jvector/issues/254

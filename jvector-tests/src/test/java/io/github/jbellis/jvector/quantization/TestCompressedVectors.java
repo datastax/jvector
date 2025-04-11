@@ -58,8 +58,8 @@ public class TestCompressedVectors extends RandomizedTest {
             cv.write(out);
         }
         // Read compressed vectors
-        try (var in = new SimpleMappedReader(cvFile.getAbsolutePath())) {
-            var cv2 = PQVectors.load(in, 0);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
+            var cv2 = PQVectors.load(readerSupplier.get(), 0);
             assertEquals(cv.hashCode(), cv2.hashCode());
             assertEquals(cv, cv2);
         }
@@ -83,8 +83,8 @@ public class TestCompressedVectors extends RandomizedTest {
             cv.write(out);
         }
         // Read compressed vectors
-        try (var in = new SimpleMappedReader(cvFile.getAbsolutePath())) {
-            var cv2 = BQVectors.load(in, 0);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
+            var cv2 = BQVectors.load(readerSupplier.get(), 0);
             assertEquals(cv, cv2);
         }
     }
@@ -121,8 +121,8 @@ public class TestCompressedVectors extends RandomizedTest {
                 cv.write(out);
             }
             // Read compressed vectors
-            try (var in = new SimpleMappedReader(cvFile.getAbsolutePath())) {
-                var cv2 = NVQVectors.load(in, 0);
+            try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
+                var cv2 = NVQVectors.load(readerSupplier.get(), 0);
                 assertEquals(cv, cv2);
             }
         }
@@ -207,10 +207,10 @@ public class TestCompressedVectors extends RandomizedTest {
             } else if (vsf == VectorSimilarityFunction.DOT_PRODUCT) {
                 tolerance *= 4;
             }
-            System.out.println(vsf + " error " + error + " tolerance " + tolerance);
+            // System.out.println(vsf + " error " + error + " tolerance " + tolerance);
             assert error <= tolerance : String.format("%s > %s for %s with %d dimensions and %d subvectors", error, tolerance, vsf, dimension, nSubvectors);
         }
-        System.out.println("--");
+        // System.out.println("--");
     }
 
     @Test
@@ -221,7 +221,7 @@ public class TestCompressedVectors extends RandomizedTest {
 
             for (var nSubvectors : List.of(1, 2, 4, 8)) {
                 for (var learn : List.of(false, true)) {
-                    System.out.println("dimensions: " + d + " subvectors: " + nSubvectors + " learn: " + learn);
+                    // System.out.println("dimensions: " + d + " subvectors: " + nSubvectors + " learn: " + learn);
                     testNVQEncodings(vectors, queries, nSubvectors, learn);
                 }
             }

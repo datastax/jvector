@@ -82,6 +82,9 @@ public interface VectorUtilSupport {
   /** @return a - b, element-wise, starting at aOffset and bOffset respectively */
   VectorFloat<?> sub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length);
 
+  /** Calculates the minimum value for every corresponding lane values in v1 and v2, in place (v1 will be modified) */
+  void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2);
+
   /**
    * Calculates the sum of sparse points in a vector.
    * <p>
@@ -96,6 +99,19 @@ public interface VectorUtilSupport {
    * @return the sum of the points
    */
   float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets);
+
+  /**
+   * Calculates the sum of sparse points in a vector.
+   *
+   * @param data the vector of all datapoints
+   * @param baseIndex the start of the data in the offset table
+   *                  (scaled by the index of the lookup table)
+   * @param baseOffsets bytes that represent offsets from the baseIndex
+   * @param baseOffsetsOffset the offset into the baseOffsets ByteSequence
+   * @param baseOffsetsLength the length of the baseOffsets ByteSequence to use
+   * @return the sum of the points
+   */
+  float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
 
   int hammingDistance(long[] v1, long[] v2);
 
@@ -210,11 +226,16 @@ public interface VectorUtilSupport {
 
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
+    return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
+  }
+
+  default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
+  {
     float sum = 0.0f;
     float aMag = 0.0f;
 
-    for (int m = 0; m < encoded.length(); ++m) {
-      int centroidIndex = Byte.toUnsignedInt(encoded.get(m));
+    for (int m = 0; m < encodedLength; ++m) {
+      int centroidIndex = Byte.toUnsignedInt(encoded.get(m + encodedOffset));
       var index = m * clusterCount + centroidIndex;
       sum += partialSums.get(index);
       aMag += aMagnitude.get(index);
@@ -300,4 +321,5 @@ public interface VectorUtilSupport {
    * @param nBits the number of bits per dimension
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
+
 }

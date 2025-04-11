@@ -288,10 +288,22 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
+  public void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+    for (int i = 0; i < v1.length(); i++) {
+      v1.set(i, Math.min(v1.get(i), v2.get(i)));
+    }
+  }
+
+  @Override
   public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets) {
+    return assembleAndSum(data, dataBase, baseOffsets, 0, baseOffsets.length());
+  }
+
+  @Override
+  public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
     float sum = 0f;
-    for (int i = 0; i < baseOffsets.length(); i++) {
-      sum += data.get(dataBase * i + Byte.toUnsignedInt(baseOffsets.get(i)));
+    for (int i = 0; i < baseOffsetsLength; i++) {
+      sum += data.get(dataBase * i + Byte.toUnsignedInt(baseOffsets.get(i + baseOffsetsOffset)));
     }
     return sum;
   }
@@ -541,4 +553,5 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
 
     return squaredSum;
   }
+
 }

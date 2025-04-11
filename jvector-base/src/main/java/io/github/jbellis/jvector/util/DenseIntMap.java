@@ -31,7 +31,7 @@ import java.util.stream.IntStream;
  * "Dense-ish" means that space is allocated for all keys from 0 to the highest key, but
  * it is valid to have gaps in the keys.  The value associated with "gap" keys is null.
  */
-public class DenseIntMap<T> {
+public class DenseIntMap<T> implements IntMap<T> {
     // locking strategy:
     // - writelock to resize the array
     // - readlock to update the array with put or remove
@@ -40,37 +40,12 @@ public class DenseIntMap<T> {
     private volatile AtomicReferenceArray<T> objects;
     private final AtomicInteger size;
 
-    public DenseIntMap(int initialSize) {
-        objects = new AtomicReferenceArray<>(initialSize);
+    public DenseIntMap(int initialCapacity) {
+        objects = new AtomicReferenceArray<>(initialCapacity);
         size = new AtomicInteger();
     }
 
-    /**
-     * @param key ordinal
-     * Prefer compareAndPut()
-     */
-    @Deprecated
-    public void put(int key, T value) {
-        if (value == null) {
-            throw new IllegalArgumentException("put() value cannot be null -- use remove() instead");
-        }
-
-        ensureCapacity(key);
-        rwl.readLock().lock();
-        try {
-            var isInsert = objects.getAndSet(key, value) == null;
-            if (isInsert) {
-                size.incrementAndGet();
-            }
-        } finally {
-            rwl.readLock().unlock();
-        }
-    }
-
-    /**
-     * @param key ordinal
-     * @return true if successful, false if the current value != `existing`
-     */
+    @Override
     public boolean compareAndPut(int key, T existing, T value) {
         if (value == null) {
             throw new IllegalArgumentException("compareAndPut() value cannot be null -- use remove() instead");
@@ -90,17 +65,12 @@ public class DenseIntMap<T> {
         }
     }
 
-    /**
-     * @return number of items that have been added
-     */
+    @Override
     public int size() {
         return size.get();
     }
 
-    /**
-     * @param key ordinal
-     * @return the value of the key, or null if not set
-     */
+    @Override
     public T get(int key) {
         if (key >= objects.length()) {
             return null;
@@ -130,9 +100,7 @@ public class DenseIntMap<T> {
         }
     }
 
-    /**
-     * @return the former value of the key, or null if it was not set
-     */
+    @Override
     public T remove(int key) {
         if (key >= objects.length()) {
             return null;
@@ -155,21 +123,12 @@ public class DenseIntMap<T> {
         }
     }
 
+    @Override
     public boolean containsKey(int key) {
         return get(key) != null;
     }
 
-    public NodesIterator keysIterator() {
-        // implemented here because we can't make it threadsafe AND performant elsewhere
-        var minSize = size(); // if keys are added concurrently we will miss them
-        var ref = objects;
-        var keysInts = IntStream.range(0, ref.length()).filter(i -> ref.get(i) != null).iterator();
-        return NodesIterator.fromPrimitiveIterator(keysInts, minSize);
-    }
-
-    /**
-     * Iterates keys in ascending order and calls the consumer for each non-null key-value pair.
-     */
+    @Override
     public void forEach(IntBiConsumer<T> consumer) {
         var ref = objects;
         for (int i = 0; i < ref.length(); i++) {
@@ -178,10 +137,5 @@ public class DenseIntMap<T> {
                 consumer.consume(i, value);
             }
         }
-    }
-
-    @FunctionalInterface
-    public interface IntBiConsumer<T> {
-        void consume(int key, T value);
     }
 }

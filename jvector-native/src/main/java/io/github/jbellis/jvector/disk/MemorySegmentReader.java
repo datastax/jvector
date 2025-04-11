@@ -50,44 +50,10 @@ public class MemorySegmentReader implements RandomAccessReader {
     private static final OfFloat floatLayout = ValueLayout.JAVA_FLOAT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
     private static final OfLong longLayout = ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
 
-    final Arena arena;
     final MemorySegment memory;
     private long position = 0;
 
-    public MemorySegmentReader(Path path) throws IOException {
-        arena = Arena.ofShared();
-        try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
-            memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
-            
-            // Apply MADV_RANDOM advice
-            var linker = Linker.nativeLinker();
-            var maybeMadvise = linker.defaultLookup().find("posix_madvise");
-            if (maybeMadvise.isPresent()) {
-                var madvise = linker.downcallHandle(maybeMadvise.get(),
-                        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-                try
-                {
-                    int result = (int) madvise.invokeExact(memory, memory.byteSize(), MADV_RANDOM);
-                    if (result != 0)
-                    {
-                        throw new IOException("posix_madvise failed with error code: " + result);
-                    }
-                }
-                catch (Throwable t)
-                {
-                    throw new RuntimeException(t);
-                }
-            } else {
-                logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
-            }
-        } catch (Exception e) {
-            arena.close();
-            throw e;
-        }
-    }
-
-    MemorySegmentReader(Arena arena, MemorySegment memory) {
-        this.arena = arena;
+    MemorySegmentReader(MemorySegment memory) {
         this.memory = memory;
     }
 
@@ -135,6 +101,13 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     @Override
+    public long readLong() {
+        var l = memory.get(longLayout, position);
+        position += 8;
+        return l;
+    }
+
+    @Override
     public float readFloat() {
         var f = memory.get(floatLayout, position);
         position += 4;
@@ -157,65 +130,55 @@ public class MemorySegmentReader implements RandomAccessReader {
      * Loads the contents of the mapped segment into physical memory.
      * This is a best-effort mechanism.
      */
+    @SuppressWarnings("unused")
     public void loadMemory() {
         memory.load();
     }
 
     @Override
     public void close() {
-        arena.close();
-    }
-
-    /**
-     * Creates a shallow copy of the MemorySegmentReader.
-     * Underlying memory-mapped region will be shared between all copies.
-     * When MemorySegmentReader is closed, all copies will become invalid.
-     */
-    public MemorySegmentReader duplicate() {
-        return new MemorySegmentReader(arena, memory);
+        // Individual readers don't close the shared memory
     }
 
     public static class Supplier implements ReaderSupplier {
-        private final InternalMemorySegmentReader reader;
+        private final Arena arena;
+        private final MemorySegment memory;
 
         public Supplier(Path path) throws IOException {
-            reader = new InternalMemorySegmentReader(path);
+            this.arena = Arena.ofShared();
+            try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
+                this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
+                
+                // Apply MADV_RANDOM advice
+                var linker = Linker.nativeLinker();
+                var maybeMadvise = linker.defaultLookup().find("posix_madvise");
+                if (maybeMadvise.isPresent()) {
+                    var madvise = linker.downcallHandle(maybeMadvise.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+                    int result = (int) madvise.invokeExact(memory, memory.byteSize(), MADV_RANDOM);
+                    if (result != 0) {
+                        throw new IOException("posix_madvise failed with error code: " + result);
+                    }
+                } else {
+                    logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
+                }
+            } catch (Throwable e) {
+                arena.close();
+                if (e instanceof IOException) {
+                    throw (IOException) e;
+                }
+                throw new RuntimeException(e);
+            }
         }
 
         @Override
-        public RandomAccessReader get() {
-            return reader.duplicate();
+        public MemorySegmentReader get() {
+            return new MemorySegmentReader(memory);
         }
 
         @Override
         public void close() {
-            reader.close();
-        }
-
-        private static class InternalMemorySegmentReader extends MemorySegmentReader {
-            private final boolean shouldClose;
-
-            private InternalMemorySegmentReader(Path path) throws IOException {
-                super(path);
-                shouldClose = true;
-            }
-
-            private InternalMemorySegmentReader(Arena arena, MemorySegment memory) {
-                super(arena, memory);
-                shouldClose = false;
-            }
-
-            @Override
-            public void close() {
-                if (shouldClose) {
-                    super.close();
-                }
-            }
-
-            @Override
-            public InternalMemorySegmentReader duplicate() {
-                return new InternalMemorySegmentReader(arena, memory);
-            }
+            arena.close();
         }
     }
 }

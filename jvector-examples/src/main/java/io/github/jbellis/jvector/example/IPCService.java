@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.GraphIndex;
@@ -25,7 +24,6 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.CachingGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -68,6 +66,8 @@ public class IPCService
         int dimension;
         int M;
         int efConstruction;
+        float neighborOverflow;
+        boolean addHierarchy;
         VectorSimilarityFunction similarityFunction;
         RandomAccessVectorValues ravv;
         CompressedVectors cv;
@@ -103,16 +103,18 @@ public class IPCService
     void create(String input, SessionContext ctx) {
         String[] args = input.split("\\s+");
 
-        if (args.length != 4)
+        if (args.length != 6)
             throw new IllegalArgumentException("Illegal CREATE statement. Expecting 'CREATE [DIMENSIONS] [SIMILARITY_TYPE] [M] [EF]'");
 
         int dimensions = Integer.parseInt(args[0]);
         VectorSimilarityFunction sim = VectorSimilarityFunction.valueOf(args[1]);
         int M = Integer.parseInt(args[2]);
         int efConstruction = Integer.parseInt(args[3]);
+        float neighborOverflow = Float.parseFloat(args[4]);
+        boolean addHierarchy = Boolean.parseBoolean(args[5]);
 
         ctx.ravv = new UpdatableRandomAccessVectorValues(dimensions);
-        ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, 1.2f, 1.4f);
+        ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, neighborOverflow, 1.4f, addHierarchy);
         ctx.M = M;
         ctx.dimension = dimensions;
         ctx.efConstruction = efConstruction;
@@ -163,7 +165,7 @@ public class IPCService
         ctx.isBulkLoad = true;
 
         var ravv = new MMapRandomAccessVectorValues(f, ctx.dimension);
-        var indexBuilder = new GraphIndexBuilder(ravv, ctx.similarityFunction, ctx.M, ctx.efConstruction, 1.2f, 1.4f);
+        var indexBuilder = new GraphIndexBuilder(ravv, ctx.similarityFunction, ctx.M, ctx.efConstruction, ctx.neighborOverflow, 1.4f, ctx.addHierarchy);
         System.out.println("BulkIndexing " + ravv.size());
         ctx.index = flushGraphIndex(indexBuilder.build(ravv), ravv);
         ctx.cv = pqIndex(ravv, ctx);
@@ -184,13 +186,13 @@ public class IPCService
         return cv;
     }
 
-    private static CachingGraphIndex flushGraphIndex(OnHeapGraphIndex onHeapIndex, RandomAccessVectorValues ravv) {
+    private static GraphIndex flushGraphIndex(OnHeapGraphIndex onHeapIndex, RandomAccessVectorValues ravv) {
         try {
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
 
             OnDiskGraphIndex.write(onHeapIndex, ravv, graphPath);
-            return new CachingGraphIndex(OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
+            return onHeapIndex;
         } catch (IOException e) {
             throw new IOError(e);
         }

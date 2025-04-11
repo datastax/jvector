@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.AbstractLongHeap;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
+import java.util.PrimitiveIterator;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static java.lang.Math.min;
@@ -89,6 +90,16 @@ public class NodeQueue {
     }
 
     /**
+     * Encodes then adds all elements from the given iterator to this heap, in bulk.
+     *
+     * @param nodeScoreIterator the node and score pairs to add
+     * @param count             the number of elements to add
+     */
+    public void pushAll(NodeScoreIterator nodeScoreIterator, int count) {
+        heap.pushAll(new NodeScoreIteratorConverter(nodeScoreIterator, this), count);
+    }
+
+    /**
      * Encodes the node ID and its similarity score as long.  If two scores are equals,
      * the smaller node ID wins.
      *
@@ -111,6 +122,7 @@ public class NodeQueue {
      * @return the encoded score, node ID
      */
     private long encode(int node, float score) {
+        assert node >= 0 : node;
         return order.apply(
                 (((long) NumericUtils.floatToSortableInt(score)) << 32) | (0xFFFFFFFFL & ~node));
     }
@@ -255,5 +267,56 @@ public class NodeQueue {
     @FunctionalInterface
     public interface NodeConsumer {
         void accept(int node, float score);
+    }
+
+    /** Iterator over node and score pairs. */
+    public interface NodeScoreIterator {
+        /** @return true if there are more elements */
+        boolean hasNext();
+
+        /** @return the next node id */
+        int nextNode();
+
+        /** @return the next node score and advance the iterator */
+        float nextScore();
+    }
+
+    /**
+     * Copies the other NodeQueue to this one. If its order (MIN_HEAP or MAX_HEAP) is the same as this,
+     * it is copied verbatim. If it differs, every lement is re-inserted into this.
+     * @param other the other node queue.
+     */
+    public void copyFrom(NodeQueue other) {
+        if (this.order == other.order) {
+            this.heap.copyFrom(other.heap);
+        } else {
+            // can't avoid re-encoding since order influences it
+            clear();
+            other.foreach(this::push);
+        }
+    }
+
+    /**
+     * Converts a NodeScoreIterator to a PrimitiveIterator.OfLong by encoding the node and score as a long.
+     */
+    private static class NodeScoreIteratorConverter implements PrimitiveIterator.OfLong {
+        private final NodeScoreIterator it;
+        private final NodeQueue queue;
+
+        public NodeScoreIteratorConverter(NodeScoreIterator it, NodeQueue queue) {
+            this.it = it;
+            this.queue = queue;
+        }
+
+        @Override
+        public boolean hasNext() {
+            return it.hasNext();
+        }
+
+        @Override
+        public long nextLong() {
+            // Call to nextScore() advances the iterator
+            return queue.encode(it.nextNode(), it.nextScore());
+        }
     }
 }

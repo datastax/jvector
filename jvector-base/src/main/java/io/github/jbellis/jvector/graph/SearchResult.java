@@ -16,18 +16,25 @@
 
 package io.github.jbellis.jvector.graph;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 /**
  * Container class for results of an ANN search, along with associated metrics about the behavior of the search.
  */
 public final class SearchResult {
     private final NodeScore[] nodes;
     private final int visitedCount;
+    private final int expandedCount;
+    private final int expandedCountL0;
     private final int rerankedCount;
     private final float worstApproximateScoreInTopK;
 
-    public SearchResult(NodeScore[] nodes, int visitedCount, int rerankedCount, float worstApproximateScoreInTopK) {
+    public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int rerankedCount, float worstApproximateScoreInTopK) {
         this.nodes = nodes;
         this.visitedCount = visitedCount;
+        this.expandedCount = expandedCount;
+        this.expandedCountL0 = expandedCountL0;
         this.rerankedCount = rerankedCount;
         this.worstApproximateScoreInTopK = worstApproximateScoreInTopK;
     }
@@ -47,6 +54,20 @@ public final class SearchResult {
     }
 
     /**
+     * @return the total number of graph nodes expanded while performing the search
+     */
+    public int getExpandedCount() {
+        return expandedCount;
+    }
+
+    /**
+     * @return the number of graph nodes expanded while performing the search in the base layer
+     */
+    public int getExpandedCountBaseLayer() {
+        return expandedCountL0;
+    }
+
+    /**
      * @return the number of nodes that were reranked during the search
      */
     public int getRerankedCount() {
@@ -62,7 +83,7 @@ public final class SearchResult {
         return worstApproximateScoreInTopK;
     }
 
-    public static final class NodeScore {
+    public static final class NodeScore implements Comparable<NodeScore> {
         public final int node;
         public final float score;
 
@@ -75,5 +96,37 @@ public final class SearchResult {
         public String toString() {
             return String.format("NodeScore(%d, %s)", node, score);
         }
+
+        @Override
+        public int compareTo(NodeScore o) {
+            // Sort by score in descending order (highest score first)
+            int scoreCompare = Float.compare(o.score, this.score);
+            // If scores are equal, break ties using node id (ascending order)
+            return scoreCompare != 0 ? scoreCompare : Integer.compare(node, o.node);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o == null || getClass() != o.getClass()) return false;
+            NodeScore nodeScore = (NodeScore) o;
+            return node == nodeScore.node && Float.compare(score, nodeScore.score) == 0;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(node, score);
+        }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        SearchResult that = (SearchResult) o;
+        return visitedCount == that.visitedCount && rerankedCount == that.rerankedCount && Float.compare(worstApproximateScoreInTopK, that.worstApproximateScoreInTopK) == 0 && Objects.deepEquals(nodes, that.nodes);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(Arrays.hashCode(nodes), visitedCount, rerankedCount, worstApproximateScoreInTopK);
     }
 }

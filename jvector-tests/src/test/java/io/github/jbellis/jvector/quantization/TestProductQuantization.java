@@ -140,7 +140,6 @@ public class TestProductQuantization extends RandomizedTest {
         var clusterer = new KMeansPlusPlusClusterer(vectors, DEFAULT_CLUSTERS, T);
         var initialLoss = loss(clusterer, vectors, T);
 
-        int iterations = 0;
         double improvedLoss = Double.MAX_VALUE;
         while (true) {
             int n = clusterer.clusterOnceAnisotropic();
@@ -148,7 +147,6 @@ public class TestProductQuantization extends RandomizedTest {
                 break;
             }
             improvedLoss = loss(clusterer, vectors, T);
-            iterations++;
             // System.out.println("improvedLoss=" + improvedLoss + " n=" + n);
         }
         // System.out.println("iterations=" + iterations);
@@ -208,8 +206,8 @@ public class TestProductQuantization extends RandomizedTest {
             pq.write(out);
         }
         // Read
-        try (var in = new SimpleMappedReader(file.getAbsolutePath())) {
-            var pq2 = ProductQuantization.load(in);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(file.toPath())) {
+            var pq2 = ProductQuantization.load(readerSupplier.get());
             Assertions.assertEquals(pq, pq2);
         }
     }
@@ -217,8 +215,8 @@ public class TestProductQuantization extends RandomizedTest {
     @Test
     public void testLoadVersion0() throws Exception {
         var file = new File("resources/version0.pq");
-        try (var in = new SimpleMappedReader(file.getAbsolutePath())) {
-            var pq = ProductQuantization.load(in);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(file.toPath())) {
+            var pq = ProductQuantization.load(readerSupplier.get());
             assertEquals(2, pq.originalDimension);
             assertNull(pq.globalCentroid);
             assertEquals(1, pq.M);
@@ -234,8 +232,8 @@ public class TestProductQuantization extends RandomizedTest {
         var fileIn = new File("resources/version0.pq");
         var fileOut = File.createTempFile("pqtest", ".pq");
 
-        try (var in = new SimpleMappedReader(fileIn.getAbsolutePath())) {
-            var pq = ProductQuantization.load(in);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(fileIn.toPath())) {
+            var pq = ProductQuantization.load(readerSupplier.get());
 
             // re-save, emulating version 0
             try (var out = new DataOutputStream(new FileOutputStream(fileOut))) {

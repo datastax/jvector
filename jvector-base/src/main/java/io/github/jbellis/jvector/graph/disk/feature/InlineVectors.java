@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -45,7 +46,7 @@ public class InlineVectors implements Feature {
         return 0;
     }
 
-    public int inlineSize() {
+    public int featureSize() {
         return dimension * Float.BYTES;
     }
 

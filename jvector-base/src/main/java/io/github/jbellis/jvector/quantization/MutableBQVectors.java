@@ -16,8 +16,10 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
 @SuppressWarnings("unused")
-public class MutableBQVectors extends BQVectors implements MutableCompressedVectors<long[]> {
+public class MutableBQVectors extends BQVectors implements MutableCompressedVectors<VectorFloat<?>> {
     private static final int INITIAL_CAPACITY = 1024;
     private static final float GROWTH_FACTOR = 1.5f;
     
@@ -44,9 +46,9 @@ public class MutableBQVectors extends BQVectors implements MutableCompressedVect
     }
 
     @Override
-    public void encodeAndSet(int ordinal, long[] vector) {
+    public void encodeAndSet(int ordinal, VectorFloat<?> vector) {
         ensureCapacity(ordinal);
-        compressedVectors[ordinal] = vector;
+        compressedVectors[ordinal] = bq.encode(vector);
         vectorCount = Math.max(vectorCount, ordinal + 1);
     }
 

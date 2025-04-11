@@ -33,3 +33,6 @@ hdf5/
 
 ### aider
 .aider*
+
+# JMH generated files
+dependency-reduced-pom.xml
