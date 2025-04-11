@@ -42,11 +42,7 @@ public class DataSet {
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    List<VectorFloat<?>> queryVectors,
-                   List<? extends List<Integer>> groundTruth)
-    {
-        if (baseVectors.isEmpty()) {
-            List<? extends List<Integer>> groundTruth
-        }) {
+                   List<? extends List<Integer>> groundTruth) {
         // Delegate with allowEmptyBase set to false.
         this(name, similarityFunction, baseVectors, queryVectors, groundTruth, false);
     }
@@ -56,7 +52,7 @@ public class DataSet {
                       VectorSimilarityFunction similarityFunction,
                       List<VectorFloat<?>> baseVectors,
                       List<VectorFloat<?>> queryVectors,
-            List<? extends List<Integer>> groundTruth),
+                      List<? extends List<Integer>> groundTruth,
                       boolean allowEmptyBase) {
         if (!allowEmptyBase && baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");

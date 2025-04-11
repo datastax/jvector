@@ -19,7 +19,7 @@ public class LazyFvecsDataSet extends DataSet {
     public LazyFvecsDataSet(String name,
                             VectorSimilarityFunction similarityFunction,
                             List<VectorFloat<?>> queryVectors,
-                            List<? extends Set<Integer>> groundTruth,
+                            List<? extends List<Integer>> groundTruth,
                             Path datasetFilePath,
                             int vectorCount,
                             int dimension,

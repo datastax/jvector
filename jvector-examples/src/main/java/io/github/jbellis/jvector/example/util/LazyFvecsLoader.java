@@ -28,7 +28,7 @@ public class LazyFvecsLoader {
      */
     public static LazyFvecsDataSet load(String filePath,
                                         List<VectorFloat<?>> queryVectors,
-                                        List<? extends Set<Integer>> groundTruth,
+                                        List<? extends List<Integer>> groundTruth,
                                         VectorSimilarityFunction similarityFunction) {
         Path path = Paths.get(filePath);
         int dimension;
