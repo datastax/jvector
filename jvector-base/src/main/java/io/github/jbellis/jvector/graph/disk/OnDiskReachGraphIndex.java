@@ -95,7 +95,8 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
     }
 
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
-        rowIndex = new ArrayList<Integer>(idUpperBound);
+        in.seek(neighborsOffset);
+        rowIndex = new ArrayList<>(idUpperBound);
         for (int i = 0; i < idUpperBound + 1; i++) {
             rowIndex.add(in.readInt());
         }
@@ -104,8 +105,8 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
         long L0size = 0;
-        L0size = idUpperBound * inlineBlockSize + rowIndex.get(idUpperBound) * Integer.BYTES * (1L + 1L + layerInfo.get(0).degree);
-        in.seek(neighborsOffset + L0size);
+        L0size = idUpperBound * inlineBlockSize + rowIndex.get(idUpperBound) * Integer.BYTES;
+        in.seek(neighborsOffset + L0size + (long) (idUpperBound + 1) * Integer.BYTES);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
             CommonHeader.LayerInfo info = layerInfo.get(lvl);
@@ -301,6 +302,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             long skipInline = Integer.BYTES + inlineBlockSize;
             long blockBytes = skipInline + (long) Integer.BYTES * (degree + 1);
 
+            // TODO modify this method wirth the rowIndex and the proper offsets
             long offsetWithinLayer = blockBytes * node;
             return neighborsOffset + offsetWithinLayer + skipInline;
         }
@@ -356,6 +358,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
                     int neighborCount = reader.readInt();
+                    System.out.println(neighborCount);
                     assert neighborCount <= neighbors.length
                             : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
                     reader.read(neighbors, 0, neighborCount);
