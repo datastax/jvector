@@ -90,14 +90,14 @@ public class NodeQueue {
     }
 
     /**
-     * Encodes then adds N elements from the given iterator to this heap, in bulk. If the nodeScoreIterator
-     * has fewer than N elements, all elements will be added.
+     * Encodes then adds elements from the given iterator to this heap until elementsSize elements have been added or
+     * the iterator is exhausted. The heap then re-heapifies in O(n) time (Floyd's build-heap).
      *
-     * @param nodeScoreIterator the node and score pairs to add
-     * @param n                 the maximum number of elements to pull from the nodeScoreIterator
+     * @param nodeScoreIterator the node/score pairs to add
+     * @param count             the maximum number of elements to pull from the nodeScoreIterator
      */
-    public void pushN(NodeScoreIterator nodeScoreIterator, int n) {
-        heap.pushN(new NodeScoreIteratorConverter(nodeScoreIterator, this), n);
+    public void pushMany(NodeScoreIterator nodeScoreIterator, int count) {
+        heap.pushMany(new NodeScoreIteratorConverter(nodeScoreIterator, this), count);
     }
 
     /**
