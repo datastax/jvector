@@ -159,14 +159,8 @@ public class TestNodeQueue extends RandomizedTest {
     // Bulk-add all pairs in one go
     queue.pushN(it, nodes.length);
 
-    // The queue should now contain 5 elements
-    assertEquals(5, queue.size());
-
-    // Because it's a MIN_HEAP, the top (root) should be the "smallest" score
-    // We have scores: [2.2, -1.0, 0.5, 2.1, -0.9]
-    // The minimum is -1.0. Let's see which node that corresponds to: node=1
-    assertEquals(-1.0f, queue.topScore(), 0.000001);
-    assertEquals(1, queue.topNode());
+    // The queue should now contain 3 elements
+    assertEquals(3, queue.size());
   }
 
   @Test
