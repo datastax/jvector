@@ -144,6 +144,32 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
+  public void testPushAllMinHeapEdgeCase() {
+    // Build a NodeQueue with a GrowableLongHeap, using MIN_HEAP order
+    NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
+
+    // Let's prepare some node, score pairs
+    // We select 3 elements in this case because it was a missed edge case in the original code
+    int[] nodes = { 5, 1, 3};
+    float[] scores = { 2.2f, -1.0f, 0.5f};
+
+    // We'll create a TestNodeScoreIterator with these arrays
+    TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
+
+    // Bulk-add all pairs in one go
+    queue.pushAll(it, nodes.length);
+
+    // The queue should now contain 5 elements
+    assertEquals(5, queue.size());
+
+    // Because it's a MIN_HEAP, the top (root) should be the "smallest" score
+    // We have scores: [2.2, -1.0, 0.5, 2.1, -0.9]
+    // The minimum is -1.0. Let's see which node that corresponds to: node=1
+    assertEquals(-1.0f, queue.topScore(), 0.000001);
+    assertEquals(1, queue.topNode());
+  }
+
+  @Test
   public void testPushAllMaxHeap() {
     // Build a NodeQueue with a GrowableLongHeap, using MAX_HEAP order
     NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MAX_HEAP);
@@ -197,6 +223,55 @@ public class TestNodeQueue extends RandomizedTest {
   @Test
   public void testToString() {
     assertEquals("Nodes[0]", new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP).toString());
+  }
+
+  @Test
+  public void testPushAllPartialIterator() {
+    // Test with MIN_HEAP
+    NodeQueue minQueue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
+    int[] nodes = { 1, 2, 3, 4, 5 };
+    float[] scores = { 2.0f, 1.0f, 3.0f, 0.5f, 4.0f };
+    TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
+
+    // Only add first 3 elements from a 5-element iterator
+    minQueue.pushAll(it, 3);
+    assertEquals(3, minQueue.size());
+    assertEquals(1.0f, minQueue.topScore(), 0.000001); // Smallest among 2.0, 1.0, 3.0
+    assertEquals(2, minQueue.topNode());
+    assertTrue(it.hasNext()); // Iterator should still have more elements
+
+    // Test with MAX_HEAP
+    NodeQueue maxQueue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MAX_HEAP);
+    nodes = new int[]{ 10, 20, 30, 40, 50 };
+    scores = new float[]{ 1.0f, 3.0f, 2.0f, 4.0f, 5.0f };
+    it = new TestNodeScoreIterator(nodes, scores);
+
+    // Only add first 2 elements from a 5-element iterator
+    maxQueue.pushAll(it, 2);
+    assertEquals(2, maxQueue.size());
+    assertEquals(3.0f, maxQueue.topScore(), 0.000001); // Largest among 1.0, 3.0
+    assertEquals(20, maxQueue.topNode());
+    assertTrue(it.hasNext()); // Iterator should still have more elements
+  }
+
+  @Test
+  public void testPushAllBoundedHeapPartial() {
+    NodeQueue queue = new NodeQueue(new BoundedLongHeap(3), NodeQueue.Order.MAX_HEAP);
+    int[] nodes = { 1, 2, 3, 4, 5 };
+    float[] scores = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
+    TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
+
+    // Add 2 elements to a heap with capacity 3
+    queue.pushAll(it, 2);
+    assertEquals(2, queue.size());
+    assertEquals(2.0f, queue.topScore(), 0.000001);
+    assertEquals(2, queue.topNode());
+
+    // Add 1 more element
+    queue.push(3, 3.0f);
+    assertEquals(3, queue.size());
+    assertEquals(3.0f, queue.topScore(), 0.000001);
+    assertEquals(3, queue.topNode());
   }
 
   /**
