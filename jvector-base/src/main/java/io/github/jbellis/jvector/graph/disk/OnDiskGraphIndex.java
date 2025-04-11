@@ -190,7 +190,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         long layer0NodeSize = (long) Integer.BYTES // ids
                 + inlineBlockSize // inline elements
-                + (Integer.BYTES * (long) (maxDegree + 1));
+                + (Integer.BYTES * (long) (getDegree(0) + 1));
         long layerUpperNodeSize = (long) Integer.BYTES // ids
                 + (Integer.BYTES * (long) (maxDegree + 1)); // neighbor count + neighbors)
         long thisLayerNodeSide = level == 0? layer0NodeSize : layerUpperNodeSize;
