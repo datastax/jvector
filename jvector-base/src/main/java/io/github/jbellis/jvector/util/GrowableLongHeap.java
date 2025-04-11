@@ -51,8 +51,8 @@ public class GrowableLongHeap extends AbstractLongHeap {
     }
 
     @Override
-    public void pushAll(PrimitiveIterator.OfLong elements, int elementsSize)
+    public void pushN(PrimitiveIterator.OfLong elements, int elementsSize)
     {
-        addAll(elements, elementsSize);
+        addN(elements, elementsSize);
     }
 }

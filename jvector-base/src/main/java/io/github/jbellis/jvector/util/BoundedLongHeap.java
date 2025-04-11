@@ -69,11 +69,11 @@ public class BoundedLongHeap extends AbstractLongHeap {
     }
 
     @Override
-    public void pushAll(PrimitiveIterator.OfLong elements, int elementsSize)
+    public void pushN(PrimitiveIterator.OfLong elements, int elementsSize)
     {
         if (elementsSize + size > maxSize)
             throw new IllegalArgumentException("Cannot add more elements than maxSize");
-        addAll(elements, elementsSize);
+        addN(elements, elementsSize);
     }
 
     /**

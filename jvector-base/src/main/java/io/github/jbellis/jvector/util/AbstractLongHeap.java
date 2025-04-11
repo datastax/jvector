@@ -66,12 +66,12 @@ public abstract class AbstractLongHeap {
     public abstract boolean push(long element);
 
     /**
-     * Adds all elements from the given iterator to this heap, in bulk.
+     * Adds `elementsSize` elements from the given iterator to this heap, in bulk.
      *
      * @param elements the elements to add
      * @param elementsSize the maximum number of elements to pull from the elements iterator
      */
-    public abstract void pushAll(PrimitiveIterator.OfLong elements, int elementsSize);
+    public abstract void pushN(PrimitiveIterator.OfLong elements, int elementsSize);
 
     protected long add(long element) {
         size++;
@@ -84,14 +84,14 @@ public abstract class AbstractLongHeap {
     }
 
     /**
-     * Bulk-adds all elements from the given iterator to this heap, then re-heapifies
+     * Bulk-adds `elementsSize` elements from the given iterator to this heap, then re-heapifies
      * in O(n) time (Floyd's build-heap). For a proof explaining the linear time
      * complexity, see <a href="https://stackoverflow.com/a/18742428">this stackoverflow answer</a>.
      *
      * @param elements the elements to add
      * @param elementsSize the maximum number of elements to pull from the elements iterator
      */
-    protected void addAll(PrimitiveIterator.OfLong elements, int elementsSize) {
+    protected void addN(PrimitiveIterator.OfLong elements, int elementsSize) {
         if (!elements.hasNext()) {
             return; // nothing to do
         }

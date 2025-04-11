@@ -119,7 +119,7 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllMinHeap() {
+  public void testPushNMinHeap() {
     // Build a NodeQueue with a GrowableLongHeap, using MIN_HEAP order
     NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
 
@@ -131,7 +131,7 @@ public class TestNodeQueue extends RandomizedTest {
     TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
 
     // Bulk-add all pairs in one go
-    queue.pushAll(it, nodes.length);
+    queue.pushN(it, nodes.length);
 
     // The queue should now contain 5 elements
     assertEquals(5, queue.size());
@@ -144,7 +144,7 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllMinHeapEdgeCase() {
+  public void testPushNMinHeapEdgeCase() {
     // Build a NodeQueue with a GrowableLongHeap, using MIN_HEAP order
     NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
 
@@ -157,7 +157,7 @@ public class TestNodeQueue extends RandomizedTest {
     TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
 
     // Bulk-add all pairs in one go
-    queue.pushAll(it, nodes.length);
+    queue.pushN(it, nodes.length);
 
     // The queue should now contain 5 elements
     assertEquals(5, queue.size());
@@ -170,7 +170,7 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllMaxHeap() {
+  public void testPushNMaxHeap() {
     // Build a NodeQueue with a GrowableLongHeap, using MAX_HEAP order
     NodeQueue queue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MAX_HEAP);
 
@@ -182,7 +182,7 @@ public class TestNodeQueue extends RandomizedTest {
     TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
 
     // Bulk-add all pairs in one go
-    queue.pushAll(it, nodes.length);
+    queue.pushN(it, nodes.length);
 
     // The queue should now contain 5 elements
     assertEquals(5, queue.size());
@@ -194,24 +194,24 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllBoundedHeapAtCapacity() {
+  public void testPushNBoundedHeapAtCapacity() {
     NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
-    queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
+    queue.pushN(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
     assertEquals(2, queue.size());
     assertEquals(2, queue.topNode());
     assertEquals(2, queue.topScore(), 0.000001);
   }
 
   @Test
-  public void testPushAllBoundedHeapExceedsCapacity() {
+  public void testPushNBoundedHeapExceedsCapacity() {
     assertThrows(IllegalArgumentException.class, () -> {
       NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
-      queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2, 3 }, new float[] { 1, 2, 3 }), 3);
+      queue.pushN(new TestNodeScoreIterator(new int[] { 1, 2, 3 }, new float[] { 1, 2, 3 }), 3);
     });
     NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
     queue.push(1, 1);
     assertThrows(IllegalArgumentException.class, () -> {
-      queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
+      queue.pushN(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
     });
   }
 
@@ -226,7 +226,7 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllPartialIterator() {
+  public void testPushNPartialIterator() {
     // Test with MIN_HEAP
     NodeQueue minQueue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);
     int[] nodes = { 1, 2, 3, 4, 5 };
@@ -234,7 +234,7 @@ public class TestNodeQueue extends RandomizedTest {
     TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
 
     // Only add first 3 elements from a 5-element iterator
-    minQueue.pushAll(it, 3);
+    minQueue.pushN(it, 3);
     assertEquals(3, minQueue.size());
     assertEquals(1.0f, minQueue.topScore(), 0.000001); // Smallest among 2.0, 1.0, 3.0
     assertEquals(2, minQueue.topNode());
@@ -247,7 +247,7 @@ public class TestNodeQueue extends RandomizedTest {
     it = new TestNodeScoreIterator(nodes, scores);
 
     // Only add first 2 elements from a 5-element iterator
-    maxQueue.pushAll(it, 2);
+    maxQueue.pushN(it, 2);
     assertEquals(2, maxQueue.size());
     assertEquals(3.0f, maxQueue.topScore(), 0.000001); // Largest among 1.0, 3.0
     assertEquals(20, maxQueue.topNode());
@@ -255,14 +255,14 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
-  public void testPushAllBoundedHeapPartial() {
+  public void testPushNBoundedHeapPartial() {
     NodeQueue queue = new NodeQueue(new BoundedLongHeap(3), NodeQueue.Order.MAX_HEAP);
     int[] nodes = { 1, 2, 3, 4, 5 };
     float[] scores = { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f };
     TestNodeScoreIterator it = new TestNodeScoreIterator(nodes, scores);
 
     // Add 2 elements to a heap with capacity 3
-    queue.pushAll(it, 2);
+    queue.pushN(it, 2);
     assertEquals(2, queue.size());
     assertEquals(2.0f, queue.topScore(), 0.000001);
     assertEquals(2, queue.topNode());
