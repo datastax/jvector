@@ -168,6 +168,15 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
+  public void testPushAllBoundedHeapAtCapacity() {
+    NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
+    queue.pushAll(new TestNodeScoreIterator(new int[] { 1, 2 }, new float[] { 1, 2 }), 2);
+    assertEquals(2, queue.size());
+    assertEquals(2, queue.topNode());
+    assertEquals(2, queue.topScore(), 0.000001);
+  }
+
+  @Test
   public void testPushAllBoundedHeapExceedsCapacity() {
     assertThrows(IllegalArgumentException.class, () -> {
       NodeQueue queue = new NodeQueue(new BoundedLongHeap(2), NodeQueue.Order.MAX_HEAP);
