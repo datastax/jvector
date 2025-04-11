@@ -187,7 +187,7 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
 
         var reachableGraph = new ArrayList<List<Integer>>(ordinalMapper.maxOrdinal() + 1);
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
-            reachableGraph.set(newOrdinal, new ArrayList<>());
+            reachableGraph.add(new ArrayList<>());
         }
 
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -216,7 +216,8 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
         int pos = 0;
         out.writeInt(pos);
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
-            pos += reachableGraph.get(newOrdinal).size();
+            // We add two to account for the nodeId and the number of neighbors
+            pos += reachableGraph.get(newOrdinal).size() + 2;
             out.writeInt(pos);
         }
 
@@ -231,9 +232,6 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
                     out.seek(out.position() + feature.featureSize());
                 }
                 out.writeInt(0);
-                for (int n = 0; n < graph.getDegree(0); n++) {
-                    out.writeInt(-1);
-                }
                 continue;
             }
 
