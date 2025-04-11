@@ -274,11 +274,11 @@ public class NodeQueue {
         /** @return true if there are more elements */
         boolean hasNext();
 
-        /** @return the next node id */
-        int nextNode();
+        /** @return the next node id and advance the iterator */
+        int pop();
 
-        /** @return the next node score and advance the iterator */
-        float nextScore();
+        /** @return the next node score */
+        float topScore();
     }
 
     /**
@@ -315,8 +315,10 @@ public class NodeQueue {
 
         @Override
         public long nextLong() {
-            // Call to nextScore() advances the iterator
-            return queue.encode(it.nextNode(), it.nextScore());
+            // pop() advances the iterator
+            float score = it.topScore();
+            int node = it.pop();
+            return queue.encode(node, score);
         }
     }
 }

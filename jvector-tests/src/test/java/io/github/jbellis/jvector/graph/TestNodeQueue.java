@@ -220,13 +220,13 @@ public class TestNodeQueue extends RandomizedTest {
     }
 
     @Override
-    public int nextNode() {
-      return nodes[index];
+    public int pop() {
+      return nodes[index++];
     }
 
     @Override
-    public float nextScore() {
-      return scores[index++];
+    public float topScore() {
+      return scores[index];
     }
   }
 
