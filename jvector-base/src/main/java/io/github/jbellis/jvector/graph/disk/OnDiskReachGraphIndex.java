@@ -64,14 +64,17 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
     final EnumMap<FeatureId, ? extends Feature> features;
     final EnumMap<FeatureId, Integer> inlineOffsets;
     private final List<CommonHeader.LayerInfo> layerInfo;
+    // offset of the end of the header & the beginning of rowIndex
+    private final long afterHeaderOffset;
     // offset of L0 adjacency data
     private final long neighborsOffset;
     /** For layers > 0, store adjacency fully in memory. */
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
 
+    int maxDegreeL0; // we do not know the maximum out-degree ahead of time
     private List<Integer> rowIndex; // the offset array that holds the logical location of each adjacency list
 
-    OnDiskReachGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
+    OnDiskReachGraphIndex(ReaderSupplier readerSupplier, Header header, long afterHeaderOffset)
     {
         this.readerSupplier = readerSupplier;
         this.version = header.common.version;
@@ -80,7 +83,8 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
         this.idUpperBound = header.common.idUpperBound;
         this.features = header.features;
-        this.neighborsOffset = neighborsOffset;
+        this.afterHeaderOffset = afterHeaderOffset;
+        this.neighborsOffset = afterHeaderOffset + (long) Integer.BYTES * (this.idUpperBound + 1);
         var inlineBlockSize = 0;
         inlineOffsets = new EnumMap<>(FeatureId.class);
         for (var entry : features.entrySet()) {
@@ -95,10 +99,14 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
     }
 
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
-        in.seek(neighborsOffset);
+        in.seek(afterHeaderOffset);
         rowIndex = new ArrayList<>(idUpperBound);
+        maxDegreeL0 = 0;
         for (int i = 0; i < idUpperBound + 1; i++) {
             rowIndex.add(in.readInt());
+            if (i > 0) {
+                maxDegreeL0 = Math.max(maxDegreeL0, rowIndex.get(i) - rowIndex.get(i - 1) - 2);
+            }
         }
 
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
@@ -106,7 +114,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
         long L0size = 0;
         L0size = idUpperBound * inlineBlockSize + rowIndex.get(idUpperBound) * Integer.BYTES;
-        in.seek(neighborsOffset + L0size + (long) (idUpperBound + 1) * Integer.BYTES);
+        in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
             CommonHeader.LayerInfo info = layerInfo.get(lvl);
@@ -256,8 +264,19 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         private final int[] neighbors;
 
         public View(RandomAccessReader reader) {
+            inMemoryNeighbors.updateAndGet(current -> {
+                if (current != null) {
+                    return current;
+                }
+                try {
+                    return loadInMemoryLayers(reader);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+
             this.reader = reader;
-            this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
+            this.neighbors = new int[maxDegreeL0];
         }
 
         @Override
@@ -286,24 +305,16 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             }
 
             // Inline features are in layer 0 only
-            return neighborsOffset +
-                    (node * ((long) Integer.BYTES // ids
-                            + inlineBlockSize // inline elements
-                            + (Integer.BYTES * (long) (layerInfo.get(0).degree + 1)) // neighbor count + neighbors)
-                    )) + Integer.BYTES + // id
-                    inlineOffsets.get(featureId);
+            long offsetWithinLayer = rowIndex.get(node) * Integer.BYTES  + (long) node * inlineBlockSize;
+            return neighborsOffset + offsetWithinLayer + inlineOffsets.get(featureId);
         }
 
         private long neighborsOffsetFor(int level, int node) {
             assert level == 0; // higher layers are in memory
-            int degree = layerInfo.get(level).degree;
 
             // skip node ID + inline features
             long skipInline = Integer.BYTES + inlineBlockSize;
-            long blockBytes = skipInline + (long) Integer.BYTES * (degree + 1);
-
-            // TODO modify this method wirth the rowIndex and the proper offsets
-            long offsetWithinLayer = blockBytes * node;
+            long offsetWithinLayer = rowIndex.get(node) * Integer.BYTES  + (long) node * inlineBlockSize;
             return neighborsOffset + offsetWithinLayer + skipInline;
         }
 
@@ -358,23 +369,11 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
                     int neighborCount = reader.readInt();
-                    System.out.println(neighborCount);
-                    assert neighborCount <= neighbors.length
-                            : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
                     reader.read(neighbors, 0, neighborCount);
                     return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
                 } else {
                     // For levels > 0, read from memory
-                    var imn = inMemoryNeighbors.updateAndGet(current -> {
-                        if (current != null) {
-                            return current;
-                        }
-                        try {
-                            return loadInMemoryLayers(reader);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
-                        }
-                    });
+                    var imn = inMemoryNeighbors.get();
                     int[] stored = imn.get(level).get(node);
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
                     return new NodesIterator.ArrayNodesIterator(stored, stored.length);
