@@ -9,11 +9,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-@CommandLine.Command(name = "testrig",
-    mixinStandardHelpOptions = true,
-    description = "JVector Test Rig",
-    subcommands = {CommandLine.HelpCommand.class, AutoComplete.GenerateCompletion.class,
-                   Run.class, CMD_datasets.class})
+@CommandLine.Command(name = "testrig", mixinStandardHelpOptions = true, description = """
+    JVector Test Rig
+
+    To generate command-line completion scripts use the
+    `generate-completion` command, and redirect the output to a file,
+    then source the file into your shell. (Known to work with bash,
+    and likely works with other shells too)
+
+    You may need to add the directory containing your testrig script
+    to your path if it is not already there, so that completion matching
+    for associated commands works reliably.
+    """,
+
+    subcommands = {
+        CommandLine.HelpCommand.class, AutoComplete.GenerateCompletion.class, Run.class,
+        CMD_datasets.class
+    })
 public class TestRig implements Callable<Integer> {
 
   @CommandLine.Option(names = {"-d", "--dataset"}, description = "Dataset to use")
@@ -33,8 +45,7 @@ public class TestRig implements Callable<Integer> {
 
   public static void main(String[] args) {
     TestRig command = new TestRig();
-             CommandLine commandLine =
-             new CommandLine(command).setCaseInsensitiveEnumValuesAllowed(true)
+    CommandLine commandLine = new CommandLine(command).setCaseInsensitiveEnumValuesAllowed(true)
         .setOptionsCaseInsensitive(true);
     int exitCode = commandLine.execute(args);
     System.exit(exitCode);
