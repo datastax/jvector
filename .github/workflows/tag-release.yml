@@ -70,22 +70,20 @@ jobs:
             - bumps the revision in pom.xml to ${{ github.event.inputs.tag_version }}
             Please review and merge.
 
+      - name: Clean workspace and checkout base branch
+        run: |
+          git checkout main
+          git reset --hard origin/main # Ensure we are clean relative to remote main
+
+      - name: Create branch for next development version
+        run: |
+          git checkout -b "release/bump-version-to-${{ github.event.inputs.new_revision }}" main
+
       - name: Update revision in pom.xml for next development version
         run: |
           sed -i 's|<revision>.*</revision>|<revision>${{ github.event.inputs.new_revision }}</revision>|' ./pom.xml
-          git checkout -b "release/bump-version-to-${{ github.event.inputs.new_revision }}"
           git add ./pom.xml
           git commit -m "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for continued development"
-
-      - name: Ensure remote branch exists for version bump
-        run: |
-          BRANCH="release/bump-version-to-${{ github.event.inputs.new_revision }}"
-          if git ls-remote --exit-code origin $BRANCH; then
-            echo "Remote branch exists."
-          else
-            echo "Remote branch does not exist. Creating it."
-            git push origin HEAD:$BRANCH
-          fi
 
       - name: Create pull request for version bump
         uses: peter-evans/create-pull-request@v7
@@ -95,7 +93,6 @@ jobs:
           branch: "release/bump-version-to-${{ github.event.inputs.new_revision }}"
           base: "main"
           title: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for development"
-          commit-message: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for ongoing development"
           body: |
             This pull request updates the pom.xml version to ${{
             github.event.inputs.new_revision }} to start development for the next release.
