@@ -108,7 +108,6 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
                 maxDegreeL0 = Math.max(maxDegreeL0, cumulativeDegrees.get(i) - cumulativeDegrees.get(i - 1));
             }
         }
-        System.out.println(maxDegreeL0);
 
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
