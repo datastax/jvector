@@ -85,6 +85,10 @@ jobs:
           git add ./pom.xml
           git commit -m "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for continued development"
 
+      - name: Push the new version branch # Ensure remote state matches local commit
+        run: |
+          git push --force-with-lease --set-upstream origin "release/bump-version-to-${{ github.event.inputs.new_revision }}"
+
       - name: Create pull request for version bump
         uses: peter-evans/create-pull-request@v7
         env:
