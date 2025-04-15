@@ -6,6 +6,7 @@
 
 **Merged pull requests:**
 
+* Creating starting point for changelog tracking. [\#456](https://github.com/datastax/jvector/pull/456) ([tlwillke](https://github.com/tlwillke))
 * Adjust changelog generation steps. [\#437](https://github.com/datastax/jvector/pull/437) ([msmygit](https://github.com/msmygit))
 * Fix minor bug in getNodes. [\#434](https://github.com/datastax/jvector/pull/434) ([marianotepper](https://github.com/marianotepper))
 * Fix/refactor NodeScoreIterator, BoundedLongHeap, and GrowableLongHeap bulk addition implementations [\#433](https://github.com/datastax/jvector/pull/433) ([michaeljmarshall](https://github.com/michaeljmarshall))
