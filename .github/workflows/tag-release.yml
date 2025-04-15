@@ -76,6 +76,16 @@ jobs:
           git add ./pom.xml
           git commit -m "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for continued development"
 
+      - name: Ensure remote branch exists for version bump
+        run: |
+          BRANCH="release/bump-version-to-${{ github.event.inputs.new_revision }}"
+          if git ls-remote --exit-code origin $BRANCH; then
+            echo "Remote branch exists."
+          else
+            echo "Remote branch does not exist. Creating it."
+            git push origin HEAD:$BRANCH
+          fi
+
       - name: Create pull request for version bump
         uses: peter-evans/create-pull-request@v7
         env:
