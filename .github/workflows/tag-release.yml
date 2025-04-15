@@ -89,10 +89,9 @@ jobs:
       - name: Create pull request for version bump
         uses: peter-evans/create-pull-request@v7
         env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           branch: "release/bump-version-to-${{ github.event.inputs.new_revision }}"
-          branch-suffix: "short-commit-hash"
           base: "main"
           title: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for development"
           commit-message: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for ongoing development"
