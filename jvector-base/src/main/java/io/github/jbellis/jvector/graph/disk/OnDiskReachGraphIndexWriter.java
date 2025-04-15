@@ -185,11 +185,13 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
 
         writeHeader(); // sets position to start writing features
 
+        // initialize reachable graph, that will be used for temporarily hosting the inverted graph (i.e., out-edges become in-edges)
         var reachableGraph = new ArrayList<List<Integer>>(ordinalMapper.maxOrdinal() + 1);
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
             reachableGraph.add(new ArrayList<>());
         }
 
+        // perform the inversion
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
             var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
 
@@ -213,11 +215,12 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
             }
         }
 
+        // save the out-degrees
         int pos = 0;
         out.writeInt(pos);
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
             // We add two to account for the nodeId and the number of neighbors
-            pos += reachableGraph.get(newOrdinal).size() + 2;
+            pos += reachableGraph.get(newOrdinal).size();
             out.writeInt(pos);
         }
 
@@ -247,7 +250,6 @@ public class OnDiskReachGraphIndexWriter implements Closeable {
 
             var neighbors = reachableGraph.get(newOrdinal);
             // write neighbors list
-            out.writeInt(neighbors.size());
             for (var n : neighbors) {
                 out.writeInt(n);
             }

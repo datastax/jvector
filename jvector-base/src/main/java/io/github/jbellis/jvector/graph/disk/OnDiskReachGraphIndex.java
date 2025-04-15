@@ -72,7 +72,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
 
     int maxDegreeL0; // we do not know the maximum out-degree ahead of time
-    private List<Integer> rowIndex; // the offset array that holds the logical location of each adjacency list
+    private List<Integer> cumulativeDegrees; // the offset array that cumulative sum of the out-degree of each node. It starts with an initial 0.
 
     OnDiskReachGraphIndex(ReaderSupplier readerSupplier, Header header, long afterHeaderOffset)
     {
@@ -100,20 +100,20 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
 
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
         in.seek(afterHeaderOffset);
-        rowIndex = new ArrayList<>(idUpperBound);
+        cumulativeDegrees = new ArrayList<>(idUpperBound);
         maxDegreeL0 = 0;
         for (int i = 0; i < idUpperBound + 1; i++) {
-            rowIndex.add(in.readInt());
+            cumulativeDegrees.add(in.readInt());
             if (i > 0) {
-                maxDegreeL0 = Math.max(maxDegreeL0, rowIndex.get(i) - rowIndex.get(i - 1) - 2);
+                maxDegreeL0 = Math.max(maxDegreeL0, cumulativeDegrees.get(i) - cumulativeDegrees.get(i - 1));
             }
         }
+        System.out.println(maxDegreeL0);
 
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
-        long L0size = 0;
-        L0size = idUpperBound * inlineBlockSize + rowIndex.get(idUpperBound) * Integer.BYTES;
+        long L0size = (long) idUpperBound * (inlineBlockSize + Integer.BYTES) + (long) cumulativeDegrees.get(idUpperBound) * Integer.BYTES;
         in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
@@ -305,7 +305,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             }
 
             // Inline features are in layer 0 only
-            long offsetWithinLayer = rowIndex.get(node) * Integer.BYTES  + (long) node * inlineBlockSize;
+            long offsetWithinLayer = (long) cumulativeDegrees.get(node) * Integer.BYTES  + (long) node * (inlineBlockSize + Integer.BYTES);
             return neighborsOffset + offsetWithinLayer + inlineOffsets.get(featureId);
         }
 
@@ -314,7 +314,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
 
             // skip node ID + inline features
             long skipInline = Integer.BYTES + inlineBlockSize;
-            long offsetWithinLayer = rowIndex.get(node) * Integer.BYTES  + (long) node * inlineBlockSize;
+            long offsetWithinLayer = (long) cumulativeDegrees.get(node) * Integer.BYTES  + (long) node * (inlineBlockSize + Integer.BYTES);
             return neighborsOffset + offsetWithinLayer + skipInline;
         }
 
@@ -368,7 +368,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
                 if (level == 0) {
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
-                    int neighborCount = reader.readInt();
+                    int neighborCount = cumulativeDegrees.get(node + 1) - cumulativeDegrees.get(node);
                     reader.read(neighbors, 0, neighborCount);
                     return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
                 } else {
