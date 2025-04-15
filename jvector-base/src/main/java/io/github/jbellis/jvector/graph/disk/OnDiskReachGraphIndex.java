@@ -69,10 +69,10 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
     // offset of L0 adjacency data
     private final long neighborsOffset;
     /** For layers > 0, store adjacency fully in memory. */
-    private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
-
-    int maxDegreeL0; // we do not know the maximum out-degree ahead of time
+    private List<Int2ObjectHashMap<int[]>> inMemoryNeighbors;
+    private int maxDegreeL0; // we do not know the maximum out-degree ahead of time
     private List<Integer> cumulativeDegrees; // the offset array that cumulative sum of the out-degree of each node. It starts with an initial 0.
+    private boolean loaded; // use to check whether the hierarchy is loaded in memory
 
     OnDiskReachGraphIndex(ReaderSupplier readerSupplier, Header header, long afterHeaderOffset)
     {
@@ -95,10 +95,13 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             }
         }
         this.inlineBlockSize = inlineBlockSize;
-        inMemoryNeighbors = new AtomicReference<>(null);
+        this.loaded = false;
     }
 
-    private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
+    private synchronized void loadInMemoryLayers(RandomAccessReader in) throws IOException {
+        if (loaded) {
+            return;
+        }
         in.seek(afterHeaderOffset);
         cumulativeDegrees = new ArrayList<>(idUpperBound);
         maxDegreeL0 = 0;
@@ -109,9 +112,9 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             }
         }
 
-        var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
+        inMemoryNeighbors = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
-        imn.add(null); // L0 placeholder so we don't have to mangle indexing
+        inMemoryNeighbors.add(null); // L0 placeholder so we don't have to mangle indexing
         long L0size = (long) idUpperBound * (inlineBlockSize + Integer.BYTES) + (long) cumulativeDegrees.get(idUpperBound) * Integer.BYTES;
         in.seek(neighborsOffset + L0size);
 
@@ -135,9 +138,10 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
 
                 edges.put(nodeId, neighbors);
             }
-            imn.add(edges);
+            inMemoryNeighbors.add(edges);
         }
-        return imn;
+
+        loaded = true;
     }
 
     /**
@@ -263,16 +267,11 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         private final int[] neighbors;
 
         public View(RandomAccessReader reader) {
-            inMemoryNeighbors.updateAndGet(current -> {
-                if (current != null) {
-                    return current;
-                }
-                try {
-                    return loadInMemoryLayers(reader);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
+            try {
+                loadInMemoryLayers(reader);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
 
             this.reader = reader;
             this.neighbors = new int[maxDegreeL0];
@@ -372,8 +371,7 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
                     return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
                 } else {
                     // For levels > 0, read from memory
-                    var imn = inMemoryNeighbors.get();
-                    int[] stored = imn.get(level).get(node);
+                    int[] stored = inMemoryNeighbors.get(level).get(node);
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
                     return new NodesIterator.ArrayNodesIterator(stored, stored.length);
                 }
