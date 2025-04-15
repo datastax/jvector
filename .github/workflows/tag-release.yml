@@ -1,4 +1,4 @@
-# @author Madhavan Sridharan
+# Authors: Madhavan Sridharan, Ted Willke
 name: Prepare new tag & changelog PR
 
 # runs on
@@ -35,21 +35,21 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-      - name: Generate changelog
-        continue-on-error: true
-        run: ./update_changelog.sh
-
-      - name: Update revision in pom.xml
+      - name: Update revision in pom.xml for release
         run: |
-          sed -i 's|<revision>.*</revision>|<revision>${{ github.event.inputs.new_revision }}</revision>|' ./pom.xml
+          sed -i 's|<revision>.*</revision>|<revision>${{ github.event.inputs.tag_version }}</revision>|' ./pom.xml
           git add ./pom.xml
-          git commit -m "chore (release): Start development on ${{ github.event.inputs.new_revision }}"
+          git commit -m "chore (release): Set release version to ${{ github.event.inputs.tag_version }}"
 
       # Note: the tag version will be pushed right away at this step prior to changelog pr merging
       - name: Create and push tag
         run: |
           git tag -a "${{ github.event.inputs.tag_version }}" -m "Release tag version ${{ github.event.inputs.tag_version }}"
           git push origin "${{ github.event.inputs.tag_version }}"
+
+      - name: Generate changelog
+        continue-on-error: true
+        run: ./update_changelog.sh
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v7
@@ -65,6 +65,27 @@ jobs:
           body: |
             This pull request does the following as part of the release process,
             - bumps the tag version to ${{ github.event.inputs.tag_version }}
-            - updates changelog
-            - bumps the revision in pom.xml to ${{ github.event.inputs.new_revision }}
+            - updates changelog to include changes for current release
+            - bumps the revision in pom.xml to ${{ github.event.inputs.tag_version }}
             Please review and merge.
+
+      - name: Update revision in pom.xml for next development version
+        run: |
+          sed -i 's|<revision>.*</revision>|<revision>${{ github.event.inputs.new_revision }}</revision>|' ./pom.xml
+          git checkout -b "release/bump-version-to-${{ github.event.inputs.new_revision }}"
+          git add ./pom.xml
+          git commit -m "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for continued development"
+
+      - name: Create pull request for version bump
+        uses: peter-evans/create-pull-request@v7
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          branch: "release/bump-version-to-${{ github.event.inputs.new_revision }}"
+          branch-suffix: "short-commit-hash"
+          base: "main"
+          title: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for development"
+          commit-message: "chore(release): Bump version to ${{ github.event.inputs.new_revision }} for ongoing development"
+          body: |
+            This pull request updates the pom.xml version to ${{
+            github.event.inputs.new_revision }} to start development for the next release.
