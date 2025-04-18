@@ -66,12 +66,13 @@ public abstract class AbstractLongHeap {
     public abstract boolean push(long element);
 
     /**
-     * Adds all elements from the given iterator to this heap, in bulk.
+     * Adds elements from the given iterator to this heap until elementsSize elements have been added or the iterator
+     * is exhausted. Then re-heapifies in O(n) time (Floyd's build-heap).
      *
-     * @param elements the elements to add
-     * @param elementsSize the number of elements to add
+     * @param elements the iterator to pull elements from
+     * @param elementsSize the maximum number of elements to pull from the elements iterator
      */
-    public abstract void pushAll(PrimitiveIterator.OfLong elements, int elementsSize);
+    public abstract void pushMany(PrimitiveIterator.OfLong elements, int elementsSize);
 
     protected long add(long element) {
         size++;
@@ -84,32 +85,35 @@ public abstract class AbstractLongHeap {
     }
 
     /**
-     * Bulk-adds all elements from the given iterator to this heap, then re-heapifies
-     * in O(n) time (Floyd's build-heap). For a proof explaining the linear time
+     * Bulk-adds the minimum between elementsSize and the number of elements in the iterator from the given iterator
+     * to this heap, then re-heapifies in O(n) time (Floyd's build-heap). For a proof explaining the linear time
      * complexity, see <a href="https://stackoverflow.com/a/18742428">this stackoverflow answer</a>.
      *
-     * @param elements the elements to add
-     * @param elementsSize the number of elements to add
+     * @param elements the iterator to pull elements from
+     * @param elementsSize the maximum number of elements to pull from the elements iterator
      */
-    protected void addAll(PrimitiveIterator.OfLong elements, int elementsSize) {
+    protected void addMany(PrimitiveIterator.OfLong elements, int elementsSize) {
         if (!elements.hasNext()) {
             return; // nothing to do
         }
 
         // 1) Ensure we have enough capacity
-        int newSize = size + elementsSize;
-        if (newSize >= heap.length) {
+        // NOTE: we add +1 to size because all access to heap is 1-based not 0-based.  heap[0] is unused.
+        int newSize = (size + 1) + elementsSize;
+        if (newSize > heap.length) {
             heap = ArrayUtil.grow(heap, newSize);
         }
 
         // 2) Copy the new elements directly into the array
-        while (elements.hasNext()) {
+        int added = 0;
+        while (elements.hasNext() && added++ < elementsSize) {
             heap[++size] = elements.nextLong();
         }
 
         // 3) "Bottom-up" re-heapify:
         //    Start from the last non-leaf node (size >>> 1) down to the root (1).
         //    This is Floyd's build-heap algorithm.
+        // The loop goes down to 1 as heap is 1-based not 0-based.
         for (int i = size >>> 1; i >= 1; i--) {
             downHeap(i);
         }
