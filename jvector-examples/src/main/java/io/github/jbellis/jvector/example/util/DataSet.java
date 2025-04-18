@@ -42,19 +42,9 @@ public class DataSet {
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    List<VectorFloat<?>> queryVectors,
-                   List<? extends List<Integer>> groundTruth) {
-        // Delegate with allowEmptyBase set to false.
-        this(name, similarityFunction, baseVectors, queryVectors, groundTruth, false);
-    }
-
-    // Option to allow empty baseVectors.
-    protected DataSet(String name,
-                      VectorSimilarityFunction similarityFunction,
-                      List<VectorFloat<?>> baseVectors,
-                      List<VectorFloat<?>> queryVectors,
-                      List<? extends List<Integer>> groundTruth,
-                      boolean allowEmptyBase) {
-        if (!allowEmptyBase && baseVectors.isEmpty()) {
+                   List<? extends List<Integer>> groundTruth)
+    {
+        if (baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");
         }
         if (queryVectors.isEmpty()) {
@@ -64,7 +54,7 @@ public class DataSet {
             throw new IllegalArgumentException("Ground truth vectors must not be empty");
         }
 
-        if (!baseVectors.isEmpty() && baseVectors.get(0).length() != queryVectors.get(0).length()) {
+        if (baseVectors.get(0).length() != queryVectors.get(0).length()) {
             throw new IllegalArgumentException("Base and query vectors must have the same dimensionality");
         }
         if (queryVectors.size() != groundTruth.size()) {
@@ -77,13 +67,8 @@ public class DataSet {
         this.queryVectors = queryVectors;
         this.groundTruth = groundTruth;
 
-        if (!baseVectors.isEmpty()) {
-            System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
-                    name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
-        } else {
-            System.out.format("%n%s: 0 base and %d query vectors created%n",
-                    name, queryVectors.size());
-        }
+        System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
+                name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
     }
 
     /**
