@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -279,7 +278,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             throw new UnsupportedOperationException(); // need to copy reader
         }
 
-        protected long offsetFor(int node, FeatureId featureId) {
+        private long offsetFor(int node, FeatureId featureId) {
             Feature feature = features.get(featureId);
 
             // Separated features are just global offset + node offset
@@ -289,25 +288,30 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             }
 
             // Inline features are in layer 0 only
-            return neighborsOffset +
-                    (node * ((long) Integer.BYTES // ids
-                            + inlineBlockSize // inline elements
-                            + (Integer.BYTES * (long) (layerInfo.get(0).degree + 1)) // neighbor count + neighbors)
-                    )) + Integer.BYTES + // id
-                    inlineOffsets.get(featureId);
+            // skip node ID and get to the desired inline feature
+            long skipInNode = Integer.BYTES + inlineOffsets.get(featureId);
+            return baseNodeOffsetFor(node) + skipInNode;
         }
 
         private long neighborsOffsetFor(int level, int node) {
             assert level == 0; // higher layers are in memory
-            int degree = layerInfo.get(level).degree;
+
+            // skip node ID + inline features
+            long skipInline = Integer.BYTES + inlineBlockSize;
+            return baseNodeOffsetFor(node) + skipInline;
+        }
+
+        private long baseNodeOffsetFor(int node) {
+            int degree = layerInfo.get(0).degree;
 
             // skip node ID + inline features
             long skipInline = Integer.BYTES + inlineBlockSize;
             long blockBytes = skipInline + (long) Integer.BYTES * (degree + 1);
 
             long offsetWithinLayer = blockBytes * node;
-            return neighborsOffset + offsetWithinLayer + skipInline;
+            return neighborsOffset + offsetWithinLayer;
         }
+
 
         @Override
         public RandomAccessReader featureReaderForNode(int node, FeatureId featureId) throws IOException {
@@ -318,21 +322,9 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         @Override
         public VectorFloat<?> getVector(int node) {
-            var feature = features.get(FeatureId.INLINE_VECTORS);
-            if (feature == null) {
-                feature = features.get(FeatureId.SEPARATED_VECTORS);
-            }
-            if (feature == null) {
-                throw new UnsupportedOperationException("No full-resolution vectors in this graph");
-            }
-
-            try {
-                long offset = offsetFor(node, feature.id());
-                reader.seek(offset);
-                return vectorTypeSupport.readFloatVector(reader, dimension);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+            getVectorInto(node, vec, 0);
+            return vec;
         }
 
         @Override
