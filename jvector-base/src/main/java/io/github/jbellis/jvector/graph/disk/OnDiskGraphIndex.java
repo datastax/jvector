@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -318,21 +317,9 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         @Override
         public VectorFloat<?> getVector(int node) {
-            var feature = features.get(FeatureId.INLINE_VECTORS);
-            if (feature == null) {
-                feature = features.get(FeatureId.SEPARATED_VECTORS);
-            }
-            if (feature == null) {
-                throw new UnsupportedOperationException("No full-resolution vectors in this graph");
-            }
-
-            try {
-                long offset = offsetFor(node, feature.id());
-                reader.seek(offset);
-                return vectorTypeSupport.readFloatVector(reader, dimension);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+            getVectorInto(node, vec, 0);
+            return vec;
         }
 
         @Override
