@@ -207,13 +207,21 @@ public class GridReach {
         writers.entrySet().stream().parallel().forEach(entry -> {
             var writer = entry.getValue();
             var features = entry.getKey();
-            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                writeSuppliers = new EnumMap<>(FeatureId.class);
-                var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
-            } else {
-                writeSuppliers = Map.of();
+            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+            for (var featureId : features) {
+                switch (featureId) {
+                    case INLINE_VECTORS:
+                        writeSuppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                        break;
+                    case FUSED_ADC:
+                        var view = builder.getGraph().getView();
+                        writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
+                        break;
+                    case NVQ_VECTORS:
+                        var nvq = NVQuantization.compute(floatVectors, 2);
+                        writeSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+                        break;
+                }
             }
             try {
                 writer.write(writeSuppliers);
