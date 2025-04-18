@@ -303,8 +303,9 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
             }
 
             // Inline features are in layer 0 only
-            long offsetWithinLayer = (long) cumulativeDegrees.get(node) * Integer.BYTES  + (long) node * (inlineBlockSize + Integer.BYTES);
-            return neighborsOffset + offsetWithinLayer + inlineOffsets.get(featureId);
+            // skip node ID and get to the desired inline feature
+            long skipInNode = Integer.BYTES + inlineOffsets.get(featureId);
+            return baseNodeOffsetFor(node) + skipInNode;
         }
 
         private long neighborsOffsetFor(int level, int node) {
@@ -312,8 +313,17 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
 
             // skip node ID + inline features
             long skipInline = Integer.BYTES + inlineBlockSize;
-            long offsetWithinLayer = (long) cumulativeDegrees.get(node) * Integer.BYTES  + (long) node * (inlineBlockSize + Integer.BYTES);
-            return neighborsOffset + offsetWithinLayer + skipInline;
+            return baseNodeOffsetFor(node) + skipInline;
+        }
+
+        private long baseNodeOffsetFor(int node) {
+            // skip node ID + inline features
+            long skipInline = Integer.BYTES + inlineBlockSize;
+            // We need to skip:
+            // 1- the number of edges given by cumulativeDegrees.get(node)
+            // 2- the inlineBlockSize and IDs of the previous nodes
+            long offsetWithinLayer = (long) cumulativeDegrees.get(node) * Integer.BYTES  + (long) node * skipInline;
+            return neighborsOffset + offsetWithinLayer;
         }
 
         @Override
@@ -325,21 +335,9 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
 
         @Override
         public VectorFloat<?> getVector(int node) {
-            var feature = features.get(FeatureId.INLINE_VECTORS);
-            if (feature == null) {
-                feature = features.get(FeatureId.SEPARATED_VECTORS);
-            }
-            if (feature == null) {
-                throw new UnsupportedOperationException("No full-resolution vectors in this graph");
-            }
-
-            try {
-                long offset = offsetFor(node, feature.id());
-                reader.seek(offset);
-                return vectorTypeSupport.readFloatVector(reader, dimension);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
+            VectorFloat<?> vector = vectorTypeSupport.createFloatVector(dimension);
+            getVectorInto(node, vector, 0);
+            return vector;
         }
 
         @Override
