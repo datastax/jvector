@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
  * Measures average execution time over N runs.
@@ -25,8 +26,10 @@ import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 public class ExecutionTimeBenchmark
         implements QueryBenchmark<ExecutionTimeBenchmark.Summary> {
 
+    private static volatile long SINK;
+
     /**
-     * Simple POJO summary for this benchmark.
+     * Simple summary.
      */
     public static class Summary implements BenchmarkSummary {
         private final double averageRuntimeSec;
@@ -70,8 +73,11 @@ public class ExecutionTimeBenchmark
             // execute all queries in parallel
             IntStream.range(0, totalQueries)
                     .parallel()
-                    .forEach(i -> QueryExecutor.executeQuery(
-                            cs, topK, rerankK, usePruning, i));
+                    .forEach(i -> {
+                        SearchResult sr = QueryExecutor.executeQuery(
+                                cs, topK, rerankK, usePruning, i);
+                        SINK += sr.getVisitedCount();
+                    });
 
             totalRuntime += System.nanoTime() - startTime;
         }
