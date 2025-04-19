@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
@@ -62,8 +63,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
@@ -153,7 +154,7 @@ public class Grid {
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, topKGrid, efSearchOptions, usePruningGrid);
+                        testConfiguration(cs, topKGrid, efSearchOptions, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -205,7 +206,7 @@ public class Grid {
         }
 
         // build the graph incrementally
-        long start = System.nanoTime();
+        long startTime = System.nanoTime();
         var vv = floatVectors.threadLocalSupplier();
         PhysicalCoreExecutor.pool().submit(() -> {
             IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
@@ -224,6 +225,7 @@ public class Grid {
             });
         }).join();
         builder.cleanup();
+
         // write the edge lists and close the writers
         // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
         writers.entrySet().stream().parallel().forEach(entry -> {
@@ -245,7 +247,7 @@ public class Grid {
             }
         });
         builder.close();
-        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - start) / 1_000_000_000.0);
+        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - startTime) / 1_000_000_000.0);
 
         // open indexes
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
@@ -363,19 +365,47 @@ public class Grid {
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
-    private static void testConfiguration(ConfiguredSystem cs, List<Integer> topKGrid, List<Double> efSearchOptions, List<Boolean> usePruningGrid) {
+    private static void testConfiguration(ConfiguredSystem cs,
+                                          List<Integer> topKGrid,
+                                          List<Double> efSearchOptions,
+                                          List<Boolean> usePruningGrid,
+                                          int M,
+                                          int efConstruction,
+                                          float neighborOverflow,
+                                          boolean addHierarchy) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
+        List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks = List.of(
+                new ExecutionTimeBenchmark(),
+                new CountBenchmark(),
+                new RecallBenchmark(),
+                new ThroughputBenchmark( /* warmupRuns= */ 2, /* warmupRatio= */ 0.1 ),
+                new LatencyBenchmark()
+        );
         for (var topK : topKGrid) {
-            for (var overquery : efSearchOptions) {
-                int rerankK = (int) (topK * overquery);
-                for (var usePruning : usePruningGrid) {
-                    var pqr = performQueries(cs, topK, rerankK, usePruning, queryRuns);
-                    System.out.format(" Query top %d/%d recall %.4f in %.2fms after %.2f nodes visited (AVG) and %.2f nodes expanded with pruning=%b%n",
-                            topK, rerankK, pqr.recall, pqr.runtime / (1_000_000.0),
-                            (double) pqr.nodesVisited / cs.ds.queryVectors.size(),
-                            (double) pqr.nodesExpanded / cs.ds.queryVectors.size(),
-                            usePruning);
+            for (var usePruning : usePruningGrid) {
+                BenchmarkTablePrinter printer = new BenchmarkTablePrinter(topK);
+                printer.printConfig(Map.of(
+                        "M",                  M,
+                        "efConstruction",     efConstruction,
+                        "neighborOverflow",   neighborOverflow,
+                        "addHierarchy",       addHierarchy,
+                        "usePruning",         usePruning
+                ));
+                for (var overquery : efSearchOptions) {
+                    int rerankK = (int) (topK * overquery);
+
+                    CompositeSummary summary = QueryTester.performQueries(
+                            cs, topK, rerankK, usePruning, queryRuns, 2, 0.1
+                    );
+
+                    printer.printRow(
+                            overquery,
+                            summary.getThroughputSummary(),
+                            summary.getCountSummary(),
+                            summary.getLatencySummary(),
+                            summary.getRecallSummary()
+                    );
                 }
             }
         }
@@ -453,7 +483,7 @@ public class Grid {
         return new ResultSummary(recall / queryRuns, nodesVisited.sum() / queryRuns, nodesExpanded.sum() / queryRuns, nodesExpandedBaseLayer.sum() / queryRuns, runtime.sum() / queryRuns);
     }
 
-    static class ConfiguredSystem implements AutoCloseable {
+    public static class ConfiguredSystem implements AutoCloseable {
         DataSet ds;
         GraphIndex index;
         CompressedVectors cv;
@@ -489,6 +519,10 @@ public class Grid {
 
         public GraphSearcher getSearcher() {
             return searchers.get();
+        }
+
+        public DataSet getDataSet() {
+            return ds;
         }
 
         @Override

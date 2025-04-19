@@ -50,17 +50,23 @@ public class Bench {
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(true); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 8, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED),
+                ds -> new PQParameters(ds.getDimension() / 8,
+                        256,
+                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        UNWEIGHTED),
                 __ -> CompressorParameters.NONE
         );
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
                 __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 8, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED)
+                ds -> new PQParameters(ds.getDimension() / 8,
+                        256,
+                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
                 EnumSet.of(FeatureId.NVQ_VECTORS),
-                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
+//                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
 
@@ -77,7 +83,8 @@ public class Bench {
                 "openai-v3-small-100k",
                 "nv-qa-v4-100k",
                 "colbert-1M",
-                "gecko-100k");
+                "gecko-100k"
+        );
         executeNw(coreFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, overqueryGrid, usePruningGrid);
 
         var extraFiles = List.of(
@@ -108,13 +115,13 @@ public class Bench {
         }
 
         // 2D grid, built and calculated at runtime
-        if (pattern.matcher("2dgrid").find()) {
-            searchCompression = Arrays.asList(__ -> CompressorParameters.NONE,
-                                              ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED));
-            buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
-            var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
-            Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
-        }
+//        if (pattern.matcher("2dgrid").find()) {
+//            searchCompression = Arrays.asList(__ -> CompressorParameters.NONE,
+//                                              ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED));
+//            buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
+//            var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
+//            Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
+//        }
     }
 
     private static void executeNw(List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Integer> topKGrid, List<Double> efSearchGrid, List<Boolean> usePruningGrid) throws IOException {
