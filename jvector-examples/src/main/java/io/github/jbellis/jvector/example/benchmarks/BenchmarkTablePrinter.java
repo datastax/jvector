@@ -29,7 +29,9 @@ public class BenchmarkTablePrinter {
     private boolean headerPrinted = false;
 
     /**
-     * @param topK  used to label the recall column as "Recall@<topK>"
+     * Create a table printer that uses the given K for the recall column header.
+     *
+     * @param topK  Used to produce a header of “Recall@<topK>”
      */
     public BenchmarkTablePrinter(int topK) {
         this.topK = topK;
@@ -37,6 +39,7 @@ public class BenchmarkTablePrinter {
 
     /**
      * Call this once to print all the global parameters before the table.
+     * 
      * @param params  A map from parameter name (e.g. "mGrid") to its List value.
      */
     public void printConfig(Map<String, ?> params) {

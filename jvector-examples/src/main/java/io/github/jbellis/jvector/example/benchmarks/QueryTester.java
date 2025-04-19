@@ -29,7 +29,7 @@ public class QueryTester {
      *   1) ExecutionTimeBenchmark
      *   2) CountBenchmark
      *   3) RecallBenchmark
-     *   4) ThroughputBenchmark (with warmupRuns & warmupRatio)
+     *   4) ThroughputBenchmark (with warmupRuns &amp; warmupRatio)
      *   5) LatencyBenchmark
      *
      * @return CompositeSummary aggregating all five results.
