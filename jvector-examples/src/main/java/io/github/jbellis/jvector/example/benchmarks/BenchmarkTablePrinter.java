@@ -31,7 +31,7 @@ public class BenchmarkTablePrinter {
     /**
      * Create a table printer that uses the given K for the recall column header.
      *
-     * @param topK used to produce a header of “Recall@<topK>”
+     * @param topK used to produce a header of “Recall@{@literal <topK}>”
      */
     public BenchmarkTablePrinter(int topK) {
         this.topK = topK;

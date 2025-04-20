@@ -100,7 +100,7 @@ public class LatencyBenchmark
                 latencies.add(duration);
                 SINK += sr.getVisitedCount();
 
-                // Welford’s online algorithm
+                // Welford’s online algorithm for variance
                 count++;
                 double delta = duration - mean;
                 mean += delta / count;

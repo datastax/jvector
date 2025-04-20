@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
- * Measures average execution time over N runs.
+ * Measures average execution time over N runs through all queries in parallel.
  */
 public class ExecutionTimeBenchmark
         implements QueryBenchmark<ExecutionTimeBenchmark.Summary> {
