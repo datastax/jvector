@@ -375,16 +375,51 @@ public class Grid {
                                           boolean addHierarchy) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
-        List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks = List.of(
+        // 1) Select benchmarks to run
+        var benchmarks = List.of(
                 new ExecutionTimeBenchmark(),
                 new CountBenchmark(),
                 new RecallBenchmark(),
-                new ThroughputBenchmark( /* warmupRuns= */ 2, /* warmupRatio= */ 0.1 ),
+                new ThroughputBenchmark(2, 0.1),
                 new LatencyBenchmark()
         );
+        QueryTester tester = new QueryTester(benchmarks);
+
         for (var topK : topKGrid) {
             for (var usePruning : usePruningGrid) {
-                BenchmarkTablePrinter printer = new BenchmarkTablePrinter(topK);
+                // 2) Specify metrics to report.  Ensure relevant QueryBenchmark is run first.  Required:
+                //   - The String name for each column
+                //   - The relevant BenchmarkSummary.Summary class.
+                //   - The getter for the numerical result
+                //   - The numeric format
+                List<Metric> metrics = List.of(
+                        Metric.of("QPS",
+                                ThroughputBenchmark.Summary.class,
+                                ThroughputBenchmark.Summary::getQueriesPerSecond,
+                                ".1f"),
+
+                        Metric.of("Avg Visited",
+                                CountBenchmark.Summary.class,
+                                CountBenchmark.Summary::getAvgNodesVisited,
+                                ".1f"),
+
+                        Metric.of("Mean Latency (ms)",
+                                LatencyBenchmark.Summary.class,
+                                LatencyBenchmark.Summary::getAverageLatency,
+                                ".3f"),
+
+                        Metric.of("p999 Latency (ms)",
+                                LatencyBenchmark.Summary.class,
+                                LatencyBenchmark.Summary::getP999Latency,
+                                ".3f"),
+
+                        Metric.of("Recall@" + topK,
+                                RecallBenchmark.Summary.class,
+                                RecallBenchmark.Summary::getAverageRecall,
+                                ".2f")
+                );
+
+                BenchmarkTablePrinter printer = new BenchmarkTablePrinter(metrics);
                 printer.printConfig(Map.of(
                         "M",                  M,
                         "efConstruction",     efConstruction,
@@ -395,18 +430,12 @@ public class Grid {
                 for (var overquery : efSearchOptions) {
                     int rerankK = (int) (topK * overquery);
 
-                    CompositeSummary summary = QueryTester.performQueries(
-                            cs, topK, rerankK, usePruning, queryRuns, 2, 0.1
-                    );
+                    Map<Class<? extends BenchmarkSummary>,BenchmarkSummary> results =
+                            tester.run(cs, topK, rerankK, usePruning, queryRuns);
 
-                    printer.printRow(
-                            overquery,
-                            summary.getThroughputSummary(),
-                            summary.getCountSummary(),
-                            summary.getLatencySummary(),
-                            summary.getRecallSummary()
-                    );
+                    printer.printRow(overquery, results);
                 }
+                printer.printFooter();
             }
         }
     }
@@ -449,38 +478,6 @@ public class Grid {
             }
             return compressor;
         });
-    }
-
-    private static ResultSummary performQueries(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int queryRuns) {
-        LongAdder nodesVisited = new LongAdder();
-        LongAdder nodesExpanded = new LongAdder();
-        LongAdder nodesExpandedBaseLayer = new LongAdder();
-        LongAdder runtime = new LongAdder();
-        double recall = 0;
-
-        for (int k = 0; k < queryRuns; k++) {
-            var startTime = System.nanoTime();
-            List<SearchResult> listSR = IntStream.range(0, cs.ds.queryVectors.size()).parallel().mapToObj(i -> {
-                var queryVector = cs.ds.queryVectors.get(i);
-                SearchResult sr;
-                var searcher = cs.getSearcher();
-                searcher.usePruning(usePruning);
-                var sf = cs.scoreProviderFor(queryVector, searcher.getView());
-                sr = searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
-                return sr;
-            }).collect(Collectors.toList());
-            var stopTime = System.nanoTime();
-
-            runtime.add(stopTime - startTime);
-            // process search result
-            listSR.stream().parallel().forEach(sr -> {
-                nodesVisited.add(sr.getVisitedCount());
-                nodesExpanded.add(sr.getExpandedCount());
-                nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
-            });
-            recall += AccuracyMetrics.recallFromSearchResults(cs.ds.groundTruth, listSR, topK, topK);
-        }
-        return new ResultSummary(recall / queryRuns, nodesVisited.sum() / queryRuns, nodesExpanded.sum() / queryRuns, nodesExpandedBaseLayer.sum() / queryRuns, runtime.sum() / queryRuns);
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
@@ -528,22 +525,6 @@ public class Grid {
         @Override
         public void close() throws Exception {
             searchers.close();
-        }
-    }
-
-    static class ResultSummary {
-        final double recall;
-        final long nodesVisited;
-        final long nodesExpanded;
-        final long nodesExpandedBaseLayer;
-        final long runtime;
-
-        ResultSummary(double recall, long nodesVisited, long nodesExpanded, long nodesExpandedBaseLayer, long runtime) {
-            this.recall = recall;
-            this.nodesVisited = nodesVisited;
-            this.nodesExpanded = nodesExpanded;
-            this.nodesExpandedBaseLayer = nodesExpandedBaseLayer;
-            this.runtime = runtime;
         }
     }
 }

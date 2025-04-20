@@ -17,24 +17,52 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * Prints a table of benchmark results.
- * First call prints the header, then each call to printRow() prints one row.
+ * Prints a two‐dimensional table:
+ *  - First column is the Overquery value (double)
+ *  - Subsequent columns are defined by Metric tuples
  */
 public class BenchmarkTablePrinter {
-    private final int topK;
+    private static final int MIN_COLUMN_WIDTH     = 11;
+    private static final int MIN_HEADER_PADDING   = 3;
+
+    private final List<Metric> cols;
+    private final String headerFmt;
+    private final String rowFmt;
     private boolean headerPrinted = false;
 
     /**
-     * Create a table printer that uses the given K for the recall column header.
-     *
-     * @param topK used to produce a header of “Recall@{@literal <topK}>”
+     * @param cols  the list of Metric definitions, in the order to print columns
      */
-    public BenchmarkTablePrinter(int topK) {
-        this.topK = topK;
+    public BenchmarkTablePrinter(List<Metric> cols) {
+        this.cols = cols;
+
+        // Build the format strings for header & rows
+        StringBuilder hsb = new StringBuilder();
+        StringBuilder rsb = new StringBuilder();
+
+        // 1) Overquery column width
+        hsb.append("%-12s");
+        rsb.append("%-12.2f");
+
+        // 2) One column per Metric
+        for (Metric m : cols) {
+            String hdr    = m.getHeader();
+            String spec   = m.getFmtSpec();
+            int width   = Math.max(MIN_COLUMN_WIDTH, hdr.length() + MIN_HEADER_PADDING);
+
+            // Header: Always a string
+            hsb.append(" %-").append(width).append("s");
+            // Row: Use the Metric’s fmtSpec (e.g. ".2f", ".3f")
+            rsb.append(" %-").append(width).append(spec);
+        }
+
+        this.headerFmt = hsb.toString();
+        this.rowFmt    = rsb.append("%n").toString();
     }
 
     /**
@@ -50,58 +78,54 @@ public class BenchmarkTablePrinter {
         );
     }
 
+    private void printHeader() {
+        // Prepare array: First "Overquery", then each Metric header
+        Object[] hdrs = new Object[cols.size() + 1];
+        hdrs[0] = "Overquery";
+        for (int i = 0; i < cols.size(); i++) {
+            hdrs[i + 1] = cols.get(i).getHeader();
+        }
+
+        // Print header line
+        String line = String.format(Locale.US, headerFmt, hdrs);
+        System.out.println(line);
+        // Underline of same length
+        System.out.println(String.join("",
+                Collections.nCopies(line.length(), "-")
+        ));
+    }
+
     /**
-     * Prints one row.  On the very first call, prints the header first.
+     * Print a row of data.
      *
-     * @param overquery       the sweep parameter (first column)
-     * @param throughput      from ThroughputBenchmark (for QPS)
-     * @param countSummary    from CountBenchmark (for avg nodes visited)
-     * @param latencySummary  from LatencyBenchmark (for mean latency)
-     * @param recallSummary   from RecallBenchmark (for recall)
+     * @param overquery the first‐column value
+     * @param results map from Summary.class → summary instance
      */
     public void printRow(double overquery,
-                         ThroughputBenchmark.Summary throughput,
-                         CountBenchmark.Summary countSummary,
-                         LatencyBenchmark.Summary latencySummary,
-                         RecallBenchmark.Summary recallSummary) {
+                         Map<Class<? extends BenchmarkSummary>,BenchmarkSummary> results) {
         if (!headerPrinted) {
             System.out.println();
             printHeader();
             headerPrinted = true;
         }
 
-        double qps           = throughput.getQueriesPerSecond();
-        double avgVisited    = countSummary.getAvgNodesVisited();
-        double meanLatencyMs = latencySummary.getAverageLatency();
-        double p999LatencyMs = latencySummary.getP999Latency();
-        double recallPct     = recallSummary.getAverageRecall() * 100.0;
+        // Build argument array: First overquery, then each Metric.extract(...)
+        Object[] vals = new Object[cols.size() + 1];
+        vals[0] = overquery;
+        for (int i = 0; i < cols.size(); i++) {
+            vals[i + 1] = cols.get(i).extract(results);
+        }
 
-        // Column header formatting....
-        System.out.printf(Locale.US,
-                "%-12.2f %-12.1f %-15.1f %-20.3f %-20.3f %-12.2f%n",
-                overquery,
-                qps,
-                avgVisited,
-                meanLatencyMs,
-                p999LatencyMs,
-                recallPct
-        );
+        // Print the formatted row
+        System.out.printf(Locale.US, rowFmt, vals);
     }
 
-    private void printHeader() {
-        String recallHeader = "Recall@" + topK;
-        String format = "%-12s %-12s %-15s %-20s %-20s %-12s";
-        String headerLine = String.format(
-                Locale.US,
-                format,
-                "Overquery", "QPS", "Avg Visited", "Mean Latency (ms)", "p999 Latency (ms)", recallHeader
-        );
-
-        System.out.println(headerLine);
-
-        System.out.println(
-            String.join("", Collections.nCopies(headerLine.length(), "-"))
-        );
+    /**
+     * Prints a blank line after the table ends.
+     * Must be called manually.
+     */
+    public void printFooter() {
+        System.out.println();
     }
 }
 

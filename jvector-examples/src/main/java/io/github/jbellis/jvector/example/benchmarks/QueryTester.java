@@ -16,66 +16,53 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 
 /**
- * Runs each of the five benchmarks on the same ConfiguredSystem
- * and returns a CompositeSummary.
+ * Orchestrates running a set of QueryBenchmark instances
+ * and collects their summary results.
  */
 public class QueryTester {
+    private final List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks;
 
     /**
-     * Executes:
-     *   1) ExecutionTimeBenchmark
-     *   2) CountBenchmark
-     *   3) RecallBenchmark
-     *   4) ThroughputBenchmark (with warmupRuns &amp; warmupRatio)
-     *   5) LatencyBenchmark
-     *
-     * @return CompositeSummary aggregating all five results.
+     * @param benchmarks the benchmarks to run, in the order provided
      */
-    public static CompositeSummary performQueries(
+    public QueryTester(List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks) {
+        this.benchmarks = benchmarks;
+    }
+
+    /**
+     * Run each benchmark once and return a map from each Summary class
+     * to its returned summary instance.
+     *
+     * @param cs          the configured system under test
+     * @param topK        the top‑K parameter for all benchmarks
+     * @param rerankK     the rerank‑K parameter
+     * @param usePruning  whether to enable pruning
+     * @param queryRuns   number of runs for each benchmark
+     */
+    public Map<Class<? extends BenchmarkSummary>, BenchmarkSummary> run(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
             boolean usePruning,
-            int queryRuns,
-            int warmupRuns,
-            double warmupRatio) {
+            int queryRuns) {
 
-        // 1. Execution time
-        ExecutionTimeBenchmark exeBench = new ExecutionTimeBenchmark();
-        ExecutionTimeBenchmark.Summary exeSummary =
-                exeBench.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+        Map<Class<? extends BenchmarkSummary>, BenchmarkSummary> results =
+                new LinkedHashMap<>();
 
-        // 2. Node count
-        CountBenchmark countBench = new CountBenchmark();
-        CountBenchmark.Summary countSummary =
-                countBench.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+        for (QueryBenchmark<? extends BenchmarkSummary> benchmark : benchmarks) {
+            BenchmarkSummary summary =
+                    benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+            results.put(summary.getClass(), summary);
+        }
 
-        // 3. Recall
-        RecallBenchmark recallBench = new RecallBenchmark();
-        RecallBenchmark.Summary recallSummary =
-                recallBench.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-
-        // 4. Throughput
-        ThroughputBenchmark thrBench = new ThroughputBenchmark(warmupRuns, warmupRatio);
-        ThroughputBenchmark.Summary thrSummary =
-                thrBench.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-
-        // 5. Latency
-        LatencyBenchmark latBench = new LatencyBenchmark();
-        LatencyBenchmark.Summary latSummary =
-                latBench.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-
-        // Aggregate into a single CompositeSummary
-        return new CompositeSummary(
-                exeSummary,
-                countSummary,
-                recallSummary,
-                thrSummary,
-                latSummary
-        );
+        return results;
     }
 }
 
