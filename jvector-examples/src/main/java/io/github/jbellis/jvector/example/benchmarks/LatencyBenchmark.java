@@ -24,7 +24,7 @@ import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
- * Measures per‐query latency (mean and variance) over N runs,
+ * Measures per‐query latency (mean and standard deviation) over N runs,
  * and counts correct top‐K results.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
