@@ -26,7 +26,7 @@ import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
- * Measures average recall over N runs.
+ * Measures average recall and/or the mean average precision.
  */
 public class AccuracyBenchmark extends AbstractQueryBenchmark {
     private final boolean computeRecall;
