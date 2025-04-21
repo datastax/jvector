@@ -378,8 +378,8 @@ public class Grid {
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
                 new ExecutionTimeBenchmark(),
-                new CountBenchmark(true, true, true),
-                new AccuracyBenchmark(true, true),
+                new CountBenchmark(),
+                new AccuracyBenchmark(),
                 new ThroughputBenchmark(2, 0.1),
                 new LatencyBenchmark()
         );
