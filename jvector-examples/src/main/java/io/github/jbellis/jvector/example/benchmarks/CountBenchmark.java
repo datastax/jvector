@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
@@ -25,45 +27,22 @@ import io.github.jbellis.jvector.graph.SearchResult;
 /**
  * Measures average node‐visit and node‐expand counts over N runs.
  */
-public class CountBenchmark implements QueryBenchmark<CountBenchmark.Summary> {
+public class CountBenchmark implements QueryBenchmark {
+    private final boolean computeAvgNodesVisited;
+    private final boolean computeAvgNodesExpanded;
+    private final boolean computeAvgNodesExpandedBaseLayer;
 
-    /**
-     * Holds the averaged node‐count metrics.
-     */
-    public static class Summary implements BenchmarkSummary {
-        private final double avgNodesVisited;
-        private final double avgNodesExpanded;
-        private final double avgNodesExpandedBaseLayer;
-
-        public Summary(double avgNodesVisited,
-                       double avgNodesExpanded,
-                       double avgNodesExpandedBaseLayer) {
-            this.avgNodesVisited = avgNodesVisited;
-            this.avgNodesExpanded = avgNodesExpanded;
-            this.avgNodesExpandedBaseLayer = avgNodesExpandedBaseLayer;
+    public CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer) {
+        if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
+            throw new IllegalArgumentException("At least one parameter must be set to true");
         }
+        this.computeAvgNodesVisited = computeAvgNodesVisited;
+        this.computeAvgNodesExpanded = computeAvgNodesExpanded;
+        this.computeAvgNodesExpandedBaseLayer = computeAvgNodesExpandedBaseLayer;
+    }
 
-        @Override
-        public String toString() {
-            return String.format(
-                    "CountSummary{%.2f nodes visited (AVG), %.2f nodes expanded, and %.2f nodes expanded in base layer}",
-                    avgNodesVisited,
-                    avgNodesExpanded,
-                    avgNodesExpandedBaseLayer
-            );
-        }
-
-        public double getAvgNodesVisited() {
-            return avgNodesVisited;
-        }
-
-        public double getAvgNodesExpanded() {
-            return avgNodesExpanded;
-        }
-
-        public double getAvgNodesExpandedBaseLayer() {
-            return avgNodesExpandedBaseLayer;
-        }
+    public CountBenchmark() {
+        this(true, false, false);
     }
 
     @Override
@@ -72,7 +51,7 @@ public class CountBenchmark implements QueryBenchmark<CountBenchmark.Summary> {
     }
 
     @Override
-    public Summary runBenchmark(
+    public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
@@ -100,8 +79,16 @@ public class CountBenchmark implements QueryBenchmark<CountBenchmark.Summary> {
         double avgExpanded = nodesExpanded.sum() / (double) (queryRuns * totalQueries);
         double avgBase = nodesExpandedBaseLayer.sum() / (double) (queryRuns * totalQueries);
 
-        return new Summary(avgVisited, avgExpanded, avgBase);
+        var list = new ArrayList<Metric>();
+        if (computeAvgNodesVisited) {
+            list.add(Metric.of("Avg Visited", ".1f", avgVisited));
+        }
+        if (computeAvgNodesExpanded) {
+            list.add(Metric.of("Avg Expanded", ".1f", avgExpanded));
+        }
+        if (computeAvgNodesExpandedBaseLayer) {
+            list.add(Metric.of("Avg Expanded Base Layer", ".1f", avgBase));
+        }
+        return list;
     }
 }
-
-

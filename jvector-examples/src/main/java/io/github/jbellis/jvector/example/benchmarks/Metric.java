@@ -28,50 +28,25 @@ import java.util.function.Function;
 public class Metric {
     private final String header;
     private final String fmtSpec;
-    private final Function<
-            Map<Class<? extends BenchmarkSummary>, BenchmarkSummary>,
-            Double
-            > extractor;
+    private final double value;
 
-    private Metric(String header,
-                   String fmtSpec,
-                   Function<
-                           Map<Class<? extends BenchmarkSummary>,BenchmarkSummary>,
-                           Double
-                           > extractor) {
-        this.header    = header;
-        this.fmtSpec   = fmtSpec;
-        this.extractor = extractor;
+    private Metric(String header, String fmtSpec, double value) {
+        this.header = header;
+        this.fmtSpec = fmtSpec;
+        this.value = value;
     }
 
     public String getHeader()   { return header; }
-    public String getFmtSpec()  { return fmtSpec;  }
-    public double extract(Map<Class<? extends BenchmarkSummary>,BenchmarkSummary> m) {
-        return extractor.apply(m);
+    public String getFmtSpec()  { return fmtSpec; }
+    public double getValue() { return value; }
+
+    public static Metric of(String header, String fmtSpec, double value) {
+        return new Metric(header, fmtSpec, value);
     }
 
-    /**
-     * Factory to create a Metric given:
-     *   - Header string
-     *   - The Summary.class to look up
-     *   - A getter method reference from the Summary
-     *   - The format specifier (e.g. ".2f", ".3f")
-     */
-    public static <T extends BenchmarkSummary> Metric of(
-            String header,
-            Class<T> summaryClass,
-            Function<T,Double> getter,
-            String fmtSpec
-    ) {
-        return new Metric(
-                header,
-                fmtSpec,
-                summaries -> {
-                    @SuppressWarnings("unchecked")
-                    T s = (T) summaries.get(summaryClass);
-                    return getter.apply(s);
-                }
-        );
+    @Override
+    public String toString() {
+        return String.format(header + " = " + fmtSpec, value);
     }
 }
 

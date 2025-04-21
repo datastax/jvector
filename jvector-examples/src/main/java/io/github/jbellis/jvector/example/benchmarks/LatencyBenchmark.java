@@ -27,45 +27,28 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures per‐query latency (mean and variance) over N runs,
  * and counts correct top‐K results.
  */
-public class LatencyBenchmark
-        implements QueryBenchmark<LatencyBenchmark.Summary> {
+public class LatencyBenchmark implements QueryBenchmark {
+    private final boolean returnAvgLatency;
+    private final boolean returnlatencySTD;
+    private final boolean returnp999Latency;
 
     private static volatile long SINK;
 
-    /**
-     * Holds the number of correct results, the average latency (ns),
-     * and the latency variance.
-     */
-    public static class Summary implements BenchmarkSummary {
-        private final double averageLatency;
-        private final double latencyVariance;
-        private final double p999Latency;
-
-        public Summary(double averageLatency, double latencyVariance, double p999Latency) {
-            this.averageLatency   = averageLatency;
-            this.latencyVariance  = latencyVariance;
-            this.p999Latency      = p999Latency;
+    public LatencyBenchmark(boolean returnAvgLatency, boolean returnlatencySTD, boolean returnp999Latency) {
+        if (!(returnAvgLatency || returnlatencySTD || returnp999Latency)) {
+            throw new IllegalArgumentException("At least one parameter must be set to true");
         }
+        this.returnAvgLatency = returnAvgLatency;
+        this.returnlatencySTD = returnlatencySTD;
+        this.returnp999Latency = returnp999Latency;
+    }
 
-        @Override
-        public String toString() {
-            return String.format(
-                    "LatencySummary{latency (AVG) = %.3fms, (VAR) = %.6fms^2, p999 = %.2fms",
-                    averageLatency, latencyVariance, p999Latency
-            );
-        }
+    public LatencyBenchmark() {
+        this(true, false, false);
+    }
 
-        public double getAverageLatency() {
-            return averageLatency;
-        }
-
-        public double getLatencyVariance() {
-            return latencyVariance;
-        }
-
-        public double getP999Latency() {
-            return p999Latency;
-        }
+    public LatencyBenchmark(boolean returnAvgLatency, boolean returnlatencySTD) {
+        this(returnAvgLatency, returnlatencySTD, false);
     }
 
     @Override
@@ -74,7 +57,7 @@ public class LatencyBenchmark
     }
 
     @Override
-    public Summary runBenchmark(
+    public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
@@ -108,16 +91,27 @@ public class LatencyBenchmark
             }
         }
 
-        double variance = (count > 0) ? (m2 / count) / 1e12: 0.0;
+        mean /= 1e6;
+        double standardDeviation = (count > 0) ? Math.sqrt(m2 / count) / 1e6: 0.0;
 
         // Compute 99.9th percentile
         Collections.sort(latencies);
         int idx = (int)Math.ceil(0.999 * latencies.size()) - 1;
         if (idx < 0) idx = 0;
         if (idx >= latencies.size()) idx = latencies.size() - 1;
-        long p999Latency = latencies.get(idx);
+        double p999Latency = latencies.get(idx) / 1e6;
 
-        return new Summary(mean / 1e6, variance, p999Latency / 1e6);
+        var list = new ArrayList<Metric>();
+        if (returnAvgLatency) {
+            list.add(Metric.of("Mean Latency (ms)", ".3f", mean));
+        }
+        if (returnlatencySTD) {
+            list.add(Metric.of("STD Latency (ms)", ".3f", standardDeviation));
+        }
+        if (returnp999Latency) {
+            list.add(Metric.of("p999 Latency (ms)", ".3f", p999Latency));
+        }
+        return list;
     }
 }
 

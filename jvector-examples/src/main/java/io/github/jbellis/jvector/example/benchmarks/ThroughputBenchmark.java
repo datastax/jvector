@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
@@ -25,38 +26,8 @@ import io.github.jbellis.jvector.graph.SearchResult;
 /**
  * Measures throughput (queries/sec) with an optional warmup phase.
  */
-public class ThroughputBenchmark
-        implements QueryBenchmark<ThroughputBenchmark.Summary> {
-
+public class ThroughputBenchmark implements QueryBenchmark {
     private static volatile long SINK;
-
-    /**
-     * Holds the number of correct top‑K results and the achieved QPS.
-     */
-    public static class Summary implements BenchmarkSummary {
-        private final double avgNodesVisited;
-        private final double queriesPerSecond;
-
-        public Summary(double queriesPerSecond, double avgNodesVisited) {
-            this.avgNodesVisited = avgNodesVisited;
-            this.queriesPerSecond = queriesPerSecond;
-        }
-
-        public double getQueriesPerSecond() {
-            return queriesPerSecond;
-        }
-
-        public double getAvgNodesVisited() {
-            return avgNodesVisited;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("ThroughputSummary{%.2f qps, with nodes visited (AVG) %.2f}",
-                    queriesPerSecond, avgNodesVisited
-            );
-        }
-    }
 
     private final int warmupRuns;
     private final double warmupRatio;
@@ -72,7 +43,7 @@ public class ThroughputBenchmark
     }
 
     @Override
-    public Summary runBenchmark(
+    public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
@@ -112,8 +83,7 @@ public class ThroughputBenchmark
 
         double elapsedSec = (System.nanoTime() - startTime) / 1e9;
         double qps = testCount / elapsedSec;
-        double avgVisited = (double) visitedAdder.sum() / testCount;
 
-        return new Summary(qps, avgVisited);
+        return List.of(Metric.of("QPS", ".1f", qps));
     }
 }

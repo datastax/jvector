@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.List;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
@@ -23,33 +24,9 @@ import io.github.jbellis.jvector.graph.SearchResult;
 /**
  * Measures average execution time over N runs through all queries in parallel.
  */
-public class ExecutionTimeBenchmark
-        implements QueryBenchmark<ExecutionTimeBenchmark.Summary> {
-
+public class ExecutionTimeBenchmark implements QueryBenchmark {
     private static volatile long SINK;
 
-    /**
-     * Simple summary.
-     */
-    public static class Summary implements BenchmarkSummary {
-        private final double averageRuntimeSec;
-
-        public Summary(double averageRuntimeSec) {
-            this.averageRuntimeSec = averageRuntimeSec;
-        }
-
-        @Override
-        public String toString() {
-            return String.format(
-                    "ExecutionTimeSummary{%.2fs execution time}",
-                    averageRuntimeSec
-            );
-        }
-
-        public double getAvgRuntimeSec() {
-            return averageRuntimeSec;
-        }
-    }
 
     @Override
     public String getBenchmarkName() {
@@ -57,7 +34,7 @@ public class ExecutionTimeBenchmark
     }
 
     @Override
-    public Summary runBenchmark(
+    public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
@@ -83,9 +60,6 @@ public class ExecutionTimeBenchmark
         }
 
         double avgRuntimeSec = totalRuntime / queryRuns / 1e9;
-        return new Summary(avgRuntimeSec);
+        return List.of(Metric.of("QPS", ".1f", avgRuntimeSec));
     }
 }
-
-
-

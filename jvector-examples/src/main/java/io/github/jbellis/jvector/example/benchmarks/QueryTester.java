@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,12 +28,12 @@ import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
  * and collects their summary results.
  */
 public class QueryTester {
-    private final List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks;
+    private final List<QueryBenchmark> benchmarks;
 
     /**
      * @param benchmarks the benchmarks to run, in the order provided
      */
-    public QueryTester(List<QueryBenchmark<? extends BenchmarkSummary>> benchmarks) {
+    public QueryTester(List<QueryBenchmark> benchmarks) {
         this.benchmarks = benchmarks;
     }
 
@@ -46,20 +47,18 @@ public class QueryTester {
      * @param usePruning  whether to enable pruning
      * @param queryRuns   number of runs for each benchmark
      */
-    public Map<Class<? extends BenchmarkSummary>, BenchmarkSummary> run(
+    public List<Metric> run(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
             boolean usePruning,
             int queryRuns) {
 
-        Map<Class<? extends BenchmarkSummary>, BenchmarkSummary> results =
-                new LinkedHashMap<>();
+        List<Metric> results = new ArrayList<>();
 
-        for (QueryBenchmark<? extends BenchmarkSummary> benchmark : benchmarks) {
-            BenchmarkSummary summary =
-                    benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-            results.put(summary.getClass(), summary);
+        for (var benchmark : benchmarks) {
+            var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+            results.addAll(metrics);
         }
 
         return results;

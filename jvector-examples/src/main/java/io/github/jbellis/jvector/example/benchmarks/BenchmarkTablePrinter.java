@@ -30,16 +30,19 @@ public class BenchmarkTablePrinter {
     private static final int MIN_COLUMN_WIDTH     = 11;
     private static final int MIN_HEADER_PADDING   = 3;
 
-    private final List<Metric> cols;
-    private final String headerFmt;
-    private final String rowFmt;
-    private boolean headerPrinted = false;
+    private String headerFmt;
+    private String rowFmt;
 
-    /**
-     * @param cols  the list of Metric definitions, in the order to print columns
-     */
-    public BenchmarkTablePrinter(List<Metric> cols) {
-        this.cols = cols;
+    public BenchmarkTablePrinter() {
+        headerFmt = null;
+        rowFmt = null;
+    }
+
+
+    private void initializeHeader(List<Metric> cols) {
+        if (headerFmt != null) {
+            return;
+        }
 
         // Build the format strings for header & rows
         StringBuilder hsb = new StringBuilder();
@@ -51,9 +54,9 @@ public class BenchmarkTablePrinter {
 
         // 2) One column per Metric
         for (Metric m : cols) {
-            String hdr    = m.getHeader();
-            String spec   = m.getFmtSpec();
-            int width   = Math.max(MIN_COLUMN_WIDTH, hdr.length() + MIN_HEADER_PADDING);
+            String hdr = m.getHeader();
+            String spec = m.getFmtSpec();
+            int width = Math.max(MIN_COLUMN_WIDTH, hdr.length() + MIN_HEADER_PADDING);
 
             // Header: Always a string
             hsb.append(" %-").append(width).append("s");
@@ -62,7 +65,10 @@ public class BenchmarkTablePrinter {
         }
 
         this.headerFmt = hsb.toString();
-        this.rowFmt    = rsb.append("%n").toString();
+        this.rowFmt = rsb.append("%n").toString();
+
+        System.out.println();
+        printHeader(cols);
     }
 
     /**
@@ -78,7 +84,7 @@ public class BenchmarkTablePrinter {
         );
     }
 
-    private void printHeader() {
+    private void printHeader(List<Metric> cols) {
         // Prepare array: First "Overquery", then each Metric header
         Object[] hdrs = new Object[cols.size() + 1];
         hdrs[0] = "Overquery";
@@ -99,21 +105,17 @@ public class BenchmarkTablePrinter {
      * Print a row of data.
      *
      * @param overquery the first‐column value
-     * @param results map from Summary.class → summary instance
+     * @param cols list of metrics to print
      */
     public void printRow(double overquery,
-                         Map<Class<? extends BenchmarkSummary>,BenchmarkSummary> results) {
-        if (!headerPrinted) {
-            System.out.println();
-            printHeader();
-            headerPrinted = true;
-        }
+                         List<Metric> cols) {
+        initializeHeader(cols);
 
         // Build argument array: First overquery, then each Metric.extract(...)
         Object[] vals = new Object[cols.size() + 1];
         vals[0] = overquery;
         for (int i = 0; i < cols.size(); i++) {
-            vals[i + 1] = cols.get(i).extract(results);
+            vals[i + 1] = cols.get(i).getValue();
         }
 
         // Print the formatted row

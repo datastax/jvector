@@ -18,14 +18,15 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 
+import java.util.List;
+
 /**
  * A common interface for all search benchmarks.
- * @param <T> the specific benchmark summary class
  */
-public interface QueryBenchmark<T extends BenchmarkSummary> {
+public interface QueryBenchmark {
     String getBenchmarkName();
 
-    T runBenchmark(
+    List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
             int rerankK,
