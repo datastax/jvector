@@ -27,28 +27,30 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures per‐query latency (mean and variance) over N runs,
  * and counts correct top‐K results.
  */
-public class LatencyBenchmark implements QueryBenchmark {
-    private final boolean returnAvgLatency;
-    private final boolean returnlatencySTD;
-    private final boolean returnp999Latency;
+public class LatencyBenchmark extends AbstractQueryBenchmark {
+    private final boolean computeAvgLatency;
+    private final boolean computelatencySTD;
+    private final boolean computeP999Latency;
 
     private static volatile long SINK;
 
-    public LatencyBenchmark(boolean returnAvgLatency, boolean returnlatencySTD, boolean returnp999Latency) {
-        if (!(returnAvgLatency || returnlatencySTD || returnp999Latency)) {
+    public LatencyBenchmark(boolean computeAvgLatency, boolean computelatencySTD, boolean computeP999Latency) {
+        super(".3f");
+
+        if (!(computeAvgLatency || computelatencySTD || computeP999Latency)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
-        this.returnAvgLatency = returnAvgLatency;
-        this.returnlatencySTD = returnlatencySTD;
-        this.returnp999Latency = returnp999Latency;
+        this.computeAvgLatency = computeAvgLatency;
+        this.computelatencySTD = computelatencySTD;
+        this.computeP999Latency = computeP999Latency;
     }
 
     public LatencyBenchmark() {
         this(true, false, false);
     }
 
-    public LatencyBenchmark(boolean returnAvgLatency, boolean returnlatencySTD) {
-        this(returnAvgLatency, returnlatencySTD, false);
+    public LatencyBenchmark(boolean computeAvgLatency, boolean computelatencySTD) {
+        this(computeAvgLatency, computelatencySTD, false);
     }
 
     @Override
@@ -102,14 +104,14 @@ public class LatencyBenchmark implements QueryBenchmark {
         double p999Latency = latencies.get(idx) / 1e6;
 
         var list = new ArrayList<Metric>();
-        if (returnAvgLatency) {
-            list.add(Metric.of("Mean Latency (ms)", ".3f", mean));
+        if (computeAvgLatency) {
+            list.add(Metric.of("Mean Latency (ms)", getPrintPrecision(), mean));
         }
-        if (returnlatencySTD) {
-            list.add(Metric.of("STD Latency (ms)", ".3f", standardDeviation));
+        if (computelatencySTD) {
+            list.add(Metric.of("STD Latency (ms)", getPrintPrecision(), standardDeviation));
         }
-        if (returnp999Latency) {
-            list.add(Metric.of("p999 Latency (ms)", ".3f", p999Latency));
+        if (computeP999Latency) {
+            list.add(Metric.of("p999 Latency (ms)", getPrintPrecision(), p999Latency));
         }
         return list;
     }

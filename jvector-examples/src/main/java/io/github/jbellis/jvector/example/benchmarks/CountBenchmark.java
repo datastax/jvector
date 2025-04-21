@@ -23,16 +23,19 @@ import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import org.apache.commons.math3.analysis.function.Abs;
 
 /**
  * Measures average node‐visit and node‐expand counts over N runs.
  */
-public class CountBenchmark implements QueryBenchmark {
+public class CountBenchmark extends AbstractQueryBenchmark {
     private final boolean computeAvgNodesVisited;
     private final boolean computeAvgNodesExpanded;
     private final boolean computeAvgNodesExpandedBaseLayer;
 
     public CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer) {
+        super(".1f");
+
         if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
@@ -81,13 +84,13 @@ public class CountBenchmark implements QueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgNodesVisited) {
-            list.add(Metric.of("Avg Visited", ".1f", avgVisited));
+            list.add(Metric.of("Avg Visited", getPrintPrecision(), avgVisited));
         }
         if (computeAvgNodesExpanded) {
-            list.add(Metric.of("Avg Expanded", ".1f", avgExpanded));
+            list.add(Metric.of("Avg Expanded", getPrintPrecision(), avgExpanded));
         }
         if (computeAvgNodesExpandedBaseLayer) {
-            list.add(Metric.of("Avg Expanded Base Layer", ".1f", avgBase));
+            list.add(Metric.of("Avg Expanded Base Layer", getPrintPrecision(), avgBase));
         }
         return list;
     }

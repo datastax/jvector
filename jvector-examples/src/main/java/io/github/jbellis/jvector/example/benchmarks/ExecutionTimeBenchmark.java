@@ -24,9 +24,12 @@ import io.github.jbellis.jvector.graph.SearchResult;
 /**
  * Measures average execution time over N runs through all queries in parallel.
  */
-public class ExecutionTimeBenchmark implements QueryBenchmark {
+public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
     private static volatile long SINK;
 
+    public ExecutionTimeBenchmark() {
+        super(".1f");
+    }
 
     @Override
     public String getBenchmarkName() {
@@ -60,6 +63,6 @@ public class ExecutionTimeBenchmark implements QueryBenchmark {
         }
 
         double avgRuntimeSec = totalRuntime / queryRuns / 1e9;
-        return List.of(Metric.of("QPS", ".1f", avgRuntimeSec));
+        return List.of(Metric.of("QPS", getPrintPrecision(), avgRuntimeSec));
     }
 }

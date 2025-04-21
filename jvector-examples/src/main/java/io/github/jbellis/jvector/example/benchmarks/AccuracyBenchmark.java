@@ -28,11 +28,12 @@ import io.github.jbellis.jvector.graph.SearchResult;
 /**
  * Measures average recall over N runs.
  */
-public class AccuracyBenchmark implements QueryBenchmark {
+public class AccuracyBenchmark extends AbstractQueryBenchmark {
     private final boolean computeRecall;
     private final boolean computeMAP;
 
     public AccuracyBenchmark(boolean computeRecall, boolean computeMAP) {
+        super(".2f");
         if (!(computeRecall || computeMAP)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
@@ -72,14 +73,14 @@ public class AccuracyBenchmark implements QueryBenchmark {
             double recall = AccuracyMetrics.recallFromSearchResults(
                             cs.getDataSet().groundTruth, results, topK, topK
             );
-            list.add(Metric.of("Recall@" + topK, ".2f", recall));
+            list.add(Metric.of("Recall@" + topK, getPrintPrecision(), recall));
         }
         if (computeMAP) {
             // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
                             cs.getDataSet().groundTruth, results, topK
             );
-            list.add(Metric.of("MAP@" + topK, ".2f", map));
+            list.add(Metric.of("MAP@" + topK, getPrintPrecision(), map));
         }
         return list;
     }

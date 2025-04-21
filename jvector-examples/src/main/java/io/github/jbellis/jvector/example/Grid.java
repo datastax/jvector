@@ -376,7 +376,7 @@ public class Grid {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run
-        var benchmarks = List.of(
+        List<QueryBenchmark> benchmarks = List.of(
                 new ExecutionTimeBenchmark(),
                 new CountBenchmark(true, true, true),
                 new AccuracyBenchmark(true, true),
