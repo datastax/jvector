@@ -29,20 +29,33 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures average recall and/or the mean average precision.
  */
 public class AccuracyBenchmark extends AbstractQueryBenchmark {
+    static private final String DEFAULT_FORMAT = ".2f";
+
     private final boolean computeRecall;
     private final boolean computeMAP;
+    private final String formatRecall;
+    private final String formatMAP;
 
-    public AccuracyBenchmark(boolean computeRecall, boolean computeMAP) {
-        super(".2f");
+    public AccuracyBenchmark(boolean computeRecall, boolean computeMAP, String formatRecall, String formatMAP) {
         if (!(computeRecall || computeMAP)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
         this.computeRecall = computeRecall;
         this.computeMAP = computeMAP;
+        this.formatRecall = formatRecall;
+        this.formatMAP = formatMAP;
     }
 
     public AccuracyBenchmark() {
-        this(true, false);
+        this(true, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public AccuracyBenchmark(String formatRecall) {
+        this(true, false, formatRecall, DEFAULT_FORMAT);
+    }
+
+    public AccuracyBenchmark(String formatRecall, String formatMAP) {
+        this(true, true, formatRecall, formatMAP);
     }
 
     @Override
@@ -73,14 +86,14 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             double recall = AccuracyMetrics.recallFromSearchResults(
                             cs.getDataSet().groundTruth, results, topK, topK
             );
-            list.add(Metric.of("Recall@" + topK, getPrintPrecision(), recall));
+            list.add(Metric.of("Recall@" + topK, formatRecall, recall));
         }
         if (computeMAP) {
             // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
                             cs.getDataSet().groundTruth, results, topK
             );
-            list.add(Metric.of("MAP@" + topK, getPrintPrecision(), map));
+            list.add(Metric.of("MAP@" + topK, formatMAP, map));
         }
         return list;
     }

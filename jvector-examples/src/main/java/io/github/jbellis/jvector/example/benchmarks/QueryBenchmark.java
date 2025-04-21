@@ -33,10 +33,6 @@ public interface QueryBenchmark {
             boolean usePruning,
             int queryRuns
     );
-
-    void setPrintPrecision(String fmt);
-
-    String getPrintPrecision();
 }
 
 

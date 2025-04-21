@@ -28,29 +28,36 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * and counts correct top‐K results.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
+    static private final String DEFAULT_FORMAT = ".3f";
+
     private final boolean computeAvgLatency;
-    private final boolean computelatencySTD;
+    private final boolean computeLatencySTD;
     private final boolean computeP999Latency;
+    private final String formatAvgLatency;
+    private final String formatLatencySTD;
+    private final String formatP999Latency;
 
     private static volatile long SINK;
 
-    public LatencyBenchmark(boolean computeAvgLatency, boolean computelatencySTD, boolean computeP999Latency) {
-        super(".3f");
-
-        if (!(computeAvgLatency || computelatencySTD || computeP999Latency)) {
+    public LatencyBenchmark(boolean computeAvgLatency, boolean computeLatencySTD, boolean computeP999Latency,
+                            String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
+        if (!(computeAvgLatency || computeLatencySTD || computeP999Latency)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
         this.computeAvgLatency = computeAvgLatency;
-        this.computelatencySTD = computelatencySTD;
+        this.computeLatencySTD = computeLatencySTD;
         this.computeP999Latency = computeP999Latency;
+        this.formatAvgLatency = formatAvgLatency;
+        this.formatLatencySTD = formatLatencySTD;
+        this.formatP999Latency = formatP999Latency;
     }
 
     public LatencyBenchmark() {
-        this(true, false, false);
+        this(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
 
-    public LatencyBenchmark(boolean computeAvgLatency, boolean computelatencySTD) {
-        this(computeAvgLatency, computelatencySTD, false);
+    public LatencyBenchmark(String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
+        this(true, true, true, formatAvgLatency, formatLatencySTD, formatP999Latency);
     }
 
     @Override
@@ -105,13 +112,13 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgLatency) {
-            list.add(Metric.of("Mean Latency (ms)", getPrintPrecision(), mean));
+            list.add(Metric.of("Mean Latency (ms)", formatAvgLatency, mean));
         }
-        if (computelatencySTD) {
-            list.add(Metric.of("STD Latency (ms)", getPrintPrecision(), standardDeviation));
+        if (computeLatencySTD) {
+            list.add(Metric.of("STD Latency (ms)", formatLatencySTD, standardDeviation));
         }
         if (computeP999Latency) {
-            list.add(Metric.of("p999 Latency (ms)", getPrintPrecision(), p999Latency));
+            list.add(Metric.of("p999 Latency (ms)", formatP999Latency, p999Latency));
         }
         return list;
     }

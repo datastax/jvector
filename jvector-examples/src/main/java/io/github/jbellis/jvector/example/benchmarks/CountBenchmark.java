@@ -29,23 +29,34 @@ import org.apache.commons.math3.analysis.function.Abs;
  * Measures average node‐visit and node‐expand counts over N runs.
  */
 public class CountBenchmark extends AbstractQueryBenchmark {
+    static private final String DEFAULT_FORMAT = ".1f";
+
     private final boolean computeAvgNodesVisited;
     private final boolean computeAvgNodesExpanded;
     private final boolean computeAvgNodesExpandedBaseLayer;
+    private final String formatAvgNodesVisited;
+    private final String formatAvgNodesExpanded;
+    private final String formatAvgNodesExpandedBaseLayer;
 
-    public CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer) {
-        super(".1f");
-
+    public CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer,
+                          String formatAvgNodesVisited, String formatAvgNodesExpanded, String formatAvgNodesExpandedBaseLayer) {
         if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
         this.computeAvgNodesVisited = computeAvgNodesVisited;
         this.computeAvgNodesExpanded = computeAvgNodesExpanded;
         this.computeAvgNodesExpandedBaseLayer = computeAvgNodesExpandedBaseLayer;
+        this.formatAvgNodesVisited = formatAvgNodesVisited;
+        this.formatAvgNodesExpanded = formatAvgNodesExpanded;
+        this.formatAvgNodesExpandedBaseLayer = formatAvgNodesExpandedBaseLayer;
     }
 
     public CountBenchmark() {
-        this(true, false, false);
+        this(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark(String formatAvgNodesVisited, String formatAvgNodesExpanded, String formatAvgNodesExpandedBaseLayer) {
+        this(true, true, true, formatAvgNodesVisited, formatAvgNodesExpanded, formatAvgNodesExpandedBaseLayer);
     }
 
     @Override
@@ -84,13 +95,13 @@ public class CountBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgNodesVisited) {
-            list.add(Metric.of("Avg Visited", getPrintPrecision(), avgVisited));
+            list.add(Metric.of("Avg Visited", formatAvgNodesVisited, avgVisited));
         }
         if (computeAvgNodesExpanded) {
-            list.add(Metric.of("Avg Expanded", getPrintPrecision(), avgExpanded));
+            list.add(Metric.of("Avg Expanded", formatAvgNodesExpanded, avgExpanded));
         }
         if (computeAvgNodesExpandedBaseLayer) {
-            list.add(Metric.of("Avg Expanded Base Layer", getPrintPrecision(), avgBase));
+            list.add(Metric.of("Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
         }
         return list;
     }
