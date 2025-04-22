@@ -48,16 +48,16 @@ public class Bench {
         var overqueryGrid = List.of(1.0, 2.0, 5.0); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(true); // List.of(false, true);
+        var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
                         ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
-                        UNWEIGHTED),
-                __ -> CompressorParameters.NONE
+                        UNWEIGHTED)
+//                __ -> CompressorParameters.NONE
         );
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
-                __ -> CompressorParameters.NONE,
+//                __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
@@ -65,7 +65,7 @@ public class Bench {
                         UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-                EnumSet.of(FeatureId.NVQ_VECTORS),
+//                EnumSet.of(FeatureId.NVQ_VECTORS),
 //                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
@@ -78,7 +78,7 @@ public class Bench {
 
         // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         var coreFiles = List.of(
-                "ada002-100k",
+//                "ada002-100k",
                 "cohere-english-v3-100k",
                 "openai-v3-small-100k",
                 "nv-qa-v4-100k",
