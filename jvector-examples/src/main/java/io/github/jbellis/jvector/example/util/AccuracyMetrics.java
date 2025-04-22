@@ -23,6 +23,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+/**
+ * Computes accuracy metrics, such as recall and mean average precision.
+ */
 public class AccuracyMetrics {
     /**
      * Compute kGT-recall@kRetrieved, which is the fraction of
@@ -36,7 +39,7 @@ public class AccuracyMetrics {
      */
     public static double recallFromSearchResults(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int kGT, int kRetrieved) {
         if (gt.size() != retrieved.size()) {
-            throw new IllegalArgumentException("We should have ground truth for each result");
+            throw new IllegalArgumentException("Insufficient ground truth for the number of retrieved elements");
         }
         Long correctCount = IntStream.range(0, gt.size())
                 .mapToObj(i -> topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved))
@@ -65,7 +68,7 @@ public class AccuracyMetrics {
         }
     }
 
-    public static long topKCorrect(List<Integer> gt, SearchResult retrieved, int kGT, int kRetrieved) {
+    private static long topKCorrect(List<Integer> gt, SearchResult retrieved, int kGT, int kRetrieved) {
         var temp = Arrays.stream(retrieved.getNodes()).mapToInt(nodeScore -> nodeScore.node)
                 .boxed()
                 .collect(Collectors.toList());
@@ -78,7 +81,7 @@ public class AccuracyMetrics {
     }
 
     /**
-     * Compute the average precision at k.
+     * Computes the average precision at k.
      * See the definition <a href="https://en.wikipedia.org/wiki/Evaluation_measures_(information_retrieval)#Average_precision">here</a>.
      * @param gt the ground truth
      * @param retrieved the retrieved elements
@@ -115,9 +118,17 @@ public class AccuracyMetrics {
         return score / gtView.size();
     }
 
+    /**
+     * Computes the mean average precision at k.
+     * See the definition <a href="https://en.wikipedia.org/wiki/Evaluation_measures_(information_retrieval)#Mean_average_precision">here</a>.
+     * @param gt the ground truth
+     * @param retrieved the retrieved elements
+     * @param k the number of retrieved elements
+     * @return the mean average precision
+     */
     public static double meanAveragePrecisionAtK(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int k) {
         if (gt.size() != retrieved.size()) {
-            throw new IllegalArgumentException("We should have ground truth for each result");
+            throw new IllegalArgumentException("Insufficient ground truth for the number of retrieved elements");
         }
         Double apk = IntStream.range(0, gt.size())
                 .mapToObj(i -> averagePrecisionAtK(gt.get(i), retrieved.get(i), k))
