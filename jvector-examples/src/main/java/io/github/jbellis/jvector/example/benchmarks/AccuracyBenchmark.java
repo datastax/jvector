@@ -29,33 +29,46 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures average recall and/or the mean average precision.
  */
 public class AccuracyBenchmark extends AbstractQueryBenchmark {
-    static private final String DEFAULT_FORMAT = ".2f";
+    private static final String DEFAULT_FORMAT = ".2f";
 
-    private final boolean computeRecall;
-    private final boolean computeMAP;
-    private final String formatRecall;
-    private final String formatMAP;
+    private boolean computeRecall;
+    private boolean computeMAP;
+    private String formatRecall;
+    private String formatMAP;
 
-    public AccuracyBenchmark(boolean computeRecall, boolean computeMAP, String formatRecall, String formatMAP) {
-        if (!(computeRecall || computeMAP)) {
-            throw new IllegalArgumentException("At least one parameter must be set to true");
-        }
+    public static AccuracyBenchmark createDefault() {
+        return new AccuracyBenchmark(true, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public static AccuracyBenchmark createEmpty() {
+        return new AccuracyBenchmark(false, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    private AccuracyBenchmark(boolean computeRecall, boolean computeMAP, String formatRecall, String formatMAP) {
         this.computeRecall = computeRecall;
         this.computeMAP = computeMAP;
         this.formatRecall = formatRecall;
         this.formatMAP = formatMAP;
     }
 
-    public AccuracyBenchmark() {
-        this(true, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    public AccuracyBenchmark displayRecall() {
+        return displayRecall(DEFAULT_FORMAT);
     }
 
-    public AccuracyBenchmark(String formatRecall) {
-        this(true, false, formatRecall, DEFAULT_FORMAT);
+    public AccuracyBenchmark displayRecall(String format) {
+        this.computeRecall = true;
+        this.formatRecall = format;
+        return this;
     }
 
-    public AccuracyBenchmark(String formatRecall, String formatMAP) {
-        this(true, true, formatRecall, formatMAP);
+    public AccuracyBenchmark displayMAP() {
+        return displayMAP(DEFAULT_FORMAT);
+    }
+
+    public AccuracyBenchmark displayMAP(String format) {
+        this.computeMAP = true;
+        this.formatMAP = format;
+        return this;
     }
 
     @Override
@@ -70,6 +83,10 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+
+        if (!(computeRecall || computeMAP)) {
+            throw new RuntimeException("At least one metric must be displayed");
+        }
 
         int totalQueries = cs.getDataSet().queryVectors.size();
 

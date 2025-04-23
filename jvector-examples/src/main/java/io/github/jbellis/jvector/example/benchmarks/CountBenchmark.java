@@ -23,26 +23,30 @@ import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
-import org.apache.commons.math3.analysis.function.Abs;
 
 /**
  * Measures average node‐visit and node‐expand counts over N runs.
  */
 public class CountBenchmark extends AbstractQueryBenchmark {
-    static private final String DEFAULT_FORMAT = ".1f";
+    private static final String DEFAULT_FORMAT = ".1f";
 
-    private final boolean computeAvgNodesVisited;
-    private final boolean computeAvgNodesExpanded;
-    private final boolean computeAvgNodesExpandedBaseLayer;
-    private final String formatAvgNodesVisited;
-    private final String formatAvgNodesExpanded;
-    private final String formatAvgNodesExpandedBaseLayer;
+    private boolean computeAvgNodesVisited;
+    private boolean computeAvgNodesExpanded;
+    private boolean computeAvgNodesExpandedBaseLayer;
+    private String formatAvgNodesVisited;
+    private String formatAvgNodesExpanded;
+    private String formatAvgNodesExpandedBaseLayer;
 
-    public CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer,
+    public static CountBenchmark createDefault() {
+        return new CountBenchmark(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public static CountBenchmark createEmpty() {
+        return new CountBenchmark(false, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    private CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer,
                           String formatAvgNodesVisited, String formatAvgNodesExpanded, String formatAvgNodesExpandedBaseLayer) {
-        if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
-            throw new IllegalArgumentException("At least one parameter must be set to true");
-        }
         this.computeAvgNodesVisited = computeAvgNodesVisited;
         this.computeAvgNodesExpanded = computeAvgNodesExpanded;
         this.computeAvgNodesExpandedBaseLayer = computeAvgNodesExpandedBaseLayer;
@@ -51,12 +55,34 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         this.formatAvgNodesExpandedBaseLayer = formatAvgNodesExpandedBaseLayer;
     }
 
-    public CountBenchmark() {
-        this(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    public CountBenchmark displayAvgNodesVisited() {
+        return displayAvgNodesVisited(DEFAULT_FORMAT);
     }
 
-    public CountBenchmark(String formatAvgNodesVisited, String formatAvgNodesExpanded, String formatAvgNodesExpandedBaseLayer) {
-        this(true, true, true, formatAvgNodesVisited, formatAvgNodesExpanded, formatAvgNodesExpandedBaseLayer);
+    public CountBenchmark displayAvgNodesVisited(String format) {
+        this.computeAvgNodesVisited = true;
+        this.formatAvgNodesVisited = format;
+        return this;
+    }
+
+    public CountBenchmark displayAvgNodesExpanded() {
+        return displayAvgNodesExpanded(DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark displayAvgNodesExpanded(String format) {
+        this.computeAvgNodesExpanded = true;
+        this.formatAvgNodesExpanded = format;
+        return this;
+    }
+
+    public CountBenchmark displayAvgNodesExpandedBaseLayer() {
+        return displayAvgNodesExpandedBaseLayer(DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark displayAvgNodesExpandedBaseLayer(String format) {
+        this.computeAvgNodesExpandedBaseLayer = true;
+        this.formatAvgNodesExpandedBaseLayer = format;
+        return this;
     }
 
     @Override
@@ -71,6 +97,10 @@ public class CountBenchmark extends AbstractQueryBenchmark {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+
+        if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
+            throw new RuntimeException("At least one metric must be displayed");
+        }
 
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();

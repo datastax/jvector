@@ -377,10 +377,10 @@ public class Grid {
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
-                new ThroughputBenchmark(2, 0.1),
-                new LatencyBenchmark(),
-                new CountBenchmark(),
-                new AccuracyBenchmark()
+                ThroughputBenchmark.createDefault(2, 0.1),
+                LatencyBenchmark.createDefault(),
+                CountBenchmark.createDefault(),
+                AccuracyBenchmark.createDefault()
         );
         QueryTester tester = new QueryTester(benchmarks);
 
