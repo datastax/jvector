@@ -59,6 +59,7 @@ public class MultiFileDatasource {
         var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
 
         // Use the lazy loader for the large base vectors.
+        // TODO Dataset needs to be scrubbed before this step (remove zero vectors at a minimum).
         return LazyFvecsLoader.load("fvec/" + basePath, queryVectors, gtVectors, VectorSimilarityFunction.COSINE);
     }
 
@@ -119,45 +120,5 @@ public class MultiFileDatasource {
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_base_vectors.fvec",
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_query_vectors_10000.fvec",
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_indices_query_10000.ivec"));
-        put("dpr-10m-norm", new MultiFileDatasource("dpr-10m-norm",
-                "dpr/en/train/embeddings/c4-en_base_10M_norm_files0_2.fvecs",
-                "dpr/en/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
-                "dpr/en/ground_truth/dpr_10m_gt_norm_ip_k100.ivecs"));
-        put("dpr-1m-norm", new MultiFileDatasource("dpr-1m-norm",
-                "dpr/en/train/embeddings/c4-en_base_1M_norm_files0_2.fvecs",
-                "dpr/en/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
-                "dpr/en/ground_truth/dpr_1m_gt_norm_ip_k100.ivecs"));
-        put("cohere-1m-norm", new MultiFileDatasource("cohere-1m-norm",
-                "cohere-40m/cohere_wiki_en_flat_base_1m_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_query_10k_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_gt_1m_ip_k100.ivecs"));
-        put("cohere-1m-shuffle-norm", new MultiFileDatasource("cohere-1m-shuffle-norm",
-                "cohere-40m/cohere_wiki_en_flat_base_1m_norm_shuffle.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_query_10k_norm_shuffle.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_gt_shuffle_1m_ip_k100.ivecs"));
-        put("cohere-10m-norm", new MultiFileDatasource("cohere-10m-norm",
-                "cohere-40m/cohere_wiki_en_flat_base_10m_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_query_10k_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs"));
-        put("cohere-40m-norm", new MultiFileDatasource("cohere-40m-norm",
-                "cohere-40m/cohere_wiki_en_flat_base_40m_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_query_10k_norm.fvecs",
-                "cohere-40m/cohere_wiki_en_flat_gt_40m_ip_k100.ivecs"));
-        put("cap-1m", new MultiFileDatasource("cap-1m",
-                "cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_1m_norm_shuffle.fvecs",
-                "cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
-                "cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
-        put("cap-6m", new MultiFileDatasource("cap-6m",
-                "cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
-                "cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
-                "cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
-        put("sift-100m", new MultiFileDatasource("sift-1b",
-                "sift/bigann_base_100m.fvecs",
-                "sift/bigann_query.fvecs",
-                "sift/gnd/idx_100M.ivecs"));
-        put("sift-1b", new MultiFileDatasource("sift-1b",
-                "sift/bigann_base.fvecs",
-                "sift/bigann_query.fvecs",
-                "sift/gnd/idx_1000M.ivecs"));
     }};
 }

@@ -41,16 +41,17 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class Bench {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+        var jobStartTime = System.nanoTime();
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
         var topKGrid = List.of(10, 100);
-        var overqueryGrid = List.of(1.0, 2.0, 5.0); // rerankK = oq * topK
+        var overqueryGrid = List.of(1.0, 2.0, 3.0, 4.0, 5.0); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 8,
+                ds -> new PQParameters(ds.getDimension() / 4,
                         256,
                         ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
@@ -59,7 +60,7 @@ public class Bench {
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
 //                __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 8,
+                ds -> new PQParameters(ds.getDimension() / 4,
                         256,
                         ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
@@ -113,6 +114,9 @@ public class Bench {
                 Grid.runAll(Hdf5Loader.load(f), mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
             }
         }
+
+        var jobTimeSecs = (System.nanoTime() - jobStartTime) / 1_000_000_000.0;
+        System.out.format("Total job time (s): %s%n", jobTimeSecs);
 
         // 2D grid, built and calculated at runtime
 //        if (pattern.matcher("2dgrid").find()) {

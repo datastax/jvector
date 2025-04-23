@@ -256,11 +256,10 @@ public class Grid {
         long startTime = System.nanoTime();
         var vv = floatVectors.threadLocalSupplier(); // ThreadLocal supplier for vector access
 
-        // Determine the maximum number of nodes to process concurrently based on memory.
-        int maxConcurrentNodes = 50;
-        // Create a queue with a bounded capacity.
-        // Tune based on memory vs. keeping threads busy. Start smaller.
-        int queueCapacity = maxConcurrentNodes * 4; // e.g., 200 tasks waiting in queue
+        // Equals the thread count.
+        int maxConcurrentNodes = Runtime.getRuntime().availableProcessors();
+        // Create a queue with a bounded capacity.  This conserves memory by limiting number of waiting tasks.
+        int queueCapacity = maxConcurrentNodes * 4; // This is somewhat arbitrary for now.
         LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(queueCapacity);
 
         System.out.printf("Using ThreadPoolExecutor with %d threads and queue capacity %d%n",
@@ -297,12 +296,9 @@ public class Grid {
                     // 1. Load the vector (only for this node)
                     var vector = vv.get().getVector(nodeOrdinal);
 
-                    // 2. Compute features (this part remains the same)
+                    // 2. Compute features
                     var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
                     writers.forEach((features, writer) -> {
-                        // This inner part doesn't need explicit try-catch if
-                        // UncheckedIOException is acceptable for writer errors.
-                        // If writer errors should allow other nodes to proceed, add try-catch here.
                         suppliers.get(features).forEach((featureId, supplier) -> {
                             stateMap.put(featureId, supplier.apply(nodeOrdinal));
                         });
@@ -318,14 +314,10 @@ public class Grid {
                     // Assuming builder.addGraphNode is thread-safe AND handles ordinal correctly
                     builder.addGraphNode(nodeOrdinal, vector);
 
-                    // At this point, 'vector' and 'stateMap' go out of scope for this task
-                    // and become eligible for garbage collection, helping manage memory.
-
                     // Increment counter *after* main work for this node is done
                     int count = nodesProcessedCounter.incrementAndGet();
 
                     if (count % reportingInterval == 0) {
-                        // Simple timestamped progress message
                         System.out.printf("[%s] Processed %d / %d nodes...%n",
                                 LocalTime.now().truncatedTo(ChronoUnit.SECONDS),
                                 count,
@@ -385,7 +377,7 @@ public class Grid {
 
         System.out.println("All nodes processed successfully. Running cleanup...");
 
-        // Finally, call cleanup (assuming this needs to happen after all nodes are added)
+        // Cleanup MUST be called before writing index to disk.
         builder.cleanup();
 
         long endTime = System.nanoTime();
