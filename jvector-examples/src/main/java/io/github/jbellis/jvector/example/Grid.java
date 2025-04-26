@@ -103,6 +103,8 @@ public class Grid {
     private static final String dirPrefix = "BenchGraphDir";
 
     static void runAll(DataSet ds,
+                       Path suppliedTestDirectory,
+                       boolean reuseIndex,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
@@ -114,7 +116,17 @@ public class Grid {
                        List<Double> efSearchFactor,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        var testDirectory = Files.createTempDirectory(dirPrefix);
+        // For loading an existing index (especially the really big ones)
+        final Path testDirectory;
+        if (!reuseIndex) {
+            // Not reusing → create an ephemeral temp directory
+            testDirectory = Files.createTempDirectory(dirPrefix);
+        } else {
+            // Reusing → use the path the caller passed in (and make sure it exists)
+            testDirectory = suppliedTestDirectory;
+            Files.createDirectories(testDirectory);
+        }
+
         try {
             for (var addHierarchy :  addHierarchyGrid) {
                 for (int M : mGrid) {
@@ -122,19 +134,22 @@ public class Grid {
                         for (int efC : efConstructionGrid) {
                             for (var bc : buildCompressors) {
                                 var compressor = getCompressor(bc, ds);
-                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, topKGrid, efSearchFactor, usePruningGrid, ds, testDirectory);
+                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, topKGrid, efSearchFactor, usePruningGrid, ds, testDirectory, reuseIndex);
                             }
                         }
                     }
                 }
             }
         } finally {
-            try
-            {
-                Files.delete(testDirectory);
-            } catch (DirectoryNotEmptyException e) {
-                // something broke, we're almost certainly in the middle of another exception being thrown,
-                // so if we don't swallow this one it will mask the original exception
+            if (!reuseIndex) {
+                try {
+                    Files.delete(testDirectory);
+                } catch (DirectoryNotEmptyException e) {
+                    // something broke, we're almost certainly in the middle of another exception being thrown,
+                    // so if we don't swallow this one it will mask the original exception
+                }
+            } else {
+                System.out.println("Preserving testDirectory (reuseIndex=true): " + testDirectory);
             }
 
             cachedCompressors.clear();
@@ -152,13 +167,41 @@ public class Grid {
                             List<Double> efSearchOptions,
                             List<Boolean> usePruningGrid,
                             DataSet ds,
-                            Path testDirectory) throws IOException
+                            Path testDirectory,
+                            boolean reuseIndex) throws IOException
     {
+        String     paramString = null;
+        List<String> featNames = List.of();
+
         Map<Set<FeatureId>, GraphIndex> indexes;
         if (buildCompressor == null) {
             indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, ds, testDirectory);
         } else {
-            indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, ds, testDirectory, buildCompressor);
+            // for naming the graph index file....
+            // Extract just the file name (no directories) and drop its extension
+            String rawName = Paths.get(ds.name).getFileName().toString();
+            String datasetName = rawName.replaceFirst("\\.[^.]+$", "");
+            String feats         = featureSets.stream()
+                    .map(set -> set.stream().map(FeatureId::name).sorted().collect(Collectors.joining("-")))
+                    .collect(Collectors.joining("__"));
+            String compressorId  = buildCompressor.toString().replaceAll("\\s+", "");
+            paramString   = String.join("_",
+                    datasetName,
+                    feats,
+                    "M"+M,
+                    "ef"+efConstruction,
+                    "of"+neighborOverflow,
+                    addHierarchy ? "H1" : "H0",
+                    compressorId
+            );
+            featNames = featureSets.stream()
+                    .map(fs -> fs.stream()
+                            .map(FeatureId::name)
+                            .sorted()
+                            .collect(Collectors.joining("-")))
+                    .collect(Collectors.toList());
+
+            indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, ds, testDirectory, reuseIndex, buildCompressor, paramString, featNames);
         }
 
         try {
@@ -168,9 +211,15 @@ public class Grid {
                 if (compressor == null) {
                     cv = null;
                     System.out.format("Uncompressed vectors%n");
-                } else {
+                } else { // Only PQ is supported for now
                     long start = System.nanoTime();
-                    cv = compressor.encodeAll(ds.getBaseRavv());
+//                    cv = compressor.encodeAll(ds.getBaseRavv());
+
+                    // Use the streaming-batch method instead of a single giant allocation
+                    ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+                    int encodingBatchSize = 500_000;
+                    cv = processPQInBatches(ds.getBaseRavv(), (ProductQuantization) buildCompressor, simdExecutor, encodingBatchSize);
+                    System.out.println("PQ batch encoding complete.");
                     System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                 }
 
@@ -187,9 +236,16 @@ public class Grid {
                 index.close();
             }
         } finally {
-            for (int n = 0; n < featureSets.size(); n++) {
-                Files.deleteIfExists(testDirectory.resolve("graph" + n));
+            // loop over the same featNames you passed into buildOnDisk
+            for (String fn : featNames) {
+                Path gp = testDirectory.resolve(sanitizeFileName("graph_" + paramString + "_" + fn));
+                if (!reuseIndex) {
+                    Files.deleteIfExists(gp);
+                } else {
+                    System.out.println("Preserving " + gp + " (reuseIndex=true)");
+                }
             }
+            cachedCompressors.clear();
         }
     }
 
@@ -200,14 +256,33 @@ public class Grid {
                                                                boolean addHierarchy,
                                                                DataSet ds,
                                                                Path testDirectory,
-                                                               VectorCompressor<?> buildCompressor)
-            throws IOException
-    {
+                                                               boolean reuseIndex,
+                                                               VectorCompressor<?> buildCompressor,
+                                                               String paramString,
+                                                               List<String> featNames
+    ) throws IOException {
+        // 1) build the list of paths, one per featureSet
+        List<Path> graphPaths = featNames.stream()
+                .map(fn -> testDirectory.resolve(sanitizeFileName("graph_" + paramString + "_" + fn)))
+                .collect(Collectors.toList());
+
+        // 2) reuse check: must have every file present
+        if (reuseIndex && graphPaths.stream().allMatch(Files::exists)) {
+            System.out.println("Reusing existing indexes in " + testDirectory);
+            Map<Set<FeatureId>,GraphIndex> indexes = new HashMap<>();
+            for (int i = 0; i < featureSets.size(); i++) {
+                var features = featureSets.get(i);
+                Path gp = graphPaths.get(i);
+                indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(gp)));
+            }
+            return indexes;
+        }
+
         var floatVectors = ds.getBaseRavv();
         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
         int encodingBatchSize = 300_000;
         ImmutablePQVectors pqVectors = processPQInBatches(floatVectors, (ProductQuantization) buildCompressor, simdExecutor, encodingBatchSize);
-        System.out.println("PQ encoding complete.");
+        System.out.println("PQ batch encoding complete.");
 
        //  var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pqVectors);
@@ -217,19 +292,34 @@ public class Grid {
         Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
         Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
         OnDiskGraphIndexWriter scoringWriter = null;
-        int n = 0;
-        for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pqVectors.getCompressor());
+
+        // Assume `paramString` and `List<String> featNames`computer earlier
+        for (int i = 0; i < featureSets.size(); i++) {
+            Set<FeatureId> features = featureSets.get(i);
+            String featName = featNames.get(i);
+            Path graphPath = testDirectory.resolve(sanitizeFileName("graph_" + paramString + "_" + featName));
+
+            var bws = builderWithSuppliers(
+                    features,
+                    builder.getGraph(),
+                    graphPath,
+                    floatVectors,
+                    pqVectors.getCompressor()
+            );
             var writer = bws.builder.build();
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
-            if (features.contains(FeatureId.INLINE_VECTORS) || features.contains(FeatureId.NVQ_VECTORS)) {
+
+            if (features.contains(FeatureId.INLINE_VECTORS) ||
+                    features.contains(FeatureId.NVQ_VECTORS)) {
                 scoringWriter = writer;
             }
         }
+
         if (scoringWriter == null) {
-            throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
+            throw new IllegalStateException(
+                    "Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds."
+            );
         }
 
 //        // build the graph incrementally
@@ -283,7 +373,7 @@ public class Grid {
         int vectorCount = floatVectors.size();
 
         final AtomicInteger nodesProcessedCounter = new AtomicInteger(0);
-        final int reportingInterval = 100_000;
+        final int reportingInterval = 500_000;
 
         System.out.printf("Submitting %d nodes for processing (will block if queue is full)...%n", vectorCount);
 
@@ -408,13 +498,19 @@ public class Grid {
 
         // open indexes
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
-        n = 0;
-        for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
+        for (int i = 0; i < featureSets.size(); i++) {
+            var features = featureSets.get(i);
+            String featName = featNames.get(i);  // the same list you used when writing
+            Path graphPath = testDirectory.resolve(sanitizeFileName("graph_" + paramString + "_" + featName));
+            GraphIndex index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
         }
         return indexes;
+    }
+
+    private static String sanitizeFileName(String name) {
+        // replace any character that isn’t a letter, digit, dot or underscore with an underscore
+        return name.replaceAll("[^A-Za-z0-9._]", "_");
     }
 
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
@@ -670,7 +766,15 @@ public class Grid {
         // Loop over the dataset in batches.
         for (int batchStart = 0; batchStart < totalVectors; batchStart += batchSize) {
             int batchEnd = Math.min(batchStart + batchSize, totalVectors);
-            System.out.format("Processing batch: %d to %d%n", batchStart, batchEnd);
+
+            int reportingInterval = 5_000_000;
+
+            if (batchStart % reportingInterval == 0) {
+                System.out.printf("[%s] Encoding %d / %d vectors...%n",
+                        LocalTime.now().truncatedTo(ChronoUnit.SECONDS),
+                        batchStart,
+                        totalVectors);
+            }
 
             // Create a subset view for the current batch.
             RandomAccessVectorValues batchRavv = new SubsetRandomAccessVectorValues(ravv, batchStart, batchEnd);
