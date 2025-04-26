@@ -53,14 +53,14 @@ public class MultiFileDatasource {
         return DataSet.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
     }
 
-    public DataSet lazyLoad() throws IOException {
+    public DataSet lazyLoad(VectorSimilarityFunction vsf) throws IOException {
         // Eagerly load query vectors and ground truth (assumed to be small)
         var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
         var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
 
         // Use the lazy loader for the large base vectors.
         // TODO Dataset needs to be scrubbed before this step (remove zero vectors at a minimum).
-        return LazyFvecsLoader.load("fvec/" + basePath, queryVectors, gtVectors, VectorSimilarityFunction.COSINE);
+        return LazyFvecsLoader.load("fvec/" + basePath, queryVectors, gtVectors, vsf);
     }
 
     public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{

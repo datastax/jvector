@@ -48,13 +48,13 @@ public class Bench {
         boolean reuseIndex = true; // Build or reuse an existing index already in tmp?
         Path existingIndexDir = Paths.get("/mnt/raid0/tmp/BenchGraphDir-prebuilt");
 
-        var mGrid = List.of(64); // List.of(16, 24, 32, 48, 64, 96, 128);
+        var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(100, 200); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
         var topKGrid = List.of(1);
         var overqueryGrid = List.of(1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(false); // List.of(false, true);
+        var usePruningGrid = List.of(false, true); // List.of(false, true);
         var vectorSimilarityFunction = VectorSimilarityFunction.EUCLIDEAN; //TODO Do we want to set this auto by dataset or here?
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 2,
