@@ -38,12 +38,12 @@ public class Bench {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = List.of(10, 100);
-        var overqueryGrid = List.of(1.0, 2.0, 5.0); // rerankK = oq * topK
-        var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
+        var efConstructionGrid = List.of(500); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
+        var topKGrid = List.of(10);
+        var overqueryGrid = List.of(1.0, 2.0, 3.0, 4.0, 5.0); // rerankK = oq * topK
+        var neighborOverflowGrid = List.of(2.0f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(true); // List.of(false, true);
+        var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
 //                ds -> new PQParameters(ds.getDimension() / 8, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED),
                 __ -> CompressorParameters.NONE
@@ -67,10 +67,10 @@ public class Bench {
 
         // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         var files = List.of(
-//                "ada002-100k"
-                "cohere-english-v3-100k"
+//                "ada002-100k",
+//                "cohere-english-v3-100k",
 //                "openai-v3-small-100k",
-//                "nv-qa-v4-100k",
+                "nv-qa-v4-100k"
 //                "colbert-1M",
 //                "gecko-100k"
 //                "openai-v3-large-3072-100k",
@@ -85,7 +85,7 @@ public class Bench {
 //                "glove-50-angular.hdf5",
 //                "lastfm-64-dot.hdf5",
 //                "glove-100-angular.hdf5",
-//                "glove-200-angular.hdf5",
+//                "glove-200-angular.hdf5"
 //                "nytimes-256-angular.hdf5",
 //                "sift-128-euclidean.hdf5"
         );
