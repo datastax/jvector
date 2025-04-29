@@ -105,12 +105,25 @@ public class OnDiskReachGraphIndex implements GraphIndex, AutoCloseable, Account
         in.seek(afterHeaderOffset);
         cumulativeDegrees = new ArrayList<>(idUpperBound);
         maxDegreeL0 = 0;
+        int[] over = {50, 100, 200, 300, 400, 500};
+        int[] counts = {0, 0, 0, 0, 0, 0};
         for (int i = 0; i < idUpperBound + 1; i++) {
             cumulativeDegrees.add(in.readInt());
             if (i > 0) {
-                maxDegreeL0 = Math.max(maxDegreeL0, cumulativeDegrees.get(i) - cumulativeDegrees.get(i - 1));
+                int degree = cumulativeDegrees.get(i) - cumulativeDegrees.get(i - 1);
+                maxDegreeL0 = Math.max(maxDegreeL0, degree);
+                for (int jj = 0; jj < over.length; jj++) {
+                    if (degree > over[jj]) {
+                        counts[jj]++;
+                    }
+                }
             }
         }
+        System.out.println("maxDegreeL0 " + maxDegreeL0);
+        for (int jj = 0; jj < over.length; jj++) {
+            System.out.print("over " + over[jj] + " = " + counts[jj] + " || ");
+        }
+        System.out.print("\n");
 
         inMemoryNeighbors = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
