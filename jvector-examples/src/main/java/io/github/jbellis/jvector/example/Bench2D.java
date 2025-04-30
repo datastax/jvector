@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
@@ -37,8 +38,10 @@ public class Bench2D {
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = List.of(10);
-        var overqueryGrid = List.of(1.0, 2.0, 5.0, 10.0, 20.0); // rerankK = oq * topK
+        var topKGrid = Map.of(
+                10, // topK
+                List.of(1.0, 2.0, 5.0, 10.0, 20.0) // oq
+        ); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
@@ -56,6 +59,6 @@ public class Bench2D {
         var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
 
         Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets,
-                buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
+                buildCompression, searchCompression, topKGrid, usePruningGrid);
     }
 }

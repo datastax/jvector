@@ -1,0 +1,35 @@
+configVersion: 4
+
+dataset: ada002-100k
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  compression:
+    - type: None
+    - type: PQ
+      parameters:
+        m: 192
+        # k: 256 # optional parameter. By default, k=256
+        centerData: No
+        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+  reranking:
+    - FP
+    - NVQ
+  useSavedIndexIfExists: Yes
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 5.0, 10.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [No, Yes]
+  compression:
+    - type: None
+    - type: PQ
+      parameters:
+        m: 192
+        k: 256 # optional parameter. By default, k=256
+        centerData: No
+        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
