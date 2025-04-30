@@ -8,16 +8,14 @@ construction:
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   compression:
-    - type: None
     - type: PQ
       parameters:
-        # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+        m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
         # mFactor: 8
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
-    - FP
     - NVQ
   useSavedIndexIfExists: Yes
 
@@ -25,12 +23,11 @@ search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
     100: [1.0, 2.0]
-  useSearchPruning: [No, Yes]
+  useSearchPruning: [Yes]
   compression:
-    - type: None
     - type: PQ
       parameters:
         m: 192
-        k: 256 # optional parameter. By default, k=256
+        # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
