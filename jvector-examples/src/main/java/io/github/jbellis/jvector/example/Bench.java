@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.yaml.Datasets;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -80,47 +81,24 @@ public class Bench {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        // Legend for the datasets:
-        // NW: large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
-        // AB: smaller vectors from ann-benchmarks:
-        var files = List.of(
-                "ada002-100k", // NW
-                "cohere-english-v3-100k", // NW
-                "openai-v3-small-100k", // NW
-                "nv-qa-v4-100k", // NW
-                "colbert-1M", // NW
-                "gecko-100k", // NW
-                "openai-v3-large-3072-100k", // NW
-                "openai-v3-large-1536-100k", // NW
-                "e5-small-v2-100k", // NW
-                "e5-base-v2-100k", // NW
-                "e5-large-v2-100k", // NW
-                "glove-25-angular.hdf5", // AB
-                "glove-50-angular.hdf5", // AB
-                "lastfm-64-dot.hdf5", // AB
-                "glove-100-angular.hdf5", // AB
-                "glove-200-angular.hdf5", // AB
-                "nytimes-256-angular.hdf5", // AB
-                "sift-128-euclidean.hdf5" // AB
-                // "deep-image-96-angular.hdf5", // AB, large files not yet supported
-                // "gist-960-euclidean.hdf5", // AB, large files not yet supported
-        );
-        execute(files, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
+        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
     }
 
-    private static void execute(List<String> files, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
-        for (var datasetName : files) {
-            if (pattern.matcher(datasetName).find()) {
-                DataSet ds;
-                if (datasetName.endsWith(".hdf5")) {
-                    DownloadHelper.maybeDownloadHdf5(datasetName);
-                    ds = Hdf5Loader.load(datasetName);
-                } else {
-                    var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
-                    ds = mfd.load();
-                }
-                Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
+    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+        var datasets = Datasets.load();
+        var datasetNames = datasets.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        System.out.println("Executing the following datasets: " + datasetNames);
+
+        for (var datasetName : datasetNames) {
+            DataSet ds;
+            if (datasetName.endsWith(".hdf5")) {
+                DownloadHelper.maybeDownloadHdf5(datasetName);
+                ds = Hdf5Loader.load(datasetName);
+            } else {
+                var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
+                ds = mfd.load();
             }
+            Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
     }
 }

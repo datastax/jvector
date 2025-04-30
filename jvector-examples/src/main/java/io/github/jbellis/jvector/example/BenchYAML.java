@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.yaml.Datasets;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import org.yaml.snakeyaml.Yaml;
 
@@ -44,61 +45,31 @@ public class BenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        // Legend for the datasets:
-        // NW: large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
-        // AB: smaller vectors from ann-benchmarks:
-        var files = List.of(
-                "ada002-100k", // NW
-                "cohere-english-v3-100k", // NW
-                "openai-v3-small-100k", // NW
-                "nv-qa-v4-100k", // NW
-                "colbert-1M", // NW
-                "gecko-100k", // NW
-                "openai-v3-large-3072-100k", // NW
-                "openai-v3-large-1536-100k", // NW
-                "e5-small-v2-100k", // NW
-                "e5-base-v2-100k", // NW
-                "e5-large-v2-100k", // NW
-                "glove-25-angular.hdf5", // AB
-                "glove-50-angular.hdf5", // AB
-                "lastfm-64-dot.hdf5", // AB
-                "glove-100-angular.hdf5", // AB
-                "glove-200-angular.hdf5", // AB
-                "nytimes-256-angular.hdf5", // AB
-                "sift-128-euclidean.hdf5" // AB
-                // "deep-image-96-angular.hdf5", // AB, large files not yet supported
-                // "gist-960-euclidean.hdf5", // AB, large files not yet supported
-        );
-        execute(files, pattern);
+        execute(pattern);
     }
 
-    private static void execute(List<String> files, Pattern pattern) throws IOException {
-        for (var datasetName : files) {
-            if (pattern.matcher(datasetName).find()) {
-                DataSet ds;
-                if (datasetName.endsWith(".hdf5")) {
-                    DownloadHelper.maybeDownloadHdf5(datasetName);
-                    ds = Hdf5Loader.load(datasetName);
-                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
-                } else {
-                    var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
-                    ds = mfd.load();
-                }
+    private static void execute(Pattern pattern) throws IOException {
+        var datasets = Datasets.load();
+        var datasetNames = datasets.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        System.out.println("Executing the following datasets: " + datasetNames);
 
-                File configFile = new File("./jvector-examples/yaml-config-examples/" + datasetName + ".yml");
-                if (!configFile.exists()) {
-                    configFile = new File("./jvector-examples/yaml-config-examples/default.yml");
-                    System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
-                }
-                InputStream inputStream = new FileInputStream(configFile);
-                Yaml yaml = new Yaml();
-                MultiConfig config = yaml.loadAs(inputStream, MultiConfig.class);
-
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy,
-                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+        for (var datasetName : datasetNames) {
+            DataSet ds;
+            if (datasetName.endsWith(".hdf5")) {
+                DownloadHelper.maybeDownloadHdf5(datasetName);
+                ds = Hdf5Loader.load(datasetName);
+                datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
+            } else {
+                var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
+                ds = mfd.load();
             }
+
+            MultiConfig config = MultiConfig.getConfig(datasetName);
+
+            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
         }
     }
 }

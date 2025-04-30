@@ -1,0 +1,23 @@
+neighborhood-watch-100k:
+  - ada002-100k
+  - cohere-english-v3-100k
+  - openai-v3-small-100k
+  - gecko-100k
+  - openai-v3-large-3072-100k
+  - openai-v3-large-1536-100k
+  - e5-small-v2-100k
+  - e5-base-v2-100k
+  - e5-large-v2-100k
+neighborhood-watch-1M:
+  - ada002-1M
+  - colbert-1M
+ann-benchmarks:
+  - glove-25-angular.hdf5
+  - glove-50-angular.hdf5
+  - lastfm-64-dot.hdf5
+  - glove-100-angular.hdf5
+  - glove-200-angular.hdf5
+  - nytimes-256-angular.hdf5
+  - sift-128-euclidean.hdf5"
+  # - deep-image-96-angular.hdf5 # large files not yet supported
+  # - gist-960-euclidean.hdf5 # large files not yet supported

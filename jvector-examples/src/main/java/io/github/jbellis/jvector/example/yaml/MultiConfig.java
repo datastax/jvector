@@ -17,12 +17,29 @@
 package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
 
 public class MultiConfig {
     private int version;
     public String dataset;
     public ConstructionParameters construction;
     public SearchParameters search;
+
+    public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
+        File configFile = new File("./jvector-examples/yaml-examples/" + datasetName + ".yml");
+        if (!configFile.exists()) {
+            configFile = new File("./jvector-examples/yaml-examples/default.yml");
+            System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
+        }
+        InputStream inputStream = new FileInputStream(configFile);
+        Yaml yaml = new Yaml();
+        return yaml.loadAs(inputStream, MultiConfig.class);
+    }
 
     public int getVersion() {
         return version;
