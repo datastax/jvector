@@ -25,7 +25,7 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 
 public class MultiConfig {
-    private static final String directory = "./jvector-examples/yaml-examples/";
+    private static final String defaultDirectory = "./jvector-examples/yaml-examples/";
 
     private int version;
     public String dataset;
@@ -33,6 +33,10 @@ public class MultiConfig {
     public SearchParameters search;
 
     public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
+        return getConfig(defaultDirectory, datasetName);
+    }
+
+    public static MultiConfig getConfig(String directory, String datasetName) throws FileNotFoundException {
         File configFile = new File(directory + datasetName + ".yml");
         if (!configFile.exists()) {
             configFile = new File(directory + "default.yml");

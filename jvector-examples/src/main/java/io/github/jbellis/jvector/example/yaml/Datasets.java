@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 public class Datasets {
-    private static final String directory = "./jvector-examples/yaml-examples/";
+    private static final String defaultFile = "./jvector-examples/yaml-examples/datasets.yml";
 
     public final Map<String, List<String>> datasetNames;
 
@@ -19,7 +19,11 @@ public class Datasets {
     }
 
     public static Datasets load() throws IOException  {
-        InputStream inputStream = new FileInputStream(directory + "datasets.yml");
+        return load(defaultFile);
+    }
+
+    public static Datasets load(String file) throws IOException  {
+        InputStream inputStream = new FileInputStream(file);
         Yaml yaml = new Yaml();
         return new Datasets(yaml.load(inputStream));
     }
