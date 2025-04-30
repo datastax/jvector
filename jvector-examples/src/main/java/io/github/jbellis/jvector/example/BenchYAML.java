@@ -16,27 +16,20 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.yaml.snakeyaml.Yaml;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
 /**
  * Tests GraphIndexes against vectors from various datasets
@@ -44,10 +37,6 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class BenchYAML {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
-
-        Yaml yaml = new Yaml();
-        InputStream inputStream = new FileInputStream("./jvector-examples/src/main/java/io/github/jbellis/jvector/example/example.yml");
-        MultiConfig config = yaml.loadAs(inputStream, MultiConfig.class);
 
         // args is list of regexes, possibly needing to be split by whitespace.
         // generate a regex that matches any regex in args, or if args is empty/null, match everything
@@ -80,20 +69,31 @@ public class BenchYAML {
                 // "deep-image-96-angular.hdf5", // AB, large files not yet supported
                 // "gist-960-euclidean.hdf5", // AB, large files not yet supported
         );
-        execute(coreFiles, pattern, config);
+        execute(coreFiles, pattern);
     }
 
-    private static void execute(List<String> files, Pattern pattern, MultiConfig config) throws IOException {
+    private static void execute(List<String> files, Pattern pattern) throws IOException {
         for (var datasetName : files) {
             if (pattern.matcher(datasetName).find()) {
+                File configFile = new File("./jvector-examples/yaml-config-examples/" + datasetName + ".yml");
+                if (!configFile.exists()) {
+                    configFile = new File("./jvector-examples/yaml-config-examples/default.yml");
+                    System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
+                }
+                InputStream inputStream = new FileInputStream(configFile);
+                Yaml yaml = new Yaml();
+                MultiConfig config = yaml.loadAs(inputStream, MultiConfig.class);
+
                 DataSet ds;
                 if (datasetName.endsWith(".hdf5")) {
                     DownloadHelper.maybeDownloadHdf5(datasetName);
                     ds = Hdf5Loader.load(datasetName);
+                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 } else {
                     var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
                     ds = mfd.load();
                 }
+
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                         config.construction.neighborOverflow, config.construction.addHierarchy,
                         config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
