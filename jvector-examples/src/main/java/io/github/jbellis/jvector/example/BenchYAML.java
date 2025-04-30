@@ -47,7 +47,7 @@ public class BenchYAML {
         // Legend for the datasets:
         // NW: large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         // AB: smaller vectors from ann-benchmarks:
-        var coreFiles = List.of(
+        var files = List.of(
                 "ada002-100k", // NW
                 "cohere-english-v3-100k", // NW
                 "openai-v3-small-100k", // NW
@@ -69,21 +69,12 @@ public class BenchYAML {
                 // "deep-image-96-angular.hdf5", // AB, large files not yet supported
                 // "gist-960-euclidean.hdf5", // AB, large files not yet supported
         );
-        execute(coreFiles, pattern);
+        execute(files, pattern);
     }
 
     private static void execute(List<String> files, Pattern pattern) throws IOException {
         for (var datasetName : files) {
             if (pattern.matcher(datasetName).find()) {
-                File configFile = new File("./jvector-examples/yaml-config-examples/" + datasetName + ".yml");
-                if (!configFile.exists()) {
-                    configFile = new File("./jvector-examples/yaml-config-examples/default.yml");
-                    System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
-                }
-                InputStream inputStream = new FileInputStream(configFile);
-                Yaml yaml = new Yaml();
-                MultiConfig config = yaml.loadAs(inputStream, MultiConfig.class);
-
                 DataSet ds;
                 if (datasetName.endsWith(".hdf5")) {
                     DownloadHelper.maybeDownloadHdf5(datasetName);
@@ -93,6 +84,15 @@ public class BenchYAML {
                     var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
                     ds = mfd.load();
                 }
+
+                File configFile = new File("./jvector-examples/yaml-config-examples/" + datasetName + ".yml");
+                if (!configFile.exists()) {
+                    configFile = new File("./jvector-examples/yaml-config-examples/default.yml");
+                    System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
+                }
+                InputStream inputStream = new FileInputStream(configFile);
+                Yaml yaml = new Yaml();
+                MultiConfig config = yaml.loadAs(inputStream, MultiConfig.class);
 
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                         config.construction.neighborOverflow, config.construction.addHierarchy,
