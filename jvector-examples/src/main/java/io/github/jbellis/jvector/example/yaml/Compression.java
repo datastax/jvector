@@ -15,11 +15,6 @@ public class Compression {
             case "None":
                 return __ -> CompressorParameters.NONE;
             case "PQ":
-                String strM = parameters.get("m");
-                if (strM == null) {
-                    throw new IllegalArgumentException("Missing 'm' parameter");
-                }
-                int m = Integer.parseInt(strM);
                 int k = Integer.parseInt(parameters.getOrDefault("k", "256"));
                 String strCenterData = parameters.get("centerData");
                 if (strCenterData == null || !(strCenterData.equals("Yes") || strCenterData.equals("No"))) {
@@ -27,7 +22,19 @@ public class Compression {
                 }
                 boolean centerData = strCenterData.equals("Yes");;
                 float anisotropicThreshold = Float.parseFloat(parameters.getOrDefault("anisotropicThreshold", "-1"));
-                return ds -> new CompressorParameters.PQParameters(m, k, centerData, anisotropicThreshold);
+
+                return ds -> {
+                    if (parameters.containsKey("m")) {
+                        int m = Integer.parseInt(parameters.get("m"));
+                        return new CompressorParameters.PQParameters(m, k, centerData, anisotropicThreshold);
+                    } else if (parameters.containsKey("mFactor")) {
+                        String strMFactor = parameters.get("mFactor");
+                        int mFactor = Integer.parseInt(strMFactor);
+                        return new CompressorParameters.PQParameters(ds.getDimension() / mFactor, k, centerData, anisotropicThreshold);
+                    } else {
+                        throw new IllegalArgumentException("Need to specify either 'm' or 'mFactor'");
+                    }
+                };
             case "BQ":
                 return ds -> new CompressorParameters.BQParameters();
             default:
