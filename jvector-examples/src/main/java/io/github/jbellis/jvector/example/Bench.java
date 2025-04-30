@@ -83,29 +83,29 @@ public class Bench {
         // Legend for the datasets:
         // NW: large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         // AB: smaller vectors from ann-benchmarks:
-        var coreFiles = List.of(
-                "ada002-100k" // NW
-//                "cohere-english-v3-100k", // NW
-//                "openai-v3-small-100k", // NW
-//                "nv-qa-v4-100k", // NW
-//                "colbert-1M", // NW
-//                "gecko-100k", // NW
-//                "openai-v3-large-3072-100k", // NW
-//                "openai-v3-large-1536-100k", // NW
-//                "e5-small-v2-100k", // NW
-//                "e5-base-v2-100k", // NW
-//                "e5-large-v2-100k", // NW
-//                "glove-25-angular.hdf5", // AB
-//                "glove-50-angular.hdf5", // AB
-//                "lastfm-64-dot.hdf5", // AB
-//                "glove-100-angular.hdf5", // AB
-//                "glove-200-angular.hdf5", // AB
-//                "nytimes-256-angular.hdf5", // AB
-//                "sift-128-euclidean.hdf5" // AB
+        var files = List.of(
+                "ada002-100k", // NW
+                "cohere-english-v3-100k", // NW
+                "openai-v3-small-100k", // NW
+                "nv-qa-v4-100k", // NW
+                "colbert-1M", // NW
+                "gecko-100k", // NW
+                "openai-v3-large-3072-100k", // NW
+                "openai-v3-large-1536-100k", // NW
+                "e5-small-v2-100k", // NW
+                "e5-base-v2-100k", // NW
+                "e5-large-v2-100k", // NW
+                "glove-25-angular.hdf5", // AB
+                "glove-50-angular.hdf5", // AB
+                "lastfm-64-dot.hdf5", // AB
+                "glove-100-angular.hdf5", // AB
+                "glove-200-angular.hdf5", // AB
+                "nytimes-256-angular.hdf5", // AB
+                "sift-128-euclidean.hdf5" // AB
                 // "deep-image-96-angular.hdf5", // AB, large files not yet supported
                 // "gist-960-euclidean.hdf5", // AB, large files not yet supported
         );
-        execute(coreFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
+        execute(files, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
     }
 
     private static void execute(List<String> files, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
