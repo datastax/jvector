@@ -33,9 +33,9 @@ public class MultiConfig {
     public SearchParameters search;
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
-        File configFile = new File(datasetName + ".yml");
+        File configFile = new File(defaultDirectory + datasetName + ".yml");
         if (!configFile.exists()) {
-            configFile = new File("default.yml");
+            configFile = new File(defaultDirectory + "default.yml");
             System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
         }
         return getConfig(configFile);
