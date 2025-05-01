@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.util.Map;
 import java.util.function.Function;
@@ -33,13 +34,19 @@ public class Compression {
             case "PQ":
                 int k = Integer.parseInt(parameters.getOrDefault("k", "256"));
                 String strCenterData = parameters.get("centerData");
-                if (strCenterData == null || !(strCenterData.equals("Yes") || strCenterData.equals("No"))) {
-                    throw new IllegalArgumentException("centerData must be Yes or No");
+                if (!(strCenterData == null || strCenterData.equals("Yes") || strCenterData.equals("No"))) {
+                    throw new IllegalArgumentException("centerData must be Yes or No, or not specified at all.");
                 }
-                boolean centerData = strCenterData.equals("Yes");;
                 float anisotropicThreshold = Float.parseFloat(parameters.getOrDefault("anisotropicThreshold", "-1"));
 
                 return ds -> {
+                    boolean centerData;
+                    if (strCenterData == null) {
+                        centerData = ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                    } else {
+                        centerData = strCenterData.equals("Yes");;
+                    }
+
                     if (parameters.containsKey("m")) {
                         int m = Integer.parseInt(parameters.get("m"));
                         return new CompressorParameters.PQParameters(m, k, centerData, anisotropicThreshold);
