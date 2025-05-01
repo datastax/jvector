@@ -17,13 +17,13 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DownloadHelper;
-import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -40,31 +40,41 @@ public class BenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        execute(pattern);
-    }
+        var datasetCollection = DatasetCollection.load();
+        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
-    private static void execute(Pattern pattern) throws IOException {
-        var datasets = DatasetCollection.load();
-        var datasetNames = datasets.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
-        System.out.println("Executing the following datasets: " + datasetNames);
+        if (!datasetNames.isEmpty()) {
+            System.out.println("Executing the following datasets: " + datasetNames);
 
-        for (var datasetName : datasetNames) {
-            DataSet ds;
-            if (datasetName.endsWith(".hdf5")) {
-                DownloadHelper.maybeDownloadHdf5(datasetName);
-                ds = Hdf5Loader.load(datasetName);
-                datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
-            } else {
-                var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
-                ds = mfd.load();
+            for (var datasetName : datasetNames) {
+                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+
+                if (datasetName.endsWith(".hdf5")) {
+                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
+                }
+                MultiConfig config = MultiConfig.getConfig(datasetName);
+
+                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                        config.construction.neighborOverflow, config.construction.addHierarchy,
+                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
             }
+        }
 
-            MultiConfig config = MultiConfig.getConfig(datasetName);
+        List<String> configNames = Arrays.stream(args).filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
 
-            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                    config.construction.neighborOverflow, config.construction.addHierarchy,
-                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+        if (!configNames.isEmpty()) {
+            for (var configName : configNames) {
+                MultiConfig config = MultiConfig.getConfig(configName);
+                String datasetName = config.dataset;
+
+                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+
+                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                        config.construction.neighborOverflow, config.construction.addHierarchy,
+                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+            }
         }
     }
 }

@@ -19,8 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DownloadHelper;
-import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -85,19 +84,12 @@ public class Bench {
     }
 
     private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
-        var datasets = DatasetCollection.load();
-        var datasetNames = datasets.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetCollection = DatasetCollection.load();
+        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
 
         for (var datasetName : datasetNames) {
-            DataSet ds;
-            if (datasetName.endsWith(".hdf5")) {
-                DownloadHelper.maybeDownloadHdf5(datasetName);
-                ds = Hdf5Loader.load(datasetName);
-            } else {
-                var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
-                ds = mfd.load();
-            }
+            DataSet ds = DataSetLoader.loadDataSet(datasetName);
             Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
     }

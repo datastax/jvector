@@ -32,15 +32,23 @@ public class MultiConfig {
     public ConstructionParameters construction;
     public SearchParameters search;
 
-    public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
-        return getConfig(defaultDirectory, datasetName);
+    public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
+        File configFile = new File(datasetName + ".yml");
+        if (!configFile.exists()) {
+            configFile = new File("default.yml");
+            System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
+        }
+        return getConfig(configFile);
     }
 
-    public static MultiConfig getConfig(String directory, String datasetName) throws FileNotFoundException {
-        File configFile = new File(directory + datasetName + ".yml");
+    public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
+        File configFile = new File(datasetName);
+        return getConfig(configFile);
+    }
+
+    public static MultiConfig getConfig(File configFile) throws FileNotFoundException {
         if (!configFile.exists()) {
-            configFile = new File(directory + "default.yml");
-            System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
+            throw new FileNotFoundException(configFile.getAbsolutePath());
         }
         InputStream inputStream = new FileInputStream(configFile);
         Yaml yaml = new Yaml();
