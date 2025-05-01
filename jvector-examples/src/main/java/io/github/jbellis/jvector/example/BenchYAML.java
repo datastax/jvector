@@ -32,9 +32,12 @@ import java.util.stream.Collectors;
  */
 public class BenchYAML {
     public static void main(String[] args) throws IOException {
+        // args is one of:
+        // - a list of regexes, possibly needing to be split by whitespace.
+        // - a list of YAML files
+
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 
-        // args is list of regexes, possibly needing to be split by whitespace.
         // generate a regex that matches any regex in args, or if args is empty/null, match everything
         var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
         // compile regex and do substring matching using find
@@ -52,7 +55,7 @@ public class BenchYAML {
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
-                MultiConfig config = MultiConfig.getConfig(datasetName);
+                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
 
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                         config.construction.neighborOverflow, config.construction.addHierarchy,
@@ -61,6 +64,7 @@ public class BenchYAML {
             }
         }
 
+        // get the list of YAML files from args
         List<String> configNames = Arrays.stream(args).filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
 
         if (!configNames.isEmpty()) {
