@@ -25,7 +25,7 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 
 public class MultiConfig {
-    private static final String defaultDirectory = "./jvector-examples/yaml-examples/";
+    private static final String defaultDirectory = "./jvector-examples/yaml-configs/";
 
     private int version;
     public String dataset;

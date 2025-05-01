@@ -12,4 +12,4 @@ src/assembly/mrjar.xml
 src/assembly/sourcesjar.xml
 src/main/java/io/github/jbellis/jvector/vector/cnative/*
 src/main/resources/log4j2.xml
-jvector-examples/yaml-examples/*
+jvector-examples/yaml-configs/*

@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 public class DatasetCollection {
-    private static final String defaultFile = "./jvector-examples/yaml-examples/datasets.yml";
+    private static final String defaultFile = "./jvector-examples/yaml-configs/datasets.yml";
 
     public final Map<String, List<String>> datasetNames;
 
