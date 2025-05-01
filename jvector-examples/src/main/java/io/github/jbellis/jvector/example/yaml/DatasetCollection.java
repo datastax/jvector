@@ -9,23 +9,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class Datasets {
+public class DatasetCollection {
     private static final String defaultFile = "./jvector-examples/yaml-examples/datasets.yml";
 
     public final Map<String, List<String>> datasetNames;
 
-    private Datasets(Map<String, List<String>> datasetNames) {
+    private DatasetCollection(Map<String, List<String>> datasetNames) {
         this.datasetNames = datasetNames;
     }
 
-    public static Datasets load() throws IOException  {
+    public static DatasetCollection load() throws IOException  {
         return load(defaultFile);
     }
 
-    public static Datasets load(String file) throws IOException  {
+    public static DatasetCollection load(String file) throws IOException  {
         InputStream inputStream = new FileInputStream(file);
         Yaml yaml = new Yaml();
-        return new Datasets(yaml.load(inputStream));
+        return new DatasetCollection(yaml.load(inputStream));
     }
 
     public List<String> getAll() {
