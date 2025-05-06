@@ -39,7 +39,7 @@ public class VamanaDiversityProvider implements DiversityProvider {
 
     /**
      * Update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
-     * It assumes that the i-th neighbor with 0 <= i < diverseBefore is already diverse.
+     * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
     public double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected) {
