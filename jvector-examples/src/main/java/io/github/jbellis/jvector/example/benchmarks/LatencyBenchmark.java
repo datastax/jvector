@@ -28,22 +28,27 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * and counts correct top‐K results.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
-    static private final String DEFAULT_FORMAT = ".3f";
+    private static final String DEFAULT_FORMAT = ".3f";
 
-    private final boolean computeAvgLatency;
-    private final boolean computeLatencySTD;
-    private final boolean computeP999Latency;
-    private final String formatAvgLatency;
-    private final String formatLatencySTD;
-    private final String formatP999Latency;
+    private boolean computeAvgLatency;
+    private boolean computeLatencySTD;
+    private boolean computeP999Latency;
+    private String formatAvgLatency;
+    private String formatLatencySTD;
+    private String formatP999Latency;
 
     private static volatile long SINK;
 
-    public LatencyBenchmark(boolean computeAvgLatency, boolean computeLatencySTD, boolean computeP999Latency,
+    public static LatencyBenchmark createDefault() {
+        return new LatencyBenchmark(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public static LatencyBenchmark createEmpty() {
+        return new LatencyBenchmark(false, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    private LatencyBenchmark(boolean computeAvgLatency, boolean computeLatencySTD, boolean computeP999Latency,
                             String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
-        if (!(computeAvgLatency || computeLatencySTD || computeP999Latency)) {
-            throw new IllegalArgumentException("At least one parameter must be set to true");
-        }
         this.computeAvgLatency = computeAvgLatency;
         this.computeLatencySTD = computeLatencySTD;
         this.computeP999Latency = computeP999Latency;
@@ -52,12 +57,34 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         this.formatP999Latency = formatP999Latency;
     }
 
-    public LatencyBenchmark() {
-        this(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    public LatencyBenchmark displayAvgLatency() {
+        return displayAvgLatency(DEFAULT_FORMAT);
     }
 
-    public LatencyBenchmark(String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
-        this(true, true, true, formatAvgLatency, formatLatencySTD, formatP999Latency);
+    public LatencyBenchmark displayAvgLatency(String format) {
+        this.computeAvgLatency = true;
+        this.formatAvgLatency = format;
+        return this;
+    }
+
+    public LatencyBenchmark displayLatencySTD() {
+        return displayLatencySTD(DEFAULT_FORMAT);
+    }
+
+    public LatencyBenchmark displayLatencySTD(String format) {
+        this.computeLatencySTD = true;
+        this.formatLatencySTD = format;
+        return this;
+    }
+
+    public LatencyBenchmark displayP999Latency() {
+        return displayP999Latency(DEFAULT_FORMAT);
+    }
+
+    public LatencyBenchmark displayP999Latency(String format) {
+        this.computeP999Latency = true;
+        this.formatP999Latency = format;
+        return this;
     }
 
     @Override
@@ -72,6 +99,10 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+
+        if (!(computeAvgLatency || computeLatencySTD || computeP999Latency)) {
+            throw new IllegalArgumentException("At least one parameter must be set to true");
+        }
 
         int totalQueries = cs.getDataSet().queryVectors.size();
         double mean = 0.0;

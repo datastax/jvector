@@ -25,17 +25,22 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures average execution time over N runs through all queries in parallel.
  */
 public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
-    static private final String DEFAULT_FORMAT = ".1f";
+    private static final String DEFAULT_FORMAT = ".1f";
 
     private static volatile long SINK;
-    private final String format;
+    private String format;
 
-    public ExecutionTimeBenchmark(String format) {
+    public static ExecutionTimeBenchmark createDefault() {
+        return new ExecutionTimeBenchmark(DEFAULT_FORMAT);
+    }
+
+    private ExecutionTimeBenchmark(String format) {
         this.format = format;
     }
 
-    public ExecutionTimeBenchmark() {
-        this.format = DEFAULT_FORMAT;
+    public ExecutionTimeBenchmark setFormat(String format) {
+        this.format = format;
+        return this;
     }
 
     @Override

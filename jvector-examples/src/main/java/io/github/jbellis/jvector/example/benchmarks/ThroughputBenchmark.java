@@ -27,22 +27,27 @@ import io.github.jbellis.jvector.graph.SearchResult;
  * Measures throughput (queries/sec) with an optional warmup phase.
  */
 public class ThroughputBenchmark extends AbstractQueryBenchmark {
-    static private final String DEFAULT_FORMAT = ".1f";
+    private static final String DEFAULT_FORMAT = ".1f";
 
     private static volatile long SINK;
 
     private final int warmupRuns;
     private final double warmupRatio;
-    private final String format;
+    private String format;
 
-    public ThroughputBenchmark(int warmupRuns, double warmupRatio, String format) {
+    public static ThroughputBenchmark createDefault(int warmupRuns, double warmupRatio) {
+        return new ThroughputBenchmark(warmupRuns, warmupRatio, DEFAULT_FORMAT);
+    }
+
+    private ThroughputBenchmark(int warmupRuns, double warmupRatio, String format) {
         this.warmupRuns = warmupRuns;
         this.warmupRatio = warmupRatio;
         this.format = format;
     }
 
-    public ThroughputBenchmark(int warmupRuns, double warmupRatio) {
-        this(warmupRuns, warmupRatio, DEFAULT_FORMAT);
+    public ThroughputBenchmark setFormat(String format) {
+        this.format = format;
+        return this;
     }
 
     @Override
