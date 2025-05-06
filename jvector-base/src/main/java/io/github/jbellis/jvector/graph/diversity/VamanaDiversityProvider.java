@@ -73,7 +73,11 @@ public class VamanaDiversityProvider implements DiversityProvider {
                 shortEdges = nSelected / (float) maxDegree;
             }
 
-            currentAlpha *= alpha;
+            if (alpha > 1) {
+                currentAlpha *= alpha;
+            } else {
+                currentAlpha = alpha + 1;
+            }
         }
         return shortEdges;
     }
