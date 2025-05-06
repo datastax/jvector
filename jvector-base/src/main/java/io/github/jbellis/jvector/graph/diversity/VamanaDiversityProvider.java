@@ -16,21 +16,33 @@
 
 package io.github.jbellis.jvector.graph.diversity;
 
-import io.github.jbellis.jvector.graph.ConcurrentNeighborMap;
 import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 
-public class VamanaDiversityProvider {
+public class VamanaDiversityProvider implements DiversityProvider {
+    /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
+    public final float alpha;
+
+    /** used to compute diversity */
+    public final BuildScoreProvider scoreProvider;
+
+
+    public VamanaDiversityProvider(BuildScoreProvider scoreProvider, float alpha) {
+        this.scoreProvider = scoreProvider;
+        this.alpha = alpha;
+    }
+
     /**
      * update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
-    public static double retainDiverse(ConcurrentNeighborMap map, NodeArray neighbors, int diverseBefore, BitSet selected) {
-        for (int i = 0; i < min(diverseBefore, map.maxDegree); i++) {
+    public double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected) {
+        for (int i = 0; i < min(diverseBefore, maxDegree); i++) {
             selected.set(i);
         }
 
@@ -39,15 +51,15 @@ public class VamanaDiversityProvider {
         // add diverse candidates, gradually increasing alpha to the threshold
         // (so that the nearest candidates are prioritized)
         float currentAlpha = 1.0f;
-        while (currentAlpha <= map.alpha + 1E-6 && nSelected < map.maxDegree) {
-            for (int i = diverseBefore; i < neighbors.size() && nSelected < map.maxDegree; i++) {
+        while (currentAlpha <= alpha + 1E-6 && nSelected < maxDegree) {
+            for (int i = diverseBefore; i < neighbors.size() && nSelected < maxDegree; i++) {
                 if (selected.get(i)) {
                     continue;
                 }
 
                 int cNode = neighbors.getNode(i);
                 float cScore = neighbors.getScore(i);
-                var sf = map.scoreProvider.diversityProviderFor(cNode).scoreFunction();
+                var sf = scoreProvider.diversityProviderFor(cNode).scoreFunction();
                 if (isDiverse(cNode, cScore, neighbors, sf, selected, currentAlpha)) {
                     selected.set(i);
                     nSelected++;
@@ -57,10 +69,10 @@ public class VamanaDiversityProvider {
             if (currentAlpha == 1.0f) {
                 // this isn't threadsafe, but (for now) we only care about the result after calling cleanup(),
                 // when we don't have to worry about concurrent changes
-                shortEdges = nSelected / (float) map.maxDegree;
+                shortEdges = nSelected / (float) maxDegree;
             }
 
-            currentAlpha *= map.alpha;
+            currentAlpha *= alpha;
         }
         return shortEdges;
     }

@@ -17,14 +17,13 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.util.IntMap;
 
-import static io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider.retainDiverse;
 import static java.lang.Math.min;
 
 /**
@@ -33,26 +32,23 @@ import static java.lang.Math.min;
 public class ConcurrentNeighborMap {
     final IntMap<Neighbors> neighbors;
 
-    /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
-    public final float alpha;
-
     /** used to compute diversity */
-    public final BuildScoreProvider scoreProvider;
+    protected final DiversityProvider diversityProvider;
 
     /** the maximum number of neighbors desired per node */
     public final int maxDegree;
+
     /** the maximum number of neighbors a node can have temporarily during construction */
     public final int maxOverflowDegree;
 
-    public ConcurrentNeighborMap(BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
-        this(new DenseIntMap<>(1024), scoreProvider, maxDegree, maxOverflowDegree, alpha);
+    public ConcurrentNeighborMap(DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
+        this(new DenseIntMap<>(1024), diversityProvider, maxDegree, maxOverflowDegree);
     }
 
-    public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
+    public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
         assert maxDegree <= maxOverflowDegree : String.format("maxDegree %d exceeds maxOverflowDegree %d", maxDegree, maxOverflowDegree);
         this.neighbors = neighbors;
-        this.alpha = alpha;
-        this.scoreProvider = scoreProvider;
+        this.diversityProvider = diversityProvider;
         this.maxDegree = maxDegree;
         this.maxOverflowDegree = maxOverflowDegree;
     }
@@ -289,7 +285,7 @@ public class ConcurrentNeighborMap {
          */
         private double retainDiverseInternal(NodeArray neighbors, int diverseBefore, ConcurrentNeighborMap map) {
             BitSet selected = new FixedBitSet(neighbors.size());
-            double shortEdges = retainDiverse(map, neighbors, diverseBefore, selected);
+            double shortEdges = map.diversityProvider.retainDiverse(neighbors, map.maxDegree, diverseBefore, selected);
             neighbors.retain(selected);
             return shortEdges;
         }
