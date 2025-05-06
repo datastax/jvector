@@ -138,9 +138,11 @@ public interface BuildScoreProvider {
      * with reranking performed using RandomAccessVectorValues (which is intended to be
      * InlineVectorValues for building incrementally, but should technically
      * work with any RAVV implementation).
+     * This class is not thread safe, we should never publish its results to another thread.
      */
     static BuildScoreProvider pqBuildScoreProvider(VectorSimilarityFunction vsf, PQVectors pqv) {
         int dimension = pqv.getOriginalSize() / Float.BYTES;
+        final ThreadLocal<VectorFloat<?>> reusableVector = ThreadLocal.withInitial(() -> vts.createFloatVector(dimension));;
 
         return new BuildScoreProvider() {
             @Override
@@ -153,7 +155,7 @@ public interface BuildScoreProvider {
                 // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
-                VectorFloat<?> v1 = vts.createFloatVector(dimension);
+                VectorFloat<?> v1 = reusableVector.get();
                 pqv.getCompressor().decode(pqv.get(node1), v1);
                 var asf = pqv.scoreFunctionFor(v1, vsf); // not precomputed!
                 return new SearchScoreProvider(asf);
@@ -161,7 +163,7 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                VectorFloat<?> decoded = vts.createFloatVector(dimension);
+                VectorFloat<?> decoded = reusableVector.get();
                 pqv.getCompressor().decode(pqv.get(node1), decoded);
                 return searchProviderFor(decoded);
             }

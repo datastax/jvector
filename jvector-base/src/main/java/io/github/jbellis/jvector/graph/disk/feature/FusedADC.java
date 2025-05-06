@@ -103,15 +103,15 @@ public class FusedADC implements Feature {
         var state = (FusedADC.State) state_;
         var pqv = state.pqVectors;
 
-        var neighbors = state.view.getNeighborsIterator(0, state.nodeId); // TODO
+        var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
         int n = 0;
-        var neighborSize = neighbors.size();
         compressedNeighbors.zero();
-        for (; n < neighborSize; n++) {
+        while (neighbors.hasNext()) {
             var compressed = pqv.get(neighbors.nextInt());
             for (int j = 0; j < pqv.getCompressedSize(); j++) {
                 compressedNeighbors.set(j * maxDegree + n, compressed.get(j));
             }
+            n++;
         }
 
         vectorTypeSupport.writeByteSequence(out, compressedNeighbors);

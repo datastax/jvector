@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.AverageTime)
@@ -37,6 +38,13 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class StaticSetVectorsBenchmark extends AbstractVectorsBenchmark {
     private static final Logger log = LoggerFactory.getLogger(StaticSetVectorsBenchmark.class);
+    private RandomAccessVectorValues ravv;
+    private List<VectorFloat<?>> baseVectors;
+    private List<VectorFloat<?>> queryVectors;
+    private List<List<Integer>> groundTruth;
+    private GraphIndexBuilder graphIndexBuilder;
+    private GraphIndex graphIndex;
+    int originalDimension;
 
     @Setup
     public void setup() throws IOException {

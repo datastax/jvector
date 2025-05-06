@@ -96,7 +96,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
     void close() throws IOException;
 
     /**
-     * @return The maximum (coarser) level with that contains a vector in the graph.
+     * @return The maximum (coarser) level that contains a vector in the graph.
      */
     int getMaxLevel();
 

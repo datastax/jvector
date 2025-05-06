@@ -1,8 +1,10 @@
 .github/workflows/unit-tests.yaml
+.github/workflows/tag-release.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md
 UPGRADING.md
+CHANGELOG.md
 rat-excludes.txt
 pom.xml
 src/main/assembly/test-jar-with-dependencies.xml
