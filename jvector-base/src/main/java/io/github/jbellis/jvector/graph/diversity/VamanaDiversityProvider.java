@@ -31,7 +31,7 @@ public class VamanaDiversityProvider implements DiversityProvider {
     /** used to compute diversity */
     public final BuildScoreProvider scoreProvider;
 
-
+    /** Create a new diversity provider */
     public VamanaDiversityProvider(BuildScoreProvider scoreProvider, float alpha) {
         this.scoreProvider = scoreProvider;
         this.alpha = alpha;
