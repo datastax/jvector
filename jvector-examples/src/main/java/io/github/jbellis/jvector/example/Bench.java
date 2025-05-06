@@ -19,9 +19,8 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetCreator;
-import io.github.jbellis.jvector.example.util.DownloadHelper;
-import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -29,6 +28,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -44,8 +44,12 @@ public class Bench {
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = List.of(10, 100);
-        var overqueryGrid = List.of(1.0, 2.0, 5.0); // rerankK = oq * topK
+        var topKGrid = Map.of(
+                10, // topK
+                List.of(1.0, 2.0, 5.0, 10.0), // oq
+                100, // topK
+                List.of(1.0, 2.0) // oq
+        ); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(true); // List.of(false, true);
@@ -76,60 +80,17 @@ public class Bench {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
-        var coreFiles = List.of(
-                "ada002-100k",
-                "cohere-english-v3-100k",
-                "openai-v3-small-100k",
-                "nv-qa-v4-100k",
-                "colbert-1M",
-                "gecko-100k"
-        );
-        executeNw(coreFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, overqueryGrid, usePruningGrid);
-
-        var extraFiles = List.of(
-                "openai-v3-large-3072-100k",
-                "openai-v3-large-1536-100k",
-                "e5-small-v2-100k",
-                "e5-base-v2-100k",
-                "e5-large-v2-100k");
-        executeNw(extraFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, overqueryGrid, usePruningGrid);
-
-        // smaller vectors from ann-benchmarks
-        var hdf5Files = List.of(
-                // large files not yet supported
-                // "hdf5/deep-image-96-angular.hdf5",
-                // "hdf5/gist-960-euclidean.hdf5",
-                "glove-25-angular.hdf5",
-                "glove-50-angular.hdf5",
-                "lastfm-64-dot.hdf5",
-                "glove-100-angular.hdf5",
-                "glove-200-angular.hdf5",
-                "nytimes-256-angular.hdf5",
-                "sift-128-euclidean.hdf5");
-        for (var f : hdf5Files) {
-            if (pattern.matcher(f).find()) {
-                DownloadHelper.maybeDownloadHdf5(f);
-                Grid.runAll(Hdf5Loader.load(f), mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
-            }
-        }
-
-        // 2D grid, built and calculated at runtime
-//        if (pattern.matcher("2dgrid").find()) {
-//            searchCompression = Arrays.asList(__ -> CompressorParameters.NONE,
-//                                              ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED));
-//            buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
-//            var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
-//            Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, overqueryGrid, usePruningGrid);
-//        }
+        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
     }
 
-    private static void executeNw(List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Integer> topKGrid, List<Double> efSearchGrid, List<Boolean> usePruningGrid) throws IOException {
-        for (var nwDatasetName : coreFiles) {
-            if (pattern.matcher(nwDatasetName).find()) {
-                var mfd = DownloadHelper.maybeDownloadFvecs(nwDatasetName);
-                Grid.runAll(mfd.load(), mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, topKGrid, efSearchGrid, usePruningGrid);
-            }
+    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+        var datasetCollection = DatasetCollection.load();
+        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        System.out.println("Executing the following datasets: " + datasetNames);
+
+        for (var datasetName : datasetNames) {
+            DataSet ds = DataSetLoader.loadDataSet(datasetName);
+            Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
     }
 }
