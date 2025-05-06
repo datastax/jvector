@@ -36,6 +36,7 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -52,6 +53,8 @@ import static java.lang.Math.sqrt;
  */
 public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, Accountable {
     private static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
+
+    protected static final Logger LOG = Logger.getLogger(ProductQuantization.class.getName());
 
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     static final int DEFAULT_CLUSTERS = 256; // number of clusters per subspace = one byte's worth
@@ -114,6 +117,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                                               ForkJoinPool simdExecutor,
                                               ForkJoinPool parallelExecutor)
     {
+        checkClusterCount(clusterCount);
+
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectors = extractTrainingVectors(ravv, parallelExecutor);
 
@@ -190,6 +195,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     ProductQuantization(VectorFloat<?>[] codebooks, int clusterCount, int[][] subvectorSizesAndOffsets, VectorFloat<?> globalCentroid, float anisotropicThreshold) {
+        checkClusterCount(clusterCount);
+
         this.codebooks = codebooks;
         this.globalCentroid = globalCentroid;
         this.M = codebooks.length;
@@ -717,5 +724,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                              clusterCount,
                              anisotropicThreshold,
                              KMeansPlusPlusClusterer.computeParallelCostMultiplier(anisotropicThreshold, originalDimension));
+    }
+
+    private static void checkClusterCount(int clusterCount) {
+        if (clusterCount > 256) {
+            throw new IllegalArgumentException("Too many PQ clusters: " + clusterCount + " > 256");
+        }
+        if (clusterCount < 256) {
+            LOG.warning("Using less than 256 PQ clusters will not reduce the memory footprint.");
+        }
     }
 }
