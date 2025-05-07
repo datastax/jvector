@@ -77,12 +77,10 @@ public class DataSet {
         this.queryVectors = queryVectors;
         this.groundTruth = groundTruth;
 
+        // Base vectors allowed to be empty due to lazy loading.
         if (!baseVectors.isEmpty()) {
             System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
                     name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
-        } else {
-            System.out.format("%n%s: 0 base and %d query vectors created%n",
-                    name, queryVectors.size());
         }
     }
 

@@ -30,6 +30,7 @@ public class LazyFvecsDataSet extends DataSet {
         this.vectorCount = vectorCount;
         this.dimension = dimension;
         this.vectorTypeSupport = vectorTypeSupport;
+        System.out.format("Lazy Loading: %d base vectors of %d dims from %s%n", vectorCount, dimension, datasetFilePath);
     }
 
     /**
