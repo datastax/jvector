@@ -15,7 +15,7 @@ jobs:
   build-avx512-proto:
     concurrency:
       group: ${{ matrix.isa }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     strategy:
       matrix:
         jdk: [ 11, 20, 22]
