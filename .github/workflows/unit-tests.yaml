@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         jdk: [ 11, 20, 22]
-        isa: [ avx512f ]
+        isa: [ isa-avx512f ]
     runs-on: ${{ matrix.isa }}
     steps:
       - uses: actions/checkout@v4
