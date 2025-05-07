@@ -14,7 +14,7 @@ on:
 jobs:
   build-avx512-proto:
     concurrency:
-      group: ${{ github.ref }}-${{ github.job }}-${{ matrix.jdk }}-${{ matrix.isa }}
+      group: ${{ matrix.isa }}
       cancel-in-progress: true
     strategy:
       matrix:
