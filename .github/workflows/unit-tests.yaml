@@ -14,7 +14,7 @@ on:
 jobs:
   build-avx512-proto:
     concurrency:
-      group: ${{ matrix.isa }}
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}
       cancel-in-progress: false
     strategy:
       matrix:
