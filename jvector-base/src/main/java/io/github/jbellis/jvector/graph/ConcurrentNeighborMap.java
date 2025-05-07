@@ -17,12 +17,10 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DenseIntMap;
-import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.util.IntMap;
 
@@ -34,26 +32,23 @@ import static java.lang.Math.min;
 public class ConcurrentNeighborMap {
     final IntMap<Neighbors> neighbors;
 
-    /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
-    final float alpha;
-
     /** used to compute diversity */
-    final BuildScoreProvider scoreProvider;
+    protected final DiversityProvider diversityProvider;
 
     /** the maximum number of neighbors desired per node */
     public final int maxDegree;
+
     /** the maximum number of neighbors a node can have temporarily during construction */
     public final int maxOverflowDegree;
 
-    public ConcurrentNeighborMap(BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
-        this(new DenseIntMap<>(1024), scoreProvider, maxDegree, maxOverflowDegree, alpha);
+    public ConcurrentNeighborMap(DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
+        this(new DenseIntMap<>(1024), diversityProvider, maxDegree, maxOverflowDegree);
     }
 
-    public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, BuildScoreProvider scoreProvider, int maxDegree, int maxOverflowDegree, float alpha) {
+    public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
         assert maxDegree <= maxOverflowDegree : String.format("maxDegree %d exceeds maxOverflowDegree %d", maxDegree, maxOverflowDegree);
         this.neighbors = neighbors;
-        this.alpha = alpha;
-        this.scoreProvider = scoreProvider;
+        this.diversityProvider = diversityProvider;
         this.maxDegree = maxDegree;
         this.maxOverflowDegree = maxOverflowDegree;
     }
@@ -222,7 +217,7 @@ public class ConcurrentNeighborMap {
                 return new NeighborWithShortEdges(this, Double.NaN);
             }
             var next = copy();
-            double shortEdges = retainDiverse(next, diverseBefore, map);
+            double shortEdges = retainDiverseInternal(next, diverseBefore, map);
             next.diverseBefore = next.size();
             return new NeighborWithShortEdges(next, shortEdges);
         }
@@ -239,7 +234,7 @@ public class ConcurrentNeighborMap {
 
             // merge the remaining neighbors with the candidates and keep the diverse results
             NodeArray merged = NodeArray.merge(liveNeighbors, candidates);
-            retainDiverse(merged, 0, map);
+            retainDiverseInternal(merged, 0, map);
             return new Neighbors(nodeId, merged);
         }
 
@@ -259,10 +254,10 @@ public class ConcurrentNeighborMap {
             NodeArray merged;
             if (size() > 0) {
                 merged = NodeArray.merge(this, toMerge);
-                retainDiverse(merged, 0, map);
+                retainDiverseInternal(merged, 0, map);
             } else {
                 merged = toMerge.copy(); // still need to copy in case we lose the race
-                retainDiverse(merged, 0, map);
+                retainDiverseInternal(merged, 0, map);
             }
             // insertDiverse usually gets called with a LOT of candidates, so trim down the resulting NodeArray
             var nextNodes = merged.getArrayLength() <= map.nodeArrayLength()
@@ -288,65 +283,11 @@ public class ConcurrentNeighborMap {
          * Retain the diverse neighbors, updating `neighbors` in place
          * @return post-diversity short edges fraction
          */
-        private double retainDiverse(NodeArray neighbors, int diverseBefore, ConcurrentNeighborMap map) {
+        private double retainDiverseInternal(NodeArray neighbors, int diverseBefore, ConcurrentNeighborMap map) {
             BitSet selected = new FixedBitSet(neighbors.size());
-            for (int i = 0; i < min(diverseBefore, map.maxDegree); i++) {
-                selected.set(i);
-            }
-
-            double shortEdges = retainDiverseInternal(neighbors, diverseBefore, selected, map);
+            double shortEdges = map.diversityProvider.retainDiverse(neighbors, map.maxDegree, diverseBefore, selected);
             neighbors.retain(selected);
             return shortEdges;
-        }
-
-        /**
-         * update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
-         * @return the fraction of short edges (neighbors within alpha=1.0)
-         */
-        private double retainDiverseInternal(NodeArray neighbors, int diverseBefore, BitSet selected, ConcurrentNeighborMap map) {
-            int nSelected = diverseBefore;
-            double shortEdges = Double.NaN;
-            // add diverse candidates, gradually increasing alpha to the threshold
-            // (so that the nearest candidates are prioritized)
-            for (float a = 1.0f; a <= map.alpha + 1E-6 && nSelected < map.maxDegree; a += 0.2f) {
-                for (int i = diverseBefore; i < neighbors.size() && nSelected < map.maxDegree; i++) {
-                    if (selected.get(i)) {
-                        continue;
-                    }
-
-                    int cNode = neighbors.getNode(i);
-                    float cScore = neighbors.getScore(i);
-                    var sf = map.scoreProvider.diversityProviderFor(cNode).scoreFunction();
-                    if (isDiverse(cNode, cScore, neighbors, sf, selected, a)) {
-                        selected.set(i);
-                        nSelected++;
-                    }
-                }
-
-                if (a == 1.0f) {
-                    // this isn't threadsafe, but (for now) we only care about the result after calling cleanup(),
-                    // when we don't have to worry about concurrent changes
-                    shortEdges = nSelected / (float) map.maxDegree;
-                }
-            }
-            return shortEdges;
-        }
-
-        // is the candidate node with the given score closer to the base node than it is to any of the
-        // already-selected neighbors
-        private boolean isDiverse(int node, float score, NodeArray others, ScoreFunction sf, BitSet selected, float alpha) {
-            assert others.size() > 0;
-
-            for (int i = selected.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {
-                int otherNode = others.getNode(i);
-                if (node == otherNode) {
-                    break;
-                }
-                if (sf.similarityTo(otherNode) > score * alpha) {
-                    return false;
-                }
-            }
-            return true;
         }
 
         /**
@@ -371,7 +312,7 @@ public class ConcurrentNeighborMap {
             // we do a lot of duplicate work scanning nodes that we won't remove
             next.diverseBefore = min(insertionPoint, diverseBefore);
             if (next.size() > hardMax) {
-                retainDiverse(next, next.diverseBefore, map);
+                retainDiverseInternal(next, next.diverseBefore, map);
                 next.diverseBefore = next.size();
             }
 
