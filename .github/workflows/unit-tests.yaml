@@ -39,7 +39,8 @@ jobs:
         if: always()
         uses: test-summary/action@v2
         with:
-          paths: target/surefire-reports/TEST-*.xml
+          paths: |
+            **/target/surefire-reports/TEST-*.xml
 
 
 #  build:
