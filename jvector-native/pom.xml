@@ -42,6 +42,11 @@
                 <version>3.1.2</version>
                 <configuration>
                     <skip>false</skip>
+                    <argLine>
+                        --add-modules jdk.incubator.vector
+                        --enable-native-access=ALL-UNNAMED
+                        -Djvector.experimental.enable_native_vectorization=true
+                    </argLine>
                 </configuration>
             </plugin>
         </plugins>
