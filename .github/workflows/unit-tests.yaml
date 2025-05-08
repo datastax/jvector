@@ -35,6 +35,12 @@ jobs:
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -X -B verify
         if: matrix.jdk == '22'
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: target/surefire-reports/TEST-*.xml
+
 
 #  build:
 #    concurrency:
