@@ -44,7 +44,7 @@ final class NativeVectorUtilSupport implements VectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> a, VectorFloat<?> b) {
-         return this.squareDistance(a, 0, b, 0, a.length());
+        return this.squareDistance(a, 0, b, 0, a.length());
     }
 
     @Override
@@ -171,12 +171,12 @@ final class NativeVectorUtilSupport implements VectorUtilSupport
 
     @Override
     public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
+        ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+        ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+        float queryMagnitudeSquared, VectorFloat<?> results) {
         assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
         NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartialSums).get(), sumDelta, minDistance,
-                ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
+            ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
     }
 
     @Override
@@ -189,25 +189,25 @@ final class NativeVectorUtilSupport implements VectorUtilSupport
     @Override
     public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue) {
         return VectorSimdOps.nvqDotProduct8bit(
-                (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
-                growthRate, midpoint, minValue, maxValue
+            (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
+            growthRate, midpoint, minValue, maxValue
         );
     }
 
     @Override
     public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue) {
         return VectorSimdOps.nvqSquareDistance8bit(
-                (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
-                growthRate, midpoint, minValue, maxValue
+            (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
+            growthRate, midpoint, minValue, maxValue
         );
     }
 
     @Override
     public float[] nvqCosine8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue, VectorFloat<?> centroid) {
         return VectorSimdOps.nvqCosine8bit(
-                (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
-                growthRate, midpoint, minValue, maxValue,
-                (MemorySegmentVectorFloat) centroid
+            (MemorySegmentVectorFloat) vector, (MemorySegmentByteSequence) bytes,
+            growthRate, midpoint, minValue, maxValue,
+            (MemorySegmentVectorFloat) centroid
         );
     }
 
