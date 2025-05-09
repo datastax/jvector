@@ -75,10 +75,10 @@ class NativeVectorUtilSupportTest {
     if (requiredProvider != null) {
       System.out.println("REQUIRED PROVIDER: " + requiredProvider);
       assertEquals(
-          provider.getClass().getSimpleName(),
           requiredProvider,
-          "Provider mismatch, " + "required " + requiredProvider + ", detected " + provider.getClass()
-              .getSimpleName()
+          provider.getClass().getSimpleName(),
+          "Provider mismatch, " + "required " + requiredProvider + ", detected "
+          + provider.getClass().getSimpleName()
       );
     }
   }
