@@ -47,22 +47,42 @@ jobs:
           java-version: ${{ matrix.jdk }}
           distribution: temurin
           cache: maven
+
+      - name: Verify Panama Vector Support
+        if: matrix.jdk == '20'
+        run: |
+          # first, a coherence check on testing config, requires native vectorization
+          mvn -X -B -pl jvector-twenty -am \
+           -Dsurefire.failIfNoSpecifiedTests=false \
+           -Dtest=NativeVectorUtilSupportTest \
+           -DTest_RequireNativeVectorizationProvider=PanamaVectorizationProvider \
+           verify
+      - name: Test Panama Support (JDK 20)
+        run: |
+          # test everything keeping the native-access assertion test
+          mvn -X -B \
+          -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+          verify
+
       - name: Compile, run tests, and package (JDK 20)
         if: matrix.jdk == '20'
         run: mvn -X -B -Pjdk20 -am -pl jvector-tests test
-      - name: Compile, run tests, and package (JDK 22)
+
+      - name: Verify native-access vector support (JDK 24)
         if: matrix.jdk == '24'
         run: |
          # first, a coherence check on testing config, requires native vectorization
          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
           -Dsurefire.failIfNoSpecifiedTests=false \
           -Dtest=NativeVectorUtilSupportTest \
-          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider \
+          -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
           verify
-         # then, everything else is tested, keeping the native-access assertion test
+      - name: Compile, run tests and package (JDK 24)
+        run: |
           mvn -X -B -Punix-amd64-profile \
-           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider \
+           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
            verify
+
       - name: Test Summary
         if: always()
         uses: test-summary/action@v2
