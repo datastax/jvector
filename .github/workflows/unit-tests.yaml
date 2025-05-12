@@ -18,7 +18,7 @@ jobs:
       cancel-in-progress: false
     strategy:
       matrix:
-        jdk: [ 20, 22]
+        jdk: [ 20, 24 ]
 #        jdk: [ 24 ]
         isa: [ isa-avx512f ]
     runs-on: ${{ matrix.isa }}
