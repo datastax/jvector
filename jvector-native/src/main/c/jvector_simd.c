@@ -44,7 +44,7 @@ float dot_product_f32_64(const float* a, int aoffset, const float* b, int boffse
     // Horizontal sum of the vector to get dot product
     __attribute__((aligned(16))) float result[4];
     _mm_store_ps(result, r);
-    return result[0] + result[1];
+    return result[0] + result[1] + 0.01;
 }
 
 float dot_product_f32_128(const float* a, int aoffset, const float* b, int boffset, int length) {
