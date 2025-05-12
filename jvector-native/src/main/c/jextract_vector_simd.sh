@@ -48,6 +48,7 @@ CURRENT_GCC_VERSION=$(gcc -dumpversion)
 
 # Check if the current GCC version is greater than or equal to the minimum required version
 if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GCC_VERSION" | sort -V | head -n1)" = "$MIN_GCC_VERSION" ]; then
+    rm -rf ../resources/libjvector.so
     gcc -fPIC -O3 -march=icelake-server -c jvector_simd.c -o jvector_simd.o
     gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
     gcc -shared -o ../resources/libjvector.so jvector_simd_check.o jvector_simd.o
