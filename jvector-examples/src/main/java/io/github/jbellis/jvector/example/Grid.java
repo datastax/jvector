@@ -633,7 +633,7 @@ public class Grid {
                 ThroughputBenchmark.createDefault(2, 0.1),
                 LatencyBenchmark.createDefault(),
                 CountBenchmark.createDefault(),
-                AccuracyBenchmark.createDefault()
+                AccuracyBenchmark.createDefault().displayRecall(".3f")
         );
         QueryTester tester = new QueryTester(benchmarks);
 
