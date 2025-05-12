@@ -156,7 +156,7 @@ public interface BuildScoreProvider {
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
                 VectorFloat<?> v1 = reusableVector.get();
-                pqv.getCompressor().decode(pqv.get(node1), v1);
+                pqv.decode(node1, v1);
                 var asf = pqv.scoreFunctionFor(v1, vsf); // not precomputed!
                 return new SearchScoreProvider(asf);
             }
@@ -164,7 +164,7 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
                 VectorFloat<?> decoded = reusableVector.get();
-                pqv.getCompressor().decode(pqv.get(node1), decoded);
+                pqv.decode(node1, decoded);
                 return searchProviderFor(decoded);
             }
 

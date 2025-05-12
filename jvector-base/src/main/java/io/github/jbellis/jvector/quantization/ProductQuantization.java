@@ -429,7 +429,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * Decodes the quantized representation (ByteSequence) to its approximate original vector.
      */
     public void decode(ByteSequence<?> encoded, VectorFloat<?> target) {
-        decodeCentered(encoded, target);
+        decode(encoded, 0, target);
+    }
+
+    /**
+     * Decodes the quantized representation (ByteSequence) to its approximate original vector.
+     */
+    public void decode(ByteSequence<?> encoded, int encodedOffset, VectorFloat<?> target) {
+        decodeCentered(encoded, encodedOffset, target);
 
         if (globalCentroid != null) {
             // Add back the global centroid to get the approximate original vector.
@@ -440,9 +447,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     /**
      * Decodes the quantized representation (ByteSequence) to its approximate original vector, relative to the global centroid.
      */
-    void decodeCentered(ByteSequence<?> encoded, VectorFloat<?> target) {
+    void decodeCentered(ByteSequence<?> encoded, int encodedOffset, VectorFloat<?> target) {
         for (int m = 0; m < M; m++) {
-            int centroidIndex = Byte.toUnsignedInt(encoded.get(m));
+            int centroidIndex = Byte.toUnsignedInt(encoded.get(m + encodedOffset));
             target.copyFrom(codebooks[m], centroidIndex * subvectorSizesAndOffsets[m][0], subvectorSizesAndOffsets[m][1], subvectorSizesAndOffsets[m][0]);
         }
     }

@@ -76,6 +76,10 @@ public class TestProductQuantization extends RandomizedTest {
         for (int i = 0; i < vectors.size(); i++) {
             pq.decode(cv.get(i), decodedScratch);
             assertEquals(vectors.get(i), decodedScratch);
+            // Now confirm with the other decode method
+            decodedScratch.zero();
+            pq.decode(cv.getChunk(i), cv.getOffsetInChunk(i), decodedScratch);
+            assertEquals(vectors.get(i), decodedScratch);
         }
     }
 

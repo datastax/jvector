@@ -351,6 +351,17 @@ public abstract class PQVectors implements CompressedVectors {
         return pq;
     }
 
+    /**
+     * Decodes the vector at the given ordinal into the given target vector. More efficient than getting the compressor
+     * via {@link #getCompressor()} and then calling {@link ProductQuantization#decode(ByteSequence, VectorFloat)}.
+     *
+     * @param nodeId the ordinal of the vector to decode
+     * @param target the target vector to decode into
+     */
+    public void decode(int nodeId, VectorFloat<?> target) {
+        pq.decode(getChunk(nodeId), getOffsetInChunk(nodeId), target);
+    }
+
     @Override
     public long ramBytesUsed() {
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
