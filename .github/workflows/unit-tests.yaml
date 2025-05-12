@@ -56,8 +56,8 @@ jobs:
           -Dtest=NativeVectorUtilSupportTest \
           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
           verify
-         # then, everything else is tested
-          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
+         # then, everything else is tested, keeping the native-access assertion test
+          mvn -X -B -Punix-amd64-profile \
            -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
            verify
       - name: Test Summary
