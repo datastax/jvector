@@ -37,6 +37,11 @@ jobs:
           fi ; done
           printf "%s\n" ${output}
           if [[ " $output " == *"FAIL"* ]] ; then exit 2 ; fi
+      - name: Set up GCC
+        uses: egor-tensin/setup-gcc@v1
+        with:
+          version: latest
+          platform: x64
       - uses: actions/checkout@v4
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -85,6 +90,11 @@ jobs:
           java-version: ${{ matrix.jdk }}
           distribution: temurin
           cache: maven
+      - name: Set up GCC
+        uses: egor-tensin/setup-gcc@v1
+        with:
+          version: latest
+          platform: x64
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'
