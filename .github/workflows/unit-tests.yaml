@@ -54,7 +54,7 @@ jobs:
           # first, a coherence check on testing config, requires native vectorization
           mvn -X -B -pl jvector-twenty -am \
            -Dsurefire.failIfNoSpecifiedTests=false \
-           -Dtest=NativeVectorUtilSupportTest \
+           -Dtest=TestVectorizationProvider \
            -DTest_RequireNativeVectorizationProvider=PanamaVectorizationProvider \
            verify
       - name: Test Panama Support (JDK 20)
@@ -74,7 +74,7 @@ jobs:
          # first, a coherence check on testing config, requires native vectorization
          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
           -Dsurefire.failIfNoSpecifiedTests=false \
-          -Dtest=NativeVectorUtilSupportTest \
+          -Dtest=TestVectorizationProvider \
           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
           verify
       - name: Compile, run tests and package (JDK 24)
