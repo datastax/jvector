@@ -27,6 +27,7 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.lang.Runtime.Version;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -101,7 +102,10 @@ public abstract class VectorizationProvider {
       // this is an experimental feature subject to change
       if (Boolean.getBoolean("jvector.experimental.enable_native_vectorization")) {
         try {
-          var provider = (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider").getConstructor().newInstance();
+          Class<?> clazz = Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider");
+          Constructor<?> ctor = clazz.getConstructor();
+          Object instance = ctor.newInstance();
+          var provider = (VectorizationProvider) instance;
           LOG.info("Native Vector API enabled. Using NativeVectorizationProvider.");
           return provider;
         } catch (UnsupportedOperationException uoe) {
