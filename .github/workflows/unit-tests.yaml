@@ -51,11 +51,15 @@ jobs:
         if: matrix.jdk == '22'
         run: |
          # first, a coherence check on testing config, requires native vectorization
-         mvn -X -B -Dsurefire.failIfNoSpecifiedTests=false -Dtest=NativeVectorUtilSupportTest \
+         mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
+          -Dsurefire.failIfNoSpecifiedTests=false \
+          -Dtest=NativeVectorUtilSupportTest \
           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
           verify
          # then, everything else is tested
-         mvn -X -B verify
+          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
+           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+           verify
       - name: Test Summary
         if: always()
         uses: test-summary/action@v2
