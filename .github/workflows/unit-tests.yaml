@@ -57,11 +57,11 @@ jobs:
          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
           -Dsurefire.failIfNoSpecifiedTests=false \
           -Dtest=NativeVectorUtilSupportTest \
-          -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider \
           verify
          # then, everything else is tested, keeping the native-access assertion test
           mvn -X -B -Punix-amd64-profile \
-           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider \
            verify
       - name: Test Summary
         if: always()

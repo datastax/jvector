@@ -24,15 +24,11 @@
 
 package io.github.jbellis.jvector.vector;
 
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.jupiter.api.Test;
 
-import java.util.Properties;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-class NativeVectorUtilSupportTest {
+class PanamaVectorUtilSupportTest {
 
   public static final String REQUIRE_SPECIFIC_VECTORIZATION_PROVIDER =
       "Test_RequireSpecificVectorizationProvider";
@@ -58,7 +54,7 @@ class NativeVectorUtilSupportTest {
   /// will fail if the detected implementation doesn't match the {@link Class#getSimpleName()}
   ///  value.
   @Test
-  void testVectorTypeSupportIsNative() {
+  void testVectorSupportTypeisPanema() {
     VectorizationProvider provider = VectorizationProvider.getInstance();
     System.out.println("PROVIDER: using " + provider.getClass().getSimpleName());
 
