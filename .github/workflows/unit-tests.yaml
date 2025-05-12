@@ -51,36 +51,28 @@ jobs:
       - name: Verify Panama Vector Support
         if: matrix.jdk == '20'
         run: |
-          # first, a coherence check on testing config, requires native vectorization
-          mvn -X -B -pl jvector-twenty -am \
+          mvn -X -B -Pjdk20 -pl jvector-tests -am \
            -Dsurefire.failIfNoSpecifiedTests=false \
            -Dtest=TestVectorizationProvider \
-           -DTest_RequireNativeVectorizationProvider=PanamaVectorizationProvider \
+           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider \
            verify
       - name: Test Panama Support (JDK 20)
         run: |
-          # test everything keeping the native-access assertion test
-          mvn -X -B \
-          -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
-          verify
-
-      - name: Compile, run tests, and package (JDK 20)
-        if: matrix.jdk == '20'
-        run: mvn -X -B -Pjdk20 -am -pl jvector-tests test
+          mvn -X -B -Pjdk20 -pl jvector-tests test -am \
+          -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
       - name: Verify native-access vector support (JDK 24)
         if: matrix.jdk == '24'
-        run: |
-         # first, a coherence check on testing config, requires native vectorization
-         mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
-          -Dsurefire.failIfNoSpecifiedTests=false \
-          -Dtest=TestVectorizationProvider \
-          -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+        run: >-
+         mvn -X -B -Punix-amd64-profile -pl jvector-native -am
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
           verify
       - name: Compile, run tests and package (JDK 24)
         run: |
           mvn -X -B -Punix-amd64-profile \
-           -DTest_RequireNativeVectorizationProvider=NativeVectorizationProvider \
+           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider \
            verify
 
       - name: Test Summary
