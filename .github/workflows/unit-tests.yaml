@@ -18,8 +18,8 @@ jobs:
       cancel-in-progress: false
     strategy:
       matrix:
-#        jdk: [ 20, 22]
-        jdk: [ 22]
+        jdk: [ 20, 24 ]
+#        jdk: [ 24 ]
         isa: [ isa-avx512f ]
     runs-on: ${{ matrix.isa }}
     steps:
@@ -38,10 +38,8 @@ jobs:
           printf "%s\n" ${output}
           if [[ " $output " == *"FAIL"* ]] ; then exit 2 ; fi
       - name: Set up GCC
-        uses: egor-tensin/setup-gcc@v1
-        with:
-          version: latest
-          platform: x64
+        run: |
+          sudo apt install -y gcc
       - uses: actions/checkout@v4
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -53,7 +51,7 @@ jobs:
         if: matrix.jdk == '20'
         run: mvn -X -B -Pjdk20 -am -pl jvector-tests test
       - name: Compile, run tests, and package (JDK 22)
-        if: matrix.jdk == '22'
+        if: matrix.jdk == '24'
         run: |
          # first, a coherence check on testing config, requires native vectorization
          mvn -X -B -Punix-amd64-profile -pl jvector-native -am \
@@ -91,10 +89,9 @@ jobs:
           distribution: temurin
           cache: maven
       - name: Set up GCC
-        uses: egor-tensin/setup-gcc@v1
-        with:
-          version: latest
-          platform: x64
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt install -y gcc
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'
