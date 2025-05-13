@@ -167,7 +167,7 @@ public class NodeArray {
      * Returns the index at which the given node should be inserted to maintain sorted order,
      * or -1 if the node already exists in the array (with the same score).
      */
-    public int insertionPoint(int newNode, float newScore) {
+    int insertionPoint(int newNode, float newScore) {
         int insertionPoint = descSortFindRightMostInsertionPoint(newScore);
         return duplicateExistsNear(insertionPoint, newNode, newScore) ? -1 : insertionPoint;
     }
@@ -193,7 +193,7 @@ public class NodeArray {
     /**
      * Add a new node to the NodeArray into the specified insertion point.
      */
-    public void insertAt(int insertionPoint, int newNode, float newScore) {
+    void insertAt(int insertionPoint, int newNode, float newScore) {
         if (size == nodes.length) {
             growArrays();
         }
