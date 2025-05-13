@@ -163,6 +163,10 @@ public class NodeArray {
         ++size;
     }
 
+    /**
+     * Returns the index at which the given node should be inserted to maintain sorted order,
+     * or -1 if the node already exists in the array (with the same score).
+     */
     public int insertionPoint(int newNode, float newScore) {
         int insertionPoint = descSortFindRightMostInsertionPoint(newScore);
         return duplicateExistsNear(insertionPoint, newNode, newScore) ? -1 : insertionPoint;
@@ -183,22 +187,20 @@ public class NodeArray {
             return -1;
         }
 
-        return insertSortedInternal(insertionPoint, newNode, newScore);
+        return insertInternal(insertionPoint, newNode, newScore);
     }
 
     /**
      * Add a new node to the NodeArray into the specified insertion point.
-     *
-     * @return the insertion point of the new node
      */
-    public int insertSorted(int insertionPoint, int newNode, float newScore) {
+    public void insertAt(int insertionPoint, int newNode, float newScore) {
         if (size == nodes.length) {
             growArrays();
         }
-        return insertSortedInternal(insertionPoint, newNode, newScore);
+        insertInternal(insertionPoint, newNode, newScore);
     }
 
-    private int insertSortedInternal(int insertionPoint, int newNode, float newScore) {
+    private int insertInternal(int insertionPoint, int newNode, float newScore) {
         System.arraycopy(nodes, insertionPoint, nodes, insertionPoint + 1, size - insertionPoint);
         System.arraycopy(scores, insertionPoint, scores, insertionPoint + 1, size - insertionPoint);
         nodes[insertionPoint] = newNode;
