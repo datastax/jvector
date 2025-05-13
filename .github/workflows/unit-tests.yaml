@@ -51,13 +51,13 @@ jobs:
       - name: Verify Panama Vector Support
         if: matrix.jdk == '20'
         run: >-
-          mvn -X -B -Pjdk20 -pl jvector-tests -am verify
+          mvn -X -B -Pjdk20 -pl jvector-tests -am test
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dtest=TestVectorizationProvider
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
       - name: Test Panama Support (JDK 20)
         run: >-
-          mvn -X -B -Pjdk20 -pl jvector-tests test -am verify
+          mvn -X -B -Pjdk20 -pl jvector-tests test -am test
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
       - name: Verify native-access vector support (JDK 24)
