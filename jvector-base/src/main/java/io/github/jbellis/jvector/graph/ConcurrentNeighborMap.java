@@ -57,7 +57,7 @@ public class ConcurrentNeighborMap {
         while (true) {
             var old = neighbors.get(fromId);
             var next = old.insert(toId, score, overflow, this);
-            if (next == old || neighbors.compareAndPut(fromId, old, next)) {
+            if (next == null || neighbors.compareAndPut(fromId, old, next)) {
                 break;
             }
         }
@@ -293,6 +293,7 @@ public class ConcurrentNeighborMap {
         /**
          * Insert a new neighbor, maintaining our size cap by removing the least diverse neighbor if
          * necessary. "Overflow" is the factor by which to allow going over the size cap temporarily.
+         * @return the new Neighbors, or null if the neighbor already existed
          */
         private Neighbors insert(int neighborId, float score, float overflow, ConcurrentNeighborMap map) {
             assert neighborId != nodeId : "can't add self as neighbor at node " + nodeId;
@@ -301,12 +302,14 @@ public class ConcurrentNeighborMap {
             assert hardMax <= map.maxOverflowDegree
                     : String.format("overflow %s could exceed max overflow degree %d", overflow, map.maxOverflowDegree);
 
-            var next = copy(map.nodeArrayLength());
-            int insertionPoint = next.insertSorted(neighborId, score);
+            var insertionPoint = insertionPoint(neighborId, score);
             if (insertionPoint == -1) {
                 // "new" node already existed
-                return this;
+                return null;
             }
+
+            var next = copy(map.nodeArrayLength());
+            next.insertSorted(insertionPoint, neighborId, score);
 
             // batch up the enforcement of the max connection limit, since otherwise
             // we do a lot of duplicate work scanning nodes that we won't remove
