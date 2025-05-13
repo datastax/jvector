@@ -51,30 +51,26 @@ jobs:
       - name: Verify Panama Vector Support
         if: matrix.jdk == '20'
         run: >-
-          mvn -X -B -Pjdk20 -pl jvector-tests -am
-           -Dsurefire.failIfNoSpecifiedTests=false
-           -Dtest=TestVectorizationProvider
-           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
-           verify
+          mvn -X -B -Pjdk20 -pl jvector-tests -am verify
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+          -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
       - name: Test Panama Support (JDK 20)
         run: >-
-          mvn -X -B -Pjdk20 -pl jvector-tests test -am
+          mvn -X -B -Pjdk20 -pl jvector-tests test -am verify
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
-          verify
 
       - name: Verify native-access vector support (JDK 24)
         if: matrix.jdk == '24'
         run: >-
-         mvn -X -B -Punix-amd64-profile -pl jvector-native -am
+          mvn -X -B -Punix-amd64-profile -pl jvector-native -am verify
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dtest=TestVectorizationProvider
-          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
-          verify
       - name: Compile, run tests and package (JDK 24)
         run: >-
-          mvn -X -B -Punix-amd64-profile
-           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
-           verify
+          mvn -X -B -Punix-amd64-profile verify
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
 
       - name: Test Summary
         if: always()
