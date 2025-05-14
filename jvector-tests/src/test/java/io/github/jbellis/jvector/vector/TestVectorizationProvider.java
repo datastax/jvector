@@ -24,6 +24,8 @@ import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 
 public class TestVectorizationProvider extends RandomizedTest {
     static final boolean hasSimd = VectorizationProvider.vectorModulePresentAndReadable();
@@ -74,4 +76,45 @@ public class TestVectorizationProvider extends RandomizedTest {
             Assert.assertEquals(b.getVectorUtilSupport().sum(v3), b.getVectorUtilSupport().assembleAndSum(v2, 0, vectorTypeSupport.createByteSequence(offsets)), 0.0001);
         }
     }
+
+    public static String REQUIRE_SPECIFIC_VECTORIZATION_PROVIDER="Test_RequireSpecificVectorizationProvider";
+
+    /**
+     * To run with native-access vector support, use
+     * <pre>{@code
+     *   -ea
+     *   --add-modules jdk.incubator.vector
+     *   --enable-native-access=ALL-UNNAMED
+     *   -Djvector.experimental.enable_native_vectorization=true
+     * }</pre>
+     *
+     * To run with panama support, use
+     * <pre>{@code
+     *   --ea
+     *   --add-modules jdk.incubator.vector
+     * }</pre>
+     *
+     * If <pre>{@code -DTest_RequireSpecificVectorizationProvider=<simplename>}</pre>
+     * is provided, then this test will error out if the chosen vector support type is different.
+     */
+    @Test
+    public void testVectorSupportTypeIsExpected() {
+        VectorizationProvider provider = VectorizationProvider.getInstance();
+        System.out.println("PROVIDER: using " + provider.getClass().getSimpleName());
+
+        boolean readable = VectorizationProvider.vectorModulePresentAndReadable();
+        System.out.println("VECTOR MODULE READABLE: " + readable);
+
+        String requiredProvider = System.getProperty(REQUIRE_SPECIFIC_VECTORIZATION_PROVIDER);
+        if (requiredProvider != null) {
+            System.out.println("REQUIRED PROVIDER: " + requiredProvider);
+            assertEquals(
+                    requiredProvider,
+                    provider.getClass().getSimpleName(),
+                    "Provider mismatch, " + "required " + requiredProvider + ", detected "
+                            + provider.getClass().getSimpleName()
+            );
+        }
+    }
+
 }
