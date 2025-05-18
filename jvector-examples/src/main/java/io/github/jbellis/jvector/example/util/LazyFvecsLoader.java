@@ -48,7 +48,7 @@ public class LazyFvecsLoader {
         } catch (IOException e) {
             throw new RuntimeException("Failed to load fvecs metadata from " + filePath, e);
         }
-        return new LazyFvecsDataSet("LazyFvecs: " + filePath,
+        return new LazyFvecsDataSet(filePath,
                 similarityFunction,
                 queryVectors,
                 groundTruth,
