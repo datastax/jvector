@@ -48,31 +48,24 @@ public class Bench {
         boolean reuseIndex = true; // Build or reuse an existing index already in tmp?
         Path existingIndexDir = Paths.get("/mnt/raid0/tmp/BenchGraphDir-prebuilt");
 
-        var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = List.of(100);
-        var overqueryGrid = List.of(1.0, 2.0, 3.0, 4.0, 5.0); // rerankK = oq * topK
+        var mGrid = List.of(64); // List.of(16, 24, 32, 48, 64, 96, 128);
+        var efConstructionGrid = List.of(200); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
+        var topKGrid = List.of(10);
+        var overqueryGrid = List.of(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(false); // List.of(false, true);
-        var usePruningGrid = List.of(true, false); // List.of(false, true);
-        var vectorSimilarityFunction = VectorSimilarityFunction.EUCLIDEAN; //TODO Do we want to set this auto by dataset or here?
+        var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 2,
-                        256,
-                        false,
-                        UNWEIGHTED),
-                __ -> CompressorParameters.NONE
+                ds -> new PQParameters(ds.getDimension() / 4, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED)
+//                __ -> CompressorParameters.NONE
         );
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
 //                __ -> CompressorParameters.NONE,
-                ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 2,
-                        256,
-                        false,
-                        UNWEIGHTED)
+                // ds -> new CompressorParameters.BQParameters(),
+                ds -> new PQParameters(ds.getDimension() / 4, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-//              EnumSet.of(FeatureId.NVQ_VECTORS)
+//                EnumSet.of(FeatureId.NVQ_VECTORS),
 //                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
@@ -85,8 +78,13 @@ public class Bench {
 
         // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         var coreFiles = List.of(
-                "product-sim-50m"
-//                "cohere-english-v3-100k",
+                "dpr-1m-norm",
+                "cohere-1m-norm",
+                "cap-1m"
+//                "dpr-10m-norm",
+//                "cohere-10m-norm",
+//                "cap-6m"
+//                "cohere-english-v3-100k"
 //                "openai-v3-small-100k",
 //                "nv-qa-v4-100k",
 //                "colbert-1M",
@@ -105,38 +103,23 @@ public class Bench {
                 addHierarchyGrid,
                 topKGrid,
                 overqueryGrid,
-                usePruningGrid,
-                vectorSimilarityFunction);
+                usePruningGrid
+        );
 
 //        var extraFiles = List.of(
 //                "openai-v3-large-3072-100k",
 //                "openai-v3-large-1536-100k",
 //                "e5-small-v2-100k",
 //                "e5-base-v2-100k",
-//                "e5-large-v2-100k"
-//        );
-//        executeNw(existingIndexDir,
-//                reuseIndex,
-//                coreFiles,
-//                pattern,
-//                buildCompression,
-//                featureSets,
-//                searchCompression,
-//                mGrid,
-//                efConstructionGrid,
-//                neighborOverflowGrid,
-//                addHierarchyGrid,
-//                topKGrid,
-//                overqueryGrid,
-//                usePruningGrid,
-//                vectorSimilarityFunction);
+//                "e5-large-v2-100k");
+//        executeNw(extraFiles, pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, overqueryGrid, usePruningGrid);
 
         // smaller vectors from ann-benchmarks
 //        var hdf5Files = List.of(
-////                // large files not yet supported
-////                // "hdf5/deep-image-96-angular.hdf5",
-////                // "hdf5/gist-960-euclidean.hdf5",
-////                "glove-25-angular.hdf5"
+//                // large files not yet supported
+//                // "hdf5/deep-image-96-angular.hdf5",
+//                // "hdf5/gist-960-euclidean.hdf5",
+//                "glove-25-angular.hdf5",
 //                "glove-50-angular.hdf5",
 //                "lastfm-64-dot.hdf5",
 //                "glove-100-angular.hdf5",
@@ -166,7 +149,7 @@ public class Bench {
         var jobTimeSecs = (System.nanoTime() - jobStartTime) / 1_000_000_000.0;
         System.out.format("Total job time (s): %s%n", jobTimeSecs);
 
-        // 2D grid, built and calculated at runtime
+//        // 2D grid, built and calculated at runtime
 //        if (pattern.matcher("2dgrid").find()) {
 //            searchCompression = Arrays.asList(__ -> CompressorParameters.NONE,
 //                                              ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED));
@@ -176,7 +159,7 @@ public class Bench {
 //        }
     }
 
-    private static void executeNw(Path existingIndexDir, boolean reuseIndex, List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Integer> topKGrid, List<Double> efSearchGrid, List<Boolean> usePruningGrid, VectorSimilarityFunction vsf) throws IOException {
+    private static void executeNw(Path existingIndexDir, boolean reuseIndex, List<String> coreFiles, Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Integer> topKGrid, List<Double> efSearchGrid, List<Boolean> usePruningGrid) throws IOException {
         for (var nwDatasetName : coreFiles) {
             if (pattern.matcher(nwDatasetName).find()) {
                 var mfd = DownloadHelper.maybeDownloadFvecs(nwDatasetName);
