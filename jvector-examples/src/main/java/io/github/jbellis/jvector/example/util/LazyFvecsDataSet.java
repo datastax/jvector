@@ -11,10 +11,10 @@ import java.util.List;
 import java.util.Set;
 
 public class LazyFvecsDataSet extends DataSet {
-    private final Path datasetFilePath;
-    private final int vectorCount;
-    private final int dimension;
-    private final VectorTypeSupport vectorTypeSupport;
+    public final Path datasetFilePath;
+    public final int vectorCount;
+    public final int dimension;
+    public final VectorTypeSupport vectorTypeSupport;
 
     public LazyFvecsDataSet(String name,
                             VectorSimilarityFunction similarityFunction,
