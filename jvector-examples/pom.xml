@@ -38,6 +38,11 @@
             <version>0.6.10</version>
         </dependency>
         <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>1.10.0</version>
+        </dependency>
+        <dependency>
             <groupId>com.indeed</groupId>
             <artifactId>util-mmap</artifactId>
             <version>1.0.52-3042601</version>
