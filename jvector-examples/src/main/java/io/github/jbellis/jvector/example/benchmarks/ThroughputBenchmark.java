@@ -18,10 +18,15 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.vector.ArrayVectorFloat;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 /**
  * Measures throughput (queries/sec) with an optional warmup phase.
@@ -32,16 +37,18 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private static volatile long SINK;
 
     private final int warmupRuns;
-    private final double warmupRatio;
+    private final int testRuns;
     private String format;
 
-    public static ThroughputBenchmark createDefault(int warmupRuns, double warmupRatio) {
-        return new ThroughputBenchmark(warmupRuns, warmupRatio, DEFAULT_FORMAT);
+    VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    public static ThroughputBenchmark createDefault(int warmupRuns, int testRuns) {
+        return new ThroughputBenchmark(warmupRuns, testRuns, DEFAULT_FORMAT);
     }
 
-    private ThroughputBenchmark(int warmupRuns, double warmupRatio, String format) {
+    private ThroughputBenchmark(int warmupRuns, int testRuns, String format) {
         this.warmupRuns = warmupRuns;
-        this.warmupRatio = warmupRatio;
+        this.testRuns = testRuns;
         this.format = format;
     }
 
@@ -64,38 +71,39 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             int queryRuns) {
 
         int totalQueries = cs.getDataSet().queryVectors.size();
-        int warmupCount   = (int) (totalQueries * warmupRatio);
-        int testCount     = totalQueries - warmupCount;
 
         // Warmup Phase
-        if (warmupCount > 0) {
-            for (int run = 0; run < warmupRuns; run++) {
-                IntStream.range(0, warmupCount)
-                        .parallel()
-                        .forEach(i -> {
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, i);
-                            SINK += sr.getVisitedCount();
-                        });
-            }
+        int dim = cs.getDataSet().getDimension();
+        for (int run = 0; run < warmupRuns; run++) {
+            IntStream.range(0, totalQueries)
+                    .parallel()
+                    .forEach(k -> {
+                        // Generate a random vector
+                        VectorFloat<?> randQ = vts.createFloatVector(dim);
+                        for (int j = 0; j < dim; j++) {
+                            randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                        }
+                        SearchResult sr = QueryExecutor.executeQuery(
+                                cs, topK, rerankK, usePruning, randQ);
+                        SINK += sr.getVisitedCount();
+                    });
         }
 
         // Test Phase
         LongAdder visitedAdder = new LongAdder();
         long startTime = System.nanoTime();
 
-        IntStream.range(0, testCount)
+        IntStream.range(0, totalQueries)
                 .parallel()
                 .forEach(i -> {
-                    int queryIndex = i + warmupCount;
                     SearchResult sr = QueryExecutor.executeQuery(
-                            cs, topK, rerankK, usePruning, queryIndex);
+                            cs, topK, rerankK, usePruning, i);
                     // “Use” the result to prevent optimization
                     visitedAdder.add(sr.getVisitedCount());
                 });
 
         double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-        double qps = testCount / elapsedSec;
+        double qps = totalQueries / elapsedSec;
 
         return List.of(Metric.of("QPS", format, qps));
     }
