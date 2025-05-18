@@ -18,10 +18,7 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.AccuracyMetrics;
-import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.SubsetRandomAccessVectorValues;
+import io.github.jbellis.jvector.example.util.*;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
@@ -92,6 +89,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.TreeMap;
 
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
 
 /**
  * Tests a grid of configurations against a dataset
@@ -99,8 +98,19 @@ import java.util.TreeMap;
 public class Grid {
 
     private static final String pqCacheDir = "pq_cache";
-
     private static final String dirPrefix = "BenchGraphDir";
+    private static final String logFilePrefix = "/home/ted_willke/jvector-nuveq/logs/log_";
+
+    // Set up csv logging
+    List<String> headers = List.of(
+            "Dataset Name", "Base Vector Count", "Dimension",
+            "Primary Vector Type", "Secondary Vector Type",
+            "k", "efConstruction", "addHierarchy",
+            "neighborOverflow", "usePruning",
+            "M", "Overquery", "QPS", "Recall"
+    );
+
+    private static CsvLogger logger;
 
     static void runAll(DataSet ds,
                        Path suppliedTestDirectory,
@@ -116,6 +126,19 @@ public class Grid {
                        List<Double> efSearchFactor,
                        List<Boolean> usePruningGrid) throws IOException
     {
+        // Set up csv logging to capture all run results.
+        List<String> headers = List.of(
+                "Dataset Name", "Base Vector Count", "Dimension",
+                "Primary Vector Type", "Secondary Vector Type",
+                "k", "efConstruction", "addHierarchy",
+                "neighborOverflow", "usePruning",
+                "M", "Overquery", "QPS", "Recall"
+        );
+        // Name the log file....
+        Path datasetFile = Paths.get(ds.name).getFileName();
+        String noExt = datasetFile.toString().replaceFirst("\\.[^.]+$", "");
+        logger = new CsvLogger(logFilePrefix + noExt + "_", headers);
+
         // For loading an existing index (especially the really big ones)
         final Path testDirectory;
         if (!reuseIndex) {
@@ -141,6 +164,13 @@ public class Grid {
                 }
             }
         } finally {
+            if (logger != null) {
+                try {
+                    logger.close();
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to close CSV logger: " + e.getMessage());
+                }
+            }
             if (!reuseIndex) {
                 try {
                     Files.delete(testDirectory);
@@ -625,15 +655,15 @@ public class Grid {
                                           int M,
                                           int efConstruction,
                                           float neighborOverflow,
-                                          boolean addHierarchy) {
+                                          boolean addHierarchy) throws IOException {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
-                ThroughputBenchmark.createDefault(2, 0.1),
-                LatencyBenchmark.createDefault(),
-                CountBenchmark.createDefault(),
-                AccuracyBenchmark.createDefault()
+                ThroughputBenchmark.createDefault(5, 1),
+//                LatencyBenchmark.createDefault(),
+//                CountBenchmark.createDefault(),
+                AccuracyBenchmark.createDefault().displayRecall(".3f")
         );
         QueryTester tester = new QueryTester(benchmarks);
 
@@ -652,6 +682,23 @@ public class Grid {
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
                     printer.printRow(overquery, results);
+                    // Prepare to log a row to csv
+                    FeatureId feature = cs.features.iterator().next();
+                    logger.setValue("Dataset Name",         cs.ds.name);
+                    logger.setValue("Base Vector Count",     ((LazyFvecsDataSet) cs.ds).vectorCount);
+                    logger.setValue("Dimension",            cs.ds.getDimension());
+                    logger.setValue("Primary Vector Type",  cs.cv.getCompressor());
+                    logger.setValue("Secondary Vector Type",feature.name());
+                    logger.setValue("k",                    topK);
+                    logger.setValue("efConstruction",       efConstruction);
+                    logger.setValue("addHierarchy",         addHierarchy);
+                    logger.setValue("neighborOverflow",     neighborOverflow);
+                    logger.setValue("usePruning",           usePruning);
+                    logger.setValue("M",                    M);
+                    logger.setValue("Overquery",            overquery);
+                    logger.setValue("QPS",                  results.get(0).getValue());
+                    logger.setValue("Recall",               results.get(1).getValue());
+                    logger.log();
                 }
                 printer.printFooter();
             }
