@@ -71,40 +71,42 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             int queryRuns) {
 
         int totalQueries = cs.getDataSet().queryVectors.size();
-
-        // Warmup Phase
         int dim = cs.getDataSet().getDimension();
-        for (int run = 0; run < warmupRuns; run++) {
+        double maxQps    = 0;
+
+        for (int testRun = 0; testRun < testRuns; testRun++) {
+        // Warmup Phase
+            for (int warmupRun = 0; warmupRun < warmupRuns; warmupRun++) {
+                IntStream.range(0, totalQueries)
+                        .parallel()
+                        .forEach(k -> {
+                            // Generate a random vector
+                            VectorFloat<?> randQ = vts.createFloatVector(dim);
+                            for (int j = 0; j < dim; j++) {
+                                randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                            }
+                            SearchResult sr = QueryExecutor.executeQuery(
+                                    cs, topK, rerankK, usePruning, randQ);
+                            SINK += sr.getVisitedCount();
+                        });
+            }
+
+            // Test Phase
+            LongAdder visitedAdder = new LongAdder();
+            long startTime = System.nanoTime();
             IntStream.range(0, totalQueries)
                     .parallel()
-                    .forEach(k -> {
-                        // Generate a random vector
-                        VectorFloat<?> randQ = vts.createFloatVector(dim);
-                        for (int j = 0; j < dim; j++) {
-                            randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                        }
+                    .forEach(i -> {
                         SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, randQ);
-                        SINK += sr.getVisitedCount();
+                                cs, topK, rerankK, usePruning, i);
+                        // “Use” the result to prevent optimization
+                        visitedAdder.add(sr.getVisitedCount());
                     });
+            double elapsedSec = (System.nanoTime() - startTime) / 1e9;
+            double runQps = totalQueries / elapsedSec;      // ← new
+            maxQps       = Math.max(maxQps, runQps);
         }
 
-        // Test Phase
-        LongAdder visitedAdder = new LongAdder();
-        long startTime = System.nanoTime();
-
-        IntStream.range(0, totalQueries)
-                .parallel()
-                .forEach(i -> {
-                    SearchResult sr = QueryExecutor.executeQuery(
-                            cs, topK, rerankK, usePruning, i);
-                    // “Use” the result to prevent optimization
-                    visitedAdder.add(sr.getVisitedCount());
-                });
-
-        double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-        double qps = totalQueries / elapsedSec;
-
-        return List.of(Metric.of("QPS", format, qps));
+        return List.of(Metric.of("QPS", format, maxQps));
     }
 }
