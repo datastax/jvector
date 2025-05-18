@@ -56,13 +56,13 @@ public class Bench {
         var addHierarchyGrid = List.of(false); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 4, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED)
+                ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
 //                __ -> CompressorParameters.NONE
         );
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
 //                __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 4, 256, ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN, UNWEIGHTED)
+                ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
 //                EnumSet.of(FeatureId.NVQ_VECTORS),
@@ -103,8 +103,7 @@ public class Bench {
                 addHierarchyGrid,
                 topKGrid,
                 overqueryGrid,
-                usePruningGrid
-        );
+                usePruningGrid);
 
 //        var extraFiles = List.of(
 //                "openai-v3-large-3072-100k",
