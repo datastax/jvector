@@ -50,7 +50,20 @@ public class MultiFileDatasource {
         var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
         var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
         var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-        return DataSet.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
+        BaseDataSet baseDataSet = new BaseDataSet(
+            name,
+            VectorSimilarityFunction.COSINE,
+            baseVectors,
+            queryVectors,
+            gtVectors
+        );
+
+        if (baseDataSet instanceof DataSet.CanScrub datasetCanScrub) {
+            return datasetCanScrub.scrub();
+        } else {
+            return baseDataSet;
+        }
+
     }
 
     public DataSet lazyLoad() throws IOException {

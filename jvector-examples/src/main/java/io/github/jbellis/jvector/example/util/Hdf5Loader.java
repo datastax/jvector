@@ -82,6 +82,18 @@ public class Hdf5Loader {
             }
         }
 
-        return DataSet.getScrubbedDataSet(path.getFileName().toString(), similarityFunction, Arrays.asList(baseVectors), Arrays.asList(queryVectors), gtSets);
+        BaseDataSet baseDataSet = new BaseDataSet(
+            path.getFileName().toString(),
+            similarityFunction,
+            Arrays.asList(baseVectors),
+            Arrays.asList(queryVectors),
+            gtSets
+        );
+
+        if (baseDataSet instanceof DataSet.CanScrub datasetCanScrub) {
+            return datasetCanScrub.scrub();
+        } else {
+            return baseDataSet;
+        }
     }
 }
