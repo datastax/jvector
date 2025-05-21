@@ -8,9 +8,8 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Set;
 
-public class LazyFvecsDataSet extends DataSet {
+public class LazyFvecsDataSet extends BaseDataSet {
     private final Path datasetFilePath;
     private final int vectorCount;
     private final int dimension;

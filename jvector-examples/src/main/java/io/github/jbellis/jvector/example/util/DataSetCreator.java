@@ -73,6 +73,6 @@ public class DataSetCreator {
         var groundTruth = queries.stream().map(Map.Entry::getValue).collect(Collectors.toList());
 
         String name = "2D" + gridWidth;
-        return new DataSet(name, VectorSimilarityFunction.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
+        return new BaseDataSet(name, VectorSimilarityFunction.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
     }
 }
