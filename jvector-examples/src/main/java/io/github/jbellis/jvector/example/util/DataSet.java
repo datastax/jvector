@@ -24,18 +24,16 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeSet;
 
 public class DataSet {
-    public final String name;
-    public final VectorSimilarityFunction similarityFunction;
-    public final List<VectorFloat<?>> baseVectors;
-    public final List<VectorFloat<?>> queryVectors;
-    public final List<? extends List<Integer>> groundTruth;
+    private final String name;
+    private final VectorSimilarityFunction similarityFunction;
+    private final List<VectorFloat<?>> baseVectors;
+    private final List<VectorFloat<?>> queryVectors;
+    private final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
     public DataSet(String name,
@@ -169,13 +167,33 @@ public class DataSet {
     }
 
     public int getDimension() {
-        return baseVectors.get(0).length();
+        return getBaseVectors().get(0).length();
     }
 
     public RandomAccessVectorValues getBaseRavv() {
         if (baseRavv == null) {
-            baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());
+            baseRavv = new ListRandomAccessVectorValues(getBaseVectors(), getDimension());
         }
         return baseRavv;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public VectorSimilarityFunction getSimilarityFunction() {
+        return similarityFunction;
+    }
+
+    public List<VectorFloat<?>> getBaseVectors() {
+        return baseVectors;
+    }
+
+    public List<VectorFloat<?>> getQueryVectors() {
+        return queryVectors;
+    }
+
+    public List<? extends List<Integer>> getGroundTruth() {
+        return groundTruth;
     }
 }

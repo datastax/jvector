@@ -58,7 +58,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
         int warmupCount   = (int) (totalQueries * warmupRatio);
         int testCount     = totalQueries - warmupCount;
 

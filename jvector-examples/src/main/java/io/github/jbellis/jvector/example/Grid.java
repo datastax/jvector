@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.SubsetRandomAccessVectorValues;
@@ -27,7 +26,6 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
@@ -45,7 +43,6 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -60,7 +57,6 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -69,16 +65,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -87,10 +78,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
-
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.TreeMap;
 
 
 /**
@@ -171,7 +158,8 @@ public class Grid {
                 } else {
                     long start = System.nanoTime();
                     cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors()
+                        .size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                 }
 
                 indexes.forEach((features, index) -> {
@@ -210,7 +198,7 @@ public class Grid {
         System.out.println("PQ encoding complete.");
 
        //  var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pqVectors);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pqVectors);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy);
 
         // use the inline vectors index as the score provider for graph construction
@@ -475,7 +463,9 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors,
+            ds.getSimilarityFunction()
+        );
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                           floatVectors.dimension(),
                                                           M,
@@ -622,17 +612,19 @@ public class Grid {
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
             // if we're not compressing then just use the exact score function
             if (cv == null) {
-                return SearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                return SearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
             }
 
             var scoringView = (GraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = scoringView.approximateScoreFunctionFor(queryVector,
+                    ds.getSimilarityFunction()
+                );
             } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
+            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
             return new SearchScoreProvider(asf, rr);
         }
 

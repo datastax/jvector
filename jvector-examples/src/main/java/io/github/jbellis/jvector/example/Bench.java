@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetCreator;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -53,7 +52,7 @@ public class Bench {
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 4,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                    ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
 //                __ -> CompressorParameters.NONE
         );
@@ -62,7 +61,7 @@ public class Bench {
                 // ds -> new CompressorParameters.BQParameters(),
                 ds -> new PQParameters(ds.getDimension() / 4,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                    ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
