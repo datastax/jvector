@@ -25,6 +25,7 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
@@ -77,18 +78,19 @@ public class OnHeapGraphIndex implements GraphIndex {
 
     public final ConcurrentMap<NodeAtLevel, VectorFloat<?>> constructionBatch;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, BuildScoreProvider scoreProvider, float alpha, int batchSize) {
+    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider, int batchSize) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         setDegrees(maxDegrees);
         entryPoint = new AtomicReference<>();
         this.completions = new CompletionTracker(1024);
         // Initialize the base layer (layer 0) with a dense map.
-        this.layers.add(new ConcurrentNeighborMap(new DenseIntMap<>(1024),
-                                                  scoreProvider,
-                                                  getDegree(0),
-                                                  (int) (getDegree(0) * overflowRatio),
-                                                  alpha));
+        this.layers.add(new ConcurrentNeighborMap(
+                new DenseIntMap<>(1024),
+                diversityProvider,
+                getDegree(0),
+                (int) (getDegree(0) * overflowRatio))
+        );
         this.constructionBatch = new ConcurrentHashMap<>(batchSize);
     }
 
@@ -138,10 +140,9 @@ public class OnHeapGraphIndex implements GraphIndex {
                 if (i == layers.size()) { // doublecheck after locking
                     var denseMap = layers.get(0);
                     var map = new ConcurrentNeighborMap(new SparseIntMap<>(),
-                                                        denseMap.scoreProvider,
+                                                        denseMap.diversityProvider,
                                                         getDegree(level),
-                                                        (int) (getDegree(level) * overflowRatio),
-                                                        denseMap.alpha);
+                                                        (int) (getDegree(level) * overflowRatio));
                     layers.add(map);
                 }
             }

@@ -12,6 +12,78 @@ on:
       - '**/pom.xml'
 
 jobs:
+  build-avx512:
+    concurrency:
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}
+      cancel-in-progress: false
+    strategy:
+      matrix:
+        jdk: [ 20, 24 ]
+#        jdk: [ 24 ]
+        isa: [ isa-avx512f ]
+    runs-on: ${{ matrix.isa }}
+    steps:
+      - name: verify-avx512
+        run: |
+          # avx2 is included just for illustration
+          required="avx2 avx512f avx512cd avx512bw avx512dq avx512v"
+          printf "required ISA feature flags: %s\n" "${required}" 
+          flags="$(lscpu|grep '^Flags'|cut -d: -f2)"
+          output=""
+          for flag in ${required} ; do
+           if [[ " $flags " == *"${flag}"* ]]
+           then output="${output} $flag(OK)"
+           else output="${output} $flag(FAIL)"
+          fi ; done
+          printf "%s\n" ${output}
+          if [[ " $output " == *"FAIL"* ]] ; then exit 2 ; fi
+      - name: Set up GCC
+        run: |
+          sudo apt install -y gcc
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: temurin
+          cache: maven
+
+      - name: Verify Panama Vector Support (JDK ${{ matrix.jdk }})
+        if: matrix.jdk == '20'
+        run: >-
+          mvn -B -Pjdk20 -pl jvector-tests -am test
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+          -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
+
+      - name: Test Panama Support (JDK ${{ matrix.jdk }})
+        if: matrix.jdk == '20'
+        run: >-
+          mvn -B -Pjdk20 -pl jvector-tests test -am test
+          -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
+
+      - name: Verify native-access vector support (JDK ${{ matrix.jdk }})
+        if: matrix.jdk == '24'
+        run: >-
+          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+
+      - name: Compile, run tests and package (JDK ${{ matrix.jdk }})
+        if: matrix.jdk == '24'
+        run: >-
+          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+
+      - name: Test Summary for (ISA:${{ matrix.isa}},JDK${{ matrix.jdk }})
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: |
+            **/target/surefire-reports/TEST-*.xml
+
+
   build:
     concurrency:
         group: ${{ github.ref }}-${{ github.job }}-${{ matrix.jdk }}-${{ matrix.os }}
@@ -29,6 +101,10 @@ jobs:
           java-version: ${{ matrix.jdk }}
           distribution: temurin
           cache: maven
+      - name: Set up GCC
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt install -y gcc
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'
@@ -38,3 +114,11 @@ jobs:
       - name: Compile and run tests (JDK 11)
         run: mvn -B -Pjdk11 -am -pl jvector-tests test
         if: matrix.jdk == '11'
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: |
+            **/target/surefire-reports/TEST-*.xml
+
+        

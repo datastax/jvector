@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.Test;
@@ -42,7 +43,7 @@ public class TestNeighbors extends RandomizedTest {
     assert candidates.size() == 9;
 
     // only nodes 6 and 8 are diverse wrt 7
-    var cnm = new ConcurrentNeighborMap(bsp, 10, 10, 1.0f);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
     cnm.addNode(7);
     var neighbors = cnm.insertDiverse(7, candidates);
     assertEquals(2, neighbors.size());
@@ -71,7 +72,7 @@ public class TestNeighbors extends RandomizedTest {
             i -> concurrent.insertSorted(i, scoreBetween(bsp, 7, i)));
 
     // only nodes 6 and 8 are diverse wrt 7
-    var cnm = new ConcurrentNeighborMap(bsp, 10, 10, 1.0f);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
     cnm.addNode(7);
     var neighbors = cnm.insertDiverse(7, NodeArray.merge(natural, concurrent));
     assertEquals(2, neighbors.size());
@@ -94,7 +95,7 @@ public class TestNeighbors extends RandomizedTest {
     var cna2 = new NodeArray(1);
     cna2.addInOrder(8, scoreBetween(bsp, 7, 8));
 
-    var cnm = new ConcurrentNeighborMap(bsp, 10, 10, 1.0f);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
     cnm.addNode(7, cna);
     var neighbors = cnm.insertDiverse(7, cna2);
     assertEquals(2, neighbors.size());
