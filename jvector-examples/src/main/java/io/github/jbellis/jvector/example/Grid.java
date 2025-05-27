@@ -660,7 +660,7 @@ public class Grid {
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
-                ThroughputBenchmark.createDefault(0, 20),
+                ThroughputBenchmark.createDefault(100, 10),
 //                LatencyBenchmark.createDefault(),
 //                CountBenchmark.createDefault(),
                 AccuracyBenchmark.createDefault().displayRecall(".3f")

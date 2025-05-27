@@ -51,9 +51,10 @@ public class Bench {
         var mGrid = List.of(64); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(200); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
         var topKGrid = List.of(10);
-        var overqueryGrid = List.of(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0); // rerankK = oq * topK
+        var overqueryGrid = List.of(1.000, 1.200, 1.440, 1.728, 2.074, 2.488, 2.986, 3.583, 4.300, 5.160, 6.192, 7.430, 8.916, 10.699, 12.839, 15.407, 18.488, 22.186, 26.623, 31.948, 38.338, 46.005, 55.206, 66.247, 79.497); // rerankK = oq * topK
+//        var overqueryGrid = List.of(1.000, 1.0,1.0,1.0,1.0,1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 5.0, 5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0, 60.0, 60.0, 60.0, 60.0); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
-        var addHierarchyGrid = List.of(false); // List.of(false, true);
+        var addHierarchyGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
@@ -65,7 +66,7 @@ public class Bench {
                 ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-//                EnumSet.of(FeatureId.NVQ_VECTORS),
+//                EnumSet.of(FeatureId.NVQ_VECTORS)
 //                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
@@ -78,9 +79,9 @@ public class Bench {
 
         // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         var coreFiles = List.of(
-                "dpr-1m-norm",
-                "cohere-1m-norm",
-                "cap-1m"
+//                "cohere-1m-norm"
+                "dpr-1m-norm"
+//                "cap-1m"
 //                "dpr-10m-norm",
 //                "cohere-10m-norm",
 //                "cap-6m"

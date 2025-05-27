@@ -16,14 +16,19 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
+
+
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.vector.ArrayVectorFloat;
+import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -72,23 +77,36 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
         int totalQueries = cs.getDataSet().queryVectors.size();
         int dim = cs.getDataSet().getDimension();
-        double maxQps    = 0;
 
-        for (int testRun = 0; testRun < testRuns; testRun++) {
         // Warmup Phase
-            for (int warmupRun = 0; warmupRun < warmupRuns; warmupRun++) {
-                IntStream.range(0, totalQueries)
-                        .parallel()
-                        .forEach(k -> {
-                            // Generate a random vector
-                            VectorFloat<?> randQ = vts.createFloatVector(dim);
-                            for (int j = 0; j < dim; j++) {
-                                randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                            }
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, randQ);
-                            SINK += sr.getVisitedCount();
-                        });
+        for (int warmupRun = 0; warmupRun < warmupRuns; warmupRun++) {
+            IntStream.range(0, totalQueries)
+                    .parallel()
+                    .forEach(k -> {
+                        // Generate a random vector
+                        VectorFloat<?> randQ = vts.createFloatVector(dim);
+                        for (int j = 0; j < dim; j++) {
+                            randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                        }
+                        VectorUtil.l2normalize(randQ);
+                        SearchResult sr = QueryExecutor.executeQuery(
+                                cs, topK, rerankK, usePruning, randQ);
+                        SINK += sr.getVisitedCount();
+                    });
+        }
+
+        double maxQps    = 0;
+        double sumQps    = 0;
+        double[] qpsSamples = new double[testRuns];
+        for (int testRun = 0; testRun < testRuns; testRun++) {
+
+            // Clear Eden and let GC complete....
+            System.gc();
+            System.runFinalization();
+            try {
+                Thread.sleep(500);   // 100 ms is usually plenty
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
             }
 
             // Test Phase
@@ -105,8 +123,28 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             double elapsedSec = (System.nanoTime() - startTime) / 1e9;
             double runQps = totalQueries / elapsedSec;      // ← new
             maxQps       = Math.max(maxQps, runQps);
-        }
+            sumQps += runQps;
+            qpsSamples[testRun] = runQps;
 
-        return List.of(Metric.of("QPS", format, maxQps));
+        }
+        double avgQps = sumQps / testRuns;
+
+        Arrays.sort(qpsSamples);
+        double medianQps = qpsSamples[testRuns/2];  // middle element (for odd)
+        double meanQps   = DoubleStream.of(qpsSamples).average().getAsDouble();
+
+//        System.out.println("QPS avg" + avgQps);
+//        System.out.println("MedianQps" + medianQps);
+//        System.out.println("MeanQps" + meanQps);
+//        System.out.println("maxQps" + maxQps);
+        return List.of(Metric.of("QPS", format, medianQps));
+    }
+
+    private static float normOf(VectorFloat<?> baseVector) {
+        float norm = 0;
+        for (int i = 0; i < baseVector.length(); i++) {
+            norm += baseVector.get(i) * baseVector.get(i);
+        }
+        return (float) Math.sqrt(norm);
     }
 }

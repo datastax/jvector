@@ -138,14 +138,14 @@ public class MultiFileDatasource {
                 "wikipedia_squad/100k/textembedding-gecko_100000_indices_query_10000.ivec"));
         put("dpr-10m-norm", new MultiFileDatasource("dpr-10m-norm",
                 VectorSimilarityFunction.DOT_PRODUCT,
-                "dpr/en/train/embeddings/c4-en_base_10M_norm_files0_2.fvecs",
-                "dpr/en/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
-                "dpr/en/ground_truth/dpr_10m_gt_norm_ip_k100.ivecs"));
+                "dpr/train/embeddings/c4-en_base_10M_norm_files0_2.fvecs",
+                "dpr/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
+                "dpr/ground_truth/dpr_10m_gt_norm_ip_k100.ivecs"));
         put("dpr-1m-norm", new MultiFileDatasource("dpr-1m-norm",
                 VectorSimilarityFunction.DOT_PRODUCT,
-                "dpr/en/train/embeddings/c4-en_base_1M_norm_files0_2.fvecs",
-                "dpr/en/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
-                "dpr/en/ground_truth/dpr_1m_gt_norm_ip_k100.ivecs"));
+                "dpr/train/embeddings/c4-en_base_1M_norm_files0_2.fvecs",
+                "dpr/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs",
+                "dpr/ground_truth/dpr_1m_gt_norm_ip_k100.ivecs"));
         put("cohere-1m-norm", new MultiFileDatasource("cohere-1m-norm",
                 VectorSimilarityFunction.DOT_PRODUCT,
                 "cohere-40m/cohere_wiki_en_flat_base_1m_norm.fvecs",
