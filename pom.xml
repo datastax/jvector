@@ -41,7 +41,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
-        <revision>4.0.0-beta.5-SNAPSHOT</revision>
+        <revision>4.0.0-beta.6-SNAPSHOT</revision>
     </properties>
     <modules>
         <module>jvector-base</module>
@@ -189,6 +189,11 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <version>2.0.16</version>
+        </dependency>
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>2.4</version>
         </dependency>
     </dependencies>
     <dependencyManagement>

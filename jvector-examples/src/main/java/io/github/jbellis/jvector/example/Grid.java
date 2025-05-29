@@ -110,8 +110,7 @@ public class Grid {
                        List<? extends Set<FeatureId>> featureSets,
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
-                       List<Integer> topKGrid,
-                       List<Double> efSearchFactor,
+                       Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
         var testDirectory = Files.createTempDirectory(dirPrefix);
@@ -122,7 +121,7 @@ public class Grid {
                         for (int efC : efConstructionGrid) {
                             for (var bc : buildCompressors) {
                                 var compressor = getCompressor(bc, ds);
-                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, topKGrid, efSearchFactor, usePruningGrid, ds, testDirectory);
+                                runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, compressor, compressionGrid, topKGrid, usePruningGrid, ds, testDirectory);
                             }
                         }
                     }
@@ -148,8 +147,7 @@ public class Grid {
                             boolean addHierarchy,
                             VectorCompressor<?> buildCompressor,
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
-                            List<Integer> topKGrid,
-                            List<Double> efSearchOptions,
+                            Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
                             DataSet ds,
                             Path testDirectory) throws IOException
@@ -177,7 +175,7 @@ public class Grid {
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, topKGrid, efSearchOptions, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
+                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -443,7 +441,8 @@ public class Grid {
                     builder.with(new FusedADC(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
-                    var nvq = NVQuantization.compute(floatVectors, 2);
+                    int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
+                    var nvq = NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
                     suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
                     break;
@@ -523,8 +522,7 @@ public class Grid {
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
     private static void testConfiguration(ConfiguredSystem cs,
-                                          List<Integer> topKGrid,
-                                          List<Double> efSearchOptions,
+                                          Map<Integer, List<Double>> topKGrid,
                                           List<Boolean> usePruningGrid,
                                           int M,
                                           int efConstruction,
@@ -534,14 +532,14 @@ public class Grid {
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
-                new ThroughputBenchmark(2, 0.1),
-                new LatencyBenchmark(),
-                new CountBenchmark(),
-                new AccuracyBenchmark()
+                ThroughputBenchmark.createDefault(2, 0.1),
+                LatencyBenchmark.createDefault(),
+                CountBenchmark.createDefault(),
+                AccuracyBenchmark.createDefault()
         );
         QueryTester tester = new QueryTester(benchmarks);
 
-        for (var topK : topKGrid) {
+        for (var topK : topKGrid.keySet()) {
             for (var usePruning : usePruningGrid) {
                 BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
                 printer.printConfig(Map.of(
@@ -551,7 +549,7 @@ public class Grid {
                         "addHierarchy",       addHierarchy,
                         "usePruning",         usePruning
                 ));
-                for (var overquery : efSearchOptions) {
+                for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
