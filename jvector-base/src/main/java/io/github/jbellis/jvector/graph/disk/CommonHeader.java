@@ -34,6 +34,7 @@ import java.util.stream.IntStream;
 /**
  * Base header for OnDiskGraphIndex functionality.
  */
+// Public, so it can be overridden or wrapped by other implementations such as Lucene in OpenSearch jVector plugin
 public class CommonHeader {
     private static final Logger logger = LoggerFactory.getLogger(CommonHeader.class);
 
@@ -45,7 +46,7 @@ public class CommonHeader {
     public final List<LayerInfo> layerInfo;
     public final int idUpperBound;
 
-    CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
+    public CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
         this.version = version;
         this.dimension = dimension;
         this.entryNode = entryNode;
@@ -53,7 +54,7 @@ public class CommonHeader {
         this.idUpperBound = idUpperBound;
     }
 
-    void write(RandomAccessWriter out) throws IOException {
+    public void write(RandomAccessWriter out) throws IOException {
         logger.debug("Writing common header at position {}", out.position());
         if (version >= 3) {
             out.writeInt(OnDiskGraphIndex.MAGIC);

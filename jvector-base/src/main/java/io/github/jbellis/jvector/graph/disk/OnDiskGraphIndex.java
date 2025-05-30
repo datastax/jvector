@@ -79,7 +79,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     /** For layers > 0, store adjacency fully in memory. */
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
 
-    OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
+    public OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
         this.readerSupplier = readerSupplier;
         this.version = header.common.version;

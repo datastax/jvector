@@ -29,16 +29,17 @@ import java.util.EnumSet;
 /**
  * Header information for an on-disk graph index, reflecting the common header and feature-specific headers.
  */
-class Header {
+// Public, so it can be overridden or wrapped by other implementations such as Lucene in OpenSearch jVector plugin
+public class Header {
     final CommonHeader common;
     final EnumMap<FeatureId, ? extends Feature> features;
 
-    Header(CommonHeader common, EnumMap<FeatureId, ? extends Feature> features) {
+    public Header(CommonHeader common, EnumMap<FeatureId, ? extends Feature> features) {
         this.common = common;
         this.features = features;
     }
 
-    void write(RandomAccessWriter out) throws IOException {
+    public void write(RandomAccessWriter out) throws IOException {
         common.write(out);
 
         if (common.version >= 3) {
@@ -63,7 +64,7 @@ class Header {
         return size;
     }
 
-    static Header load(RandomAccessReader reader, long offset) throws IOException {
+    public static Header load(RandomAccessReader reader, long offset) throws IOException {
         reader.seek(offset);
 
         EnumSet<FeatureId> featureIds;

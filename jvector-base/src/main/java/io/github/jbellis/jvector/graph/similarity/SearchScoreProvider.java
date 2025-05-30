@@ -21,7 +21,8 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
-public final class SearchScoreProvider {
+// Public, so it can be overridden or wrapped by other implementations such as Lucene in OpenSearch jVector plugin
+public class SearchScoreProvider {
     private final ScoreFunction scoreFunction;
     private final ScoreFunction.ExactScoreFunction reranker;
 

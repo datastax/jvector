@@ -68,7 +68,8 @@ public class OnDiskGraphIndexWriter implements Closeable {
     private volatile int maxOrdinalWritten = -1;
     private final List<Feature> inlineFeatures;
 
-    private OnDiskGraphIndexWriter(RandomAccessWriter out,
+    // Public, so it can be overridden or wrapped by other implementations such as Lucene in OpenSearch jVector plugin
+    public OnDiskGraphIndexWriter(RandomAccessWriter out,
                                    int version,
                                    long startOffset,
                                    GraphIndex graph,
