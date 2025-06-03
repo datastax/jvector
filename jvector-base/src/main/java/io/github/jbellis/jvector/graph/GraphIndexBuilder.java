@@ -449,9 +449,27 @@ public class GraphIndexBuilder implements Closeable {
      * other in-progress updates as neighbor candidates.
      *
      * @param node the node ID to add
+     * @param vector the vector to add
      * @return an estimate of the number of extra bytes used by the graph after adding the given node
      */
     public long addGraphNode(int node, VectorFloat<?> vector) {
+        var ssp = scoreProvider.searchProviderFor(vector);
+        return addGraphNode(node, ssp);
+    }
+
+    /**
+     * Inserts a node with the given vector value to the graph.
+     *
+     * <p>To allow correctness under concurrency, we track in-progress updates in a
+     * ConcurrentSkipListSet. After adding ourselves, we take a snapshot of this set, and consider all
+     * other in-progress updates as neighbor candidates.
+     *
+     * @param node the node ID to add
+     * @param searchScoreProvider a SearchScoreProvider corresponding to the vector to add.
+     *                            It needs to be compatible with the BuildScoreProvider provided to the constructor
+     * @return an estimate of the number of extra bytes used by the graph after adding the given node
+     */
+    public long addGraphNode(int node, SearchScoreProvider searchScoreProvider) {
         var nodeLevel = new NodeAtLevel(getRandomGraphLevel(), node);
         // do this before adding to in-progress, so a concurrent writer checking
         // the in-progress set doesn't have to worry about uninitialized neighbor sets
@@ -465,20 +483,19 @@ public class GraphIndexBuilder implements Closeable {
             var concurrentScratchPooled = concurrentScratch.get();
 
             var bits = new ExcludingBits(nodeLevel.node);
-            var ssp = scoreProvider.searchProviderFor(vector);
             var entry = graph.entry();
             SearchResult result;
             if (entry == null) {
                 result = new SearchResult(new NodeScore[] {}, 0, 0, 0, 0, 0);
             } else {
-                gs.initializeInternal(ssp, entry, bits);
+                gs.initializeInternal(searchScoreProvider, entry, bits);
 
                 // Move downward from entry.level to 1
                 for (int lvl = entry.level; lvl > 0; lvl--) {
                     if (lvl > nodeLevel.level) {
-                        gs.searchOneLayer(ssp, 1, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, 1, 0.0f, lvl, gs.getView().liveNodes());
                     } else {
-                        gs.searchOneLayer(ssp, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
                         NodeScore[] neighbors = new NodeScore[gs.approximateResults.size()];
                         AtomicInteger index = new AtomicInteger();
                         // TODO extract an interface that lets us avoid the copy here and in toScratchCandidates
@@ -486,7 +503,7 @@ public class GraphIndexBuilder implements Closeable {
                             neighbors[index.getAndIncrement()] = new NodeScore(neighbor, score);
                         });
                         Arrays.sort(neighbors);
-                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, naturalScratchPooled, inProgressBefore, concurrentScratchPooled, ssp);
+                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
                     }
                     gs.setEntryPointsFromPreviousLayer();
                 }
@@ -495,7 +512,7 @@ public class GraphIndexBuilder implements Closeable {
                 result = gs.resume(beamWidth, beamWidth, 0.0f, 0.0f);
             }
 
-            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, ssp);
+            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
 
             graph.markComplete(nodeLevel);
         } catch (Exception e) {
