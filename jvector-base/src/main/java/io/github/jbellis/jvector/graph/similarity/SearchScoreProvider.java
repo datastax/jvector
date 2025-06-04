@@ -16,16 +16,12 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
 public interface SearchScoreProvider {
 
-    public ScoreFunction scoreFunction();
+    ScoreFunction scoreFunction();
 
-    public ScoreFunction.ExactScoreFunction reranker();
+    ScoreFunction.ExactScoreFunction reranker();
 
-    public ScoreFunction.ExactScoreFunction exactScoreFunction();
+    ScoreFunction.ExactScoreFunction exactScoreFunction();
 }
