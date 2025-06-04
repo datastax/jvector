@@ -51,6 +51,7 @@
         <module>jvector-multirelease</module>
         <module>jvector-examples</module>
         <module>benchmarks-jmh</module>
+        <module>jvector-api</module>
     </modules>
     <build>
         <resources>
