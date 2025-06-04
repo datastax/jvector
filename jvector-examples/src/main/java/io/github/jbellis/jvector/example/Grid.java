@@ -36,6 +36,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
@@ -463,7 +464,7 @@ public class Grid {
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
             // if we're not compressing then just use the exact score function
             if (cv == null) {
-                return SearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
             }
 
             var scoringView = (GraphIndex.ScoringView) view;
@@ -474,7 +475,7 @@ public class Grid {
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
             }
             var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
-            return new SearchScoreProvider(asf, rr);
+            return new DefaultSearchScoreProvider(asf, rr);
         }
 
         public GraphSearcher getSearcher() {

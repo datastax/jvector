@@ -113,7 +113,7 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 var vc = vectorsCopy.get();
-                return SearchScoreProvider.exact(vector, similarityFunction, vc);
+                return DefaultSearchScoreProvider.exact(vector, similarityFunction, vc);
             }
 
             @Override
@@ -128,7 +128,7 @@ public interface BuildScoreProvider {
                 RandomAccessVectorValues randomAccessVectorValues = vectors.get();
                 var v = randomAccessVectorValues.getVector(node1);
                 var vc = vectorsCopy.get();
-                return SearchScoreProvider.exact(v, similarityFunction, vc);
+                return DefaultSearchScoreProvider.exact(v, similarityFunction, vc);
             }
         };
     }
@@ -158,7 +158,7 @@ public interface BuildScoreProvider {
                 VectorFloat<?> v1 = reusableVector.get();
                 pqv.getCompressor().decode(pqv.get(node1), v1);
                 var asf = pqv.scoreFunctionFor(v1, vsf); // not precomputed!
-                return new SearchScoreProvider(asf);
+                return new DefaultSearchScoreProvider(asf);
             }
 
             @Override
@@ -171,7 +171,7 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 // deliberately skips reranking even though we are using an approximate score function
-                return new SearchScoreProvider(pqv.precomputedScoreFunctionFor(vector, vsf));
+                return new DefaultSearchScoreProvider(pqv.precomputedScoreFunctionFor(vector, vsf));
             }
 
             @Override
@@ -196,13 +196,13 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
-                return new SearchScoreProvider(bqv.scoreFunctionFor(vector, null));
+                return new DefaultSearchScoreProvider(bqv.scoreFunctionFor(vector, null));
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
                 var encoded1 = bqv.get(node1);
-                return new SearchScoreProvider(new ScoreFunction() {
+                return new DefaultSearchScoreProvider(new ScoreFunction() {
                     @Override
                     public boolean isExact() {
                         return false;

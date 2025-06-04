@@ -36,6 +36,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction.ApproximateScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction.ExactScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -116,7 +117,7 @@ public class SiftSmall {
             // search for a random vector using a GraphSearcher and SearchScoreProvider
             VectorFloat<?> q = randomVector(originalDimension);
             try (GraphSearcher searcher = new GraphSearcher(index)) {
-                SearchScoreProvider ssp = SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
+                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
                 SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
                 for (SearchResult.NodeScore ns : sr.getNodes()) {
                     System.out.println(ns);
@@ -134,7 +135,7 @@ public class SiftSmall {
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
             OnHeapGraphIndex index = builder.build(ravv);
             // measure our recall against the (exactly computed) ground truth
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
+            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }
     }
@@ -158,7 +159,7 @@ public class SiftSmall {
         try (ReaderSupplier rs = ReaderSupplierFactory.open(indexPath)) {
             OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
             // measure our recall against the (exactly computed) ground truth
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, index.getView());
+            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, index.getView());
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }
     }
@@ -200,7 +201,7 @@ public class SiftSmall {
                 Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                     ApproximateScoreFunction asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
                     ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                    return new SearchScoreProvider(asf, reranker);
+                    return new DefaultSearchScoreProvider(asf, reranker);
                 };
                 // measure our recall against the (exactly computed) ground truth
                 testRecall(index, queryVectors, groundTruth, sspFactory);
@@ -263,7 +264,7 @@ public class SiftSmall {
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
                 ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                return new SearchScoreProvider(asf, reranker);
+                return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }
@@ -326,7 +327,7 @@ public class SiftSmall {
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
                 ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                return new SearchScoreProvider(asf, reranker);
+                return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }

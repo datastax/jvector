@@ -28,6 +28,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -154,7 +155,7 @@ public class TestVectorGraph extends LuceneTestCase {
         var searcher = new GraphSearcher(graph);
         searcher.usePruning(false);
 
-        var ssp = new SearchScoreProvider(vectors.rerankerFor(query, similarityFunction));
+        var ssp = new DefaultSearchScoreProvider(vectors.rerankerFor(query, similarityFunction));
         var initial = searcher.search(ssp, initialTopK, acceptOrds);
         assertEquals(initialTopK, initial.getNodes().length);
 
@@ -200,8 +201,10 @@ public class TestVectorGraph extends LuceneTestCase {
         var query = randomVector(dim);
         var searcher = new GraphSearcher(graph);
 
-        var ssp = new SearchScoreProvider(pqv.scoreFunctionFor(query, similarityFunction),
-                                          vectors.rerankerFor(query, similarityFunction));
+        var ssp = new DefaultSearchScoreProvider(
+                pqv.scoreFunctionFor(query, similarityFunction),
+                vectors.rerankerFor(query, similarityFunction)
+        );
         var initial = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
         assertEquals(topK, initial.getNodes().length);
         assertEquals(rerankK, initial.getRerankedCount());
@@ -261,7 +264,7 @@ public class TestVectorGraph extends LuceneTestCase {
         };
 
         var searcher = new GraphSearcher(graph);
-        var ssp = new SearchScoreProvider(wrappedVectors.rerankerFor(getTargetVector(), similarityFunction));
+        var ssp = new DefaultSearchScoreProvider(wrappedVectors.rerankerFor(getTargetVector(), similarityFunction));
 
         assertThrows(RuntimeException.class, () -> {
             searcher.search(ssp, 10, Bits.ALL);

@@ -26,6 +26,7 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
@@ -113,7 +114,7 @@ public class GraphSearcher implements Closeable {
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
-            var ssp = SearchScoreProvider.exact(queryVector, similarityFunction, vectors);
+            var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -126,7 +127,7 @@ public class GraphSearcher implements Closeable {
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
-            var ssp = SearchScoreProvider.exact(queryVector, similarityFunction, vectors);
+            var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
