@@ -1,5 +1,6 @@
 package io.github.jbellis.jvector.api.startup;
 
+import io.github.jbellis.jvector.api.types.JVEngine;
 import io.github.jbellis.jvector.api.types.JVMultiIndex;
 
 import java.util.Optional;
@@ -23,5 +24,6 @@ public interface JVProfileSelector {
    @param rankedProfiles the allowed profiles from {@link JVProfile}, in order of preference.
    @throws ProfileInitializationException if none of the profiles could be loaded.
    */
-  Optional<JVMultiIndex> loadFirst(JVProfile... rankedProfiles);
+  Optional<JVEngine> loadFirst(JVProfile... rankedProfiles);
+  JVEngine load();
 }
