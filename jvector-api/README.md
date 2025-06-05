@@ -89,3 +89,15 @@ be avoided.
 
 👉 Nullability shall be avoided completely. `Optional` should be used instead, for example. 
 
+### Exception Handling
+
+👉 Checked Exception types should be used sparingly, if at all.
+
+Requiring developers to add explicit checked exception handlers into the code doesn't really 
+help the case where good basic exception handling is in place. It is often onerous and makes the 
+code less readable.
+
+Instead , it is almost always better to use return types like Optional, or to extend 
+RuntimeException with an exception type which is suitably descriptive of the cause of error 
+without requiring more boilerplate. In these cases, developers may special-case handling of 
+those types anyway if they so choose. 
