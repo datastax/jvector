@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -27,7 +28,15 @@ import java.util.EnumMap;
 import java.util.EnumSet;
 
 /**
- * Header information for an on-disk graph index, reflecting the common header and feature-specific headers.
+ * Header information for an on-disk graph index, containing both common metadata and feature-specific headers.
+ * <p>
+ * This class encapsulates:
+ * - Common header information (version, dimension, entry node, etc.)
+ * - Feature set information (which features are included in the index)
+ * - Feature-specific header data
+ * <p>
+ * The header can be written at the beginning of the index file or alternatively in a separate metadata file and is read when loading an index.
+ * It provides all the metadata needed to correctly interpret the on-disk format of the graph.
  */
 class Header {
     final CommonHeader common;
@@ -38,7 +47,7 @@ class Header {
         this.features = features;
     }
 
-    void write(RandomAccessWriter out) throws IOException {
+    void write(IndexWriter out) throws IOException {
         common.write(out);
 
         if (common.version >= 3) {

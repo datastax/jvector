@@ -23,10 +23,8 @@ import java.io.IOException;
 /**
  * A DataOutput that adds methods for random access writes
  */
-public interface RandomAccessWriter extends DataOutput, Closeable {
+public interface RandomAccessWriter extends IndexWriter, Closeable {
     void seek(long position) throws IOException;
-
-    long position() throws IOException;
 
     void flush() throws IOException;
 
