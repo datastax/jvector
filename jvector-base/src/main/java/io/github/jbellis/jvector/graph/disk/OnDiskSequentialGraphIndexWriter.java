@@ -54,7 +54,6 @@ import java.util.stream.Collectors;
  * Goals:
  * <ol>
  * <li> Immutability: Every byte written to the index file is immutable. This allows for running calculation of checksums without needing to re-read the file.
- * <li> Simplicity: We don't have to cache metadata in memory and can immediately start writing it to the metadata file.
  * <li> Performance: We can take advantage of sequential writes for performance.
  * </ol>
  * <p>
@@ -62,10 +61,9 @@ import java.util.stream.Collectors;
  * <ol>
  * <li> When we work with either cloud object storage where random writes are not supported on a single stream
  * <li> When we embed jVector in frameworks such as Lucene that rely on sequential writes for performance and correctness
- * <li> When we want to avoid the need for caching the metadata in memory.
  * </ol>
  */
-public class OnDiskSequentialGraphIndexWriter implements Closeable {
+public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
     private final int version;
     private final GraphIndex graph;
     private final GraphIndex.View view;
@@ -138,17 +136,12 @@ public class OnDiskSequentialGraphIndexWriter implements Closeable {
     }
 
     /**
-     * Write the index header and completed edge lists to the given outputs.  Inline features given in
-     * `featureStateSuppliers` will also be written.  (Features that do not have a supplier are assumed
-     * to have already been written by calls to writeInline).  The output IS flushed.
-     * <p>
-     * Each supplier takes a node ordinal and returns a FeatureState suitable for Feature.writeInline.
-     *
      * Note: There are several limitations you should be aware of when using:
      * <li> This method doesn't persist (e.g. flush) the output streams.  The caller is responsible for doing so.
      * <li> This method does not support writing to "holes" in the ordinal space.  If your ordinal mapper
      *      maps a new ordinal to an old ordinal that does not exist in the graph, an exception will be thrown.
      */
+    @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
         final long startOffset = dataOut.position();
@@ -278,7 +271,6 @@ public class OnDiskSequentialGraphIndexWriter implements Closeable {
 
     /**
      * Writes the index header, including the graph size, so that OnDiskGraphIndex can open it.
-     * The output IS flushed.
      * <p>
      * Public so that you can write the index size (and thus usefully open an OnDiskGraphIndex against the index)
      * to read Features from it before writing the edges.

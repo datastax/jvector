@@ -136,7 +136,11 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     /**
-     * Load an index from the given reader supplier, where the index starts at `offset`.
+     * Load an index from the given reader supplier where header and graph are located on the same file,
+     * where the index starts at `offset`.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph and index.
+     * @param offset the offset in bytes from the start of the file where the index starts.
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset) {
         try (var reader = readerSupplier.get()) {
@@ -153,10 +157,52 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     /**
-     * Load an index from the given reader supplier at offset 0.
+     * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph index.
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier) {
         return load(readerSupplier, 0);
+    }
+
+    /**
+     * Load an index from the given reader supplier where header and graph are located in separate files.
+     * @param readerSupplier the reader supplier to use to read the graph index.
+     * @param metadataReader the input reader to read the metadata from the current offset. This reader must be closed by the caller.
+     * @return the loaded index.
+     */
+    public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, RandomAccessReader metadataReader) {
+        try {
+            return load(readerSupplier, metadataReader, metadataReader.getPosition());
+        } catch (IOException e) {
+            logger.error("Error loading OnDiskGraphIndex", e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Load an index from the given reader supplier where header and graph are located in separate files.
+     * @param readerSupplier the reader supplier to use to read the graph index.
+     *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @param metadataReader the input reader to read the metadata from. The caller is responsible for closing this reader.
+     * @param offset         the offset in bytes from the start of the metadata file where the index header starts.
+     * @return the loaded index.
+     */
+    public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, RandomAccessReader metadataReader, long offset) {
+        try {
+            metadataReader.seek(offset);
+            logger.debug("Loading OnDiskGraphIndex header from offset={}", offset);
+            var header = Header.load(metadataReader, offset);
+            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}, Position after reading header={}",
+                    header.common.version,
+                    header.common.dimension,
+                    header.common.entryNode,
+                    header.common.layerInfo.size(),
+                    metadataReader.getPosition());
+            return new OnDiskGraphIndex(readerSupplier, header, 0);
+        } catch (Exception e) {
+            throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
+        }
     }
 
     public Set<FeatureId> getFeatureSet() {
