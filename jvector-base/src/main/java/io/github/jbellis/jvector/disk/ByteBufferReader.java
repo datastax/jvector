@@ -100,4 +100,9 @@ public class ByteBufferReader implements RandomAccessReader {
     @Override
     public void close() {
     }
+
+    @Override
+    public long length() throws IOException {
+        return bb.limit();
+    }
 }

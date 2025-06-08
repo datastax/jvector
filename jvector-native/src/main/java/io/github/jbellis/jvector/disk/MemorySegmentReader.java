@@ -126,6 +126,11 @@ public class MemorySegmentReader implements RandomAccessReader {
         position += count * 4L;
     }
 
+    @Override
+    public long length() {
+        return memory.byteSize();
+    }
+
     /**
      * Loads the contents of the mapped segment into physical memory.
      * This is a best-effort mechanism.

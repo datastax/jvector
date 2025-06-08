@@ -137,6 +137,11 @@ public class MMapReader implements RandomAccessReader {
     }
 
     @Override
+    public long length() {
+        return buffer.memory().length();
+    }
+
+    @Override
     public void close() {
         // don't close buffer, let the Supplier handle that
     }

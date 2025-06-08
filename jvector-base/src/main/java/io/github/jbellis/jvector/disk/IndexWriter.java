@@ -20,5 +20,9 @@ import java.io.DataOutput;
 import java.io.IOException;
 
 public interface IndexWriter extends DataOutput {
+    void resetStartWritingOffset() throws IOException;
+
     long position() throws IOException;
+
+    long bytesWrittenSinceStart() throws IOException;
 }

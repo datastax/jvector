@@ -52,6 +52,8 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter.*;
+
 /**
  * A class representing a graph index stored on disk. The base graph contains only graph structure.
  * <p> * The base graph
@@ -166,42 +168,37 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     /**
-     * Load an index from the given reader supplier where header and graph are located in separate files.
-     * @param readerSupplier the reader supplier to use to read the graph index.
-     * @param metadataReader the input reader to read the metadata from the current offset. This reader must be closed by the caller.
-     * @return the loaded index.
-     */
-    public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, RandomAccessReader metadataReader) {
-        try {
-            return load(readerSupplier, metadataReader, metadataReader.getPosition());
-        } catch (IOException e) {
-            logger.error("Error loading OnDiskGraphIndex", e);
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * Load an index from the given reader supplier where header and graph are located in separate files.
+     * Load an index from the given reader supplier where we will use the footer of the file to find the header.
+     * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
      * @param readerSupplier the reader supplier to use to read the graph index.
      *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
-     * @param metadataReader the input reader to read the metadata from. The caller is responsible for closing this reader.
-     * @param offset         the offset in bytes from the start of the metadata file where the index header starts.
      * @return the loaded index.
      */
-    public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, RandomAccessReader metadataReader, long offset) {
-        try {
-            metadataReader.seek(offset);
-            logger.debug("Loading OnDiskGraphIndex header from offset={}", offset);
-            var header = Header.load(metadataReader, offset);
+    public static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier) {
+        try (var in = readerSupplier.get()) {
+            final long magicOffset = in.length() - FOOTER_MAGIC_SIZE;
+            logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
+            in.seek(magicOffset);
+            int version = in.readInt();
+            if (version != FOOTER_MAGIC) {
+                logger.error("Found an invalid footer, magic doesn't match any known version: {}", version);
+                throw new RuntimeException("Unsupported version " + version);
+            }
+            final long metadataOffset = magicOffset - FOOTER_OFFSET_SIZE;
+            logger.debug("Loading header offset={}", metadataOffset);
+            in.seek(metadataOffset);
+            final long headerOffset = in.readLong();
+            logger.debug("Loading OnDiskGraphIndex header from offset={}", headerOffset);
+            var header = Header.load(in, headerOffset);
             logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}, Position after reading header={}",
                     header.common.version,
                     header.common.dimension,
                     header.common.entryNode,
                     header.common.layerInfo.size(),
-                    metadataReader.getPosition());
+                    in.getPosition());
             return new OnDiskGraphIndex(readerSupplier, header, 0);
         } catch (Exception e) {
-            throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
+            throw new RuntimeException("Error initializing OnDiskGraph", e);
         }
     }
 

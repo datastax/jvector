@@ -34,6 +34,7 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
     // that we need to be careful to flush the buffer when seeking to a new position.
     private final RandomAccessFile raf;
     private final DataOutputStream stream;
+    private volatile long bytesWrittenSinceStart = 0;
 
     public BufferedRandomAccessWriter(Path path) throws FileNotFoundException {
         raf = new RandomAccessFile(path.toFile(), "rw");
@@ -77,9 +78,19 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
     }
 
     @Override
+    public void resetStartWritingOffset() throws IOException {
+        bytesWrittenSinceStart = 0;
+    }
+
+    @Override
     public long position() throws IOException {
         flush();
         return raf.getFilePointer();
+    }
+
+    @Override
+    public long bytesWrittenSinceStart() {
+        return bytesWrittenSinceStart;
     }
 
     @Override
