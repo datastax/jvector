@@ -16,13 +16,13 @@
 
 package io.github.jbellis.jvector.disk;
 
+import java.io.Closeable;
 import java.io.DataOutput;
 import java.io.IOException;
 
-public interface IndexWriter extends DataOutput {
-    void resetStartWritingOffset() throws IOException;
-
+public interface IndexWriter extends DataOutput, Closeable {
+    /**
+     * @return the current position in the output
+     */
     long position() throws IOException;
-
-    long bytesWrittenSinceStart() throws IOException;
 }

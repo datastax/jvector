@@ -202,6 +202,43 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
     }
 
+    /**
+     * Load an index from the given reader supplier where we will use the footer of the file to find the header.
+     * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @param readerSupplier the reader supplier to use to read the graph index.
+     *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @param offset the offset in bytes from the start of the file where the index ends.
+     *
+     * @return the loaded index.
+     */
+    public static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long offset) {
+        try (var in = readerSupplier.get()) {
+            final long magicOffset = offset;
+            logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
+            in.seek(magicOffset);
+            int version = in.readInt();
+            if (version != FOOTER_MAGIC) {
+                logger.error("Found an invalid footer, magic doesn't match any known version: {}", version);
+                throw new RuntimeException("Unsupported version " + version);
+            }
+            final long metadataOffset = magicOffset - FOOTER_OFFSET_SIZE;
+            logger.debug("Loading header offset={}", metadataOffset);
+            in.seek(metadataOffset);
+            final long headerOffset = in.readLong();
+            logger.debug("Loading OnDiskGraphIndex header from offset={}", headerOffset);
+            var header = Header.load(in, headerOffset);
+            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}, Position after reading header={}",
+                    header.common.version,
+                    header.common.dimension,
+                    header.common.entryNode,
+                    header.common.layerInfo.size(),
+                    in.getPosition());
+            return new OnDiskGraphIndex(readerSupplier, header, 0);
+        } catch (Exception e) {
+            throw new RuntimeException("Error initializing OnDiskGraph", e);
+        }
+    }
+
     public Set<FeatureId> getFeatureSet() {
         return features.keySet();
     }

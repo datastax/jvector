@@ -118,10 +118,11 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
         return maxOrdinalWritten;
     }
 
-    private long featureOffsetForOrdinal(int ordinal) {
+    private long featureOffsetForOrdinal(long startOffset, int ordinal) {
         int edgeSize = Integer.BYTES * (1 + graph.getDegree(0));
         long inlineBytes = ordinal * (long) (Integer.BYTES + inlineFeatures.stream().mapToInt(Feature::featureSize).sum() + edgeSize);
-        return inlineBytes // previous nodes
+        return startOffset
+                + inlineBytes // previous nodes
                 + Integer.BYTES; // the ordinal of the node whose features we're about to write
     }
 
@@ -140,7 +141,7 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
     @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        out.resetStartWritingOffset();
+        final var startOffset = out.position();
         if (graph instanceof OnHeapGraphIndex) {
             var ohgi = (OnHeapGraphIndex) graph;
             if (ohgi.getDeletedNodes().cardinality() > 0) {
@@ -172,7 +173,7 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
                 throw new IllegalStateException(msg);
             }
             out.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
-            assert out.bytesWrittenSinceStart() == featureOffsetForOrdinal(newOrdinal) : String.format("%d != %d", out.bytesWrittenSinceStart(), featureOffsetForOrdinal(newOrdinal));
+            assert out.position() == featureOffsetForOrdinal(startOffset, newOrdinal) : String.format("%d != %d", out.position(), featureOffsetForOrdinal(startOffset, newOrdinal));
             for (var feature : inlineFeatures) {
                 var supplier = featureStateSuppliers.get(feature.id());
                 if (supplier == null) {
@@ -246,7 +247,7 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
 
                 // Set the offset for this feature
                 var feature = (SeparatedFeature) featureEntry.getValue();
-                feature.setOffset(out.bytesWrittenSinceStart());
+                feature.setOffset(out.position());
 
                 // Write separated data for each node
                 for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -261,7 +262,7 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
         }
 
         // Writer the footer with all the metadata info about the graph
-        writeFooter(out.bytesWrittenSinceStart());
+        writeFooter(out.position());
         // Note: flushing the data output is the responsibility of the caller we are not going to make assumptions about further uses of the data outputs
     }
 
@@ -290,7 +291,7 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
         out.writeLong(headerOffset); // We write the offset of the header at the end of the file
         out.writeInt(FOOTER_MAGIC);
         final long expectedPosition = headerOffset + headerSize + FOOTER_SIZE;
-        assert out.bytesWrittenSinceStart() == expectedPosition : String.format("%d != %d", out.bytesWrittenSinceStart(), expectedPosition);
+        assert out.position() == expectedPosition : String.format("%d != %d", out.position(), expectedPosition);
     }
 
     /**
@@ -321,14 +322,12 @@ public class OnDiskSequentialGraphIndexWriter implements GraphIndexWriter {
         private final GraphIndex graphIndex;
         private final EnumMap<FeatureId, Feature> features;
         private final IndexWriter dataOut;
-        private final IndexWriter metadataOut;
         private OrdinalMapper ordinalMapper;
         private int version;
 
-        public Builder(GraphIndex graphIndex, IndexWriter dataOut, IndexWriter metadataOut) {
+        public Builder(GraphIndex graphIndex, IndexWriter dataOut) {
             this.graphIndex = graphIndex;
             this.dataOut = dataOut;
-            this.metadataOut = metadataOut;
             this.features = new EnumMap<>(FeatureId.class);
             this.version = OnDiskGraphIndex.CURRENT_VERSION;
         }
