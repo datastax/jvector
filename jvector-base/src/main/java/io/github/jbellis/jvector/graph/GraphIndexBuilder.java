@@ -359,6 +359,8 @@ public class GraphIndexBuilder implements Closeable {
         if (dimension == 2 && graph.getMaxLevel() > 0) {
             // improve connections on everything in L1 & L0.
             // It may be helpful for 2D use cases, but empirically it seems unnecessary for high-dimensional vectors.
+            // It may bring a slight improvement in recall for small maximum degrees,
+            // but it can be easily be compensated by using a slightly larger neighborOverflow.
             parallelExecutor.submit(() -> {
                 graph.nodeStream(1).parallel().forEach(this::improveConnections);
             }).join();
