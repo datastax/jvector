@@ -64,7 +64,7 @@ import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWri
 public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 4;
+    public static final int CURRENT_VERSION = 5;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -148,11 +148,17 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         try (var reader = readerSupplier.get()) {
             logger.debug("Loading OnDiskGraphIndex from offset={}", offset);
             var header = Header.load(reader, offset);
+
             logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
                     header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
             logger.debug("Position after reading header={}",
                     reader.getPosition());
-            return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+            if (header.common.version >= 5) {
+                logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
+                return loadFromFooter(readerSupplier, reader.getPosition());
+            } else {
+                return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+            }
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
         }
@@ -174,7 +180,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
      *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
      * @return the loaded index.
      */
-    public static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier) {
+    private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
         try (var in = readerSupplier.get()) {
             final long magicOffset = in.length() - FOOTER_MAGIC_SIZE;
             logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
@@ -196,44 +202,8 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                     header.common.entryNode,
                     header.common.layerInfo.size(),
                     in.getPosition());
-            return new OnDiskGraphIndex(readerSupplier, header, 0);
-        } catch (Exception e) {
-            throw new RuntimeException("Error initializing OnDiskGraph", e);
-        }
-    }
-
-    /**
-     * Load an index from the given reader supplier where we will use the footer of the file to find the header.
-     * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
-     * @param readerSupplier the reader supplier to use to read the graph index.
-     *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
-     * @param offset the offset in bytes from the start of the file where the index ends.
-     *
-     * @return the loaded index.
-     */
-    public static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long offset) {
-        try (var in = readerSupplier.get()) {
-            final long magicOffset = offset;
-            logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
-            in.seek(magicOffset);
-            int version = in.readInt();
-            if (version != FOOTER_MAGIC) {
-                logger.error("Found an invalid footer, magic doesn't match any known version: {}", version);
-                throw new RuntimeException("Unsupported version " + version);
-            }
-            final long metadataOffset = magicOffset - FOOTER_OFFSET_SIZE;
-            logger.debug("Loading header offset={}", metadataOffset);
-            in.seek(metadataOffset);
-            final long headerOffset = in.readLong();
-            logger.debug("Loading OnDiskGraphIndex header from offset={}", headerOffset);
-            var header = Header.load(in, headerOffset);
-            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}, Position after reading header={}",
-                    header.common.version,
-                    header.common.dimension,
-                    header.common.entryNode,
-                    header.common.layerInfo.size(),
-                    in.getPosition());
-            return new OnDiskGraphIndex(readerSupplier, header, 0);
+            // TODO: record neighbors offset in the footer
+            return new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
         }
