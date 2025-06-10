@@ -47,7 +47,10 @@ public class DatasetCollection {
     public List<String> getAll() {
         List<String> allDatasetNames = new ArrayList<>();
         for (var key : datasetNames.keySet()) {
-            allDatasetNames.addAll(datasetNames.get(key));
+            var subList = datasetNames.get(key);
+            if (subList != null) {
+                allDatasetNames.addAll(subList);
+            }
         }
         return allDatasetNames;
     }
