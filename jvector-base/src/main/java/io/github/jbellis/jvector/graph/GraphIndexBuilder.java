@@ -356,8 +356,9 @@ public class GraphIndexBuilder implements Closeable {
             return;
         }
 
-        // improve connections on everything in L1
-        if (graph.getMaxLevel() > 0) {
+        if (dimension == 2 && graph.getMaxLevel() > 0) {
+            // improve connections on everything in L1 & L0.
+            // It may be helpful for 2D use cases, but empirically it seems unnecessary for high-dimensional vectors.
             parallelExecutor.submit(() -> {
                 graph.nodeStream(1).parallel().forEach(this::improveConnections);
             }).join();
@@ -559,13 +560,6 @@ public class GraphIndexBuilder implements Closeable {
         if (nRemoved == 0) {
             return 0;
         }
-        // make a list of remaining live nodes
-        var liveNodes = new IntArrayList();
-        for (int i = 0; i < graph.getIdUpperBound(); i++) {
-            if (graph.containsNode(i) && !toDelete.get(i)) {
-                liveNodes.add(i);
-            }
-        }
 
         for (int currentLevel = 0; currentLevel < graph.layers.size(); currentLevel++) {
             final int level = currentLevel;  // Create effectively final copy for lambda
@@ -618,7 +612,10 @@ public class GraphIndexBuilder implements Closeable {
                         var R = ThreadLocalRandom.current();
                         // doing actual sampling-without-replacement is expensive so we'll loop a fixed number of times instead
                         for (int i = 0; i < 2 * graph.getDegree(level); i++) {
-                            int randomNode = liveNodes.get(R.nextInt(liveNodes.size()));
+                            int randomNode = R.nextInt(graph.getIdUpperBound());
+                            while(toDelete.get(randomNode)) {
+                                randomNode = R.nextInt(graph.getIdUpperBound());
+                            }
                             if (randomNode != node && !candidates.contains(randomNode) && graph.layers.get(level).contains(randomNode)) {
                                 float score = sf.similarityTo(randomNode);
                                 candidates.insertSorted(randomNode, score);
