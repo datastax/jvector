@@ -104,6 +104,19 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         inMemoryNeighbors = new AtomicReference<>(null);
     }
 
+    private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
+        return inMemoryNeighbors.updateAndGet(current -> {
+            if (current != null) {
+                return current;
+            }
+            try {
+                return loadInMemoryLayers(in);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+    }
+
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
@@ -236,25 +249,6 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         int size = size(level);
         int maxDegree = getDegree(level);
 
-        if (level > 0) {
-            var imh = inMemoryNeighbors.updateAndGet(current -> {
-                if (current != null) {
-                    return current;
-                }
-                try (var reader = readerSupplier.get()) {
-                    return loadInMemoryLayers(reader);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
-            var validIntegerNodes = imh.get(level).keySet().stream().sorted().toArray(Integer[]::new);
-            var validNodes = new int[validIntegerNodes.length];
-            for (int i = 0; i < validNodes.length; i++) {
-                validNodes[i] = validIntegerNodes[i];
-            }
-            return new NodesIterator.ArrayNodesIterator(validNodes, size);
-        }
-
         long layer0NodeSize = (long) Integer.BYTES // ids
                 + inlineBlockSize // inline elements
                 + (Integer.BYTES * (long) (getDegree(0) + 1));
@@ -269,6 +263,16 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
 
         try (var reader = readerSupplier.get()) {
+            if (level > 0) {
+                var imn = getInMemoryLayers(reader);
+                var validIntegerNodes = imn.get(level).keySet().stream().sorted().toArray(Integer[]::new);
+                var validNodes = new int[validIntegerNodes.length];
+                for (int i = 0; i < validNodes.length; i++) {
+                    validNodes[i] = validIntegerNodes[i];
+                }
+                return new NodesIterator.ArrayNodesIterator(validNodes, size);
+            }
+
             int[] validNodes = new int[size(level)];
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
@@ -427,16 +431,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                     return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
                 } else {
                     // For levels > 0, read from memory
-                    var imn = inMemoryNeighbors.updateAndGet(current -> {
-                        if (current != null) {
-                            return current;
-                        }
-                        try {
-                            return loadInMemoryLayers(reader);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
-                        }
-                    });
+                    var imn = getInMemoryLayers(reader);
                     int[] stored = imn.get(level).get(node);
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
                     return new NodesIterator.ArrayNodesIterator(stored, stored.length);

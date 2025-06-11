@@ -29,11 +29,8 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -42,7 +39,6 @@ import java.util.ArrayList;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
-    private static final Logger log = LoggerFactory.getLogger(TestOnDiskSequentialGraphIndexWriter.class);
     private Path testDirectory;
 
     @Before
@@ -74,7 +70,7 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
     public void testMultiLayerGraphWriteAndLoad() throws IOException {
         // Setup test parameters
         int dimension = 2;
-        int size = 20;
+        int size = 50;
         int maxConnections = 8;
         int beamWidth = 100;
         float alpha = 1.2f;
