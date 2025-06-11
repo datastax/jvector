@@ -202,7 +202,6 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                     header.common.entryNode,
                     header.common.layerInfo.size(),
                     in.getPosition());
-            // TODO: record neighbors offset in the footer
             return new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
