@@ -27,18 +27,13 @@ import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
-import org.agrona.collections.Int2IntHashMap;
 
-import java.io.Closeable;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 
 /**
  * Writes a graph index to disk in a format that can be loaded as an OnDiskGraphIndex.
@@ -74,22 +69,11 @@ import java.util.stream.Collectors;
  * The class supports incremental writing through the writeInline method, which
  * allows writing features for individual nodes without writing the entire graph.
  */
-public class OnDiskGraphIndexWriter implements Closeable {
-    private final int version;
-    private final GraphIndex graph;
-    private final GraphIndex.View view;
-    private final OrdinalMapper ordinalMapper;
-    private final int dimension;
-    // we don't use Map features but EnumMap is the best way to make sure we don't
-    // accidentally introduce an ordering bug in the future
-    private final EnumMap<FeatureId, Feature> featureMap;
-    private final RandomAccessWriter out;
+public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
     private final long startOffset;
-    private final int headerSize;
-    private volatile int maxOrdinalWritten = -1;
-    private final List<Feature> inlineFeatures;
+    private final RandomAccessWriter randomAccessWriter;
 
-    private OnDiskGraphIndexWriter(RandomAccessWriter out,
+    private OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
                                    GraphIndex graph,
@@ -97,34 +81,19 @@ public class OnDiskGraphIndexWriter implements Closeable {
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features)
     {
-        if (graph.getMaxLevel() > 0 && version < 4) {
-            throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
-        }
-        this.version = version;
-        this.graph = graph;
-        this.view = graph instanceof OnHeapGraphIndex ? ((OnHeapGraphIndex) graph).getFrozenView() : graph.getView();
-        this.ordinalMapper = oldToNewOrdinals;
-        this.dimension = dimension;
-        this.featureMap = features;
-        this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
-        this.out = out;
+        super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;
-
-        // create a mock Header to determine the correct size
-        var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
-        var ch = new CommonHeader(version, dimension, 0, layerInfo, 0);
-        var placeholderHeader = new Header(ch, featureMap);
-        this.headerSize = placeholderHeader.size();
+        this.randomAccessWriter = randomAccessWriter;
     }
 
-    public Set<FeatureId> getFeatureSet() {
-        return featureMap.keySet();
-    }
-
+    /**
+     * Close the view and the output stream. Unlike the super method, for backwards compatibility reasons,
+     * this method assumes ownership of the output stream.
+     */
     @Override
     public synchronized void close() throws IOException {
         view.close();
-        out.close();
+        randomAccessWriter.close();
     }
 
     /**
@@ -134,7 +103,7 @@ public class OnDiskGraphIndexWriter implements Closeable {
      * Provided for callers (like Cassandra) that want to add their own header/footer to the output.
      */
     public RandomAccessWriter getOutput() {
-        return out;
+        return randomAccessWriter;
     }
 
     /**
@@ -153,45 +122,22 @@ public class OnDiskGraphIndexWriter implements Closeable {
             }
         }
 
-        out.seek(featureOffsetForOrdinal(ordinal));
+        randomAccessWriter.seek(featureOffsetForOrdinal(ordinal));
 
         for (var feature : inlineFeatures) {
             var state = stateMap.get(feature.id());
             if (state == null) {
-                out.seek(out.position() + feature.featureSize());
+                randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
             } else {
-                feature.writeInline(out, state);
+                feature.writeInline(randomAccessWriter, state);
             }
         }
 
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
     }
 
-    /**
-     * @return the maximum ordinal written so far, or -1 if no ordinals have been written yet
-     */
-    public int getMaxOrdinal() {
-        return maxOrdinalWritten;
-    }
-
     private long featureOffsetForOrdinal(int ordinal) {
-        int edgeSize = Integer.BYTES * (1 + graph.getDegree(0));
-        long inlineBytes = ordinal * (long) (Integer.BYTES + inlineFeatures.stream().mapToInt(Feature::featureSize).sum() + edgeSize);
-        return startOffset
-                + headerSize
-                + inlineBytes // previous nodes
-                + Integer.BYTES; // the ordinal of the node whose features we're about to write
-    }
-
-    /**
-     * Write the index header and completed edge lists to the given output.  Inline features given in
-     * `featureStateSuppliers` will also be written.  (Features that do not have a supplier are assumed
-     * to have already been written by calls to writeInline).  The output IS flushed.
-     * <p>
-     * Each supplier takes a node ordinal and returns a FeatureState suitable for Feature.writeInline.
-     */
-    private boolean isSeparated(Feature feature) {
-        return feature instanceof SeparatedFeature;
+        return super.featureOffsetForOrdinal(startOffset, ordinal);
     }
 
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
@@ -221,13 +167,13 @@ public class OnDiskGraphIndexWriter implements Closeable {
 
             // if no node exists with the given ordinal, write a placeholder
             if (originalOrdinal == OrdinalMapper.OMITTED) {
-                out.writeInt(-1);
+                randomAccessWriter.writeInt(-1);
                 for (var feature : inlineFeatures) {
-                    out.seek(out.position() + feature.featureSize());
+                    randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
                 }
-                out.writeInt(0);
+                randomAccessWriter.writeInt(0);
                 for (int n = 0; n < graph.getDegree(0); n++) {
-                    out.writeInt(-1);
+                    randomAccessWriter.writeInt(-1);
                 }
                 continue;
             }
@@ -236,14 +182,14 @@ public class OnDiskGraphIndexWriter implements Closeable {
                 var msg = String.format("Ordinal mapper mapped new ordinal %s to non-existing node %s", newOrdinal, originalOrdinal);
                 throw new IllegalStateException(msg);
             }
-            out.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
-            assert out.position() == featureOffsetForOrdinal(newOrdinal) : String.format("%d != %d", out.position(), featureOffsetForOrdinal(newOrdinal));
+            randomAccessWriter.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
+            assert randomAccessWriter.position() == featureOffsetForOrdinal(newOrdinal) : String.format("%d != %d", randomAccessWriter.position(), featureOffsetForOrdinal(newOrdinal));
             for (var feature : inlineFeatures) {
                 var supplier = featureStateSuppliers.get(feature.id());
                 if (supplier == null) {
-                    out.seek(out.position() + feature.featureSize());
+                    randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
                 } else {
-                    feature.writeInline(out, supplier.apply(originalOrdinal));
+                    feature.writeInline(randomAccessWriter, supplier.apply(originalOrdinal));
                 }
             }
 
@@ -254,7 +200,7 @@ public class OnDiskGraphIndexWriter implements Closeable {
                 throw new IllegalStateException(msg);
             }
             // write neighbors list
-            out.writeInt(neighbors.size());
+            randomAccessWriter.writeInt(neighbors.size());
             int n = 0;
             for (; n < neighbors.size(); n++) {
                 var newNeighborOrdinal = ordinalMapper.oldToNew(neighbors.nextInt());
@@ -262,13 +208,13 @@ public class OnDiskGraphIndexWriter implements Closeable {
                     var msg = String.format("Neighbor ordinal out of bounds: %d/%d", newNeighborOrdinal, ordinalMapper.maxOrdinal());
                     throw new IllegalStateException(msg);
                 }
-                out.writeInt(newNeighborOrdinal);
+                randomAccessWriter.writeInt(newNeighborOrdinal);
             }
             assert !neighbors.hasNext();
 
             // pad out to maxEdgesPerNode
             for (; n < graph.getDegree(0); n++) {
-                out.writeInt(-1);
+                randomAccessWriter.writeInt(-1);
             }
         }
 
@@ -280,18 +226,19 @@ public class OnDiskGraphIndexWriter implements Closeable {
             for (var it = graph.getNodes(level); it.hasNext(); ) {
                 int originalOrdinal = it.nextInt();
                 // node id
-                out.writeInt(ordinalMapper.oldToNew(originalOrdinal));
+                final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
+                randomAccessWriter.writeInt(newOrdinal);
                 // neighbors
                 var neighbors = view.getNeighborsIterator(level, originalOrdinal);
-                out.writeInt(neighbors.size());
+                randomAccessWriter.writeInt(neighbors.size());
                 int n = 0;
                 for ( ; n < neighbors.size(); n++) {
-                    out.writeInt(ordinalMapper.oldToNew(neighbors.nextInt()));
+                    randomAccessWriter.writeInt(ordinalMapper.oldToNew(neighbors.nextInt()));
                 }
                 assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
                 // pad out to degree
                 for (; n < layerDegree; n++) {
-                    out.writeInt(-1);
+                    randomAccessWriter.writeInt(-1);
                 }
                 nodesWritten++;
             }
@@ -311,74 +258,48 @@ public class OnDiskGraphIndexWriter implements Closeable {
 
                 // Set the offset for this feature
                 var feature = (SeparatedFeature) featureEntry.getValue();
-                feature.setOffset(out.position());
+                feature.setOffset(randomAccessWriter.position());
 
                 // Write separated data for each node
                 for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
                     int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
                     if (originalOrdinal != OrdinalMapper.OMITTED) {
-                        feature.writeSeparately(out, supplier.apply(originalOrdinal));
+                        feature.writeSeparately(randomAccessWriter, supplier.apply(originalOrdinal));
                     } else {
-                        out.seek(out.position() + feature.featureSize());
+                        randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
                     }
                 }
             }
         }
 
         // Write the header again with updated offsets
-        long currentPosition = out.position();
+        if (version >= 5) {
+            writeFooter(randomAccessWriter.position());
+        }
+
+        final var endOfGraphPosition = randomAccessWriter.position();
         writeHeader();
-        out.seek(currentPosition);
-        out.flush();
+        randomAccessWriter.seek(endOfGraphPosition);
+        randomAccessWriter.flush();
     }
 
     /**
-     * Writes the index header, including the graph size, so that OnDiskGraphIndex can open it.
-     * The output IS flushed.
-     * <p>
-     * Public so that you can write the index size (and thus usefully open an OnDiskGraphIndex against the index)
-     * to read Features from it before writing the edges.
+     * Write the index header and completed edge lists to the given output.
+     * Unlike the super method, this method flushes the output and also assumes it's using a RandomAccessWriter that can
+     * seek to the startOffset and re-write the header.
+     * @throws IOException if there is an error writing the header
      */
     public synchronized void writeHeader() throws IOException {
         // graph-level properties
-        out.seek(startOffset);
-        var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
-        var commonHeader = new CommonHeader(version,
-                dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
-                layerInfo,
-                ordinalMapper.maxOrdinal() + 1);
-        var header = new Header(commonHeader, featureMap);
-        header.write(out);
-        out.flush();
-        assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
-    }
-
-    /**
-     * @return a Map of old to new graph ordinals where the new ordinals are sequential starting at 0,
-     * while preserving the original relative ordering in `graph`.  That is, for all node ids i and j,
-     * if i &lt; j in `graph` then map[i] &lt; map[j] in the returned map.  "Holes" left by
-     * deleted nodes are filled in by shifting down the new ordinals.
-     */
-    public static Map<Integer, Integer> sequentialRenumbering(GraphIndex graph) {
-        try (var view = graph.getView()) {
-            Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
-            int nextOrdinal = 0;
-            for (int i = 0; i < view.getIdUpperBound(); i++) {
-                if (graph.containsNode(i)) {
-                    oldToNewMap.put(i, nextOrdinal++);
-                }
-            }
-            return oldToNewMap;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        randomAccessWriter.seek(startOffset);
+        super.writeHeader(startOffset);
+        randomAccessWriter.flush();
     }
 
     /** CRC32 checksum of bytes written since the starting offset */
     public synchronized long checksum() throws IOException {
-        long endOffset = out.position();
-        return out.checksum(startOffset, endOffset);
+        long endOffset = randomAccessWriter.position();
+        return randomAccessWriter.checksum(startOffset, endOffset);
     }
 
     /**

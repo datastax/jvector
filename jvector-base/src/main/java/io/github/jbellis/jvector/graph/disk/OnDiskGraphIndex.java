@@ -236,6 +236,25 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         int size = size(level);
         int maxDegree = getDegree(level);
 
+        if (level > 0) {
+            var imh = inMemoryNeighbors.updateAndGet(current -> {
+                if (current != null) {
+                    return current;
+                }
+                try (var reader = readerSupplier.get()) {
+                    return loadInMemoryLayers(reader);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            var validIntegerNodes = imh.get(level).keySet().stream().sorted().toArray(Integer[]::new);
+            var validNodes = new int[validIntegerNodes.length];
+            for (int i = 0; i < validNodes.length; i++) {
+                validNodes[i] = validIntegerNodes[i];
+            }
+            return new NodesIterator.ArrayNodesIterator(validNodes, size);
+        }
+
         long layer0NodeSize = (long) Integer.BYTES // ids
                 + inlineBlockSize // inline elements
                 + (Integer.BYTES * (long) (getDegree(0) + 1));
