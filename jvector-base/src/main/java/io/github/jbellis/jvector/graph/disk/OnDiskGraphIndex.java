@@ -253,11 +253,12 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             int[] validNodes = new int[size(level)];
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
-            for (int node = 0; node < upperBound; node++) {
-                long nodeOffset = layerOffset + (node * thisLayerNodeSide);
+            for (int nodeOrd = 0; nodeOrd < upperBound; nodeOrd++) {
+                long nodeOffset = layerOffset + (nodeOrd * thisLayerNodeSide);
                 reader.seek(nodeOffset);
-                if (reader.readInt() != -1) {
-                    validNodes[pos++] = node;
+                int nodeId = reader.readInt();
+                if (nodeId != -1) {
+                    validNodes[pos++] = nodeId;
                 }
             }
             return new NodesIterator.ArrayNodesIterator(validNodes, size);

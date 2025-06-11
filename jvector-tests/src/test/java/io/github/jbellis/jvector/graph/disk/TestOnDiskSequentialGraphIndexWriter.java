@@ -1,3 +1,19 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.graph.disk;
 
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
@@ -13,8 +29,11 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,6 +42,7 @@ import java.util.ArrayList;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
+    private static final Logger log = LoggerFactory.getLogger(TestOnDiskSequentialGraphIndexWriter.class);
     private Path testDirectory;
 
     @Before
@@ -53,8 +73,8 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
     @Test
     public void testMultiLayerGraphWriteAndLoad() throws IOException {
         // Setup test parameters
-        int dimension = 16;
-        int size = 50;
+        int dimension = 2;
+        int size = 20;
         int maxConnections = 8;
         int beamWidth = 100;
         float alpha = 1.2f;
@@ -71,14 +91,11 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
         GraphIndex graph = TestUtil.buildSequentially(builder, ravv);
 
         // Create a sequential writer and write the graph
-        Path indexPath = testDirectory.resolve("sequential_graph.data");
-        try (var out = new SimpleWriter(indexPath)) {
-            // Create an ordinal mapper
-            var ordinalMapper = new OrdinalMapper.MapMapper(OnDiskSequentialGraphIndexWriter.sequentialRenumbering(graph));
-            var writer = new OnDiskSequentialGraphIndexWriter.Builder(graph, out)
-                    .with(new InlineVectors(dimension))
-                    .withMapper(ordinalMapper)
-                    .build();
+        Path indexPath = testDirectory.resolve("graph.index_with_hierarchy_" + addHierarchy);
+        try (var out = new SimpleWriter(indexPath);
+             var writer = new OnDiskSequentialGraphIndexWriter.Builder(graph, out)
+                     .with(new InlineVectors(ravv.dimension()))
+                     .build()) {
 
             // Create feature state suppliers
             var suppliers = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,

@@ -130,6 +130,7 @@ public class SimpleWriter implements IndexWriter {
 
     @Override
     public void close() throws IOException {
+        dos.flush();
         dos.close();
         fos.close();
     }
