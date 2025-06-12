@@ -17,11 +17,10 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.*;
 import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
@@ -31,7 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public abstract class AbstractGraphIndexWriter implements  GraphIndexWriter {
+public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
     public static final int FOOTER_MAGIC = 0x4a564244; // "EOF magic"
     public static final int FOOTER_OFFSET_SIZE = Long.BYTES; // The size of the offset in the footer
     public static final int FOOTER_MAGIC_SIZE = Integer.BYTES; // The size of the magic number in the footer
@@ -44,12 +43,12 @@ public abstract class AbstractGraphIndexWriter implements  GraphIndexWriter {
     // we don't use Map features but EnumMap is the best way to make sure we don't
     // accidentally introduce an ordering bug in the future
     final EnumMap<FeatureId, Feature> featureMap;
-    final IndexWriter out; /* output for graph nodes and inline features */
+    final T out; /* output for graph nodes and inline features */
     final int headerSize;
     volatile int maxOrdinalWritten = -1;
     final List<Feature> inlineFeatures;
 
-    AbstractGraphIndexWriter(IndexWriter out,
+    AbstractGraphIndexWriter(T out,
                                      int version,
                                      GraphIndex graph,
                                      OrdinalMapper oldToNewOrdinals,
@@ -166,5 +165,112 @@ public abstract class AbstractGraphIndexWriter implements  GraphIndexWriter {
         var header = new Header(commonHeader, featureMap);
         header.write(out);
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
+    }
+
+    void writeSparseLevels() throws IOException {
+        // write sparse levels
+        for (int level = 1; level <= graph.getMaxLevel(); level++) {
+            int layerSize = graph.size(level);
+            int layerDegree = graph.getDegree(level);
+            int nodesWritten = 0;
+            for (var it = graph.getNodes(level); it.hasNext(); ) {
+                int originalOrdinal = it.nextInt();
+                // node id
+                final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
+                out.writeInt(newOrdinal);
+                // neighbors
+                var neighbors = view.getNeighborsIterator(level, originalOrdinal);
+                out.writeInt(neighbors.size());
+                int n = 0;
+                for ( ; n < neighbors.size(); n++) {
+                    out.writeInt(ordinalMapper.oldToNew(neighbors.nextInt()));
+                }
+                assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
+                // pad out to degree
+                for (; n < layerDegree; n++) {
+                    out.writeInt(-1);
+                }
+                nodesWritten++;
+            }
+            if (nodesWritten != layerSize) {
+                throw new IllegalStateException("Mismatch between layer size and nodes written");
+            }
+        }
+    }
+
+    /**
+     * Builder for {@link AbstractGraphIndexWriter}, with optional features.
+     * <p>
+     * Subclasses should implement `reallyBuild` to return the appropriate type.
+     * <p>
+     * K - the type of the writer to build
+     * T - the type of the output stream
+     */
+    public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> {
+        final GraphIndex graphIndex;
+        final EnumMap<FeatureId, Feature> features;
+        final T out;
+        OrdinalMapper ordinalMapper;
+        int version;
+
+        public Builder(GraphIndex graphIndex, T out) {
+            this.graphIndex = graphIndex;
+            this.out = out;
+            this.features = new EnumMap<>(FeatureId.class);
+            this.version = OnDiskGraphIndex.CURRENT_VERSION;
+        }
+
+        public Builder<K, T> withVersion(int version) {
+            if (version > OnDiskGraphIndex.CURRENT_VERSION) {
+                throw new IllegalArgumentException("Unsupported version: " + version);
+            }
+
+            this.version = version;
+            return this;
+        }
+
+        public Builder<K, T> with(Feature feature) {
+            features.put(feature.id(), feature);
+            return this;
+        }
+
+        public Builder<K, T> withMapper(OrdinalMapper ordinalMapper) {
+            this.ordinalMapper = ordinalMapper;
+            return this;
+        }
+
+        public K build() throws IOException {
+            if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
+                throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
+            }
+
+            int dimension;
+            if (features.containsKey(FeatureId.INLINE_VECTORS)) {
+                dimension = ((InlineVectors) features.get(FeatureId.INLINE_VECTORS)).dimension();
+            } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
+                dimension = ((NVQ) features.get(FeatureId.NVQ_VECTORS)).dimension();
+            } else if (features.containsKey(FeatureId.SEPARATED_VECTORS)) {
+                dimension = ((SeparatedVectors) features.get(FeatureId.SEPARATED_VECTORS)).dimension();
+            } else if (features.containsKey(FeatureId.SEPARATED_NVQ)) {
+                dimension = ((SeparatedNVQ) features.get(FeatureId.SEPARATED_NVQ)).dimension();
+            } else {
+                throw new IllegalArgumentException("Inline or separated vector feature must be provided");
+            }
+
+            if (ordinalMapper == null) {
+                ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
+            }
+            return reallyBuild(dimension);
+        }
+
+        protected abstract K reallyBuild(int dimension) throws IOException;
+
+        public Builder<K, T> withMap(Map<Integer, Integer> oldToNewOrdinals) {
+            return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
+        }
+
+        public Feature getFeature(FeatureId featureId) {
+            return features.get(featureId);
+        }
     }
 }

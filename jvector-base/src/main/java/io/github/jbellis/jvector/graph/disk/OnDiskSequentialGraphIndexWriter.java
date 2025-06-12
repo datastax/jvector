@@ -56,13 +56,13 @@ import java.util.stream.Collectors;
  * <li> When we embed jVector in frameworks such as Lucene that rely on sequential writes for performance and correctness
  * </ul>
  */
-public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter {
+public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
     public static final int FOOTER_MAGIC = 0x4a564244; // "EOF magic"
     public static final int FOOTER_OFFSET_SIZE = Long.BYTES; // The size of the offset in the footer
     public static final int FOOTER_MAGIC_SIZE = Integer.BYTES; // The size of the magic number in the footer
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE; // The total size of the footer
 
-    private OnDiskSequentialGraphIndexWriter(IndexWriter out,
+    OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
                                              GraphIndex graph,
                                              OrdinalMapper oldToNewOrdinals,
@@ -157,33 +157,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter {
             }
         }
 
-        // write sparse levels
-        for (int level = 1; level <= graph.getMaxLevel(); level++) {
-            int layerSize = graph.size(level);
-            int layerDegree = graph.getDegree(level);
-            int nodesWritten = 0;
-            for (var it = graph.getNodes(level); it.hasNext(); ) {
-                int originalOrdinal = it.nextInt();
-                // node id
-                out.writeInt(ordinalMapper.oldToNew(originalOrdinal));
-                // neighbors
-                var neighbors = view.getNeighborsIterator(level, originalOrdinal);
-                out.writeInt(neighbors.size());
-                int n = 0;
-                for ( ; n < neighbors.size(); n++) {
-                    out.writeInt(ordinalMapper.oldToNew(neighbors.nextInt()));
-                }
-                assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
-                // pad out to degree
-                for (; n < layerDegree; n++) {
-                    out.writeInt(-1);
-                }
-                nodesWritten++;
-            }
-            if (nodesWritten != layerSize) {
-                throw new IllegalStateException("Mismatch between layer size and nodes written");
-            }
-        }
+        writeSparseLevels();
 
         // Write separated features
         for (var featureEntry : featureMap.entrySet()) {
@@ -216,71 +190,17 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter {
     }
 
     /**
-     * Builder for OnDiskGraphIndexWriter, with optional features.
+     * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
-    public static class Builder {
-        private final GraphIndex graphIndex;
-        private final EnumMap<FeatureId, Feature> features;
-        private final IndexWriter dataOut;
-        private OrdinalMapper ordinalMapper;
-        private int version;
-
-        public Builder(GraphIndex graphIndex, IndexWriter dataOut) {
-            this.graphIndex = graphIndex;
-            this.dataOut = dataOut;
-            this.features = new EnumMap<>(FeatureId.class);
-            this.version = OnDiskGraphIndex.CURRENT_VERSION;
+    public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
+        public Builder(GraphIndex graphIndex, IndexWriter out) {
+            super(graphIndex, out);
         }
 
-        public Builder withVersion(int version) {
-            if (version > OnDiskGraphIndex.CURRENT_VERSION) {
-                throw new IllegalArgumentException("Unsupported version: " + version);
-            }
+        @Override
+        protected OnDiskSequentialGraphIndexWriter reallyBuild(int dimension) {
+            return new OnDiskSequentialGraphIndexWriter(out, version, graphIndex, ordinalMapper, dimension, features);
 
-            this.version = version;
-            return this;
-        }
-
-        public Builder with(Feature feature) {
-            features.put(feature.id(), feature);
-            return this;
-        }
-
-        public Builder withMapper(OrdinalMapper ordinalMapper) {
-            this.ordinalMapper = ordinalMapper;
-            return this;
-        }
-
-        public OnDiskSequentialGraphIndexWriter build() throws IOException {
-            if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
-                throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
-            }
-
-            int dimension;
-            if (features.containsKey(FeatureId.INLINE_VECTORS)) {
-                dimension = ((InlineVectors) features.get(FeatureId.INLINE_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
-                dimension = ((NVQ) features.get(FeatureId.NVQ_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.SEPARATED_VECTORS)) {
-                dimension = ((SeparatedVectors) features.get(FeatureId.SEPARATED_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.SEPARATED_NVQ)) {
-                dimension = ((SeparatedNVQ) features.get(FeatureId.SEPARATED_NVQ)).dimension();
-            } else {
-                throw new IllegalArgumentException("Inline or separated vector feature must be provided");
-            }
-
-            if (ordinalMapper == null) {
-                ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
-            }
-            return new OnDiskSequentialGraphIndexWriter(dataOut, version, graphIndex, ordinalMapper, dimension, features);
-        }
-
-        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
-            return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
-        }
-
-        public Feature getFeature(FeatureId featureId) {
-            return features.get(featureId);
         }
     }
 }

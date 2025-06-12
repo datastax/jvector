@@ -20,17 +20,15 @@ import java.io.DataOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.zip.CRC32;
 
 /**
  * A simple implementation of IndexWriter that writes to a file.
  * This implementation is primarily for testing purposes.
+ * Primarily, it is a basic sequential writer, unlike {@link BufferedRandomAccessWriter} which is mostly used in production.
  */
 public class SimpleWriter implements IndexWriter {
     private final FileOutputStream fos;
     private final DataOutputStream dos;
-    private volatile long bytesWrittenSinceStart = 0;
-    private long startPosition = 0;
 
     public SimpleWriter(Path path) throws IOException {
         fos = new FileOutputStream(path.toFile());
@@ -46,86 +44,71 @@ public class SimpleWriter implements IndexWriter {
     @Override
     public void write(int b) throws IOException {
         dos.write(b);
-        bytesWrittenSinceStart++;
     }
 
     @Override
     public void write(byte[] b) throws IOException {
         dos.write(b);
-        bytesWrittenSinceStart += b.length;
     }
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
         dos.write(b, off, len);
-        bytesWrittenSinceStart += len;
     }
 
     @Override
     public void writeBoolean(boolean v) throws IOException {
         dos.writeBoolean(v);
-        bytesWrittenSinceStart++;
     }
 
     @Override
     public void writeByte(int v) throws IOException {
         dos.writeByte(v);
-        bytesWrittenSinceStart++;
     }
 
     @Override
     public void writeShort(int v) throws IOException {
         dos.writeShort(v);
-        bytesWrittenSinceStart += 2;
     }
 
     @Override
     public void writeChar(int v) throws IOException {
         dos.writeChar(v);
-        bytesWrittenSinceStart += 2;
     }
 
     @Override
     public void writeInt(int v) throws IOException {
         dos.writeInt(v);
-        bytesWrittenSinceStart += 4;
     }
 
     @Override
     public void writeLong(long v) throws IOException {
         dos.writeLong(v);
-        bytesWrittenSinceStart += 8;
     }
 
     @Override
     public void writeFloat(float v) throws IOException {
         dos.writeFloat(v);
-        bytesWrittenSinceStart += 4;
     }
 
     @Override
     public void writeDouble(double v) throws IOException {
         dos.writeDouble(v);
-        bytesWrittenSinceStart += 8;
     }
 
     @Override
     public void writeBytes(String s) throws IOException {
         dos.writeBytes(s);
-        bytesWrittenSinceStart += s.length();
     }
 
     @Override
     public void writeChars(String s) throws IOException {
         dos.writeChars(s);
-        bytesWrittenSinceStart += s.length() * 2;
     }
 
     @Override
     public void writeUTF(String s) throws IOException {
         dos.writeUTF(s);
-        // UTF encoding adds variable length, so we need to recalculate position
-        bytesWrittenSinceStart = fos.getChannel().position() - startPosition;
     }
 
     @Override

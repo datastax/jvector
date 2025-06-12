@@ -69,11 +69,10 @@ import java.util.function.IntFunction;
  * The class supports incremental writing through the writeInline method, which
  * allows writing features for individual nodes without writing the entire graph.
  */
-public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
+public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
-    private final RandomAccessWriter randomAccessWriter;
 
-    private OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
+    OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
                                    GraphIndex graph,
@@ -83,7 +82,6 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
     {
         super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;
-        this.randomAccessWriter = randomAccessWriter;
     }
 
     /**
@@ -93,7 +91,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
     @Override
     public synchronized void close() throws IOException {
         view.close();
-        randomAccessWriter.close();
+        out.close();
     }
 
     /**
@@ -103,7 +101,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
      * Provided for callers (like Cassandra) that want to add their own header/footer to the output.
      */
     public RandomAccessWriter getOutput() {
-        return randomAccessWriter;
+        return out;
     }
 
     /**
@@ -122,14 +120,14 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
             }
         }
 
-        randomAccessWriter.seek(featureOffsetForOrdinal(ordinal));
+        out.seek(featureOffsetForOrdinal(ordinal));
 
         for (var feature : inlineFeatures) {
             var state = stateMap.get(feature.id());
             if (state == null) {
-                randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
+                out.seek(out.position() + feature.featureSize());
             } else {
-                feature.writeInline(randomAccessWriter, state);
+                feature.writeInline(out, state);
             }
         }
 
@@ -167,13 +165,13 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
 
             // if no node exists with the given ordinal, write a placeholder
             if (originalOrdinal == OrdinalMapper.OMITTED) {
-                randomAccessWriter.writeInt(-1);
+                out.writeInt(-1);
                 for (var feature : inlineFeatures) {
-                    randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
+                    out.seek(out.position() + feature.featureSize());
                 }
-                randomAccessWriter.writeInt(0);
+                out.writeInt(0);
                 for (int n = 0; n < graph.getDegree(0); n++) {
-                    randomAccessWriter.writeInt(-1);
+                    out.writeInt(-1);
                 }
                 continue;
             }
@@ -182,14 +180,14 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
                 var msg = String.format("Ordinal mapper mapped new ordinal %s to non-existing node %s", newOrdinal, originalOrdinal);
                 throw new IllegalStateException(msg);
             }
-            randomAccessWriter.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
-            assert randomAccessWriter.position() == featureOffsetForOrdinal(newOrdinal) : String.format("%d != %d", randomAccessWriter.position(), featureOffsetForOrdinal(newOrdinal));
+            out.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
+            assert out.position() == featureOffsetForOrdinal(newOrdinal) : String.format("%d != %d", out.position(), featureOffsetForOrdinal(newOrdinal));
             for (var feature : inlineFeatures) {
                 var supplier = featureStateSuppliers.get(feature.id());
                 if (supplier == null) {
-                    randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
+                    out.seek(out.position() + feature.featureSize());
                 } else {
-                    feature.writeInline(randomAccessWriter, supplier.apply(originalOrdinal));
+                    feature.writeInline(out, supplier.apply(originalOrdinal));
                 }
             }
 
@@ -200,7 +198,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
                 throw new IllegalStateException(msg);
             }
             // write neighbors list
-            randomAccessWriter.writeInt(neighbors.size());
+            out.writeInt(neighbors.size());
             int n = 0;
             for (; n < neighbors.size(); n++) {
                 var newNeighborOrdinal = ordinalMapper.oldToNew(neighbors.nextInt());
@@ -208,44 +206,18 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
                     var msg = String.format("Neighbor ordinal out of bounds: %d/%d", newNeighborOrdinal, ordinalMapper.maxOrdinal());
                     throw new IllegalStateException(msg);
                 }
-                randomAccessWriter.writeInt(newNeighborOrdinal);
+                out.writeInt(newNeighborOrdinal);
             }
             assert !neighbors.hasNext();
 
             // pad out to maxEdgesPerNode
             for (; n < graph.getDegree(0); n++) {
-                randomAccessWriter.writeInt(-1);
+                out.writeInt(-1);
             }
         }
 
-        // write sparse levels
-        for (int level = 1; level <= graph.getMaxLevel(); level++) {
-            int layerSize = graph.size(level);
-            int layerDegree = graph.getDegree(level);
-            int nodesWritten = 0;
-            for (var it = graph.getNodes(level); it.hasNext(); ) {
-                int originalOrdinal = it.nextInt();
-                // node id
-                final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
-                randomAccessWriter.writeInt(newOrdinal);
-                // neighbors
-                var neighbors = view.getNeighborsIterator(level, originalOrdinal);
-                randomAccessWriter.writeInt(neighbors.size());
-                int n = 0;
-                for ( ; n < neighbors.size(); n++) {
-                    randomAccessWriter.writeInt(ordinalMapper.oldToNew(neighbors.nextInt()));
-                }
-                assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
-                // pad out to degree
-                for (; n < layerDegree; n++) {
-                    randomAccessWriter.writeInt(-1);
-                }
-                nodesWritten++;
-            }
-            if (nodesWritten != layerSize) {
-                throw new IllegalStateException("Mismatch between layer size and nodes written");
-            }
-        }
+        // We will use the abstract method because no random access is needed
+        writeSparseLevels();
 
         // Write separated features
         for (var featureEntry : featureMap.entrySet()) {
@@ -258,15 +230,15 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
 
                 // Set the offset for this feature
                 var feature = (SeparatedFeature) featureEntry.getValue();
-                feature.setOffset(randomAccessWriter.position());
+                feature.setOffset(out.position());
 
                 // Write separated data for each node
                 for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
                     int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
                     if (originalOrdinal != OrdinalMapper.OMITTED) {
-                        feature.writeSeparately(randomAccessWriter, supplier.apply(originalOrdinal));
+                        feature.writeSeparately(out, supplier.apply(originalOrdinal));
                     } else {
-                        randomAccessWriter.seek(randomAccessWriter.position() + feature.featureSize());
+                        out.seek(out.position() + feature.featureSize());
                     }
                 }
             }
@@ -274,13 +246,13 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
 
         // Write the header again with updated offsets
         if (version >= 5) {
-            writeFooter(randomAccessWriter.position());
+            writeFooter(out.position());
         }
 
-        final var endOfGraphPosition = randomAccessWriter.position();
+        final var endOfGraphPosition = out.position();
         writeHeader();
-        randomAccessWriter.seek(endOfGraphPosition);
-        randomAccessWriter.flush();
+        out.seek(endOfGraphPosition);
+        out.flush();
     }
 
     /**
@@ -291,56 +263,29 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
      */
     public synchronized void writeHeader() throws IOException {
         // graph-level properties
-        randomAccessWriter.seek(startOffset);
+        out.seek(startOffset);
         super.writeHeader(startOffset);
-        randomAccessWriter.flush();
+        out.flush();
     }
 
     /** CRC32 checksum of bytes written since the starting offset */
     public synchronized long checksum() throws IOException {
-        long endOffset = randomAccessWriter.position();
-        return randomAccessWriter.checksum(startOffset, endOffset);
+        long endOffset = out.position();
+        return out.checksum(startOffset, endOffset);
     }
 
     /**
-     * Builder for OnDiskGraphIndexWriter, with optional features.
+     * Builder for {@link OnDiskGraphIndexWriter}, with optional features.
      */
-    public static class Builder {
-        private final GraphIndex graphIndex;
-        private final EnumMap<FeatureId, Feature> features;
-        private final RandomAccessWriter out;
-        private OrdinalMapper ordinalMapper;
-        private long startOffset;
-        private int version;
+    public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
+        private long startOffset = 0L;
 
         public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
         }
 
         public Builder(GraphIndex graphIndex, RandomAccessWriter out) {
-            this.graphIndex = graphIndex;
-            this.out = out;
-            this.features = new EnumMap<>(FeatureId.class);
-            this.version = OnDiskGraphIndex.CURRENT_VERSION;
-        }
-
-        public Builder withVersion(int version) {
-            if (version > OnDiskGraphIndex.CURRENT_VERSION) {
-                throw new IllegalArgumentException("Unsupported version: " + version);
-            }
-
-            this.version = version;
-            return this;
-        }
-
-        public Builder with(Feature feature) {
-            features.put(feature.id(), feature);
-            return this;
-        }
-
-        public Builder withMapper(OrdinalMapper ordinalMapper) {
-            this.ordinalMapper = ordinalMapper;
-            return this;
+            super(graphIndex, out);
         }
 
         /**
@@ -352,36 +297,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter {
             return this;
         }
 
-        public OnDiskGraphIndexWriter build() throws IOException {
-            if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
-                throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
-            }
-
-            int dimension;
-            if (features.containsKey(FeatureId.INLINE_VECTORS)) {
-                dimension = ((InlineVectors) features.get(FeatureId.INLINE_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
-                dimension = ((NVQ) features.get(FeatureId.NVQ_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.SEPARATED_VECTORS)) {
-                dimension = ((SeparatedVectors) features.get(FeatureId.SEPARATED_VECTORS)).dimension();
-            } else if (features.containsKey(FeatureId.SEPARATED_NVQ)) {
-                dimension = ((SeparatedNVQ) features.get(FeatureId.SEPARATED_NVQ)).dimension();
-            } else {
-                throw new IllegalArgumentException("Inline or separated vector feature must be provided");
-            }
-
-            if (ordinalMapper == null) {
-                ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
-            }
+        @Override
+        protected OnDiskGraphIndexWriter reallyBuild(int dimension) throws IOException {
             return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
-        }
-
-        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
-            return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
-        }
-
-        public Feature getFeature(FeatureId featureId) {
-            return features.get(featureId);
         }
     }
 }
