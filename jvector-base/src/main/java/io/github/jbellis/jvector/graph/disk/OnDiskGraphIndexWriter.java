@@ -219,30 +219,8 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         // We will use the abstract method because no random access is needed
         writeSparseLevels();
 
-        // Write separated features
-        for (var featureEntry : featureMap.entrySet()) {
-            if (isSeparated(featureEntry.getValue())) {
-                var fid = featureEntry.getKey();
-                var supplier = featureStateSuppliers.get(fid);
-                if (supplier == null) {
-                    throw new IllegalStateException("Supplier for feature " + fid + " not found");
-                }
-
-                // Set the offset for this feature
-                var feature = (SeparatedFeature) featureEntry.getValue();
-                feature.setOffset(out.position());
-
-                // Write separated data for each node
-                for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
-                    int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
-                    if (originalOrdinal != OrdinalMapper.OMITTED) {
-                        feature.writeSeparately(out, supplier.apply(originalOrdinal));
-                    } else {
-                        out.seek(out.position() + feature.featureSize());
-                    }
-                }
-            }
-        }
+        // We will use the abstract method because no random access is needed
+        writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the header again with updated offsets
         if (version >= 5) {

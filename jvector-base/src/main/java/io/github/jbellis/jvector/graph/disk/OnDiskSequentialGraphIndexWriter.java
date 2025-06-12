@@ -159,30 +159,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
         writeSparseLevels();
 
-        // Write separated features
-        for (var featureEntry : featureMap.entrySet()) {
-            if (isSeparated(featureEntry.getValue())) {
-                var fid = featureEntry.getKey();
-                var supplier = featureStateSuppliers.get(fid);
-                if (supplier == null) {
-                    throw new IllegalStateException("Supplier for feature " + fid + " not found");
-                }
-
-                // Set the offset for this feature
-                var feature = (SeparatedFeature) featureEntry.getValue();
-                feature.setOffset(out.position());
-
-                // Write separated data for each node
-                for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
-                    int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
-                    if (originalOrdinal != OrdinalMapper.OMITTED) {
-                        feature.writeSeparately(out, supplier.apply(originalOrdinal));
-                    } else {
-                        throw new IllegalStateException("Ordinal mapper mapped new ordinal" + newOrdinal + " to non-existing node. This behavior is not supported on OnDiskSequentialGraphIndexWriter. Use OnDiskGraphIndexWriter instead.");
-                    }
-                }
-            }
-        }
+        writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the footer with all the metadata info about the graph
         writeFooter(out.position());

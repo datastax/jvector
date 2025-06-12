@@ -28,6 +28,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
@@ -194,6 +195,35 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
             if (nodesWritten != layerSize) {
                 throw new IllegalStateException("Mismatch between layer size and nodes written");
+            }
+        }
+    }
+
+    void writeSeparatedFeatures(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+        for (var featureEntry : featureMap.entrySet()) {
+            if (isSeparated(featureEntry.getValue())) {
+                var fid = featureEntry.getKey();
+                var supplier = featureStateSuppliers.get(fid);
+                if (supplier == null) {
+                    throw new IllegalStateException("Supplier for feature " + fid + " not found");
+                }
+
+                // Set the offset for this feature
+                var feature = (SeparatedFeature) featureEntry.getValue();
+                feature.setOffset(out.position());
+
+                // Write separated data for each node
+                for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
+                    int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
+                    if (originalOrdinal != OrdinalMapper.OMITTED) {
+                        feature.writeSeparately(out, supplier.apply(originalOrdinal));
+                    } else {
+                        // write zeros for missing data as padding
+                        for (int i = 0; i < feature.featureSize(); i++) {
+                            out.writeByte(0);
+                        }
+                    }
+                }
             }
         }
     }
