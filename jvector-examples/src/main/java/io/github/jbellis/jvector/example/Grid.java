@@ -267,8 +267,8 @@ public class Grid {
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath)
-                .withMapper(identityMapper);
+        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
+        builder.withMapper(identityMapper);
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
         for (var featureId : features) {
             switch (featureId) {

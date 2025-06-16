@@ -52,6 +52,8 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter.*;
+
 /**
  * A class representing a graph index stored on disk. The base graph contains only graph structure.
  * <p> * The base graph
@@ -62,7 +64,7 @@ import org.slf4j.LoggerFactory;
 public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 4;
+    public static final int CURRENT_VERSION = 5;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -102,6 +104,19 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         inMemoryNeighbors = new AtomicReference<>(null);
     }
 
+    private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
+        return inMemoryNeighbors.updateAndGet(current -> {
+            if (current != null) {
+                return current;
+            }
+            try {
+                return loadInMemoryLayers(in);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+    }
+
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
@@ -136,27 +151,74 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     /**
-     * Load an index from the given reader supplier, where the index starts at `offset`.
+     * Load an index from the given reader supplier where header and graph are located on the same file,
+     * where the index starts at `offset`.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph and index.
+     * @param offset the offset in bytes from the start of the file where the index starts.
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset) {
         try (var reader = readerSupplier.get()) {
             logger.debug("Loading OnDiskGraphIndex from offset={}", offset);
             var header = Header.load(reader, offset);
+
             logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
                     header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
             logger.debug("Position after reading header={}",
                     reader.getPosition());
-            return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+            if (header.common.version >= 5) {
+                logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
+                return loadFromFooter(readerSupplier, reader.getPosition());
+            } else {
+                return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+            }
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
         }
     }
 
     /**
-     * Load an index from the given reader supplier at offset 0.
+     * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph index.
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier) {
         return load(readerSupplier, 0);
+    }
+
+    /**
+     * Load an index from the given reader supplier where we will use the footer of the file to find the header.
+     * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @param readerSupplier the reader supplier to use to read the graph index.
+     *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @return the loaded index.
+     */
+    private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
+        try (var in = readerSupplier.get()) {
+            final long magicOffset = in.length() - FOOTER_MAGIC_SIZE;
+            logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
+            in.seek(magicOffset);
+            int version = in.readInt();
+            if (version != FOOTER_MAGIC) {
+                logger.error("Found an invalid footer, magic doesn't match any known version: {}", version);
+                throw new RuntimeException("Unsupported version " + version);
+            }
+            final long metadataOffset = magicOffset - FOOTER_OFFSET_SIZE;
+            logger.debug("Loading header offset={}", metadataOffset);
+            in.seek(metadataOffset);
+            final long headerOffset = in.readLong();
+            logger.debug("Loading OnDiskGraphIndex header from offset={}", headerOffset);
+            var header = Header.load(in, headerOffset);
+            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}, Position after reading header={}",
+                    header.common.version,
+                    header.common.dimension,
+                    header.common.entryNode,
+                    header.common.layerInfo.size(),
+                    in.getPosition());
+            return new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+        } catch (Exception e) {
+            throw new RuntimeException("Error initializing OnDiskGraph", e);
+        }
     }
 
     public Set<FeatureId> getFeatureSet() {
@@ -201,14 +263,25 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
 
         try (var reader = readerSupplier.get()) {
+            if (level > 0) {
+                var imn = getInMemoryLayers(reader);
+                var validIntegerNodes = imn.get(level).keySet().stream().sorted().toArray(Integer[]::new);
+                var validNodes = new int[validIntegerNodes.length];
+                for (int i = 0; i < validNodes.length; i++) {
+                    validNodes[i] = validIntegerNodes[i];
+                }
+                return new NodesIterator.ArrayNodesIterator(validNodes, size);
+            }
+
             int[] validNodes = new int[size(level)];
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
-            for (int node = 0; node < upperBound; node++) {
-                long nodeOffset = layerOffset + (node * thisLayerNodeSide);
+            for (int nodeOrd = 0; nodeOrd < upperBound; nodeOrd++) {
+                long nodeOffset = layerOffset + (nodeOrd * thisLayerNodeSide);
                 reader.seek(nodeOffset);
-                if (reader.readInt() != -1) {
-                    validNodes[pos++] = node;
+                int nodeId = reader.readInt();
+                if (nodeId != -1) {
+                    validNodes[pos++] = nodeId;
                 }
             }
             return new NodesIterator.ArrayNodesIterator(validNodes, size);
@@ -358,16 +431,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                     return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
                 } else {
                     // For levels > 0, read from memory
-                    var imn = inMemoryNeighbors.updateAndGet(current -> {
-                        if (current != null) {
-                            return current;
-                        }
-                        try {
-                            return loadInMemoryLayers(reader);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
-                        }
-                    });
+                    var imn = getInMemoryLayers(reader);
                     int[] stored = imn.get(level).get(node);
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
                     return new NodesIterator.ArrayNodesIterator(stored, stored.length);

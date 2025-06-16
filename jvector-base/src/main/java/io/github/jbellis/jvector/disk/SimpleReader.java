@@ -100,6 +100,11 @@ public class SimpleReader implements RandomAccessReader {
         raf.close();
     }
 
+    @Override
+    public long length() throws IOException {
+        return raf.length();
+    }
+
     public static class Supplier implements ReaderSupplier {
         private final Path path;
 

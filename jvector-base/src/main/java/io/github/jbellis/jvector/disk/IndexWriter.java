@@ -20,13 +20,9 @@ import java.io.Closeable;
 import java.io.DataOutput;
 import java.io.IOException;
 
-/**
- * A DataOutput that adds methods for random access writes
- */
-public interface RandomAccessWriter extends IndexWriter {
-    void seek(long position) throws IOException;
-
-    void flush() throws IOException;
-
-    long checksum(long startOffset, long endOffset) throws IOException;
+public interface IndexWriter extends DataOutput, Closeable {
+    /**
+     * @return the current position in the output
+     */
+    long position() throws IOException;
 }

@@ -218,7 +218,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         }
     }
 
-    private static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorValues ravv) {
+    public static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorValues ravv) {
         for (int i = 0; i < view.size(); i++) {
             assertEquals("Incorrect vector at " + i, ravv.getVector(i), view.getVector(i));
         }

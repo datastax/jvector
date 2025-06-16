@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
@@ -32,7 +33,30 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * Base header for OnDiskGraphIndex functionality.
+ * Base header for OnDiskGraphIndex functionality, containing essential metadata about the graph structure.
+ * <p>
+ * This class stores:
+ * - Version information for format compatibility
+ * - Vector dimension
+ * - Entry node for graph traversal
+ * - Layer information for multi-layer graphs (HNSW)
+ * - ID upper bound (maximum node ID + 1)
+ * <p>
+ * The format evolves across versions:
+ * - v2: Basic format with no magic number
+ * - v3: Added magic number and feature set support
+ * - v4: Added multi-layer support and ID upper bound
+ * <p>
+ * The on-disk layout for v4+ is:
+ * - Magic number (to identify JVector files)
+ * - Version
+ * - Base layer size
+ * - Vector dimension
+ * - Entry node ID
+ * - Base layer max degree
+ * - ID upper bound
+ * - Number of layers
+ * - Layer info (size and degree for each layer)
  */
 public class CommonHeader {
     private static final Logger logger = LoggerFactory.getLogger(CommonHeader.class);
@@ -53,7 +77,7 @@ public class CommonHeader {
         this.idUpperBound = idUpperBound;
     }
 
-    void write(RandomAccessWriter out) throws IOException {
+    void write(IndexWriter out) throws IOException {
         logger.debug("Writing common header at position {}", out.position());
         if (version >= 3) {
             out.writeInt(OnDiskGraphIndex.MAGIC);
