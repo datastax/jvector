@@ -30,18 +30,11 @@ public class TestLimit {
     public static VectorFloat<?>[] createVectors() {
         float[] vec1 = {0.1f, 0.1f, 0.1f, 0.1f, 0.1f};
         float[] vec2 = {0.9f, 0.9f, 0.9f, 0.9f, 0.9f};
-        return List.of(createOneVector(vec1), createOneVector(vec2)).toArray(sz -> new VectorFloat<?>[sz]);
+        float[] vec3 = {0.7f, 0.7f, 0.7f, 0.7f, 0.7f};
+        return List.of(createOneVector(vec1), createOneVector(vec2), createOneVector(vec3)).toArray(sz -> new VectorFloat<?>[sz]);
     }
 
-    @Test
-    public void testLimit() {
-        int nDoc = 1000;
-        var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
-        var ravv = MockVectorValues.fromValues(createVectors());
-
-        GraphIndexBuilder builder = new GraphIndexBuilder(ravv, similarityFunction, 32, 100, 1.0f, 1.2f, true);
-        var graph = builder.build(ravv);
-
+    private void runSearch(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction, GraphIndex graph, String prefix) {
         var query = createOneVector(new float[]{0.8f, 0.8f, 0.8f, 0.8f, 0.8f});
 
         SearchResult.NodeScore[] nn =
@@ -56,26 +49,70 @@ public class TestLimit {
                 ).getNodes();
 
         int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
-        assertEquals("Number of found results is not equal to [2].", 2, nodes.length);
+//        System.out.println(Arrays.toString(nodes));
+        assertEquals(prefix + ": number of found results is not equal to [2].", 2, nodes.length);
 
-        var newNode = createOneVector(new float[]{0.7f, 0.7f, 0.7f, 0.7f, 0.7f});
+    }
 
-        graph.removeNode(0);
-        builder.addGraphNode(0, newNode);
+    @Test
+    public void testLimit() {
+        var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        var ravv = MockVectorValues.fromValues(createVectors());
 
-        SearchResult.NodeScore[] nn2 =
-                GraphSearcher.search(
-                        query,
-                        10,
-                        20,
-                        ravv.copy(),
-                        similarityFunction,
-                        graph,
-                        Bits.ALL
-                ).getNodes();
+        for (int trial = 0; trial < 1000; trial++) {
+            GraphIndexBuilder builder = new GraphIndexBuilder(ravv, similarityFunction, 32, 100, 1.0f, 1.2f, true);
+            builder.addGraphNode(0, ravv.getVector(0));
+            builder.addGraphNode(1, ravv.getVector(1));
 
-        int[] nodes2 = Arrays.stream(nn2).mapToInt(nodeScore -> nodeScore.node).toArray();
-        assertEquals("Number of found results is not equal to [2].", 2, nodes2.length);
+            runSearch(ravv, similarityFunction, builder.graph, "Before update");
 
+            builder.markNodeDeleted(0);
+            builder.addGraphNode(2, ravv.getVector(2));
+
+            runSearch(ravv, similarityFunction, builder.graph, "After update, no cleanup");
+        }
+
+        for (int trial = 0; trial < 1000; trial++) {
+            GraphIndexBuilder builder = new GraphIndexBuilder(ravv, similarityFunction, 32, 100, 1.0f, 1.2f, true);
+            builder.addGraphNode(0, ravv.getVector(0));
+            builder.addGraphNode(1, ravv.getVector(1));
+
+            runSearch(ravv, similarityFunction, builder.graph, "Before update");
+
+            builder.markNodeDeleted(0);
+            builder.cleanup();
+            builder.addGraphNode(0, ravv.getVector(2));
+
+            runSearch(ravv, similarityFunction, builder.graph, "After update, pre cleanup");
+        }
+
+        for (int trial = 0; trial < 1000; trial++) {
+            GraphIndexBuilder builder = new GraphIndexBuilder(ravv, similarityFunction, 32, 100, 1.0f, 1.2f, true);
+            builder.addGraphNode(0, ravv.getVector(0));
+            builder.addGraphNode(1, ravv.getVector(1));
+
+            runSearch(ravv, similarityFunction, builder.graph, "Before update");
+
+            builder.markNodeDeleted(0);
+            builder.addGraphNode(2, ravv.getVector(2));
+            builder.cleanup();
+
+            runSearch(ravv, similarityFunction, builder.graph, "After update, post cleanup");
+        }
+
+        for (int trial = 0; trial < 1000; trial++) {
+            GraphIndexBuilder builder = new GraphIndexBuilder(ravv, similarityFunction, 32, 100, 1.0f, 1.2f, true);
+            builder.addGraphNode(0, ravv.getVector(0));
+            builder.addGraphNode(1, ravv.getVector(1));
+
+            runSearch(ravv, similarityFunction, builder.graph, "Before update");
+
+            builder.markNodeDeleted(0);
+            builder.cleanup();
+            builder.addGraphNode(0, ravv.getVector(2));
+            builder.cleanup();
+
+            runSearch(ravv, similarityFunction, builder.graph, "After update, pre/post cleanup");
+        }
     }
 }
