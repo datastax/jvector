@@ -49,23 +49,25 @@ import java.util.stream.Collectors;
  * search algorithm, see {@link GraphIndex}.
  */
 public class MultiGraphSearcher implements Closeable {
-    private boolean pruneSearch;
-
     private List<GraphIndex.View> views;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
     private final NodeQueue candidates;
-    private final NodeQueue candidatesHierarchy;
     final NodeQueue approximateResults;
     private final NodeQueue rerankedResults;
     private final IntHashSet visited;
     private final NodesUnsorted evictedResults;
 
     // Search parameters that we save here for use by resume()
-    private MultiviewBits.DefaultMultiviewBits acceptOrds;
+    private final MultiviewBits acceptOrds;
     private List<SearchScoreProvider> scoreProviders;
     private CachingReranker cachingReranker;
+
+    private boolean pruneSearch;
+    private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
+
+    private final List<GraphSearcher> searchers;
 
     private int visitedCount;
     private int expandedCount;
@@ -76,14 +78,20 @@ public class MultiGraphSearcher implements Closeable {
      */
     private MultiGraphSearcher(List<GraphIndex> graphs) {
         this.views = graphs.stream().map(GraphIndex::getView).collect(Collectors.toList());
+        this.searchers = new ArrayList<>();
+        for (var view : views) {
+            this.searchers.add(new GraphSearcher(view));
+        }
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
-        this.candidatesHierarchy = new NodeQueue(new GrowableLongHeap(1), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
         this.approximateResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
         this.pruneSearch = true;
-        this.acceptOrds = new MultiviewBits.DefaultMultiviewBits(graphs.size());
+        this.acceptOrds = new MultiviewBits(graphs.size());
+
+        this.pruneSearch = true;
+        this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
     private void initializeScoreProvider(List<SearchScoreProvider> scoreProviders) {
@@ -140,7 +148,7 @@ public class MultiGraphSearcher implements Closeable {
                 var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors.get(iView));
                 ssps.add(ssp);
             }
-            return searcher.search(ssps, topK, rerankK, 0.f, 0.f, acceptOrds);
+            return searcher.search(ssps, topK, rerankK, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -168,24 +176,16 @@ public class MultiGraphSearcher implements Closeable {
      *                        with a large topK to find (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
-     * @param rerankFloor     (Experimental!) Candidates whose approximate similarity is at least this value
-     *                        will be reranked with the exact score (which requires loading a high-res vector from disk)
-     *                        and included in the final results.  (Potentially leaving fewer than topK entries
-     *                        in the results.)  Other candidates will be discarded, but will be potentially
-     *                        resurfaced if `resume` is called.  This is intended for use when combining results
-     *                        from multiple indexes.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
      *                        If {@link Bits#ALL}, all nodes are acceptable.
      *                        It is caller's responsibility to ensure that there are enough acceptable nodes
      *                        that we don't search the entire graph trying to satisfy topK.
      * @return a SearchResult containing the topK results and the number of nodes visited during the search.
      */
-    @Experimental
     public MultiSearchResult search(List<SearchScoreProvider> scoreProviders,
                                     int topK,
                                     int rerankK,
                                     float threshold,
-                                    float rerankFloor,
                                     List<Bits> acceptOrds)
     {
         if (acceptOrds.size() != views.size()) {
@@ -198,38 +198,31 @@ public class MultiGraphSearcher implements Closeable {
             throw new IllegalArgumentException(String.format("rerankK %d must be >= topK %d", rerankK, topK));
         }
 
-        if (views.stream().allMatch(Objects::isNull)) {
+        if (views.stream().allMatch(v -> v.entryNode() == null)) {
             return new MultiSearchResult(new MultiSearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
-        initializeInternal(scoreProviders, acceptOrds);
-
-        // Start with entry points
+        initializeScoreProvider(scoreProviders);
+        initializeBits(acceptOrds);
 
 
         for (var iView = 0; iView < views.size(); iView++) {
-            var entry = views.get(iView).entryNode();
-            if (entry != null) {
-                float score = scoreProviders.get(iView).scoreFunction().similarityTo(entry.node);
-                int nodeId = composeInternalNodeId(iView, entry.node, views.size());
-                visited.add(nodeId);
-                candidatesHierarchy.push(nodeId, score);
+            var searcher = searchers.get(iView);
+            var view = views.get(iView);
 
-                // Move downward from entry.level to 1
-                for (int lvl = entry.level; lvl > 0; lvl--) {
-                    // Search this layer with minimal parameters since we just want the best candidate
-                    searchOneLayer(scoreProviders, 1, 0.0f, lvl, MultiviewBits.ALL,
-                            candidatesHierarchy);
-                    assert approximateResults.size() == 1 : approximateResults.size();
-                    setEntryPointsFromPreviousLayers(candidatesHierarchy);
-                }
-                candidatesHierarchy.foreach(candidates::push);
-                candidatesHierarchy.clear();
+
+            var entry = view.entryNode();
+            if (entry != null) {
+                var sp = scoreProviders.get(iView);
+
+                searcher.internalSearch(sp, entry, topK, rerankK, threshold, acceptOrds.get(iView));
+
+                searcher.approximateResults.foreach(candidates::push);
             }
         }
 
         // Now do the main search at layer 0
-        return resume(topK, rerankK, threshold, rerankFloor);
+        return resume(topK, rerankK, threshold);
     }
 
     /**
@@ -250,7 +243,7 @@ public class MultiGraphSearcher implements Closeable {
                                     int topK,
                                     float threshold,
                                     List<Bits> acceptOrds) {
-        return search(scoreProviders, topK, topK, threshold, 0.0f, acceptOrds);
+        return search(scoreProviders, topK, topK, threshold, acceptOrds);
     }
 
 
@@ -271,123 +264,73 @@ public class MultiGraphSearcher implements Closeable {
         return search(scoreProviders, topK, 0.0f, acceptOrds);
     }
 
-    void setEntryPointsFromPreviousLayers(NodeQueue localCandidates) {
-        // push the candidates seen so far back onto the queue for the next layer
-        // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
-        approximateResults.foreach(localCandidates::push);
-        evictedResults.foreach(localCandidates::push);
-        evictedResults.clear();
-        approximateResults.clear();
-    }
-
-    void initializeInternal(List<SearchScoreProvider> scoreProviders, List<Bits> rawAcceptOrds) {
-        // save search parameters for potential later resume
-        initializeScoreProvider(scoreProviders);
-
+    void initializeBits(List<Bits> rawAcceptOrds) {
         for (var iView = 0; iView < views.size(); iView++) {
             var bits = Bits.intersectionOf(rawAcceptOrds.get(iView), views.get(iView).liveNodes());
             this.acceptOrds.add(bits);
         }
+    }
 
-        // reset the scratch data structures
-        evictedResults.clear();
-        candidates.clear();
-        candidatesHierarchy.clear();
-        visited.clear();
+    private static int getGraphId(int internalNodeId, int nGraphs) {
+        return internalNodeId % nGraphs;
+    }
 
-        // Start with entry points
-        for (var iView = 0; iView < views.size(); iView++) {
-            var entry = views.get(iView).entryNode();
-            if (entry != null) {
-                float score = scoreProviders.get(iView).scoreFunction().similarityTo(entry.node);
-                int nodeId = composeInternalNodeId(iView, entry.node, views.size());
-                visited.add(nodeId);
-                candidates.push(nodeId, score);
-            }
+    private static int getNodeId(int internalNodeId, int nGraphs) {
+        return internalNodeId / nGraphs;
+    }
+
+    private static int composeInternalNodeId(int iView, int nodeId, int nGraphs) {
+        return nodeId * nGraphs + iView;
+    }
+
+    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
+        float topCandidateScore = localCandidates.topScore();
+        // we're done when we have K results and the best candidate is worse than the worst result so far
+        if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
+            return true;
         }
-
-        visitedCount = 0;
-        expandedCount = 0;
-        expandedCountBaseLayer = 0;
-    }
-
-    private static int getGraphId(int internalNodeId, int size) {
-        return internalNodeId % size;
-    }
-
-    private static int getNodeId(int internalNodeId, int size) {
-        return internalNodeId / size;
-    }
-
-    private static int composeInternalNodeId(int iView, int nodeId, int size) {
-        return nodeId * size + iView;
+        // when querying by threshold, also stop when we are probabilistically unlikely to find more qualifying results
+        if (threshold > 0 && scoreTracker.shouldStop()) {
+            return true;
+        }
+        return false;
     }
 
     /**
      * Performs a single-layer ANN search, expanding from the given candidates queue.
+     * Modifies the internal search state.
+     * When it's done, `approximateResults` contains the best `rerankK` results found at layer 0.
      *
      * @param scoreProviders      the current query's scoring/approximation logic for each index
      * @param rerankK             how many results to over-query for approximate ranking
      * @param threshold           similarity threshold, or 0f if none
-     * @param level               which layer to search
-     *                            <p>
-     *                            Modifies the internal search state.
-     *                            When it's done, `approximateResults` contains the best `rerankK` results found at the given layer.
      * @param acceptOrdsThisLayer a Bits instance indicating which nodes are acceptable results for each index
      *                            If {@link Bits#ALL}, all nodes are acceptable.
      *                            It is caller's responsibility to ensure that there are enough acceptable nodes
      *                            that we don't search the entire graph trying to satisfy topK.
      */
-    // Since Astra / Cassandra's usage drives the design decisions here, it's worth being explicit
-    // about how that works and why.
-    //
-    // Astra breaks logical indexes up across multiple physical OnDiskGraphIndex pieces, one per sstable.
-    // Each of these pieces is searched independently, and the results are combined.  To avoid doing
-    // more work than necessary, Astra assumes that each physical ODGI will contribute responses
-    // to the final result in proportion to its size, and only asks for that many results in the initial
-    // search.  If this assumption is incorrect, or if the rows found turn out to be deleted or overwritten
-    // by later requests (which will be in a different sstable), Astra wants a lightweight way to resume
-    // the search where it was left off to get more results.
-    //
-    // Because Astra uses a nonlinear overquerying strategy (i.e. rerankK will be larger in proportion to
-    // topK for small values of topK than for large), it's especially important to avoid reranking more
-    // results than necessary.  Thus, Astra will look at the worstApproximateInTopK value from the first
-    // ODGI, and use that as the rerankFloor for the next.  Thus, rerankFloor helps avoid believed-to-be-
-    // unnecessary work in the initial search, but if the caller needs to resume() then that belief was
-    // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
-    //
-    // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(List<SearchScoreProvider> scoreProviders,
-                        int rerankK,
-                        float threshold,
-                        int level,
-                        MultiviewBits acceptOrdsThisLayer,
-                        NodeQueue localCandidates)
+    void multiSearch(List<SearchScoreProvider> scoreProviders,
+                     int rerankK,
+                     float threshold,
+                     MultiviewBits acceptOrdsThisLayer)
     {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
             // track scores to predict when we are done with threshold queries
-            var scoreTracker = threshold > 0
-                    ? new ScoreTracker.TwoPhaseTracker(threshold)
-                    : pruneSearch ? new ScoreTracker.RelaxedMonotonicityTracker(rerankK) : new ScoreTracker.NoOpTracker();
+            var scoreTracker = scoreTrackerFactory.getScoreTracker(pruneSearch, rerankK, threshold);
             VectorFloat<?> similarities = null;
 
             // the main search loop
-            while (localCandidates.size() > 0) {
-                // we're done when we have K results and the best candidate is worse than the worst result so far
-                float topCandidateScore = localCandidates.topScore();
-                if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
-                    break;
-                }
-                // when querying by threshold, also stop when we are probabilistically unlikely to find more qualifying results
-                if (threshold > 0 && scoreTracker.shouldStop()) {
+            while (candidates.size() > 0) {
+                if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
                     break;
                 }
 
                 // process the top candidate
-                int topCandidateNode = localCandidates.pop();
+                float topCandidateScore = candidates.topScore();
+                int topCandidateNode = candidates.pop();
                 int viewId = getGraphId(topCandidateNode, views.size());
                 int nodeId = getNodeId(topCandidateNode, views.size());
                 if (acceptOrdsThisLayer.get(viewId, nodeId) && topCandidateScore >= threshold) {
@@ -395,13 +338,11 @@ public class MultiGraphSearcher implements Closeable {
                 }
 
                 // skip edge loading if we've found a local maximum and we have enough results
-                if (scoreTracker.shouldStop() && localCandidates.size() >= rerankK - approximateResults.size()) {
+                if (scoreTracker.shouldStop() && candidates.size() >= rerankK - approximateResults.size()) {
                     continue;
                 }
 
-                if (level == 0) {
-                    expandedCountBaseLayer++;
-                }
+                expandedCountBaseLayer++;
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
@@ -411,7 +352,7 @@ public class MultiGraphSearcher implements Closeable {
                     similarities = scoreFunction.edgeLoadingSimilarityTo(topCandidateNode);
                 }
                 int i = 0;
-                for (var it = views.get(viewId).getNeighborsIterator(level, topCandidateNode); it.hasNext(); ) {
+                for (var it = views.get(viewId).getNeighborsIterator(0, topCandidateNode); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     int internalNodeId = composeInternalNodeId(viewId, friendOrd, views.size());
 
@@ -424,7 +365,7 @@ public class MultiGraphSearcher implements Closeable {
                             ? similarities.get(i)
                             : scoreFunction.similarityTo(friendOrd);
                     scoreTracker.track(friendSimilarity);
-                    localCandidates.push(internalNodeId, friendSimilarity);
+                    candidates.push(internalNodeId, friendSimilarity);
                     i++;
                 }
             }
@@ -435,7 +376,7 @@ public class MultiGraphSearcher implements Closeable {
         }
     }
 
-    MultiSearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
+    MultiSearchResult resume(int topK, int rerankK, float threshold) {
         // rR is persistent to save on allocations
         rerankedResults.clear();
         rerankedResults.setMaxSize(topK);
@@ -444,7 +385,7 @@ public class MultiGraphSearcher implements Closeable {
         evictedResults.foreach(candidates::push);
         evictedResults.clear();
 
-        searchOneLayer(scoreProviders, rerankK, threshold, 0, acceptOrds, candidates);
+        multiSearch(scoreProviders, rerankK, threshold, acceptOrds);
 
         // rerank results
         assert approximateResults.size() <= rerankK;
@@ -464,7 +405,7 @@ public class MultiGraphSearcher implements Closeable {
             popFromQueue = approximateResults;
         } else {
             int oldReranked = cachingReranker.getRerankCalls();
-            worstApproximateInTopK = approximateResults.rerank(topK, cachingReranker, rerankFloor, rerankedResults, evictedResults);
+            worstApproximateInTopK = approximateResults.rerank(topK, cachingReranker, 0.0f, rerankedResults, evictedResults);
             reranked = cachingReranker.getRerankCalls() - oldReranked;
             approximateResults.clear();
             popFromQueue = rerankedResults;
@@ -517,7 +458,7 @@ public class MultiGraphSearcher implements Closeable {
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
-        return resume(additionalK, rerankK, 0.0f, 0.0f);
+        return resume(additionalK, rerankK, 0.0f);
     }
 
     @Override
@@ -560,34 +501,23 @@ public class MultiGraphSearcher implements Closeable {
         }
     }
 
-    private interface MultiviewBits {
-        MultiviewBits ALL = new MultiviewBits.MultiViewMatchAllBits();
+    private class MultiviewBits {
+        private List<Bits> acceptOrds;
 
-        boolean get(int view, int index);
-
-
-        class MultiViewMatchAllBits implements MultiviewBits {
-            @Override
-            public boolean get(int view, int index) {
-                return true;
-            }
+        public MultiviewBits(int capacity) {
+            acceptOrds = new ArrayList<>(capacity);
         }
 
-        class DefaultMultiviewBits implements MultiviewBits {
-            private List<Bits> acceptOrds;
+        public boolean add(Bits bits) {
+            return acceptOrds.add(bits);
+        }
 
-            public DefaultMultiviewBits(int capacity) {
-                acceptOrds = new ArrayList<>(capacity);
-            }
+        public boolean get(int view, int index) {
+            return get(view).get(index);
+        }
 
-            public boolean add(Bits bits) {
-                return acceptOrds.add(bits);
-            }
-
-            @Override
-            public boolean get(int view, int index) {
-                return true;
-            }
+        public Bits get(int view) {
+            return acceptOrds.get(view);
         }
     }
 }

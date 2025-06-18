@@ -205,7 +205,7 @@ public class TestVectorGraph extends LuceneTestCase {
                 pqv.scoreFunctionFor(query, similarityFunction),
                 vectors.rerankerFor(query, similarityFunction)
         );
-        var initial = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        var initial = searcher.search(ssp, topK, rerankK, 0.0f, Bits.ALL);
         assertEquals(topK, initial.getNodes().length);
         assertEquals(rerankK, initial.getRerankedCount());
 
