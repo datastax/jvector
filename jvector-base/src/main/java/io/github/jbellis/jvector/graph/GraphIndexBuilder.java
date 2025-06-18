@@ -717,7 +717,7 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
-    private static class ExcludingBits implements Bits {
+    public static class ExcludingBits implements Bits {
         private final int excluded;
 
         public ExcludingBits(int excluded) {

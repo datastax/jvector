@@ -1,6 +1,7 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -36,22 +37,15 @@ public class TestLimit {
 
     private void runSearch(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction, GraphIndex graph, String prefix) {
         var query = createOneVector(new float[]{0.8f, 0.8f, 0.8f, 0.8f, 0.8f});
+        var searcher = new GraphSearcher(graph);
+        var ssp = DefaultSearchScoreProvider.exact(query, similarityFunction, ravv);
 
-        SearchResult.NodeScore[] nn =
-                GraphSearcher.search(
-                        query,
-                        10,
-                        20,
-                        ravv.copy(),
-                        similarityFunction,
-                        graph,
-                        Bits.ALL
-                ).getNodes();
-
-        int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
-//        System.out.println(Arrays.toString(nodes));
-        assertEquals(prefix + ": number of found results is not equal to [2].", 2, nodes.length);
-
+        var x = searcher.search(ssp, 1, 5, 0.0f, 0.0f, new GraphIndexBuilder.ExcludingBits(0));
+        // assert is 1
+        assertEquals(1, x.getNodes().length);
+        // Now resume and get next 1
+        var y = searcher.resume(1, 5);
+        assertEquals(1, y.getNodes().length);
     }
 
     @Test
