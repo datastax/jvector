@@ -79,7 +79,7 @@ public class GraphSearcher implements Closeable {
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
-    public GraphSearcher(GraphIndex.View view) {
+    protected GraphSearcher(GraphIndex.View view) {
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
