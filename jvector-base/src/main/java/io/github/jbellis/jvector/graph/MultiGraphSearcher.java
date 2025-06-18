@@ -217,7 +217,11 @@ public class MultiGraphSearcher implements Closeable {
 
                 searcher.internalSearch(sp, entry, topK, rerankK, threshold, acceptOrds.get(iView));
 
-                searcher.approximateResults.foreach(candidates::push);
+                int finalIView = iView;
+                searcher.approximateResults.foreach((node, score) -> {
+                    int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
+                    candidates.push(internalNodeId, score);
+                });
             }
         }
 
