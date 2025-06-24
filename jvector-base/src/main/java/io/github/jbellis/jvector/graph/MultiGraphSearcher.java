@@ -96,7 +96,7 @@ public class MultiGraphSearcher implements Closeable {
 
     private void initializeScoreProvider(List<SearchScoreProvider> scoreProviders) {
         this.scoreProviders = scoreProviders;
-        if (scoreProviders.stream().anyMatch(Objects::isNull)) {
+        if (scoreProviders.stream().anyMatch(sp -> sp.reranker() == null)) {
             cachingReranker = null;
         } else {
             cachingReranker = new CachingReranker(scoreProviders);
@@ -215,12 +215,13 @@ public class MultiGraphSearcher implements Closeable {
             if (entry != null) {
                 var sp = scoreProviders.get(iView);
 
-                searcher.internalSearch(sp, entry, topK, rerankK, threshold, acceptOrds.get(iView));
+                searcher.internalSearch(sp, entry, 1, 1, threshold, acceptOrds.get(iView));
 
                 int finalIView = iView;
                 searcher.approximateResults.foreach((node, score) -> {
                     int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
                     candidates.push(internalNodeId, score);
+                    visited.add(internalNodeId);
                 });
             }
         }
@@ -353,10 +354,10 @@ public class MultiGraphSearcher implements Closeable {
                 var scoreFunction = scoreProviders.get(viewId).scoreFunction();
                 var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
                 if (useEdgeLoading) {
-                    similarities = scoreFunction.edgeLoadingSimilarityTo(topCandidateNode);
+                    similarities = scoreFunction.edgeLoadingSimilarityTo(nodeId);
                 }
                 int i = 0;
-                for (var it = views.get(viewId).getNeighborsIterator(0, topCandidateNode); it.hasNext(); ) {
+                for (var it = views.get(viewId).getNeighborsIterator(0, nodeId); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     int internalNodeId = composeInternalNodeId(viewId, friendOrd, views.size());
 
