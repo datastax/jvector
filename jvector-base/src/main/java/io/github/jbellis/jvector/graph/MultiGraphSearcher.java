@@ -215,7 +215,7 @@ public class MultiGraphSearcher implements Closeable {
             if (entry != null) {
                 var sp = scoreProviders.get(iView);
 
-                searcher.internalSearch(sp, entry, 1, 1, threshold, acceptOrds.get(iView));
+                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
 
                 int finalIView = iView;
                 searcher.approximateResults.foreach((node, score) -> {
