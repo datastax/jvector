@@ -17,6 +17,8 @@
 package io.github.jbellis.jvector.example;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
+import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
@@ -25,6 +27,7 @@ import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.*;
@@ -85,7 +88,7 @@ public class Bench {
         var pattern = Pattern.compile(regex);
 
         if (outputPath == null) {
-            // Default: run as before, printing to console
+            // run Grid.runAll for each dataset
             var datasetCollection = DatasetCollection.load();
             var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
             System.out.println("Executing the following datasets: " + datasetNames);
@@ -94,14 +97,34 @@ public class Bench {
                 Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets, buildCompression, searchCompression, topKGrid, usePruningGrid);
             }
         } else {
-            // Output to JSON file
+            // run Grid.runAllAndCollectResults and write JSON file
+            var datasetCollection = DatasetCollection.load();
+            var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+            System.out.println("Executing the following datasets: " + datasetNames);
             List<BenchResult> results = executeAndCollect(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, topKGrid, usePruningGrid);
+            
+            // Calculate summary statistics
+            SummaryStats stats = BenchmarkSummarizer.summarize(results);
+            System.out.println(stats.toString());
+            
+            // Write results to JSON file
             ObjectMapper mapper = new ObjectMapper();
-            mapper.writerWithDefaultPrettyPrinter().writeValue(Paths.get(outputPath).toFile(), results);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(new File(outputPath), results);
+            System.out.println("Benchmark results written to " + outputPath);
         }
     }
 
-    private static List<BenchResult> executeAndCollect(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+    private static List<BenchResult> executeAndCollect(
+            Pattern pattern, 
+            List<Function<DataSet, CompressorParameters>> buildCompression, 
+            List<EnumSet<FeatureId>> featureSets, 
+            List<Function<DataSet, CompressorParameters>> compressionGrid, 
+            List<Integer> mGrid, 
+            List<Integer> efConstructionGrid, 
+            List<Float> neighborOverflowGrid, 
+            List<Boolean> addHierarchyGrid, 
+            Map<Integer, List<Double>> topKGrid, 
+            List<Boolean> usePruningGrid) throws IOException {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);

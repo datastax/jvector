@@ -48,9 +48,8 @@ jobs:
 
       - name: Run Bench main
         run: |
-          mvn exec:java -pl jvector-examples \
-            -Dexec.mainClass="io.github.jbellis.jvector.example.Bench" \
-            -Dexec.args="--output bench-results.json"
+          java -cp jvector-multirelease/target/jvector-*.jar \
+            io.github.jbellis.jvector.example.Bench --output bench-results.json
 
       - name: Upload Bench Results
         uses: actions/upload-artifact@v4
