@@ -1,0 +1,59 @@
+name: Run Bench Main
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  run-bench:
+    strategy:
+      matrix:
+        jdk: [11, 20, 22, 24]
+        os: [ubuntu-latest, windows-latest]
+        isa: [isa-avx512f]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.jdk }}
+
+      - name: Set up GCC
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt install -y gcc
+
+      - name: Print ISA info
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          required="avx2 avx512f avx512cd avx512bw avx512dq avx512v"
+          printf "required ISA feature flags: %s\n" "${required}"
+          flags="$(lscpu|grep '^Flags'|cut -d: -f2)"
+          output=""
+          for flag in ${required} ; do
+           if [[ " $flags " == *"${flag}"* ]]
+           then output="${output} $flag(OK)"
+           else output="${output} $flag(FAIL)"
+          fi ; done
+          printf "%s\n" ${output}
+          if [[ " $output " == *"FAIL"* ]] ; then exit 2 ; fi
+
+      - name: Build with Maven
+        run: mvn -B package --file pom.xml
+
+      - name: Run Bench main
+        run: |
+          mvn exec:java -pl jvector-examples \
+            -Dexec.mainClass="io.github.jbellis.jvector.example.Bench" \
+            -Dexec.args="--output bench-results.json"
+
+      - name: Upload Bench Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ matrix.os }}-jdk${{ matrix.jdk }}
+          path: jvector-examples/bench-results.json

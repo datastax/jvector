@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.graph.GraphIndex;
@@ -26,7 +25,6 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
@@ -44,7 +42,6 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -58,17 +55,16 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -402,6 +398,85 @@ public class Grid {
                 printer.printFooter();
             }
         }
+    }
+
+    public static List<BenchResult> runAllAndCollectResults(
+            DataSet ds,
+            List<Integer> mGrid,
+            List<Integer> efConstructionGrid,
+            List<Float> neighborOverflowGrid,
+            List<Boolean> addHierarchyGrid,
+            List<? extends Set<FeatureId>> featureSets,
+            List<Function<DataSet, CompressorParameters>> buildCompressors,
+            List<Function<DataSet, CompressorParameters>> compressionGrid,
+            Map<Integer, List<Double>> topKGrid,
+            List<Boolean> usePruningGrid) throws IOException {
+
+        List<BenchResult> results = new ArrayList<>();
+        for (int m : mGrid) {
+            for (int ef : efConstructionGrid) {
+                for (float neighborOverflow : neighborOverflowGrid) {
+                    for (boolean addHierarchy : addHierarchyGrid) {
+                        for (Set<FeatureId> features : featureSets) {
+                            for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
+                                for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
+                                    Path testDirectory = Files.createTempDirectory("bench");
+                                    try {
+                                        var compressor = getCompressor(buildCompressor, ds);
+                                        var searchCompressorObj = getCompressor(searchCompressor, ds);
+                                        CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
+                                        var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, ds, testDirectory, compressor);
+                                        GraphIndex index = indexes.get(features);
+                                        try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
+                                            int queryRuns = 2;
+                                            List<QueryBenchmark> benchmarks = List.of(
+                                                    ThroughputBenchmark.createDefault(2, 0.1),
+                                                    LatencyBenchmark.createDefault(),
+                                                    CountBenchmark.createDefault(),
+                                                    AccuracyBenchmark.createDefault()
+                                            );
+                                            QueryTester tester = new QueryTester(benchmarks);
+                                            for (int topK : topKGrid.keySet()) {
+                                                for (boolean usePruning : usePruningGrid) {
+                                                    for (double overquery : topKGrid.get(topK)) {
+                                                        int rerankK = (int) (topK * overquery);
+                                                        List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                                                        Map<String, Object> params = Map.of(
+                                                                "M", m,
+                                                                "efConstruction", ef,
+                                                                "neighborOverflow", neighborOverflow,
+                                                                "addHierarchy", addHierarchy,
+                                                                "features", features.toString(),
+                                                                "buildCompressor", buildCompressor.toString(),
+                                                                "searchCompressor", searchCompressor.toString(),
+                                                                "topK", topK,
+                                                                "overquery", overquery,
+                                                                "usePruning", usePruning
+                                                        );
+                                                        for (Metric metric : metricsList) {
+                                                            Map<String, Object> metrics = java.util.Map.of(metric.getHeader(), metric.getValue());
+                                                            results.add(new BenchResult(ds.name, params, metrics));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } catch (Exception e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    } finally {
+                                        for (int n = 0; n < 1; n++) {
+                                            try { Files.deleteIfExists(testDirectory.resolve("graph" + n)); } catch (IOException e) { /* ignore */ }
+                                        }
+                                        try { Files.deleteIfExists(testDirectory); } catch (IOException e) { /* ignore */ }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return results;
     }
 
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
