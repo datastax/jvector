@@ -3,7 +3,7 @@ name: Run Bench Main
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main,github_actions ]
     tags: [ '*' ]
   pull_request:
 
