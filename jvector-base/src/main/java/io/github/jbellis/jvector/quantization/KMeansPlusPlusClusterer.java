@@ -326,7 +326,7 @@ public class KMeansPlusPlusClusterer {
     /**
      * Return the index of the closest centroid to the given point
      */
-    private int getNearestCluster(VectorFloat<?> point) {
+    public int getNearestCluster(VectorFloat<?> point) {
         float minDistance = Float.MAX_VALUE;
         int nearestCluster = 0;
 

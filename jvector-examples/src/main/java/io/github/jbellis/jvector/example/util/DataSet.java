@@ -24,51 +24,43 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeSet;
 
-public class DataSet {
+public class DataSet implements AbstractDataSet {
     public final String name;
     public final VectorSimilarityFunction similarityFunction;
     public final List<VectorFloat<?>> baseVectors;
-    public final List<VectorFloat<?>> queryVectors;
-    public final List<? extends List<Integer>> groundTruth;
+    public final QueryBundle queryBundle;
     private RandomAccessVectorValues baseRavv;
 
     public DataSet(String name,
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    List<VectorFloat<?>> queryVectors,
-                   List<? extends List<Integer>> groundTruth)
-    {
+                   List<? extends List<Integer>> groundTruth) {
+        this(name, similarityFunction, baseVectors, new QueryBundle(queryVectors, groundTruth));
+    }
+
+    public DataSet(String name,
+                   VectorSimilarityFunction similarityFunction,
+                   List<VectorFloat<?>> baseVectors,
+                   QueryBundle queryBundle) {
         if (baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");
         }
-        if (queryVectors.isEmpty()) {
-            throw new IllegalArgumentException("Query vectors must not be empty");
-        }
-        if (groundTruth.isEmpty()) {
-            throw new IllegalArgumentException("Ground truth vectors must not be empty");
-        }
-
-        if (baseVectors.get(0).length() != queryVectors.get(0).length()) {
+        if (baseVectors.get(0).length() != queryBundle.queryVectors.get(0).length()) {
             throw new IllegalArgumentException("Base and query vectors must have the same dimensionality");
-        }
-        if (queryVectors.size() != groundTruth.size()) {
-            throw new IllegalArgumentException("Query and ground truth lists must be the same size");
         }
 
         this.name = name;
         this.similarityFunction = similarityFunction;
         this.baseVectors = baseVectors;
-        this.queryVectors = queryVectors;
-        this.groundTruth = groundTruth;
+        this.queryBundle = queryBundle;
 
         System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
-                name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
+                name, baseVectors.size(), queryBundle.queryVectors.size(), baseVectors.get(0).length());
     }
 
     /**
@@ -79,8 +71,7 @@ public class DataSet {
                                              VectorSimilarityFunction vsf,
                                              List<VectorFloat<?>> baseVectors,
                                              List<VectorFloat<?>> queryVectors,
-                                             List<List<Integer>> groundTruth)
-    {
+                                             List<List<Integer>> groundTruth) {
         // remove zero vectors and duplicates, noting that this will change the indexes of the ground truth answers
         List<VectorFloat<?>> scrubbedBaseVectors;
         List<VectorFloat<?>> scrubbedQueryVectors;
@@ -162,5 +153,15 @@ public class DataSet {
             baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());
         }
         return baseRavv;
+    }
+
+    @Override
+    public String getName() {
+        return "";
+    }
+
+    @Override
+    public VectorFloat<?> getBaseVector(int ordinal) {
+        return baseVectors.get(ordinal);
     }
 }
