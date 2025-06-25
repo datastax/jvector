@@ -205,6 +205,14 @@ public class MultiGraphSearcher implements Closeable {
         initializeScoreProvider(scoreProviders);
         initializeBits(acceptOrds);
 
+        // reset the scratch data structures
+        evictedResults.clear();
+        candidates.clear();
+        visited.clear();
+
+        visitedCount = 0;
+        expandedCount = 0;
+        expandedCountBaseLayer = 0;
 
         for (var iView = 0; iView < views.size(); iView++) {
             var searcher = searchers.get(iView);
@@ -215,14 +223,20 @@ public class MultiGraphSearcher implements Closeable {
             if (entry != null) {
                 var sp = scoreProviders.get(iView);
 
-                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
+                // Only rerankK matters here, topK is not used
+                searcher.internalSearch(sp, entry, 1, 1, threshold, acceptOrds.get(iView));
 
                 int finalIView = iView;
                 searcher.approximateResults.foreach((node, score) -> {
                     int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
                     candidates.push(internalNodeId, score);
                     visited.add(internalNodeId);
+
                 });
+
+                visitedCount += searcher.getVisitedCount();
+                expandedCount += searcher.getExpandedCount();
+                expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
             }
         }
 
