@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
@@ -327,7 +328,7 @@ public class Grid {
                                                           1.2f,
                                                           addHierarchy,
                                                           PhysicalCoreExecutor.pool(),
-                                                          ForkJoinPool.commonPool());
+                                                          FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
         var onHeapGraph = builder.build(floatVectors);
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",

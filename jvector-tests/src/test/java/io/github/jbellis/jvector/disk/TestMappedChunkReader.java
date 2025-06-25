@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.TestUtil;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.jupiter.api.Assumptions;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -30,6 +31,7 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Random;
 
 import static org.junit.Assert.assertEquals;
@@ -108,15 +110,15 @@ public class TestMappedChunkReader extends RandomizedTest {
     public void testReadingLargeFile() throws IOException {
         // Skip the test if we can't allocate a large file
         // This is important for CI environments with limited disk space
+        boolean fileCreated = true;
         try {
             createLargeTestFile();
         } catch (IOException e) {
-            System.out.println("Skipping test due to failure to create large file: " + e.getMessage());
-            return;
+            fileCreated = false;
         }
-        
+        Assumptions.assumeTrue(fileCreated, "Skipping test due to failure to create large file");
         // Open the file channel
-        try (FileChannel channel = FileChannel.open(largeFilePath)) {
+        try (final FileChannel channel = FileChannel.open(largeFilePath, StandardOpenOption.READ)) {
             // Create a MappedChunkReader
             try (MappedChunkReader reader = new MappedChunkReader(channel, ByteOrder.BIG_ENDIAN)) {
                 // Test reading before the 2GB boundary
@@ -156,12 +158,13 @@ public class TestMappedChunkReader extends RandomizedTest {
     @Test
     public void testReadingLargeFileWithSupplier() throws IOException {
         // Skip the test if we can't allocate a large file
+        boolean fileCreated = true;
         try {
             createLargeTestFile();
         } catch (IOException e) {
-            System.out.println("Skipping test due to failure to create large file: " + e.getMessage());
-            return;
+            fileCreated = false;
         }
+        Assumptions.assumeTrue(fileCreated, "Skipping test due to failure to create large file");
         
         // Test using the Supplier
         try (ReaderSupplier readerSupplier = new MappedChunkReader.Supplier(largeFilePath)) {
