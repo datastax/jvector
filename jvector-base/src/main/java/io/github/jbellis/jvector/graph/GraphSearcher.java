@@ -91,6 +91,18 @@ public class GraphSearcher implements Closeable {
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
+    protected int getVisitedCount() {
+        return visitedCount;
+    }
+
+    protected int getExpandedCount() {
+        return expandedCount;
+    }
+
+    protected int getExpandedCountBaseLayer() {
+        return expandedCountBaseLayer;
+    }
+
     private void initializeScoreProvider(SearchScoreProvider scoreProvider) {
         this.scoreProvider = scoreProvider;
         if (scoreProvider.reranker() == null) {
