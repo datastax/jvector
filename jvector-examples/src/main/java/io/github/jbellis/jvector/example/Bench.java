@@ -29,7 +29,6 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -83,7 +82,12 @@ public class Bench {
         );
         // args is list of regexes, possibly needing to be split by whitespace.
         // generate a regex that matches any regex in args, or if args is empty/null, match everything
-        var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
+        // filter out --output and its argument from the regex creation
+        String finalOutputPath = outputPath;
+        String[] filteredArgs = Arrays.stream(args)
+                .filter(arg -> !arg.equals("--output") && (finalOutputPath == null || !arg.equals(finalOutputPath)))
+                .toArray(String[]::new);
+        var regex = filteredArgs.length == 0 ? ".*" : Arrays.stream(filteredArgs).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
