@@ -15,20 +15,19 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -39,34 +38,36 @@ import java.util.concurrent.TimeUnit;
 @Warmup(iterations = 2)
 @Measurement(iterations = 5)
 @Threads(1)
-public class PQBenchmark {
-    private static final Logger log = LoggerFactory.getLogger(PQBenchmark.class);
+public class PQTrainingWithRandomVectorsBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(PQTrainingWithRandomVectorsBenchmark.class);
+    private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
     private RandomAccessVectorValues ravv;
-    private List<VectorFloat<?>> baseVectors;
-    private List<VectorFloat<?>> queryVectors;
-    private List<List<Integer>> groundTruth;
     @Param({"16", "32", "64"})
     private int M; // Number of subspaces
+    @Param({"768"})
     int originalDimension;
+    @Param({"100000"})
+    int vectorCount;
 
     @Setup
     public void setup() throws IOException {
-        var siftPath = "siftsmall";
-        baseVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_base.fvecs", siftPath));
-        queryVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_query.fvecs", siftPath));
-        groundTruth = SiftLoader.readIvecs(String.format("%s/siftsmall_groundtruth.ivecs", siftPath));
-        log.info("base vectors size: {}, query vectors size: {}, loaded, dimensions {}",
-                baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
-        originalDimension = baseVectors.get(0).length();
+        log.info("Pre-creating vector dataset with original dimension: {}, vector count: {}", originalDimension, vectorCount);
+        final List<VectorFloat<?>> vectors = new ArrayList<>(vectorCount);
+        for (int i = 0; i < vectorCount; i++) {
+            float[] vector = new float[originalDimension];
+            for (int j = 0; j < originalDimension; j++) {
+                vector[j] = (float) Math.random();
+            }
+            VectorFloat<?> floatVector = VECTOR_TYPE_SUPPORT.createFloatVector(vector);
+            vectors.add(floatVector);
+        }
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
+        ravv = new ListRandomAccessVectorValues(vectors, originalDimension);
     }
 
     @TearDown
     public void tearDown() throws IOException {
-        baseVectors.clear();
-        queryVectors.clear();
-        groundTruth.clear();
+
     }
 
     @Benchmark
