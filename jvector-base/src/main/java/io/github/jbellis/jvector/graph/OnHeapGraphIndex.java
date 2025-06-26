@@ -366,9 +366,8 @@ public class OnHeapGraphIndex implements GraphIndex {
 
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            NodesIterator it;
-            try {
-                it = getNeighbors(level, node).iterator();
+            NodesIterator it = getNeighbors(level, node).iterator();
+            if (it != null) {
                 return new NodesIterator() {
                     int nextNode = advance();
 
@@ -402,7 +401,7 @@ public class OnHeapGraphIndex implements GraphIndex {
                         return nextNode != Integer.MIN_VALUE;
                     }
                 };
-            } catch (NullPointerException e) {
+            } else {
                 // This case may be encountered when concurrently searching while GraphIndexBuilder.cleanup is running.
                 // In such a case, the neighborhoods may get temporarily broken and we just assume that the node has
                 // no neighbors.
