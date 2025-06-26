@@ -2,6 +2,15 @@ name: Run Bench Main
 
 on:
   workflow_dispatch:
+    inputs:
+      benchmark_config:
+        description: 'Benchmark configuration file (leave empty for default)'
+        required: false
+        default: ''
+      jdk_version:
+        description: 'Override JDK version (leave empty to use matrix)'
+        required: false
+        default: ''
   push:
     branches:
       - main
