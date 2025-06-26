@@ -1,5 +1,6 @@
 package io.github.jbellis.jvector.graph;
 
+import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -36,7 +37,7 @@ import java.util.stream.IntStream;
  * cannot be concurrently executed (we use a lock to control their execution).
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
-public class TestConcurrentReadWriteDeletes extends LuceneTestCase {
+public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private static final int nVectors = 20_000;
     private static final int dimension = 16;
 
