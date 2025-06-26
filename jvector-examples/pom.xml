@@ -34,7 +34,7 @@
                     </descriptorRefs>
                     <archive>
                         <manifest>
-                            <mainClass>io.github.jbellis.jvector.example.Bench</mainClass>
+                            <mainClass>io.github.jbellis.jvector.example.BenchYAML</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
@@ -164,7 +164,7 @@
                                         <classpath/>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -216,7 +216,7 @@
                                         <argument>-XX:+HeapDumpOnOutOfMemoryError</argument>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -311,7 +311,7 @@
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
