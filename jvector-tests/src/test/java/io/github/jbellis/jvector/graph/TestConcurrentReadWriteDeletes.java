@@ -106,7 +106,6 @@ public class TestConcurrentReadWriteDeletes extends LuceneTestCase {
                 System.out.println(String.format("%d ops in %dms = %f ops/s", counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
             }
             if (ThreadLocalRandom.current().nextDouble() < 0.001) {
-//                System.out.println("Cleanup");
                 for (Integer key : keysRemoved) {
                     builder.markNodeDeleted(key);
                 }
