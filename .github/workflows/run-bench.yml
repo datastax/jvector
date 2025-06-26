@@ -57,7 +57,7 @@ jobs:
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
             -Xmx4G -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
-            io.github.jbellis.jvector.example.Bench --output bench-results.json
+            --output bench-results.json
 
       - name: Upload Bench Results
         uses: actions/upload-artifact@v4
