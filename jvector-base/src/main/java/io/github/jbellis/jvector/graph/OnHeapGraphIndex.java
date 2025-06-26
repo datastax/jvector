@@ -366,40 +366,60 @@ public class OnHeapGraphIndex implements GraphIndex {
 
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            var it = getNeighbors(level, node).iterator();
-            return new NodesIterator() {
-                int nextNode = advance();
+            NodesIterator it;
+            try {
+                it = getNeighbors(level, node).iterator();
+                return new NodesIterator() {
+                    int nextNode = advance();
 
-                private int advance() {
-                    while (it.hasNext()) {
-                        int n = it.nextInt();
-                        if (completions.completedAt(n) < timestamp) {
-                            return n;
+                    private int advance() {
+                        while (it.hasNext()) {
+                            int n = it.nextInt();
+                            if (completions.completedAt(n) < timestamp) {
+                                return n;
+                            }
                         }
+                        return Integer.MIN_VALUE;
                     }
-                    return Integer.MIN_VALUE;
-                }
 
-                @Override
-                public int size() {
-                    throw new UnsupportedOperationException();
-                }
-
-                @Override
-                public int nextInt() {
-                    int current = nextNode;
-                    if (current == Integer.MIN_VALUE) {
-                        throw new IndexOutOfBoundsException();
+                    @Override
+                    public int size() {
+                        throw new UnsupportedOperationException();
                     }
-                    nextNode = advance();
-                    return current;
-                }
 
-                @Override
-                public boolean hasNext() {
-                    return nextNode != Integer.MIN_VALUE;
-                }
-            };
+                    @Override
+                    public int nextInt() {
+                        int current = nextNode;
+                        if (current == Integer.MIN_VALUE) {
+                            throw new IndexOutOfBoundsException();
+                        }
+                        nextNode = advance();
+                        return current;
+                    }
+
+                    @Override
+                    public boolean hasNext() {
+                        return nextNode != Integer.MIN_VALUE;
+                    }
+                };
+            } catch (NullPointerException e) {
+                return new NodesIterator() {
+                    @Override
+                    public int size() {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public int nextInt() {
+                        return -1;
+                    }
+
+                    @Override
+                    public boolean hasNext() {
+                        return false;
+                    }
+                };
+            }
         }
     }
 
@@ -407,6 +427,7 @@ public class OnHeapGraphIndex implements GraphIndex {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return getNeighbors(level, node).iterator();
+
         }
 
         @Override
