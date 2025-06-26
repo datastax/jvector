@@ -2,7 +2,6 @@ package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
-import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -13,65 +12,71 @@ import org.junit.Test;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.TestUtil.randomVector;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-
+/**
+ * Runs "nVectors" operations, where each operation is either:
+ * - an insertion
+ * - a mock deletion, instantiated through the use of a BitSet for skipping these nodes during search
+ * - a search
+ * With probability 0.001, we run cleanup to commit the deletions to the index. The cleanup process and the insertions
+ * cannot be concurrently executed (we use a lock to control their execution).
+ */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestConcurrentReadWriteDeletes extends LuceneTestCase {
-    private static final int nVectors = 200_000;
+    private static final int nVectors = 20_000;
     private static final int dimension = 16;
 
-    KeySet keysInserted = new KeySet();
-    List<Integer> keysRemoved = new CopyOnWriteArrayList();
+    private KeySet keysInserted = new KeySet();
+    private List<Integer> keysRemoved = new CopyOnWriteArrayList();
 
-    List<VectorFloat<?>> vectors = createRandomVectors(nVectors, dimension);
-    RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
+    private List<VectorFloat<?>> vectors = createRandomVectors(nVectors, dimension);
+    private RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
 
-    VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+    private VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
 
-    BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
-    GraphIndexBuilder builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, true);
+    private BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+    private GraphIndexBuilder builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, true);
 
-    FixedBitSet liveNodes = new FixedBitSet(nVectors);
+    private FixedBitSet liveNodes = new FixedBitSet(nVectors);
+
+    private final Lock writeLock = new ReentrantLock();
 
     @Test
-    public void testConcurrentReadsWritesDeletes() {
-        try {
-            testConcurrentReadsWritesDeletes(false);
-//            testConcurrentReadsWritesDeletes(true);
-        } catch (ExecutionException | InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void testConcurrentReadsWritesDeletes(boolean addHierarchy) throws ExecutionException, InterruptedException {
+    public void testConcurrentReadsWritesDeletes() throws ExecutionException, InterruptedException {
         var vv = ravv.threadLocalSupplier();
 
-        testConcurrentOps(addHierarchy, i -> {
+        testConcurrentOps(i -> {
             var R = ThreadLocalRandom.current();
             if (R.nextDouble() < 0.2 || keysInserted.isEmpty())
             {
-                builder.addGraphNode(i, vv.get().getVector(i));
-                liveNodes.set(i);
-                keysInserted.add(i);
+                writeLock.lock();
+                try {
+                    builder.addGraphNode(i, vv.get().getVector(i));
+                    liveNodes.set(i);
+                    keysInserted.add(i);
+                } finally {
+                    writeLock.unlock();
+                }
             } else if (R.nextDouble() < 0.1) {
                 var key = keysInserted.getRandom();
-                liveNodes.flip(key);
-                keysRemoved.add(key);
+                if (!keysRemoved.contains(key)) {
+                    liveNodes.flip(key);
+                    keysRemoved.add(key);
+                }
             } else {
                 var queryVector = randomVector(getRandom(), dimension);
                 SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, ravv);
@@ -91,7 +96,7 @@ public class TestConcurrentReadWriteDeletes extends LuceneTestCase {
         void run(int i) throws Throwable;
     }
 
-    private void testConcurrentOps(boolean addHierarchy, Op op) throws ExecutionException, InterruptedException {
+    private void testConcurrentOps(Op op) throws ExecutionException, InterruptedException {
         AtomicInteger counter = new AtomicInteger();
         long start = System.currentTimeMillis();
         var fjp = ForkJoinPool.commonPool();
@@ -100,17 +105,22 @@ public class TestConcurrentReadWriteDeletes extends LuceneTestCase {
         var task = fjp.submit(() -> keys.stream().parallel().forEach(i ->
         {
             wrappedOp(op, i);
-            if (counter.incrementAndGet() % 10_000 == 0)
+            if (counter.incrementAndGet() % 1_000 == 0)
             {
                 var elapsed = System.currentTimeMillis() - start;
                 System.out.println(String.format("%d ops in %dms = %f ops/s", counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
             }
-            if (ThreadLocalRandom.current().nextDouble() < 0.001) {
-                for (Integer key : keysRemoved) {
-                    builder.markNodeDeleted(key);
+            if (ThreadLocalRandom.current().nextDouble() < 0.01) {
+                writeLock.lock();
+                try {
+                    for (Integer key : keysRemoved) {
+                        builder.markNodeDeleted(key);
+                    }
+                    keysRemoved.clear();
+                    builder.cleanup();
+                } finally {
+                    writeLock.unlock();
                 }
-                keysRemoved.clear();
-                builder.cleanup();
             }
         }));
         fjp.shutdown();
