@@ -403,6 +403,9 @@ public class OnHeapGraphIndex implements GraphIndex {
                     }
                 };
             } catch (NullPointerException e) {
+                // This case may be encountered when concurrently searching while GraphIndexBuilder.cleanup is running.
+                // In such a case, the neighborhoods may get temporarily broken and we just assume that the node has
+                // no neighbors.
                 return new NodesIterator() {
                     @Override
                     public int size() {
