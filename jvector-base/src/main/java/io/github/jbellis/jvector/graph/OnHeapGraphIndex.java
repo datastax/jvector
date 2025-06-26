@@ -406,22 +406,7 @@ public class OnHeapGraphIndex implements GraphIndex {
                 // This case may be encountered when concurrently searching while GraphIndexBuilder.cleanup is running.
                 // In such a case, the neighborhoods may get temporarily broken and we just assume that the node has
                 // no neighbors.
-                return new NodesIterator() {
-                    @Override
-                    public int size() {
-                        throw new UnsupportedOperationException();
-                    }
-
-                    @Override
-                    public int nextInt() {
-                        return Integer.MIN_VALUE;
-                    }
-
-                    @Override
-                    public boolean hasNext() {
-                        return false;
-                    }
-                };
+                return new NodesIterator.EmptyNodeIterator();
             }
         }
     }
