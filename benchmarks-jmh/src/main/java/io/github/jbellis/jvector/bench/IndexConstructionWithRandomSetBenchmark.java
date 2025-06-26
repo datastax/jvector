@@ -15,11 +15,13 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -30,7 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Set;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -47,13 +49,16 @@ public class IndexConstructionWithRandomSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithRandomSetBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
     private RandomAccessVectorValues ravv;
-    private BuildScoreProvider bsp;
+    private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
     @Param({"768", "1536"})
     private int originalDimension;
     @Param({"10000", "100000", "1000000"})
     int numBaseVectors;
+
+    @Param({"Exact", "PQ"})
+    String buildScoreProviderType;
 
     @Setup
     public void setup() throws IOException {
@@ -66,8 +71,20 @@ public class IndexConstructionWithRandomSetBenchmark {
         // wrap the raw vectors in a RandomAccessVectorValues
         ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
-        // score provider using the raw, in-memory vectors
-        bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        if (buildScoreProviderType.equals("PQ")) {
+            final ProductQuantization pq = ProductQuantization.compute(ravv,
+                    16,
+                    256,
+                    true);
+            final PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
+            buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqVectors);
+        } else if (buildScoreProviderType.equals("Exact")) {
+            // score provider using the raw, in-memory vectors
+            buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        } else {
+            throw new IllegalArgumentException("Unknown build score provider type: " + buildScoreProviderType);
+        }
+
     }
 
     @TearDown
@@ -78,7 +95,7 @@ public class IndexConstructionWithRandomSetBenchmark {
     @Benchmark
     public void buildIndexBenchmark(Blackhole blackhole) throws IOException {
         // score provider using the raw, in-memory vectors
-        try (final var graphIndexBuilder = new GraphIndexBuilder(bsp, ravv.dimension(), M, beamWidth, 1.2f, 1.2f, true)) {
+        try (final var graphIndexBuilder = new GraphIndexBuilder(buildScoreProvider, ravv.dimension(), M, beamWidth, 1.2f, 1.2f, true)) {
             final var graphIndex = graphIndexBuilder.build(ravv);
             blackhole.consume(graphIndex);
         }

@@ -51,9 +51,6 @@ public class PQTrainingWithRandomVectorsBenchmark {
     int originalDimension;
     @Param({"100000"})
     int vectorCount;
-    @Param({"1"})
-    int concurrency;
-    ForkJoinPool forkJoinPool;
 
     @Setup
     public void setup() throws IOException {
@@ -69,19 +66,12 @@ public class PQTrainingWithRandomVectorsBenchmark {
         }
         // wrap the raw vectors in a RandomAccessVectorValues
         ravv = new ListRandomAccessVectorValues(vectors, originalDimension);
-        forkJoinPool = new ForkJoinPool(concurrency);
         log.info("Pre-created vector dataset with original dimension: {}, vector count: {}", originalDimension, vectorCount);
     }
 
     @TearDown
     public void tearDown() throws IOException, InterruptedException {
-        log.info("Tearing down test, waiting for fork join pool to shutdown, queued task count: {}", forkJoinPool.getQueuedTaskCount());
-        forkJoinPool.shutdownNow();
-        boolean timedOut = forkJoinPool.awaitTermination(1, TimeUnit.MINUTES);
-        if (timedOut) {
-            log.warn("Fork join pool did not shutdown in time, some tasks may not have completed");
-            throw new RuntimeException("Fork join pool did not shutdown in time, some tasks may not have completed");
-        }
+
     }
 
     @Benchmark
@@ -90,10 +80,8 @@ public class PQTrainingWithRandomVectorsBenchmark {
         ProductQuantization pq = ProductQuantization.compute(ravv,
                 M, // number of subspaces
                 256, // number of centroids per subspace
-                true, // center the dataset
-                UNWEIGHTED,
-                forkJoinPool,
-                forkJoinPool);
+                true // center the dataset
+        );
 
         blackhole.consume(pq);
     }
