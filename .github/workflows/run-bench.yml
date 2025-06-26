@@ -3,9 +3,8 @@ name: Run Bench Main
 on:
   workflow_dispatch:
   push:
-    branches: [ main,github_actions ]
-    tags: [ '*' ]
-  pull_request:
+    branches:
+      - main
 
 jobs:
   test-avx512:
@@ -56,11 +55,36 @@ jobs:
           # Use the jar-with-dependencies which includes all required dependencies
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
-            -Xmx4G -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
-            --output bench-results.json
+            -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar --output bench-results.json
 
       - name: Upload Bench Results
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results-${{ matrix.os }}-jdk${{ matrix.jdk }}
+          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
           path: bench-results.json
+
+      - name: Download Previous Benchmark Results
+        uses: dawidd6/action-download-artifact@v2
+        continue-on-error: true
+        with:
+          workflow: run-bench.yml
+          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+          path: previous-results
+          skip_unpack: false
+          if_no_artifact_found: warn
+
+      - name: Install Python Dependencies
+        run: |
+          pip install argparse
+
+      - name: Compare Benchmark Results
+        if: success() && hashFiles('previous-results/bench-results.json') != ''
+        run: |
+          python compare_benchmarks.py bench-results.json previous-results/bench-results.json --output benchmark-comparison.md
+
+      - name: Upload Comparison Report
+        if: success() && hashFiles('benchmark-comparison.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-comparison-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+          path: benchmark-comparison.md
