@@ -47,8 +47,21 @@ jobs:
             exit 0
           fi
 
-      - name: Build with Maven
+      - name: Build with Maven (JDK 11)
+        if: matrix.jdk == '11'
+        run: mvn -B -Pjdk11 package --file pom.xml
+
+      - name: Build with Maven (JDK 20)
+        if: matrix.jdk == '20'
+        run: mvn -B -Pjdk20 package --file pom.xml
+
+      - name: Build with Maven (JDK 22)
+        if: matrix.jdk == '22'
         run: mvn -B package --file pom.xml
+
+      - name: Build with Maven (JDK 24)
+        if: matrix.jdk == '24'
+        run: mvn -B -Punix-amd64-profile package --file pom.xml
 
       - name: Run Bench main
         run: |
