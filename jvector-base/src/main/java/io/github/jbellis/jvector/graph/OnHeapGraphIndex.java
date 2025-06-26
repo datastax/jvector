@@ -411,7 +411,7 @@ public class OnHeapGraphIndex implements GraphIndex {
 
                     @Override
                     public int nextInt() {
-                        return -1;
+                        return Integer.MIN_VALUE;
                     }
 
                     @Override
