@@ -52,15 +52,15 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"768", "1536"})
+    @Param({"768"/*, "1536"*/})
     private int originalDimension;
-    @Param({"10000", "100000", "1000000"})
+    @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
 
     @Param({"Exact", "PQ"})
     String buildScoreProviderType;
 
-    @Setup
+    @Setup(Level.Invocation)
     public void setup() throws IOException {
 
         final var baseVectors = new ArrayList<VectorFloat<?>>(numBaseVectors);
@@ -72,6 +72,7 @@ public class IndexConstructionWithRandomSetBenchmark {
         ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         if (buildScoreProviderType.equals("PQ")) {
+            log.info("Using PQ build score provider with original dimension: {}, M: {}, beam width: {}", originalDimension, M, beamWidth);
             final ProductQuantization pq = ProductQuantization.compute(ravv,
                     16,
                     256,
@@ -79,6 +80,7 @@ public class IndexConstructionWithRandomSetBenchmark {
             final PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
             buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqVectors);
         } else if (buildScoreProviderType.equals("Exact")) {
+            log.info("Using Exact build score provider with original dimension: {}, M: {}, beam width: {}", originalDimension, M, beamWidth);
             // score provider using the raw, in-memory vectors
             buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         } else {
@@ -87,7 +89,7 @@ public class IndexConstructionWithRandomSetBenchmark {
 
     }
 
-    @TearDown
+    @TearDown(Level.Invocation)
     public void tearDown() throws IOException {
 
     }
