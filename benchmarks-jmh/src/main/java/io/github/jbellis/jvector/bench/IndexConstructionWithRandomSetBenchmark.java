@@ -52,7 +52,7 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"768"/*, "1536"*/})
+    @Param({"768", "1536"})
     private int originalDimension;
     @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
@@ -73,8 +73,9 @@ public class IndexConstructionWithRandomSetBenchmark {
 
         if (buildScoreProviderType.equals("PQ")) {
             log.info("Using PQ build score provider with original dimension: {}, M: {}, beam width: {}", originalDimension, M, beamWidth);
+            int numberOfSubspaces = getDefaultNumberOfSubspacesPerVector(originalDimension);
             final ProductQuantization pq = ProductQuantization.compute(ravv,
-                    16,
+                    numberOfSubspaces,
                     256,
                     true);
             final PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
@@ -109,5 +110,45 @@ public class IndexConstructionWithRandomSetBenchmark {
             vector.set(i, (float) Math.random());
         }
         return vector;
+    }
+
+    /**
+     * This method returns the default number of subspaces per vector for a given original dimension.
+     * Should be used as a default value for the number of subspaces per vector in case no value is provided.
+     *
+     * @param originalDimension original vector dimension
+     * @return default number of subspaces per vector
+     */
+    public static int getDefaultNumberOfSubspacesPerVector(int originalDimension) {
+        // the idea here is that higher dimensions compress well, but not so well that we should use fewer bits
+        // than a lower-dimension vector, which is what you could get with cutoff points to switch between (e.g.)
+        // D*0.5 and D*0.25. Thus, the following ensures that bytes per vector is strictly increasing with D.
+        int compressedBytes;
+        if (originalDimension <= 32) {
+            // We are compressing from 4-byte floats to single-byte codebook indexes,
+            // so this represents compression of 4x
+            // * GloVe-25 needs 25 BPV to achieve good recall
+            compressedBytes = originalDimension;
+        } else if (originalDimension <= 64) {
+            // * GloVe-50 performs fine at 25
+            compressedBytes = 32;
+        } else if (originalDimension <= 200) {
+            // * GloVe-100 and -200 perform well at 50 and 100 BPV, respectively
+            compressedBytes = (int) (originalDimension * 0.5);
+        } else if (originalDimension <= 400) {
+            // * NYTimes-256 actually performs fine at 64 BPV but we'll be conservative
+            // since we don't want BPV to decrease
+            compressedBytes = 100;
+        } else if (originalDimension <= 768) {
+            // allow BPV to increase linearly up to 192
+            compressedBytes = (int) (originalDimension * 0.25);
+        } else if (originalDimension <= 1536) {
+            // * ada002 vectors have good recall even at 192 BPV = compression of 32x
+            compressedBytes = 192;
+        } else {
+            // We have not tested recall with larger vectors than this, let's let it increase linearly
+            compressedBytes = (int) (originalDimension * 0.125);
+        }
+        return compressedBytes;
     }
 }
