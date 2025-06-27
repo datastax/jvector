@@ -41,6 +41,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -409,7 +410,7 @@ public class OnHeapGraphIndex implements GraphIndex {
                 public int nextInt() {
                     int current = nextNode;
                     if (current == Integer.MIN_VALUE) {
-                        throw new IndexOutOfBoundsException();
+                        throw new NoSuchElementException();
                     }
                     nextNode = advance();
                     return current;

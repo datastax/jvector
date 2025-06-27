@@ -107,7 +107,7 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
 
         @Override
         public int nextInt() {
-            return Integer.MIN_VALUE;
+            throw new NoSuchElementException();
         }
 
         @Override
