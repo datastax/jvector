@@ -108,6 +108,25 @@ public class OnHeapGraphIndex implements GraphIndex {
         return layers.get(level).get(node);
     }
 
+    /**
+     * Returns an iterator over the neighbors for the given node at the specified level.
+     *
+     * @param level the layer
+     * @param node  the node id
+     * @return a NodesIterator, which can be empty
+     */
+    NodesIterator getNeighborsIterator(int level, int node) {
+        if (level >= layers.size()) {
+            return NodesIterator.EMPTY_NODE_ITERATOR;
+        }
+        var neighs = layers.get(level).get(node);
+        if (neighs == null) {
+            return NodesIterator.EMPTY_NODE_ITERATOR;
+        } else {
+            return neighs.iterator();
+        }
+    }
+
     @Override
     public int size(int level) {
         return layers.get(level).size();
@@ -366,54 +385,48 @@ public class OnHeapGraphIndex implements GraphIndex {
 
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            NodesIterator it = getNeighbors(level, node).iterator();
-            if (it != null) {
-                return new NodesIterator() {
-                    int nextNode = advance();
+            NodesIterator it = OnHeapGraphIndex.this.getNeighborsIterator(level, node);
 
-                    private int advance() {
-                        while (it.hasNext()) {
-                            int n = it.nextInt();
-                            if (completions.completedAt(n) < timestamp) {
-                                return n;
-                            }
+            return new NodesIterator() {
+                int nextNode = advance();
+
+                private int advance() {
+                    while (it.hasNext()) {
+                        int n = it.nextInt();
+                        if (completions.completedAt(n) < timestamp) {
+                            return n;
                         }
-                        return Integer.MIN_VALUE;
                     }
+                    return Integer.MIN_VALUE;
+                }
 
-                    @Override
-                    public int size() {
-                        throw new UnsupportedOperationException();
-                    }
+                @Override
+                public int size() {
+                    throw new UnsupportedOperationException();
+                }
 
-                    @Override
-                    public int nextInt() {
-                        int current = nextNode;
-                        if (current == Integer.MIN_VALUE) {
-                            throw new IndexOutOfBoundsException();
-                        }
-                        nextNode = advance();
-                        return current;
+                @Override
+                public int nextInt() {
+                    int current = nextNode;
+                    if (current == Integer.MIN_VALUE) {
+                        throw new IndexOutOfBoundsException();
                     }
+                    nextNode = advance();
+                    return current;
+                }
 
-                    @Override
-                    public boolean hasNext() {
-                        return nextNode != Integer.MIN_VALUE;
-                    }
-                };
-            } else {
-                // This case may be encountered when concurrently searching while GraphIndexBuilder.cleanup is running.
-                // In such a case, the neighborhoods may get temporarily broken and we just assume that the node has
-                // no neighbors.
-                return new NodesIterator.EmptyNodeIterator();
-            }
+                @Override
+                public boolean hasNext() {
+                    return nextNode != Integer.MIN_VALUE;
+                }
+            };
         }
     }
 
     private class FrozenView implements View {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            return getNeighbors(level, node).iterator();
+            return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
 
         }
 

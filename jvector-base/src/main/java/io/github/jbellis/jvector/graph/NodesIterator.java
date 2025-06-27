@@ -97,10 +97,12 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
         }
     }
 
+    EmptyNodeIterator EMPTY_NODE_ITERATOR = new EmptyNodeIterator();
+
     class EmptyNodeIterator implements NodesIterator {
         @Override
         public int size() {
-            throw new UnsupportedOperationException();
+            return 0;
         }
 
         @Override

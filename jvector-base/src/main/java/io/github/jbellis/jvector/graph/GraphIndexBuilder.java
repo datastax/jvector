@@ -297,11 +297,11 @@ public class GraphIndexBuilder implements Closeable {
                 // Loop over 0..maxLayer, re-score neighbors for each layer
                 var sf = newProvider.searchProviderFor(i).scoreFunction();
                 for (int lvl = 0; lvl <= maxLayer; lvl++) {
-                    var oldNeighbors = other.graph.getNeighbors(lvl, i);
+                    var oldNeighborsIt = other.graph.getNeighborsIterator(lvl, i);
                     // Copy edges, compute new scores
-                    var newNeighbors = new NodeArray(oldNeighbors.size());
-                    for (var it = oldNeighbors.iterator(); it.hasNext();) {
-                        int neighbor = it.nextInt();
+                    var newNeighbors = new NodeArray(oldNeighborsIt.size());
+                    while (oldNeighborsIt.hasNext()) {
+                        int neighbor = oldNeighborsIt.nextInt();
                         // since we're using a different score provider, use insertSorted instead of addInOrder
                         newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
                     }
@@ -576,15 +576,14 @@ public class GraphIndexBuilder implements Closeable {
             var newEdges = new ConcurrentHashMap<Integer, Set<Integer>>(); // new edges for key k are values v
             parallelExecutor.submit(() -> {
                 IntStream.range(0, graph.getIdUpperBound()).parallel().forEach(i -> {
-                    var neighbors = graph.getNeighbors(level, i);
-                    if (neighbors == null || toDelete.get(i)) {
+                    if (toDelete.get(i)) {
                         return;
                     }
-                    for (var it = neighbors.iterator(); it.hasNext(); ) {
+                    for (var it = graph.getNeighborsIterator(level, i); it.hasNext(); ) {
                         var j = it.nextInt();
                         if (toDelete.get(j)) {
                             var newEdgesForI = newEdges.computeIfAbsent(i, __ -> ConcurrentHashMap.newKeySet());
-                            for (var jt = graph.getNeighbors(level, j).iterator(); jt.hasNext(); ) {
+                            for (var jt = graph.getNeighborsIterator(level, j); jt.hasNext(); ) {
                                 int k = jt.nextInt();
                                 if (i != k && !toDelete.get(k)) {
                                     newEdgesForI.add(k);
