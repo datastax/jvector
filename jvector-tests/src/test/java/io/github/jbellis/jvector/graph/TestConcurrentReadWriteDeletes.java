@@ -25,15 +25,19 @@ import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.TestUtil.randomVector;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -50,6 +54,8 @@ import java.util.stream.IntStream;
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestConcurrentReadWriteDeletes extends RandomizedTest {
+    private static final Logger logger = LoggerFactory.getLogger(TestConcurrentReadWriteDeletes.class);
+
     private static final int nVectors = 20_000;
     private static final int dimension = 16;
     private static final double cleanupProbability = 0.01;
@@ -74,9 +80,10 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
         var vv = ravv.threadLocalSupplier();
 
         testConcurrentOps(i -> {
-            var R = ThreadLocalRandom.current();
+            var R = getRandom();
             if (R.nextDouble() < 0.2 || keysInserted.isEmpty())
             {
+                // In the future, we could improve this test by acquiring the lock earlier and executing other
                 writeLock.lock();
                 try {
                     builder.addGraphNode(i, vv.get().getVector(i));
@@ -119,7 +126,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
         Collections.shuffle(keys, getRandom());
         
         // Use a thread-safe approach without relying on RandomizedContext
-        int threadCount = Math.min(Runtime.getRuntime().availableProcessors(), 4); // Limit thread count
+        int threadCount = Math.min(Runtime.getRuntime().availableProcessors(), 8); // Limit thread count
         List<Thread> threads = new ArrayList<>();
         int keysPerThread = nVectors / threadCount;
         
@@ -132,21 +139,17 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
             final int endIdx = (threadIndex == threadCount - 1) ? keys.size() : (threadIndex + 1) * keysPerThread;
             
             Thread thread = new Thread(() -> {
-                // Create a new random instance with a seed derived from the main test thread
-                Random threadRandom = new Random(randomSeed + threadIndex);
-                
                 for (int i = startIdx; i < endIdx; i++) {
                     int key = keys.get(i);
                     wrappedOp(op, key);
                     
                     if (counter.incrementAndGet() % 1_000 == 0) {
                         var elapsed = System.currentTimeMillis() - start;
-                        System.out.println(String.format("%d ops in %dms = %f ops/s", 
+                        logger.info(String.format("%d ops in %dms = %f ops/s",
                             counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
                     }
                     
-                    // Use our thread-specific random instead of ThreadLocalRandom
-                    if (threadRandom.nextDouble() < cleanupProbability) {
+                    if (getRandom().nextDouble() < cleanupProbability) {
                         writeLock.lock();
                         try {
                             for (Integer keyToRemove : keysRemoved) {
@@ -197,7 +200,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
         {
             if (isEmpty())
                 throw new IllegalStateException();
-            var i = ThreadLocalRandom.current().nextInt(ordinal.get());
+            var i = TestConcurrentReadWriteDeletes.getRandom().nextInt(ordinal.get());
             // in case there is race with add(key), retry another random
             return keys.containsKey(i) ? keys.get(i) : getRandom();
         }
