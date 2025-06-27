@@ -13,13 +13,10 @@ import org.junit.Test;
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.TestUtil.randomVector;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -100,32 +97,62 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private void testConcurrentOps(Op op) throws ExecutionException, InterruptedException {
         AtomicInteger counter = new AtomicInteger();
         long start = System.currentTimeMillis();
-        var fjp = ForkJoinPool.commonPool();
+        
+        // Use a simpler approach that doesn't rely on parallel streams
         var keys = IntStream.range(0, nVectors).boxed().collect(Collectors.toList());
-        Collections.shuffle(keys);
-        var task = fjp.submit(() -> keys.stream().parallel().forEach(i ->
-        {
-            wrappedOp(op, i);
-            if (counter.incrementAndGet() % 1_000 == 0)
-            {
-                var elapsed = System.currentTimeMillis() - start;
-                System.out.println(String.format("%d ops in %dms = %f ops/s", counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
-            }
-            if (ThreadLocalRandom.current().nextDouble() < cleanupProbability) {
-                writeLock.lock();
-                try {
-                    for (Integer key : keysRemoved) {
-                        builder.markNodeDeleted(key);
+        Collections.shuffle(keys, getRandom());
+        
+        // Use a thread-safe approach without relying on RandomizedContext
+        int threadCount = Math.min(Runtime.getRuntime().availableProcessors(), 4); // Limit thread count
+        List<Thread> threads = new ArrayList<>();
+        int keysPerThread = nVectors / threadCount;
+        
+        // Create a thread-safe random seed for each thread
+        final long randomSeed = getRandom().nextLong();
+        
+        for (int t = 0; t < threadCount; t++) {
+            final int threadIndex = t;
+            final int startIdx = threadIndex * keysPerThread;
+            final int endIdx = (threadIndex == threadCount - 1) ? keys.size() : (threadIndex + 1) * keysPerThread;
+            
+            Thread thread = new Thread(() -> {
+                // Create a new random instance with a seed derived from the main test thread
+                Random threadRandom = new Random(randomSeed + threadIndex);
+                
+                for (int i = startIdx; i < endIdx; i++) {
+                    int key = keys.get(i);
+                    wrappedOp(op, key);
+                    
+                    if (counter.incrementAndGet() % 1_000 == 0) {
+                        var elapsed = System.currentTimeMillis() - start;
+                        System.out.println(String.format("%d ops in %dms = %f ops/s", 
+                            counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
                     }
-                    keysRemoved.clear();
-                    builder.cleanup();
-                } finally {
-                    writeLock.unlock();
+                    
+                    // Use our thread-specific random instead of ThreadLocalRandom
+                    if (threadRandom.nextDouble() < cleanupProbability) {
+                        writeLock.lock();
+                        try {
+                            for (Integer keyToRemove : keysRemoved) {
+                                builder.markNodeDeleted(keyToRemove);
+                            }
+                            keysRemoved.clear();
+                            builder.cleanup();
+                        } finally {
+                            writeLock.unlock();
+                        }
+                    }
                 }
-            }
-        }));
-        fjp.shutdown();
-        task.get(); // re-throw
+            });
+            
+            threads.add(thread);
+            thread.start();
+        }
+        
+        // Wait for all threads to complete
+        for (Thread thread : threads) {
+            thread.join();
+        }
     }
 
     private static void wrappedOp(Op op, Integer i) {
