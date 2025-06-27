@@ -2,7 +2,6 @@ package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -33,13 +32,14 @@ import java.util.stream.IntStream;
  * - an insertion
  * - a mock deletion, instantiated through the use of a BitSet for skipping these nodes during search
  * - a search
- * With probability 0.001, we run cleanup to commit the deletions to the index. The cleanup process and the insertions
+ * With probability 0.01, we run cleanup to commit the deletions to the index. The cleanup process and the insertions
  * cannot be concurrently executed (we use a lock to control their execution).
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private static final int nVectors = 20_000;
     private static final int dimension = 16;
+    private static final double cleanupProbability = 0.01;
 
     private KeySet keysInserted = new KeySet();
     private List<Integer> keysRemoved = new CopyOnWriteArrayList();
@@ -111,7 +111,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
                 var elapsed = System.currentTimeMillis() - start;
                 System.out.println(String.format("%d ops in %dms = %f ops/s", counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
             }
-            if (ThreadLocalRandom.current().nextDouble() < 0.01) {
+            if (ThreadLocalRandom.current().nextDouble() < cleanupProbability) {
                 writeLock.lock();
                 try {
                     for (Integer key : keysRemoved) {
