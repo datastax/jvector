@@ -22,7 +22,7 @@ jobs:
       cancel-in-progress: false
     strategy:
       matrix:
-        jdk: [ 22, 24 ]
+        jdk: [ 24 ]
         isa: [ isa-avx512f ]
     runs-on: ${{ matrix.isa }}
     steps:
@@ -51,7 +51,7 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Build with Maven (JDK 20)
+      - name: Build with Maven (JDK 22)
         if: matrix.jdk == '22'
         run: mvn -B -Pjdk22 package --file pom.xml
 
