@@ -41,6 +41,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -106,6 +107,25 @@ public class OnHeapGraphIndex implements GraphIndex {
             return null;
         }
         return layers.get(level).get(node);
+    }
+
+    /**
+     * Returns an iterator over the neighbors for the given node at the specified level.
+     *
+     * @param level the layer
+     * @param node  the node id
+     * @return a NodesIterator, which can be empty
+     */
+    NodesIterator getNeighborsIterator(int level, int node) {
+        if (level >= layers.size()) {
+            return NodesIterator.EMPTY_NODE_ITERATOR;
+        }
+        var neighs = layers.get(level).get(node);
+        if (neighs == null) {
+            return NodesIterator.EMPTY_NODE_ITERATOR;
+        } else {
+            return neighs.iterator();
+        }
     }
 
     @Override
@@ -366,7 +386,8 @@ public class OnHeapGraphIndex implements GraphIndex {
 
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            var it = getNeighbors(level, node).iterator();
+            NodesIterator it = OnHeapGraphIndex.this.getNeighborsIterator(level, node);
+
             return new NodesIterator() {
                 int nextNode = advance();
 
@@ -389,7 +410,7 @@ public class OnHeapGraphIndex implements GraphIndex {
                 public int nextInt() {
                     int current = nextNode;
                     if (current == Integer.MIN_VALUE) {
-                        throw new IndexOutOfBoundsException();
+                        throw new NoSuchElementException();
                     }
                     nextNode = advance();
                     return current;
@@ -406,7 +427,8 @@ public class OnHeapGraphIndex implements GraphIndex {
     private class FrozenView implements View {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
-            return getNeighbors(level, node).iterator();
+            return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
+
         }
 
         @Override
