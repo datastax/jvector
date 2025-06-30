@@ -22,7 +22,7 @@ jobs:
       cancel-in-progress: false
     strategy:
       matrix:
-        jdk: [ 20, 24 ]
+        jdk: [ 22, 24 ]
         isa: [ isa-avx512f ]
     runs-on: ${{ matrix.isa }}
     steps:
@@ -52,8 +52,8 @@ jobs:
           cache: maven
 
       - name: Build with Maven (JDK 20)
-        if: matrix.jdk == '20'
-        run: mvn -B -Pjdk20 package --file pom.xml
+        if: matrix.jdk == '22'
+        run: mvn -B -Pjdk22 package --file pom.xml
 
       - name: Build with Maven (JDK 24)
         if: matrix.jdk == '24'
