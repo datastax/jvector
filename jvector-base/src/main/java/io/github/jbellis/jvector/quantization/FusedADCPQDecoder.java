@@ -21,11 +21,11 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Performs similarity comparisons with compressed vectors without decoding them.
@@ -36,7 +36,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     protected final ProductQuantization pq;
     protected final VectorFloat<?> query;
     protected final ExactScoreFunction esf;
-    protected final ByteSequence<?> partialQuantizedSums;
+    protected final AtomicReference<Object> partialQuantizedSums;
     // connected to the Graph View by caller
     protected final FusedADC.PackedNeighbors neighbors;
     // caller passes this to us for re-use across calls
@@ -92,7 +92,8 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
 
         if (supportsQuantizedSimilarity) {
             // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
-            VectorUtil.bulkShuffleQuantizedSimilarity(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results, vsf);
+            VectorUtil.bulkShuffleQuantizedSimilarity(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums,
+                    delta, bestDistance, results, vsf);
             return results;
         }
 
@@ -178,7 +179,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     static class CosineDecoder extends FusedADCPQDecoder {
         private final float queryMagnitudeSquared;
         private final VectorFloat<?> partialSquaredMagnitudes;
-        private final ByteSequence<?> partialQuantizedSquaredMagnitudes;
+        private final AtomicReference<Object> partialQuantizedSquaredMagnitudes;
         // prior to quantization, we need a good place on-heap to aggregate these for worstDistance tracking/result calculation
         private final float[] resultSumAggregates;
         private final float[] resultMagnitudeAggregates;
@@ -220,17 +221,18 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
                     minSquaredMagnitude += minPartialMagnitude;
                 }
                 squaredMagnitudeDelta = (maxMagnitude - minSquaredMagnitude) / 65535;
-                var partialQuantizedSquaredMagnitudes = vts.createByteSequence(pq.getSubspaceCount() * pq.getClusterCount() * 2);
-                VectorUtil.quantizePartials(squaredMagnitudeDelta, partialSquaredMagnitudes, partialMinMagnitudes, partialQuantizedSquaredMagnitudes);
+                AtomicReference<Object> partialQuantizedSquaredMagnitudesTemp = new AtomicReference<>();
+                VectorUtil.quantizePartials(squaredMagnitudeDelta, partialSquaredMagnitudes, partialMinMagnitudes,
+                        partialQuantizedSquaredMagnitudesTemp);
 
                 // publish for future use in other decoders using this PQ
                 pq.squaredMagnitudeDelta = squaredMagnitudeDelta;
                 pq.minSquaredMagnitude = minSquaredMagnitude;
-                pq.partialQuantizedSquaredMagnitudes().set(partialQuantizedSquaredMagnitudes);
+                pq.partialQuantizedSquaredMagnitudes().set(partialQuantizedSquaredMagnitudesTemp.get());
 
                 return partialSquaredMagnitudes;
             });
-            partialQuantizedSquaredMagnitudes = pq.partialQuantizedSquaredMagnitudes().get();
+            partialQuantizedSquaredMagnitudes = pq.partialQuantizedSquaredMagnitudes();
 
             // compute partialSums, partialBestDistances, bestDistance, and queryMagnitudeSquared from the codebooks
             VectorFloat<?> center = pq.globalCentroid;
@@ -258,7 +260,10 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             if (supportsQuantizedSimilarity) {
                 results.zero();
                 // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
-                VectorUtil.bulkShuffleQuantizedSimilarityCosine(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude, queryMagnitudeSquared, results);
+                VectorUtil.bulkShuffleQuantizedSimilarityCosine(permutedNodes, pq.compressedVectorSize(),
+                        partialQuantizedSums, delta, bestDistance,
+                        partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude,
+                        queryMagnitudeSquared, results);
                 return results;
             }
 
@@ -294,11 +299,11 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
 
         protected float distanceToScore(float distance) {
             return (1 + distance) / 2;
-        };
+        }
 
         protected void updateWorstDistance(float distance) {
             worstDistance = Math.min(worstDistance, distance);
-        };
+        }
     }
 
     public static FusedADCPQDecoder newDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query,

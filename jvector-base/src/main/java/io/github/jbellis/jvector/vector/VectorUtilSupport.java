@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Interface for implementations of VectorUtil support.
@@ -115,8 +116,8 @@ public interface VectorUtilSupport {
 
   int hammingDistance(long[] v1, long[] v2);
 
-
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
+  // default implementation used here for scalar and less than java 24, because Panama SIMD can't express necessary SIMD operations and degrades to scalar
+  // For Java 24+ vectorized solution using Java Vector API is available
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
@@ -130,12 +131,14 @@ public interface VectorUtilSupport {
    * @param vsf      The similarity function to use.
    * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
    */
-  default void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
+  default void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, AtomicReference<Object> quantizedPartials, float delta, float minDistance,
+          VectorSimilarityFunction vsf, VectorFloat<?> results) {
+    ArrayByteSequence quantizedPartialsBS = (ArrayByteSequence) quantizedPartials.get();
     for (int i = 0; i < codebookCount; i++) {
       for (int j = 0; j < results.length(); j++) {
         var shuffle = Byte.toUnsignedInt(shuffles.get(i * results.length() + j)) * 2;
-        var lowByte = quantizedPartials.get(i * 512 + shuffle);
-        var highByte = quantizedPartials.get(i * 512 + shuffle + 1);
+        var lowByte = quantizedPartialsBS.get(i * 512 + shuffle);
+        var highByte = quantizedPartialsBS.get(i * 512 + shuffle + 1);
         var val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
         results.set(j, results.get(j) + val);
       }
@@ -147,15 +150,16 @@ public interface VectorUtilSupport {
           results.set(i, 1 / (1 + (delta * results.get(i)) + minDistance));
           break;
         case DOT_PRODUCT:
-            results.set(i, (1 + (delta * results.get(i)) + minDistance) / 2);
-            break;
+          results.set(i, (1 + (delta * results.get(i)) + minDistance) / 2);
+          break;
         default:
           throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
       }
     }
   }
 
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
+  // default implementation used here for scalar and less than java 24, because Panama SIMD can't express necessary SIMD operations and degrades to scalar
+  // For Java 24+ vectorized solution using Java Vector API is available
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
@@ -176,30 +180,32 @@ public interface VectorUtilSupport {
    * @param results  The output vector to store the similarity distances. This should be pre-allocated to the same size as the number of shuffles.
    */
   default void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                    ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                    ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                    float queryMagnitudeSquared, VectorFloat<?> results) {
+          AtomicReference<Object> quantizedPartialSums, float sumDelta, float minDistance,
+          AtomicReference<Object> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+          float queryMagnitudeSquared, VectorFloat<?> results) {
+    ArrayByteSequence quantizedPartialSumsBS = (ArrayByteSequence) quantizedPartialSums.get();
+    ArrayByteSequence quantizedPartialSquaredMagnitudesBS = (ArrayByteSequence) quantizedPartialSquaredMagnitudes.get();
     float[] sums = new float[results.length()];
     float[] magnitudes = new float[results.length()];
     for (int i = 0; i < codebookCount; i++) {
       for (int j = 0; j < results.length(); j++) {
         var shuffle = Byte.toUnsignedInt(shuffles.get(i * results.length() + j)) * 2;
-        var lowByte = quantizedPartialSums.get(i * 512 + shuffle);
-        var highByte = quantizedPartialSums.get(i * 512 + shuffle + 1);
+        var lowByte = quantizedPartialSumsBS.get(i * 512 + shuffle);
+        var highByte = quantizedPartialSumsBS.get(i * 512 + shuffle + 1);
         var val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
         sums[j] += val;
-        lowByte = quantizedPartialSquaredMagnitudes.get(i * 512 + shuffle);
-        highByte = quantizedPartialSquaredMagnitudes.get(i * 512 + shuffle + 1);
+        lowByte = quantizedPartialSquaredMagnitudesBS.get(i * 512 + shuffle);
+        highByte = quantizedPartialSquaredMagnitudesBS.get(i * 512 + shuffle + 1);
         val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
         magnitudes[j] += val;
       }
     }
 
     for (int i = 0; i < results.length(); i++) {
-        float unquantizedSum = sumDelta * sums[i] + minDistance;
-        float unquantizedMagnitude = magnitudeDelta * magnitudes[i] + minMagnitude;
-        double divisor = Math.sqrt(unquantizedMagnitude * queryMagnitudeSquared);
-        results.set(i, (1 + (float) (unquantizedSum / divisor)) / 2);
+      float unquantizedSum = sumDelta * sums[i] + minDistance;
+      float unquantizedMagnitude = magnitudeDelta * magnitudes[i] + minMagnitude;
+      double divisor = Math.sqrt(unquantizedMagnitude * queryMagnitudeSquared);
+      results.set(i, (1 + (float) (unquantizedSum / divisor)) / 2);
     }
   }
 
@@ -219,7 +225,7 @@ public interface VectorUtilSupport {
    * @param partialBases the base values to subtract from the partials
    * @param quantizedPartials the output sequence to store the quantized values
    */
-  void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials);
+  void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, AtomicReference<Object> quantizedPartials);
 
   float max(VectorFloat<?> v);
   float min(VectorFloat<?> v);

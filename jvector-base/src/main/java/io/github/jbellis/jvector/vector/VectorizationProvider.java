@@ -124,6 +124,23 @@ public abstract class VectorizationProvider {
         }
       }
 
+      if (runtimeVersion >= 24) {
+        try {
+          var provider = (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProviderJava24Plus").getConstructor().newInstance();
+          LOG.info("Java version is 24 or greater. Java incubating Vector API enabled. Using PanamaVectorizationProviderJava24Plus.");
+          return provider;
+        } catch (UnsupportedOperationException uoe) {
+          // not supported because preferred vector size too small or similar
+          LOG.warning("Java 24 vector API was not enabled. " + uoe.getMessage());
+        } catch (ClassNotFoundException e) {
+          LOG.warning("Java 24 version provider class not found");
+        } catch (RuntimeException | Error e) {
+          throw e;
+        } catch (Throwable th) {
+          throw new AssertionError(th);
+        }
+      }
+
       try {
         var provider = (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProvider").getConstructor().newInstance();
         LOG.info("Java incubating Vector API enabled. Using PanamaVectorizationProvider.");

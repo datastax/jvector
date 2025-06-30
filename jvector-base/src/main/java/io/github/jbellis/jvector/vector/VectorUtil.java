@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Utilities for computations with numeric arrays */
 public final class VectorUtil {
@@ -170,15 +171,16 @@ public final class VectorUtil {
     return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
-  public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {
+  public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, AtomicReference<Object> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {
     impl.bulkShuffleQuantizedSimilarity(shuffles, codebookCount, quantizedPartials, delta, minDistance, vsf, results);
   }
 
   public static void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                          ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                          ByteSequence<?> quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                          float queryMagnitudeSquared, VectorFloat<?> results) {
-    impl.bulkShuffleQuantizedSimilarityCosine(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
+          AtomicReference<Object> quantizedPartialSums, float sumDelta, float minDistance,
+          AtomicReference<Object> quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude,
+          float queryMagnitudeSquared, VectorFloat<?> results) {
+    impl.bulkShuffleQuantizedSimilarityCosine(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance,
+            quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
   }
 
   public static int hammingDistance(long[] v1, long[] v2) {
@@ -193,7 +195,7 @@ public final class VectorUtil {
     impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums);
   }
 
-  public static void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBase, ByteSequence<?> quantizedPartials) {
+  public static void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBase, AtomicReference<Object> quantizedPartials) {
     impl.quantizePartials(delta, partials, partialBase, quantizedPartials);
   }
 

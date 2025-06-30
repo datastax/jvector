@@ -11,6 +11,10 @@
     </parent>
     <artifactId>jvector-twenty</artifactId>
     <name>Twenty</name>
+    <properties>
+        <maven.compiler.release>20</maven.compiler.release>
+    </properties>
+
     <build>
         <plugins>
             <plugin>
@@ -18,12 +22,24 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <release>20</release>
+                    <release>${maven.compiler.release}</release>
                     <compilerArgs>
-<!--                        <arg>&#45;&#45;enable-preview</arg>-->
                         <arg>--add-modules</arg>
                         <arg>jdk.incubator.vector</arg>
                     </compilerArgs>
+                </configuration>
+            </plugin>
+            <!-- Package as multi-release JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Multi-Release>true</Multi-Release>
+                        </manifestEntries>
+                    </archive>
                 </configuration>
             </plugin>
             <plugin>
@@ -82,4 +98,39 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+    <profiles>
+        <profile>
+            <id>java24</id>
+            <activation>
+                <jdk>[24,)</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.release>24</maven.compiler.release>
+            </properties>
+            <build>
+                <plugins>
+                    <!-- Add Java 24-specific source directory -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.4.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-24-sources</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/main/versions/24</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

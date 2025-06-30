@@ -34,6 +34,10 @@
                         <outputDirectory>${module.artifactId}</outputDirectory>
                         <directory>src/main/java</directory>
                     </fileSet>
+                    <fileSet>
+                        <outputDirectory>${module.artifactId}/META-INF/versions/24</outputDirectory>
+                        <directory>src/main/versions/24</directory>
+                    </fileSet>
                 </fileSets>
             </sources>
         </moduleSet>

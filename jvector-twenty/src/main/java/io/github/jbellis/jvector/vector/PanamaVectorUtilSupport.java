@@ -20,8 +20,9 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
-final class PanamaVectorUtilSupport implements VectorUtilSupport {
+class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float dotProduct(VectorFloat<?> a, VectorFloat<?> b) {
         return SimdOps.dotProduct((ArrayVectorFloat)a, (ArrayVectorFloat)b);
@@ -178,8 +179,8 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        SimdOps.quantizePartials(delta, (ArrayVectorFloat) partials, (ArrayVectorFloat) partialBases, (ArrayByteSequence) quantizedPartials);
+    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, AtomicReference<Object> quantizedPartials) {
+        SimdOps.quantizePartials(delta, (ArrayVectorFloat) partials, (ArrayVectorFloat) partialBases, quantizedPartials);
     }
 
     @Override

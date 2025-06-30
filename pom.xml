@@ -42,6 +42,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
         <revision>4.0.0-beta.6-SNAPSHOT</revision>
+        <maven.compiler.release>22</maven.compiler.release>
     </properties>
     <modules>
         <module>jvector-base</module>
@@ -121,7 +122,7 @@
                             <additionalJOptions>
                                 <additionalJOption>--add-modules=jdk.incubator.vector</additionalJOption>
                             </additionalJOptions>
-                            <release>22</release>
+                            <release>${maven.compiler.release}</release>
                         </configuration>
                     </execution>
                 </executions>
@@ -220,4 +221,41 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+    <profiles>
+        <profile>
+            <id>java24</id>
+            <activation>
+                <jdk>[24,)</jdk>
+            </activation>
+            <properties>
+                <maven.compiler.release>24</maven.compiler.release>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs-java24</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>aggregate-jar</goal>
+                                </goals>
+                                <configuration>
+                                    <skippedModules>jvector-examples,jvector-tests</skippedModules>
+                                    <additionalJOptions>
+                                        <additionalJOption>--add-modules=jdk.incubator.vector</additionalJOption>
+                                    </additionalJOptions>
+                                    <sourcepath>${project.basedir}/src/main/java:${project.basedir}/src/main/versions/24</sourcepath>
+                                    <release>${maven.compiler.release}</release>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

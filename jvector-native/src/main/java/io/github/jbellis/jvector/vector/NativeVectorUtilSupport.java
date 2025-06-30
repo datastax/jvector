@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * VectorUtilSupport implementation that prefers native/Panama SIMD.
@@ -162,28 +163,38 @@ final class NativeVectorUtilSupport implements VectorUtilSupport
     }
 
     @Override
-    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        VectorSimdOps.quantizePartials(delta, (MemorySegmentVectorFloat) partials, (MemorySegmentVectorFloat) partialBases, (MemorySegmentByteSequence) quantizedPartials);
+    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, AtomicReference<Object> quantizedPartials) {
+        VectorSimdOps.quantizePartials(delta, (MemorySegmentVectorFloat) partials, (MemorySegmentVectorFloat) partialBases, quantizedPartials);
     }
 
     @Override
-    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
+    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount,
+            AtomicReference<Object> quantizedPartials, float delta, float bestDistance,
+            VectorSimilarityFunction vsf, VectorFloat<?> results) {
         assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
+
+        MemorySegmentByteSequence quantizedPartialsMS = (MemorySegmentByteSequence) quantizedPartials.get();
         switch (vsf) {
-            case DOT_PRODUCT -> NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
-            case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
+            case DOT_PRODUCT -> NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount,
+                    quantizedPartialsMS.get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
+            case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount,
+                    quantizedPartialsMS.get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
             case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
         }
     }
 
     @Override
     public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
+            AtomicReference<Object> quantizedPartialSums, float sumDelta, float minDistance,
+            AtomicReference<Object> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+            float queryMagnitudeSquared, VectorFloat<?> results) {
         assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
-        NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartialSums).get(), sumDelta, minDistance,
-                ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
+
+        MemorySegmentByteSequence quantizedPartialSumsMS = (MemorySegmentByteSequence) quantizedPartialSums.get();
+        MemorySegmentByteSequence quantizedPartialSquaredMagnitudesMS = (MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes.get();
+        NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount,
+                quantizedPartialSumsMS.get(), sumDelta, minDistance,
+                quantizedPartialSquaredMagnitudesMS.get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
     }
 
     @Override

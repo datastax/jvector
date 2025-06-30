@@ -27,7 +27,9 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A VectorUtilSupport implementation supported by JDK 11+. This implementation assumes the VectorFloat/ByteSequence
@@ -359,15 +361,26 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
-  public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
+  public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, AtomicReference<Object> quantizedPartials)
+  {
     var codebookSize = partials.length() / partialBases.length();
-    for (int i = 0; i < partialBases.length(); i++) {
-      var localBest = partialBases.get(i);
-      for (int j = 0; j < codebookSize; j++) {
-        var val = partials.get(i * codebookSize + j);
-        var quantized = (short) Math.min((val - localBest) / delta, 65535);
-        quantizedPartials.setLittleEndianShort(i * codebookSize + j, quantized);
+    try {
+      Class<?> clazz = Class.forName("io.github.jbellis.jvector.vector.ArrayByteSequence");
+      java.lang.reflect.Constructor<?> constructor = clazz.getDeclaredConstructor(int.class);
+      quantizedPartials.set(constructor.newInstance(partials.length() * 2));
+      var quantizedPartialsShortsABS = (ArrayByteSequence) (quantizedPartials.get());
+
+      for (int i = 0; i < partialBases.length(); i++) {
+        var localBest = partialBases.get(i);
+        for (int j = 0; j < codebookSize; j++) {
+          var val = partials.get(i * codebookSize + j);
+          var quantized = (short) Math.min((val - localBest) / delta, 65535);
+          quantizedPartialsShortsABS.setLittleEndianShort(i * codebookSize + j, quantized);
+        }
       }
+    }
+    catch (ClassNotFoundException | NoSuchMethodException | InstantiationException | IllegalAccessException | InvocationTargetException e) {
+      throw new RuntimeException(e);
     }
   }
 

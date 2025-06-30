@@ -26,8 +26,10 @@ import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 
+import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteOrder;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Support class for vector operations using a mix of native and Panama SIMD.
@@ -646,27 +648,39 @@ final class VectorSimdOps {
         return min;
     }
 
-    public static void quantizePartials(float delta, MemorySegmentVectorFloat partials, MemorySegmentVectorFloat partialBases, MemorySegmentByteSequence quantizedPartials) {
+    public static void quantizePartials(float delta, MemorySegmentVectorFloat partials, MemorySegmentVectorFloat partialBases,
+            AtomicReference<Object> quantizedPartials)
+    {
         var codebookSize = partials.length() / partialBases.length();
         var codebookCount = partialBases.length();
 
-        for (int i = 0; i < codebookCount; i++) {
-            var vectorizedLength = FloatVector.SPECIES_512.loopBound(codebookSize);
-            var codebookBase = partialBases.get(i);
-            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_512, codebookBase);
-            int j = 0;
-            for (; j < vectorizedLength; j += FloatVector.SPECIES_512.length()) {
-                var partialVector = FloatVector.fromMemorySegment(FloatVector.SPECIES_512, partials.get(), partials.offset(i * codebookSize + j), ByteOrder.LITTLE_ENDIAN);
-                var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
-                quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_512)).min(FloatVector.broadcast(FloatVector.SPECIES_512, 65535));
-                var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, ShortVector.SPECIES_256, 0);
-                quantizedBytes.intoMemorySegment(quantizedPartials.get(), 2 * (i * codebookSize + j), ByteOrder.LITTLE_ENDIAN);
+        try {
+            Class<?> clazz = Class.forName("io.github.jbellis.jvector.vector.MemorySegmentByteSequence");
+            java.lang.reflect.Constructor<?> constructor = clazz.getDeclaredConstructor(int.class);
+            quantizedPartials.set(constructor.newInstance(partials.length() * 2));
+            var quantizedPartialsMS = (MemorySegmentByteSequence) (quantizedPartials.get());
+
+            for (int i = 0; i < codebookCount; i++) {
+                var vectorizedLength = FloatVector.SPECIES_512.loopBound(codebookSize);
+                var codebookBase = partialBases.get(i);
+                var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_512, codebookBase);
+                int j = 0;
+                for (; j < vectorizedLength; j += FloatVector.SPECIES_512.length()) {
+                    var partialVector = FloatVector.fromMemorySegment(FloatVector.SPECIES_512, partials.get(), partials.offset(i * codebookSize + j), ByteOrder.LITTLE_ENDIAN);
+                    var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
+                    quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_512)).min(FloatVector.broadcast(FloatVector.SPECIES_512, 65535));
+                    var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, ShortVector.SPECIES_256, 0);
+                    quantizedBytes.intoMemorySegment(quantizedPartialsMS.get(), 2 * (i * codebookSize + j), ByteOrder.LITTLE_ENDIAN);
+                }
+                for (; j < codebookSize; j++) {
+                    var val = partials.get(i * codebookSize + j);
+                    var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
+                    quantizedPartialsMS.setLittleEndianShort(i * codebookSize + j, quantized);
+                }
             }
-            for (; j < codebookSize; j++) {
-                var val = partials.get(i * codebookSize + j);
-                var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
-                quantizedPartials.setLittleEndianShort(i * codebookSize + j, quantized);
-            }
+        }
+        catch (ClassNotFoundException | NoSuchMethodException | InstantiationException | IllegalAccessException | InvocationTargetException e) {
+            throw new RuntimeException(e);
         }
     }
 

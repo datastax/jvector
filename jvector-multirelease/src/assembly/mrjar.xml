@@ -36,6 +36,22 @@
         <moduleSet>
             <useAllReactorProjects>true</useAllReactorProjects>
             <includes>
+                <include>io.github.jbellis:jvector-twenty</include>
+            </includes>
+            <binaries>
+                <outputDirectory>META-INF/versions/24</outputDirectory>
+                <unpack>true</unpack>
+                <includeDependencies>false</includeDependencies>
+                <unpackOptions>
+                    <excludes>
+                        <exclude>/META-INF/**</exclude>
+                    </excludes>
+                </unpackOptions>
+            </binaries>
+        </moduleSet>
+        <moduleSet>
+            <useAllReactorProjects>true</useAllReactorProjects>
+            <includes>
                 <include>io.github.jbellis:jvector-native</include>
             </includes>
             <binaries>
