@@ -1,5 +1,6 @@
 .github/workflows/unit-tests.yaml
-.github/workflows/tag-release.yml
+.github/workflows/generate-changelog.yaml
+package.json
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md
