@@ -42,7 +42,7 @@ jobs:
           base: main
 
           # changelog commit author
-          author: "Ted Willke <ted.willke@gmail.com>"
+          author: "${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>"
 
           # only include these two files in the commit
           add-paths: |
