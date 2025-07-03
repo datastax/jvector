@@ -1,5 +1,9 @@
 name: Generate Changelog
 
+permissions:
+  contents: write        # allow git push / branch creation
+  pull-requests: write   # allow creating/updating PRs
+
 on:
   workflow_dispatch:
     inputs:
