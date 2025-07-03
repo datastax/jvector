@@ -58,7 +58,7 @@ public class PQDistanceCalculationBenchmark {
     private ProductQuantization pq;
     private BuildScoreProvider buildScoreProvider;
     
-    @Param({"768"})
+    @Param({"1536"})
     private int dimension;
     
     @Param({"10000"})
