@@ -3,6 +3,7 @@ name: Generate Changelog
 permissions:
   contents: write        # allow git push / branch creation
   pull-requests: write   # allow creating/updating PRs
+  issues: write          # allow label creation
 
 on:
   workflow_dispatch:
