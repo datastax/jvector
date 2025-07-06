@@ -99,7 +99,7 @@ public class Grid {
 
     private static final String pqCacheDir = "pq_cache";
     private static final String dirPrefix = "BenchGraphDir";
-    private static final String logFilePrefix = "/home/ted_willke/jvector-nuveq/logs/log_";
+    private static final String logFilePrefix = "/home/ted_willke/jvector-ibm-datapile-tuning/logs/log_";
 
     // Set up csv logging
     List<String> headers = List.of(

@@ -166,5 +166,10 @@ public class MultiFileDatasource {
                 "cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
                 "cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
                 "cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
+        put("datapile-20m", new MultiFileDatasource("datapile-20m",
+                VectorSimilarityFunction.COSINE,
+                "datapile-v0.8-1B/datapile_1b_first_20m_base.fvecs",
+                "datapile-v0.8-1B/datapile_1b_first_20m_query.fvecs",
+                "datapile-v0.8-1B/datapile-v0.8-1B_first_20m_ip_k100.ivecs"));
     }};
 }

@@ -48,27 +48,27 @@ public class Bench {
         boolean reuseIndex = true; // Build or reuse an existing index already in tmp?
         Path existingIndexDir = Paths.get("/mnt/raid0/tmp/BenchGraphDir-prebuilt");
 
-        var mGrid = List.of(64); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var efConstructionGrid = List.of(200); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = List.of(10);
-        var overqueryGrid = List.of(1.000, 1.200, 1.440, 1.728, 2.074, 2.488, 2.986, 3.583, 4.300, 5.160, 6.192, 7.430, 8.916, 10.699, 12.839, 15.407, 18.488, 22.186, 26.623, 31.948, 38.338, 46.005, 55.206, 66.247, 79.497); // rerankK = oq * topK
+        var mGrid = List.of(32, 64); // List.of(16, 24, 32, 48, 64, 96, 128);
+        var efConstructionGrid = List.of(100, 200); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
+        var topKGrid = List.of(100);
+        var overqueryGrid = List.of(1.0, 2.0, 4.0, 8.0); // rerankK = oq * topK
 //        var overqueryGrid = List.of(1.000, 1.0,1.0,1.0,1.0,1.0,1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 5.0, 5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0, 60.0, 60.0, 60.0, 60.0); // rerankK = oq * topK
-        var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
-        var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(false); // List.of(false, true);
+        var neighborOverflowGrid = List.of(1.2f, 1.8f); // List.of(1.2f, 2.0f);
+        var addHierarchyGrid = List.of(true, false); // List.of(false, true);
+        var usePruningGrid = List.of(false, true); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
+                ds -> new PQParameters(ds.getDimension() / 8, 256, false, UNWEIGHTED)
 //                __ -> CompressorParameters.NONE
         );
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
 //                __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
+                ds -> new PQParameters(ds.getDimension() / 8, 256, false, UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-                EnumSet.of(FeatureId.NVQ_VECTORS)
+//                EnumSet.of(FeatureId.NVQ_VECTORS)
 //                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
-//                EnumSet.of(FeatureId.INLINE_VECTORS)
+                EnumSet.of(FeatureId.INLINE_VECTORS)
         );
 
         // args is list of regexes, possibly needing to be split by whitespace.
@@ -79,8 +79,8 @@ public class Bench {
 
         // large embeddings calculated by Neighborhood Watch.  100k files by default; 1M also available
         var coreFiles = List.of(
-//                "cohere-1m-norm"
-                "dpr-1m-norm"
+                "datapile-20m"
+//                "dpr-1m-norm"
 //                "cap-1m"
 //                "dpr-10m-norm",
 //                "cohere-10m-norm",
