@@ -66,9 +66,9 @@ public class Bench {
                 ds -> new PQParameters(ds.getDimension() / 4, 256, false, UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-//                EnumSet.of(FeatureId.NVQ_VECTORS)
+                EnumSet.of(FeatureId.NVQ_VECTORS)
 //                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
-                EnumSet.of(FeatureId.INLINE_VECTORS)
+//                EnumSet.of(FeatureId.INLINE_VECTORS)
         );
 
         // args is list of regexes, possibly needing to be split by whitespace.

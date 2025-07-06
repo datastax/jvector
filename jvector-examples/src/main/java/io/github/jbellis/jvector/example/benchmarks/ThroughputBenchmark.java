@@ -137,7 +137,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 //        System.out.println("MedianQps" + medianQps);
 //        System.out.println("MeanQps" + meanQps);
 //        System.out.println("maxQps" + maxQps);
-        return List.of(Metric.of("QPS", format, medianQps));
+        return List.of(Metric.of("Median QPS", format, medianQps));
     }
 
     private static float normOf(VectorFloat<?> baseVector) {

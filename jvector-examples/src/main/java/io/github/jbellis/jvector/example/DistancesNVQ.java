@@ -119,6 +119,14 @@ public class DistancesNVQ {
         testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
     }
 
+    public static void runDPR() throws IOException {
+        System.out.println("Running DPR");
+
+        var baseVectors = "./fvec/dpr/train/embeddings/c4-en_base_1M_norm_files0_2.fvecs";
+        var queryVectors = "./fvec/dpr/validation/embeddings/c4-en_query_10k_norm_files0_1.fvecs";
+        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.EUCLIDEAN);
+    }
+
     public static void runADA() throws IOException {
         System.out.println("Running ada_002");
 
@@ -144,9 +152,10 @@ public class DistancesNVQ {
     }
 
     public static void main(String[] args) throws IOException {
-        runSIFT();
-        runADA();
-        runColbert();
-        runOpenai3072();
+        runDPR();
+//        runSIFT();
+//        runADA();
+//        runColbert();
+//        runOpenai3072();
     }
 }
