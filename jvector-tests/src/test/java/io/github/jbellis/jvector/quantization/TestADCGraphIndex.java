@@ -89,9 +89,10 @@ public class TestADCGraphIndex extends RandomizedTest {
                             assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 0.01);
                         }
                         // third pass compares fused ADC's edge similarity after quantization to edge similarity before quantization
-                        var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
+                        var edgeSimilaritiesCopy = edgeSimilarities.copy(); // results of second pass
+                        var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal); // results of third pass
                         for (int j = 0; j < fusedEdgeSimilarities.length(); j++) {
-                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilarities.get(j), 0.01);
+                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 0.01);
                         }
                     }
                 }

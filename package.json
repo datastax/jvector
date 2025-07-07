@@ -1,0 +1,10 @@
+{
+  "name": "jvector-release",
+  "version": "4.0.0-rc.1",
+  "devDependencies": {
+    "auto-changelog": "*"
+  },
+  "scripts": {
+    "version": "auto-changelog -p && git add CHANGELOG.md"
+  }
+}

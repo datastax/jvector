@@ -96,4 +96,23 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
             return cur < size;
         }
     }
+
+    EmptyNodeIterator EMPTY_NODE_ITERATOR = new EmptyNodeIterator();
+
+    class EmptyNodeIterator implements NodesIterator {
+        @Override
+        public int size() {
+            return 0;
+        }
+
+        @Override
+        public int nextInt() {
+            throw new NoSuchElementException();
+        }
+
+        @Override
+        public boolean hasNext() {
+            return false;
+        }
+    }
 }

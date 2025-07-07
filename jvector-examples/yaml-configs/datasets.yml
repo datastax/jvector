@@ -18,6 +18,6 @@ ann-benchmarks:
   - glove-100-angular.hdf5
   - glove-200-angular.hdf5
   - nytimes-256-angular.hdf5
-  - sift-128-euclidean.hdf5"
+  - sift-128-euclidean.hdf5
   # - deep-image-96-angular.hdf5 # large files not yet supported
   # - gist-960-euclidean.hdf5 # large files not yet supported

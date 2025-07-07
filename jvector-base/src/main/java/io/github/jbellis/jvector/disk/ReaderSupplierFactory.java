@@ -45,14 +45,11 @@ public class ReaderSupplierFactory {
             Constructor<?> ctor = supplierClass.getConstructor(Path.class);
             return (ReaderSupplier) ctor.newInstance(path);
         } catch (Exception e) {
-            LOG.log(Level.WARNING, "MMapReaderSupplier not available, falling back to SimpleMappedReaderSupplier. More details available at level FINE.");
+            LOG.log(Level.WARNING, "MMapReaderSupplier not available, falling back to MappedChunkReader. More details available at level FINE.");
             LOG.log(Level.FINE, "MMapReaderSupplier instantiation exception:", e);
-            if (Files.size(path) > Integer.MAX_VALUE) {
-                throw new RuntimeException("File sizes greater than 2GB are not supported on older Windows JDKs");
-            }
 
-            // finally, fall back to SimpleMappedReader (available everywhere, but doesn't support files > 2GB)
-            return new SimpleMappedReader.Supplier(path);
+            // finally, fall back to MappedChunkReader
+            return new MappedChunkReader.Supplier(path);
         }
     }
 }
