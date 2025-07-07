@@ -6,7 +6,8 @@ are mostly targeting scalability and latency aspects.
 
 1. You can build and then run
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 mvn clean install -DskipTests=true
 java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
@@ -17,7 +18,8 @@ java --enable-native-access=ALL-UNNAMED \
 
 You can add additional optional JMH arguments dynamically from command line. For example, to run the benchmarks with 4 forks, 5 warmup iterations, 5 measurement iterations, 2 threads, and 10 seconds warmup time per iteration, use the following command:
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
@@ -41,7 +43,8 @@ Common JMH command line options you can use in the configuration or command line
 
 For example in the below command lines we are going to run only `IndexConstructionWithRandomSetBenchmark`
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 BENCHMARK_NAME="IndexConstructionWithRandomSetBenchmark"
 mvn clean install -DskipTests=true
 java --enable-native-access=ALL-UNNAMED \
@@ -53,7 +56,8 @@ java --enable-native-access=ALL-UNNAMED \
 
 Same example for PQ training benchmark
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 BENCHMARK_NAME="PQTrainingWithRandomVectorsBenchmark"
 mvn clean install -DskipTests=true
 java --enable-native-access=ALL-UNNAMED \
@@ -66,7 +70,8 @@ java --enable-native-access=ALL-UNNAMED \
 If you want to rerun a specific benchmark without testing the entire grid of scenarios defined in the benchmark.
 You can just do the following to set M and beamWidth:
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 java -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar IndexConstructionWithStaticSetBenchmark -p M=32 -p beamWidth=100 
 ```
 ### Running benchmarks with auxiliary counters
@@ -74,7 +79,8 @@ java -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar IndexCons
 For benchmarks that include auxiliary counters (like `RecallWithRandomVectorsBenchmark`), run with CSV output to capture all metrics:
 
 ```shell
-VERSION="4.0.0-beta.6"
+# Get version from pom.xml
+VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
 BENCHMARK_NAME="RecallWithRandomVectorsBenchmark"
 mvn clean install -DskipTests=true
 java --enable-native-access=ALL-UNNAMED \
