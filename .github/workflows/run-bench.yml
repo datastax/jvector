@@ -82,8 +82,14 @@ jobs:
           skip_unpack: false
           if_no_artifact_found: warn
 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
       - name: Install Python Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install argparse
 
       - name: Compare Benchmark Results
