@@ -44,22 +44,22 @@ public class AutoBenchYAML {
      */
     private static List<String> getAllDatasetNames() {
         List<String> allDatasets = new ArrayList<>();
-        
+
         // neighborhood-watch-100k datasets
-//        allDatasets.add("ada002-100k");
-//        allDatasets.add("cohere-english-v3-100k");
-//        allDatasets.add("openai-v3-small-100k");
-//        allDatasets.add("gecko-100k");
-//        allDatasets.add("openai-v3-large-3072-100k");
-//        allDatasets.add("openai-v3-large-1536-100k");
-//        allDatasets.add("e5-small-v2-100k");
-//        allDatasets.add("e5-base-v2-100k");
-//        allDatasets.add("e5-large-v2-100k");
-//
-//        // neighborhood-watch-1M datasets
-//        allDatasets.add("ada002-1M");
-//        allDatasets.add("colbert-1M");
-        
+        allDatasets.add("ada002-100k");
+        allDatasets.add("cohere-english-v3-100k");
+        allDatasets.add("openai-v3-small-100k");
+        allDatasets.add("gecko-100k");
+        allDatasets.add("openai-v3-large-3072-100k");
+        allDatasets.add("openai-v3-large-1536-100k");
+        allDatasets.add("e5-small-v2-100k");
+        allDatasets.add("e5-base-v2-100k");
+        allDatasets.add("e5-large-v2-100k");
+
+        // neighborhood-watch-1M datasets
+        allDatasets.add("ada002-1M");
+        allDatasets.add("colbert-1M");
+
         // ann-benchmarks datasets
         allDatasets.add("glove-25-angular.hdf5");
         allDatasets.add("glove-50-angular.hdf5");
@@ -71,7 +71,7 @@ public class AutoBenchYAML {
         // Large files not yet supported:
         // allDatasets.add("deep-image-96-angular.hdf5");
         // allDatasets.add("gist-960-euclidean.hdf5");
-        
+
         return allDatasets;
     }
 
