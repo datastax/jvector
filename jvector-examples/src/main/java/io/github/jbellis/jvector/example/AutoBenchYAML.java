@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
-import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -39,6 +38,43 @@ import java.util.stream.Collectors;
  * for regression testing in the run-bench.yml workflow.
  */
 public class AutoBenchYAML {
+    /**
+     * Returns a list of all dataset names.
+     * This replaces the need to load datasets.yml which may not be available in all environments.
+     */
+    private static List<String> getAllDatasetNames() {
+        List<String> allDatasets = new ArrayList<>();
+        
+        // neighborhood-watch-100k datasets
+//        allDatasets.add("ada002-100k");
+//        allDatasets.add("cohere-english-v3-100k");
+//        allDatasets.add("openai-v3-small-100k");
+//        allDatasets.add("gecko-100k");
+//        allDatasets.add("openai-v3-large-3072-100k");
+//        allDatasets.add("openai-v3-large-1536-100k");
+//        allDatasets.add("e5-small-v2-100k");
+//        allDatasets.add("e5-base-v2-100k");
+//        allDatasets.add("e5-large-v2-100k");
+//
+//        // neighborhood-watch-1M datasets
+//        allDatasets.add("ada002-1M");
+//        allDatasets.add("colbert-1M");
+        
+        // ann-benchmarks datasets
+        allDatasets.add("glove-25-angular.hdf5");
+        allDatasets.add("glove-50-angular.hdf5");
+        allDatasets.add("lastfm-64-dot.hdf5");
+        allDatasets.add("glove-100-angular.hdf5");
+        allDatasets.add("glove-200-angular.hdf5");
+        allDatasets.add("nytimes-256-angular.hdf5");
+        allDatasets.add("sift-128-euclidean.hdf5");
+        // Large files not yet supported:
+        // allDatasets.add("deep-image-96-angular.hdf5");
+        // allDatasets.add("gist-960-euclidean.hdf5");
+        
+        return allDatasets;
+    }
+
     public static void main(String[] args) throws IOException {
         // Check for --output argument (required for this class)
         String outputPath = null;
@@ -64,8 +100,7 @@ public class AutoBenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetNames = getAllDatasetNames().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         System.out.println("Executing the following datasets: " + datasetNames);
         List<BenchResult> results = new ArrayList<>();
