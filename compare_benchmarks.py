@@ -61,14 +61,13 @@ def group_results_by_config(results: List[Dict[str, Any]]) -> Dict[str, Dict[str
         config_key = f"{dataset}|"
         config_key += "|".join([f"{k}={v}" for k, v in sorted(params.items())])
         
-        # Extract the metric name and value
-        metric_name, metric_value = next(iter(metrics.items()))
-        
-        # Store the metric value under this configuration
+        # Store all metrics for this configuration
         if config_key not in grouped_results:
             grouped_results[config_key] = {}
         
-        grouped_results[config_key][metric_name] = float(metric_value)
+        # Process all metrics instead of just the first one
+        for metric_name, metric_value in metrics.items():
+            grouped_results[config_key][metric_name] = float(metric_value)
     
     return grouped_results
 
