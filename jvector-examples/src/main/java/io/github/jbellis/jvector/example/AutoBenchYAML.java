@@ -24,6 +24,9 @@ import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -38,6 +41,8 @@ import java.util.stream.Collectors;
  * for regression testing in the run-bench.yml workflow.
  */
 public class AutoBenchYAML {
+    private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
+
     /**
      * Returns a list of all dataset names.
      * This replaces the need to load datasets.yml which may not be available in all environments.
@@ -83,11 +88,11 @@ public class AutoBenchYAML {
         }
 
         if (outputPath == null) {
-            System.err.println("Error: --output argument is required for AutoBenchYAML");
+            logger.error("Error: --output argument is required for AutoBenchYAML");
             System.exit(1);
         }
 
-        System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+        logger.info("Heap space available is {}", Runtime.getRuntime().maxMemory());
 
         // Filter out --output and its argument from the args
         String finalOutputPath = outputPath;
@@ -102,18 +107,21 @@ public class AutoBenchYAML {
 
         var datasetNames = getAllDatasetNames().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
-        System.out.println("Executing the following datasets: " + datasetNames);
+        logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
 
         // Process datasets from regex patterns
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
+                logger.info("Loading dataset: {}", datasetName);
                 DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
 
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
+                logger.info("Using configuration: {}", config);
 
                 results.addAll(Grid.runAllAndCollectResults(ds, 
                         config.construction.outDegree, 
@@ -132,10 +140,14 @@ public class AutoBenchYAML {
         List<String> configNames = Arrays.stream(filteredArgs).filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
         if (!configNames.isEmpty()) {
             for (var configName : configNames) {
+                logger.info("Processing configuration file: {}", configName);
                 MultiConfig config = MultiConfig.getConfig(configName);
                 String datasetName = config.dataset;
+                logger.info("Configuration specifies dataset: {}", datasetName);
 
+                logger.info("Loading dataset: {}", datasetName);
                 DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
 
                 results.addAll(Grid.runAllAndCollectResults(ds, 
                         config.construction.outDegree, 
@@ -152,11 +164,19 @@ public class AutoBenchYAML {
 
         // Calculate summary statistics
         SummaryStats stats = BenchmarkSummarizer.summarize(results);
-        System.out.println(stats.toString());
+        logger.info("Benchmark summary: {}", stats.toString());
 
         // Write results to JSON file
         ObjectMapper mapper = new ObjectMapper();
-        mapper.writerWithDefaultPrettyPrinter().writeValue(new File(outputPath), results);
-        System.out.println("Benchmark results written to " + outputPath);
+        File outputFile = new File(outputPath);
+        mapper.writerWithDefaultPrettyPrinter().writeValue(outputFile, results);
+        logger.info("Benchmark results written to {} (file exists: {})", outputPath, outputFile.exists());
+        
+        // Double check that the file was created and log its size
+        if (outputFile.exists()) {
+            logger.info("Output file size: {} bytes", outputFile.length());
+        } else {
+            logger.error("Failed to create output file at {}", outputPath);
+        }
     }
 }
