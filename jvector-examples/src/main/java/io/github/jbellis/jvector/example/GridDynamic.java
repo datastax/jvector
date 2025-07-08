@@ -146,6 +146,7 @@ public class GridDynamic {
                 }
 
                 try (var cs = new ConfiguredSystem.DynamicConfiguredSystem(ds, index, cv, Set.of())) {
+                    cs.setEpoch(epoch);
                     testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
                 } catch (Exception e) {
                     throw new RuntimeException(e);

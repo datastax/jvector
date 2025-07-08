@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class AbstractDynamicDataset implements DynamicDataset {
@@ -24,6 +25,8 @@ public class AbstractDynamicDataset implements DynamicDataset {
     private final List<VectorFloat<?>> baseVectors;
     private RandomAccessVectorValues baseRavv; // wrapper around baseVectors
     private final List<VectorFloat<?>> queryVectors;
+
+    private List<List<List<Integer>>> epochGroundTruth;
 
     private final int topK;
 
@@ -41,6 +44,8 @@ public class AbstractDynamicDataset implements DynamicDataset {
         this.baseVectors = baseVectors;
         this.queryVectors = queryVectors;
         this.topK = topK;
+
+        computeEpochGroundTruth();
     }
 
     @Override
@@ -65,20 +70,40 @@ public class AbstractDynamicDataset implements DynamicDataset {
 
     @Override
     public List<Integer> deletions(int epoch) {
+        if (epoch < deletionLag) {
+            return new ArrayList<>();
+        }
         return batches.get(epoch - deletionLag);
     }
 
     @Override
     public QueryBundle getQueryBundle(int epoch) {
-        // TODO for now, the ground truth is computed on the fly
-        List<List<Integer>> groundTruth = new ArrayList<>(queryVectors.size());
-        for (var query : queryVectors) {
-            Integer[] gt = computeGroundTruth(similarityFunction, baseVectors, batches.get(epoch), query, topK);
-            var temp = new ArrayList<Integer>(gt.length);
-            temp.addAll(Arrays.asList(gt));
-            groundTruth.add(temp);
+        return new QueryBundle(queryVectors, epochGroundTruth.get(epoch));
+    }
+
+    private void computeEpochGroundTruth() {
+        epochGroundTruth = new ArrayList<>(epochs());
+        for (int epoch = 0; epoch < epochs(); epoch++) {
+            List<List<Integer>> groundTruth = new ArrayList<>(queryVectors.size());
+
+            List<Integer> elementsInBatch = new ArrayList<>();
+            for (int ep = 0; ep <= epoch; ep++) {
+                elementsInBatch.addAll(insertions(ep));
+            }
+            for (int ep = 0; ep <= epoch; ep++) {
+                elementsInBatch.removeAll(deletions(ep));
+            }
+            System.out.println("Epoch " + epoch + ": " + elementsInBatch.size() + " elements in batch");
+
+            for (var query : queryVectors) {
+                List<VectorFloat<?>> vectorsEpoch0 = elementsInBatch.stream().map(baseVectors::get).collect(Collectors.toList());
+                Integer[] gt = computeGroundTruth(similarityFunction, vectorsEpoch0, query, topK);
+                var temp = Arrays.stream(gt).map(elementsInBatch::get).collect(Collectors.toList());
+                groundTruth.add(temp);
+            }
+            System.out.println("Epoch " + epoch + ": " + groundTruth.size() + " queries");
+            epochGroundTruth.add(groundTruth);
         }
-        return new QueryBundle(queryVectors, groundTruth);
     }
 
     @Override
@@ -99,13 +124,10 @@ public class AbstractDynamicDataset implements DynamicDataset {
         return baseVectors.get(0).length();
     }
 
-    public static Integer[] computeGroundTruth(VectorSimilarityFunction vsf, List<VectorFloat<?>> vectors, List<Integer> batch, VectorFloat<?> query, int topK) {
-        double[] groundTruthDistances = batch.stream().mapToDouble(i -> vsf.compare(query, vectors.get(i))).toArray();
+    public static Integer[] computeGroundTruth(VectorSimilarityFunction vsf, List<VectorFloat<?>> vectors, VectorFloat<?> query, int topK) {
+        double[] groundTruthDistances = vectors.stream().mapToDouble(vec -> vsf.compare(query, vec)).toArray();
         Integer[] idx = argsort(groundTruthDistances, false);
         idx = Arrays.copyOfRange(idx, 0, topK);
-        for (int i = 0; i < idx.length; i++) {
-            idx[i] = batch.get(idx[i]);
-        }
         return idx;
     }
 

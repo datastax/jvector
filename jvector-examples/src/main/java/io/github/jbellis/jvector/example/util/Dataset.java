@@ -171,6 +171,10 @@ public class Dataset implements AbstractDataset {
         return baseVectors.get(ordinal);
     }
 
+    public List<VectorFloat<?>> getBaseVectors() {
+        return baseVectors;
+    }
+
     public QueryBundle getQueryBundle() {
         return queryBundle;
     }

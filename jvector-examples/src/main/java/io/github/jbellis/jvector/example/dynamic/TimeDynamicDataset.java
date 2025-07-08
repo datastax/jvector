@@ -9,14 +9,14 @@ import java.util.Comparator;
 import java.util.List;
 
 public class TimeDynamicDataset {
-    public DynamicDataset getTimeDynamicDataset(String name,
-                                                VectorSimilarityFunction similarityFunction,
-                                                List<Integer> timestamps,
-                                                List<VectorFloat<?>> baseVectors,
-                                                List<VectorFloat<?>> queryVectors,
-                                                int epochs,
-                                                int deletionLag,
-                                                int topK) {
+    public static DynamicDataset create(String name,
+                                        VectorSimilarityFunction similarityFunction,
+                                        List<Integer> timestamps,
+                                        List<VectorFloat<?>> baseVectors,
+                                        List<VectorFloat<?>> queryVectors,
+                                        int epochs,
+                                        int deletionLag,
+                                        int topK) {
         if (epochs < 1) {
             throw new IllegalArgumentException("epochs must be at least 1");
         }

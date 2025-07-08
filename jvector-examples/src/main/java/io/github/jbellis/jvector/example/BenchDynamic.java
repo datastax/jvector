@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.dynamic.ClusteredDynamicDataset;
 import io.github.jbellis.jvector.example.dynamic.DynamicDataset;
 import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
@@ -52,8 +53,6 @@ public class BenchDynamic {
 
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
-                Dataset ds = DataSetLoader.loadDataSet(datasetName);
-
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
@@ -77,7 +76,8 @@ public class BenchDynamic {
         for (var config : configurations) {
             String datasetName = config.dataset;
             Dataset ds = DataSetLoader.loadDataSet(datasetName);
-            DynamicDataset dds = (DynamicDataset) ds;
+
+            DynamicDataset dds = ClusteredDynamicDataset.create(ds, 10, 1, 100);
 
             GridDynamic.runAll(dds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,

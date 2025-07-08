@@ -1,5 +1,6 @@
 package io.github.jbellis.jvector.example.dynamic;
 
+import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.QueryBundle;
 import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -13,14 +14,26 @@ import java.util.Comparator;
 import java.util.List;
 
 public class ClusteredDynamicDataset {
-    public DynamicDataset getClusteredDynamicDataset(String name,
-                                                     VectorSimilarityFunction similarityFunction,
-                                                     List<Integer> timestamps,
-                                                     List<VectorFloat<?>> baseVectors,
-                                                     List<VectorFloat<?>> queryVectors,
-                                                     int epochs,
-                                                     int deletionLag,
-                                                     int topK) {
+    public static DynamicDataset create(Dataset ds,
+                                        int epochs,
+                                        int deletionLag,
+                                        int topK) {
+        return create(ds.getName(),
+                      ds.getSimilarityFunction(),
+                      ds.getBaseVectors(),
+                      ds.getQueryBundle().queryVectors,
+                      epochs,
+                deletionLag,
+                topK);
+    }
+
+    public static DynamicDataset create(String name,
+                                        VectorSimilarityFunction similarityFunction,
+                                        List<VectorFloat<?>> baseVectors,
+                                        List<VectorFloat<?>> queryVectors,
+                                        int epochs,
+                                        int deletionLag,
+                                        int topK) {
         if (epochs < 1) {
             throw new IllegalArgumentException("epochs must be at least 1");
         }
@@ -32,13 +45,20 @@ public class ClusteredDynamicDataset {
         kmeans.cluster(10, 0);
 
         List<List<Integer>> batches = new ArrayList<>(epochs);
+        for (int ep = 0; ep < epochs; ep++) {
+            batches.add(new ArrayList<>());
+        }
         for (int i = 0; i < baseVectors.size(); i++) {
             int epoch = kmeans.getNearestCluster(baseVectors.get(i));
-            if (batches.get(epoch) == null) {
-                batches.add(epoch, new ArrayList<>());
-            }
             batches.get(epoch).add(i);
         }
+
+        int totalSize = 0;
+        for (int ep = 0; ep < epochs; ep++) {
+            totalSize += batches.get(ep).size();
+            System.out.println("Epoch " + ep + ": " + batches.get(ep).size() + " vectors");
+        }
+        System.out.println("Total size: " + totalSize);
 
         return new AbstractDynamicDataset(name, similarityFunction, batches, deletionLag, baseVectors, queryVectors, topK);
     }

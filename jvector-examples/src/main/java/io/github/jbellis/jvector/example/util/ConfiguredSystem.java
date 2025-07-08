@@ -94,7 +94,7 @@ public interface ConfiguredSystem extends AutoCloseable {
             epoch = 0;
         }
 
-        void setEpoch(int epoch) {
+        public void setEpoch(int epoch) {
             this.epoch = epoch;
         }
 
@@ -104,14 +104,13 @@ public interface ConfiguredSystem extends AutoCloseable {
                 return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
             }
 
-            var scoringView = (GraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
-            } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
-            }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            ScoreFunction.ApproximateScoreFunction asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+            var rr = new ScoreFunction.ExactScoreFunction() {
+                @Override
+                public float similarityTo(int node2) {
+                    return ds.getSimilarityFunction().compare(queryVector, ds.getBaseVector(node2));
+                }
+            };
             return new DefaultSearchScoreProvider(asf, rr);
         }
 
