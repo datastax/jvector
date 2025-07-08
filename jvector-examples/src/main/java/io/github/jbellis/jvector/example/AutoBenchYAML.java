@@ -46,7 +46,7 @@ public class AutoBenchYAML {
         List<String> allDatasets = new ArrayList<>();
 
         // neighborhood-watch-100k datasets
-        allDatasets.add("ada002-100k");
+//        allDatasets.add("ada002-100k");
         allDatasets.add("cohere-english-v3-100k");
 //        allDatasets.add("openai-v3-small-100k");
 //        allDatasets.add("gecko-100k");
