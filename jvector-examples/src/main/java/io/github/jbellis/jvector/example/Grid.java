@@ -17,8 +17,18 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.*;
+import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
+import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryTester;
+import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
+import io.github.jbellis.jvector.example.util.AbstractDataset;
+import io.github.jbellis.jvector.example.util.Dataset;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;

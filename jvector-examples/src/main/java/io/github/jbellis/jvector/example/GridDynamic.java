@@ -17,36 +17,41 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.*;
+import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
+import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryTester;
+import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.dynamic.DynamicDataset;
 import io.github.jbellis.jvector.example.util.AbstractDataset;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.ConfiguredSystem;
-import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
-import io.github.jbellis.jvector.graph.disk.feature.*;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
-import io.github.jbellis.jvector.quantization.*;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.*;
-import java.nio.file.DirectoryNotEmptyException;
+import java.io.BufferedOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Set;
+import java.util.Map;
 import java.util.function.Function;
-import java.util.function.IntFunction;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 /**
  * Tests a grid of configurations against a dataset
@@ -100,7 +105,7 @@ public class GridDynamic {
     {
         var buildCompressor = getCompressor(buildCompressorFunc, ds);
 
-        // TODO This is a hack for now. We load ALL vectors in memory and create a BuildScoreProvider with them.
+        // TODO This is a temporary hack. We load ALL vectors in memory and create a BuildScoreProvider with them.
         //  In the future, we should support a mutable BuildScoreProvider.
         var floatVectors = ds.getBaseRavv();
         BuildScoreProvider bsp;
