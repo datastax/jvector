@@ -16,9 +16,10 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.util.AbstractDataset;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -54,19 +55,19 @@ public class Bench {
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var refineFinalGraphGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(true); // List.of(false, true);
-        List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
+        List<Function<AbstractDataset, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED),
                 __ -> CompressorParameters.NONE
         );
-        List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
+        List<Function<AbstractDataset, CompressorParameters>> searchCompression = Arrays.asList(
                 __ -> CompressorParameters.NONE,
                 // ds -> new CompressorParameters.BQParameters(),
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
@@ -84,13 +85,13 @@ public class Bench {
         execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
     }
 
-    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+    private static void execute(Pattern pattern, List<Function<AbstractDataset, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<AbstractDataset, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
 
         for (var datasetName : datasetNames) {
-            DataSet ds = DataSetLoader.loadDataSet(datasetName);
+            Dataset ds = DataSetLoader.loadDataSet(datasetName);
             Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
     }

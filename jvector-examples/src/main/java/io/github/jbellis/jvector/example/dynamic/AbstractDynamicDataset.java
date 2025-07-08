@@ -1,6 +1,8 @@
 package io.github.jbellis.jvector.example.dynamic;
 
 import io.github.jbellis.jvector.example.util.QueryBundle;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -12,15 +14,16 @@ import java.util.stream.IntStream;
 
 public class AbstractDynamicDataset implements DynamicDataset {
     private final String name;
-    public final VectorSimilarityFunction similarityFunction;
+    private final VectorSimilarityFunction similarityFunction;
 
     // The points belonging to each batch
     private final List<List<Integer>> batches;
     // At time t, all vectors inserted in the (t - deletionLag) epoch are moved
     private final int deletionLag;
 
-    public final List<VectorFloat<?>> baseVectors;
-    public final List<VectorFloat<?>> queryVectors;
+    private final List<VectorFloat<?>> baseVectors;
+    private RandomAccessVectorValues baseRavv; // wrapper around baseVectors
+    private final List<VectorFloat<?>> queryVectors;
 
     private final int topK;
 
@@ -43,6 +46,11 @@ public class AbstractDynamicDataset implements DynamicDataset {
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public VectorSimilarityFunction getSimilarityFunction() {
+        return similarityFunction;
     }
 
     @Override
@@ -71,6 +79,14 @@ public class AbstractDynamicDataset implements DynamicDataset {
             groundTruth.add(temp);
         }
         return new QueryBundle(queryVectors, groundTruth);
+    }
+
+    @Override
+    public RandomAccessVectorValues getBaseRavv() {
+        if (baseRavv == null) {
+            baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());
+        }
+        return baseRavv;
     }
 
     @Override

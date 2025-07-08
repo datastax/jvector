@@ -19,8 +19,8 @@ package io.github.jbellis.jvector.example.util;
 import java.io.IOException;
 
 public class DataSetLoader {
-    public static DataSet loadDataSet(String fileName) throws IOException {
-        DataSet ds;
+    public static Dataset loadDataSet(String fileName) throws IOException {
+        Dataset ds;
         if (fileName.endsWith(".hdf5")) {
             DownloadHelper.maybeDownloadHdf5(fileName);
             ds = Hdf5Loader.load(fileName);

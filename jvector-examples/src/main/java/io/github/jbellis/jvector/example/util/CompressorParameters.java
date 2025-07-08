@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -28,12 +29,12 @@ public abstract class CompressorParameters {
         return false;
     }
 
-    public String idStringFor(DataSet ds) {
+    public String idStringFor(AbstractDataset ads) {
         // only required when supportsCaching() is true
         throw new UnsupportedOperationException();
     }
 
-    public abstract VectorCompressor<?> computeCompressor(DataSet ds);
+    public abstract VectorCompressor<?> computeCompressor(RandomAccessVectorValues RandomAccessVectorValues);
 
     public static class PQParameters extends CompressorParameters {
         private final int m;
@@ -49,13 +50,13 @@ public abstract class CompressorParameters {
         }
 
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
-            return ProductQuantization.compute(ds.getBaseRavv(), m, k, isCentered, anisotropicThreshold);
+        public VectorCompressor<?> computeCompressor(RandomAccessVectorValues ravv) {
+            return ProductQuantization.compute(ravv, m, k, isCentered, anisotropicThreshold);
         }
 
         @Override
-        public String idStringFor(DataSet ds) {
-            return String.format("PQ_%s_%d_%d_%s_%s", ds.name, m, k, isCentered, anisotropicThreshold);
+        public String idStringFor(AbstractDataset ads) {
+            return String.format("PQ_%s_%d_%d_%s_%s", ads.getName(), m, k, isCentered, anisotropicThreshold);
         }
 
         @Override
@@ -66,8 +67,8 @@ public abstract class CompressorParameters {
 
     public static class BQParameters extends CompressorParameters {
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
-            return new BinaryQuantization(ds.getDimension());
+        public VectorCompressor<?> computeCompressor(RandomAccessVectorValues ravv) {
+            return new BinaryQuantization(ravv.dimension());
         }
     }
 
@@ -79,13 +80,13 @@ public abstract class CompressorParameters {
         }
 
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
-            return NVQuantization.compute(ds.getBaseRavv(), nSubVectors);
+        public VectorCompressor<?> computeCompressor(RandomAccessVectorValues ravv) {
+            return NVQuantization.compute(ravv, nSubVectors);
         }
 
         @Override
-        public String idStringFor(DataSet ds) {
-            return String.format("NVQ_%s_%d_%s", ds.name, nSubVectors);
+        public String idStringFor(AbstractDataset ads) {
+            return String.format("NVQ_%s_%d_%s", ads.getName(), nSubVectors);
         }
 
         @Override
@@ -96,7 +97,7 @@ public abstract class CompressorParameters {
 
     private static class NoCompressionParameters extends CompressorParameters {
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
+        public VectorCompressor<?> computeCompressor(RandomAccessVectorValues ravv) {
             return null;
         }
     }

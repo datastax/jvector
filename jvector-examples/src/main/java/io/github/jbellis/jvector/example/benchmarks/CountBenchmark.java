@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -105,7 +105,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
-        int totalQueries = cs.getDataSet().queryBundle.queryVectors.size();
+        int totalQueries = cs.getQueryBundle().queryVectors.size();
 
         for (int run = 0; run < queryRuns; run++) {
             IntStream.range(0, totalQueries)

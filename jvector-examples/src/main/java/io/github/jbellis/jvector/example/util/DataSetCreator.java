@@ -41,7 +41,7 @@ public class DataSetCreator {
      * @param topK     The number of closest points to find for each query vector.
      * @return DataSet containing base vectors, query vectors, and ground truth sets.
      */
-    public static DataSet create2DGrid(int nPoints, int nQueries, int topK) {
+    public static Dataset create2DGrid(int nPoints, int nQueries, int topK) {
         // generate the grid
         int gridWidth = (int) Math.sqrt(nPoints);
         var baseVectors = new ArrayList<VectorFloat<?>>();
@@ -73,6 +73,6 @@ public class DataSetCreator {
         var groundTruth = queries.stream().map(Map.Entry::getValue).collect(Collectors.toList());
 
         String name = "2D" + gridWidth;
-        return new DataSet(name, VectorSimilarityFunction.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
+        return new Dataset(name, VectorSimilarityFunction.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
     }
 }

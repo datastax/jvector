@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.DownloadHelper;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
@@ -32,7 +32,7 @@ public class HelloVectorWorld {
         String datasetName = "ada002-100k";
 
         var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
-        DataSet ds = mfd.load();
+        Dataset ds = mfd.load();
 
         MultiConfig config = MultiConfig.getConfig(datasetName);
 

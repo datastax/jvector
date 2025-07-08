@@ -19,7 +19,9 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.dynamic.DynamicDataset;
+import io.github.jbellis.jvector.example.util.AbstractDataset;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -43,6 +45,7 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -52,8 +55,6 @@ public class GridDynamic {
 
     private static final String pqCacheDir = "pq_cache";
 
-    private static final String dirPrefix = "BenchGraphDir";
-
     static void runAll(DynamicDataset ds,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
@@ -61,12 +62,11 @@ public class GridDynamic {
                        List<Boolean> addHierarchyGrid,
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DynamicDataset, CompressorParameters>> buildCompressors,
-                       List<Function<DynamicDataset, CompressorParameters>> compressionGrid,
+                       List<Function<AbstractDataset, CompressorParameters>> buildCompressors,
+                       List<Function<AbstractDataset, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        var testDirectory = Files.createTempDirectory(dirPrefix);
         try {
             for (var addHierarchy :  addHierarchyGrid) {
                 for (var refineFinalGraph : refineFinalGraphGrid) {
@@ -74,8 +74,7 @@ public class GridDynamic {
                         for (float neighborOverflow : neighborOverflowGrid) {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
-                                    var compressor = getCompressor(bc, ds);
-                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, ds, testDirectory);
+                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, bc, compressionGrid, topKGrid, usePruningGrid, ds);
                                 }
                             }
                         }
@@ -83,14 +82,6 @@ public class GridDynamic {
                 }
             }
         } finally {
-            try
-            {
-                Files.delete(testDirectory);
-            } catch (DirectoryNotEmptyException e) {
-                // something broke, we're almost certainly in the middle of another exception being thrown,
-                // so if we don't swallow this one it will mask the original exception
-            }
-
             cachedCompressors.clear();
         }
     }
@@ -101,183 +92,66 @@ public class GridDynamic {
                             float neighborOverflow,
                             boolean addHierarchy,
                             boolean refineFinalGraph,
-                            VectorCompressor<?> buildCompressor,
-                            List<Function<DynamicDataset, CompressorParameters>> compressionGrid,
+                            Function<AbstractDataset, CompressorParameters> buildCompressorFunc,
+                            List<Function<AbstractDataset, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
-                            DynamicDataset ds,
-                            Path testDirectory) throws IOException
+                            DynamicDataset ds) throws IOException
     {
-        Map<Set<FeatureId>, GraphIndex> indexes;
-        indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+        var buildCompressor = getCompressor(buildCompressorFunc, ds);
 
-        try {
-            for (var cpSupplier : compressionGrid) {
-                var compressor = getCompressor(cpSupplier, ds);
-                CompressedVectors cv;
-                if (compressor == null) {
-                    cv = null;
-                    System.out.format("Uncompressed vectors%n");
-                } else {
-                    long start = System.nanoTime();
-                    cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                }
-
-                indexes.forEach((features, index) -> {
-                    try (var cs = new ConfiguredSystem(ds, index, cv,
-                                                       index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-            }
-            for (var index : indexes.values()) {
-                index.close();
-            }
-        } finally {
-            for (int n = 0; n < featureSets.size(); n++) {
-                Files.deleteIfExists(testDirectory.resolve("graph" + n));
-            }
-        }
-    }
-
-    private static Map<Set<FeatureId>, GraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
-                                                               int M,
-                                                               int efConstruction,
-                                                               float neighborOverflow,
-                                                               boolean addHierarchy,
-                                                               boolean refineFinalGraph,
-                                                               DynamicDataset ds,
-                                                               Path testDirectory,
-                                                               VectorCompressor<?> buildCompressor)
-            throws IOException
-    {
-        var floatVectors = new UpdatableRandomAccessVectorValues(ds.getDimension());
-
+        // TODO This is a hack for now. We load ALL vectors in memory and create a BuildScoreProvider with them.
+        //  In the future, we should support a mutable BuildScoreProvider.
+        var floatVectors = ds.getBaseRavv();
         var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ds.getDimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
-        // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
-        Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskGraphIndexWriter scoringWriter = null;
-        int n = 0;
-        for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor());
-            var writer = bws.builder.build();
-            writers.put(features, writer);
-            suppliers.put(features, bws.suppliers);
-            if (features.contains(FeatureId.INLINE_VECTORS) || features.contains(FeatureId.NVQ_VECTORS)) {
-                scoringWriter = writer;
-            }
-        }
-        if (scoringWriter == null) {
-            throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
-        }
 
-        // build the graph incrementally
-        long startTime = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
-        PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                        suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
-                        });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
+        for (int epoch = 0; epoch < ds.epochs(); epoch++) {
+            var insertions = ds.insertions(epoch);
+            var deletions = ds.deletions(epoch);
+
+            // build the graph incrementally
+            long startTime = System.nanoTime();
+            var vv = floatVectors.threadLocalSupplier();
+            // Process insertions
+            PhysicalCoreExecutor.pool().submit(() -> {
+                insertions.parallelStream().forEach(node -> {
+                    builder.addGraphNode(node, vv.get().getVector(node));
                 });
-                builder.addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
-        builder.cleanup();
+            }).join();
+            // Process deletions
+            PhysicalCoreExecutor.pool().submit(() -> {
+                deletions.parallelStream().forEach(node -> {
+                    builder.markNodeDeleted(node);
+                });
+            }).join();
+            builder.cleanup();
 
-        // write the edge lists and close the writers
-        // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
-        writers.entrySet().stream().parallel().forEach(entry -> {
-            var writer = entry.getValue();
-            var features = entry.getKey();
-            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                writeSuppliers = new EnumMap<>(FeatureId.class);
-                var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
-            } else {
-                writeSuppliers = Map.of();
+            System.out.format("Epoch %d built in %ss%n", epoch, (System.nanoTime() - startTime) / 1_000_000_000.0);
+
+            var index = builder.getGraph();
+
+            for (var cpSupplier : compressionGrid) {
+                var searchCompressor = getCompressor(cpSupplier, ds);
+                CompressedVectors cv;
+                if (searchCompressor == null) {
+                    cv = null;
+                    System.out.format("Uncompressed vectors%n");
+                } else {
+                    long start = System.nanoTime();
+                    cv = searchCompressor.encodeAll(ds.getBaseRavv());
+                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", searchCompressor, ds.getBaseRavv().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                }
+
+                try (var cs = new ConfiguredSystem.DynamicConfiguredSystem(ds, index, cv, Set.of())) {
+                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
             }
-            try {
-                writer.write(writeSuppliers);
-                writer.close();
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        });
-        builder.close();
-        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - startTime) / 1_000_000_000.0);
-
-        // open indexes
-        Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
-        n = 0;
-        for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
-            indexes.put(features, index);
-        }
-        return indexes;
-    }
-
-    private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
-                                                             OnHeapGraphIndex onHeapGraph,
-                                                             Path outPath,
-                                                             RandomAccessVectorValues floatVectors,
-                                                             ProductQuantization pq)
-            throws FileNotFoundException
-    {
-        var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
-        builder.withMapper(identityMapper);
-        Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
-        for (var featureId : features) {
-            switch (featureId) {
-                case INLINE_VECTORS:
-                    builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
-                    break;
-                case FUSED_ADC:
-                    if (pq == null) {
-                        System.out.println("Skipping Fused ADC feature due to null ProductQuantization");
-                        continue;
-                    }
-                    // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
-                    builder.with(new FusedADC(onHeapGraph.maxDegree(), pq));
-                    break;
-                case NVQ_VECTORS:
-                    int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
-                    var nvq = NVQuantization.compute(floatVectors, nSubVectors);
-                    builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
-                    break;
-
-            }
-        }
-        return new BuilderWithSuppliers(builder, suppliers);
-    }
-
-    private static class BuilderWithSuppliers {
-        public final OnDiskGraphIndexWriter.Builder builder;
-        public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
-
-        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
-            this.builder = builder;
-            this.suppliers = suppliers;
+            index.close();
         }
     }
 
@@ -292,7 +166,7 @@ public class GridDynamic {
                                           float neighborOverflow,
                                           boolean addHierarchy) {
         int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.index);
+        System.out.format("Using %s:%n", cs.getIndex());
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
                 ThroughputBenchmark.createDefault(2, 0.1),
@@ -323,10 +197,12 @@ public class GridDynamic {
         }
     }
 
-    private static VectorCompressor<?> getCompressor(Function<DynamicDataset, CompressorParameters> cpSupplier, DynamicDataset ds) {
+    private static VectorCompressor<?> getCompressor(Function<AbstractDataset, CompressorParameters> cpSupplier, DynamicDataset ds) {
         var cp = cpSupplier.apply(ds);
         if (!cp.supportsCaching()) {
-            return cp.computeCompressor(ds);
+            List<VectorFloat<?>> vectorsEpoch0 = ds.insertions(0).stream().map(ds::getBaseVector).collect(Collectors.toList());
+            var ravvEpoch0 = new ListRandomAccessVectorValues(vectorsEpoch0, ds.getDimension());
+            return cp.computeCompressor(ravvEpoch0);
         }
 
         var fname = cp.idStringFor(ds);
@@ -347,7 +223,9 @@ public class GridDynamic {
             }
 
             var start = System.nanoTime();
-            var compressor = cp.computeCompressor(ds);
+            List<VectorFloat<?>> vectorsEpoch0 = ds.insertions(0).stream().map(ds::getBaseVector).collect(Collectors.toList());
+            var ravvEpoch0 = new ListRandomAccessVectorValues(vectorsEpoch0, ds.getDimension());
+            var compressor = cp.computeCompressor(ravvEpoch0);
             System.out.format("%s build in %.2fs,%n", compressor, (System.nanoTime() - start) / 1_000_000_000.0);
             if (cp.supportsCaching()) {
                 try {
@@ -361,53 +239,5 @@ public class GridDynamic {
             }
             return compressor;
         });
-    }
-
-    public static class ConfiguredSystem implements AutoCloseable {
-        DynamicDataset ds;
-        GraphIndex index;
-        CompressedVectors cv;
-        Set<FeatureId> features;
-
-        private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            return new GraphSearcher(index);
-        });
-
-        ConfiguredSystem(DynamicDataset ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
-            this.ds = ds;
-            this.index = index;
-            this.cv = cv;
-            this.features = features;
-        }
-
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
-            // if we're not compressing then just use the exact score function
-            if (cv == null) {
-                return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
-            }
-
-            var scoringView = (GraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
-            } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
-            }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
-            return new DefaultSearchScoreProvider(asf, rr);
-        }
-
-        public GraphSearcher getSearcher() {
-            return searchers.get();
-        }
-
-        public DynamicDataset getDataSet() {
-            return ds;
-        }
-
-        @Override
-        public void close() throws Exception {
-            searchers.close();
-        }
     }
 }

@@ -28,14 +28,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
-public class DataSet implements AbstractDataSet {
-    public final String name;
-    public final VectorSimilarityFunction similarityFunction;
-    public final List<VectorFloat<?>> baseVectors;
-    public final QueryBundle queryBundle;
+public class Dataset implements AbstractDataset {
+    private final String name;
+    private final VectorSimilarityFunction similarityFunction;
+    private final List<VectorFloat<?>> baseVectors;
+    private final QueryBundle queryBundle;
     private RandomAccessVectorValues baseRavv;
 
-    public DataSet(String name,
+    public Dataset(String name,
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    List<VectorFloat<?>> queryVectors,
@@ -43,7 +43,7 @@ public class DataSet implements AbstractDataSet {
         this(name, similarityFunction, baseVectors, new QueryBundle(queryVectors, groundTruth));
     }
 
-    public DataSet(String name,
+    public Dataset(String name,
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
                    QueryBundle queryBundle) {
@@ -63,11 +63,16 @@ public class DataSet implements AbstractDataSet {
                 name, baseVectors.size(), queryBundle.queryVectors.size(), baseVectors.get(0).length());
     }
 
+    @Override
+    public VectorSimilarityFunction getSimilarityFunction() {
+        return similarityFunction;
+    }
+
     /**
      * Return a dataset containing the given vectors, scrubbed free from zero vectors and normalized to unit length.
      * Note: This only scrubs and normalizes for dot product similarity.
      */
-    public static DataSet getScrubbedDataSet(String pathStr,
+    public static Dataset getScrubbedDataSet(String pathStr,
                                              VectorSimilarityFunction vsf,
                                              List<VectorFloat<?>> baseVectors,
                                              List<VectorFloat<?>> queryVectors,
@@ -127,7 +132,7 @@ public class DataSet implements AbstractDataSet {
         }
 
         assert scrubbedQueryVectors.size() == gtSet.size();
-        return new DataSet(pathStr, vsf, scrubbedBaseVectors, scrubbedQueryVectors, gtSet);
+        return new Dataset(pathStr, vsf, scrubbedBaseVectors, scrubbedQueryVectors, gtSet);
     }
 
     private static void normalizeAll(Iterable<VectorFloat<?>> vectors) {
@@ -148,6 +153,7 @@ public class DataSet implements AbstractDataSet {
         return baseVectors.get(0).length();
     }
 
+    @Override
     public RandomAccessVectorValues getBaseRavv() {
         if (baseRavv == null) {
             baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());
@@ -163,5 +169,9 @@ public class DataSet implements AbstractDataSet {
     @Override
     public VectorFloat<?> getBaseVector(int ordinal) {
         return baseVectors.get(ordinal);
+    }
+
+    public QueryBundle getQueryBundle() {
+        return queryBundle;
     }
 }

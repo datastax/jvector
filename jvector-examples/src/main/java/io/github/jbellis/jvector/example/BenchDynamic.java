@@ -16,7 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.dynamic.DynamicDataset;
+import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -51,7 +52,7 @@ public class BenchDynamic {
 
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                Dataset ds = DataSetLoader.loadDataSet(datasetName);
 
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
@@ -73,14 +74,15 @@ public class BenchDynamic {
 
         System.out.println("Executing the following datasets:" + configurations.stream().map(c -> " " + c.dataset));
 
-//        for (var config : configurations) {
-//            String datasetName = config.dataset;
-//            DataSet ds = DataSetLoader.loadDataSet(datasetName);
-//
-//            GridDynamic.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-//                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-//                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-//                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
-//        }
+        for (var config : configurations) {
+            String datasetName = config.dataset;
+            Dataset ds = DataSetLoader.loadDataSet(datasetName);
+            DynamicDataset dds = (DynamicDataset) ds;
+
+            GridDynamic.runAll(dds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+        }
     }
 }

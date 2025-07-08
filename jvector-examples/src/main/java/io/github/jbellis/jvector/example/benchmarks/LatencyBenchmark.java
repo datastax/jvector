@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -104,7 +104,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        int totalQueries = cs.getDataSet().queryBundle.queryVectors.size();
+        int totalQueries = cs.getQueryBundle().queryVectors.size();
         double mean = 0.0;
         double m2 = 0.0;
         int count = 0;

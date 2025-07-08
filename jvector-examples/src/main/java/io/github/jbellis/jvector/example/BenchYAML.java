@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.Dataset;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -50,7 +50,7 @@ public class BenchYAML {
             System.out.println("Executing the following datasets: " + datasetNames);
 
             for (var datasetName : datasetNames) {
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                Dataset ds = DataSetLoader.loadDataSet(datasetName);
 
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
@@ -72,7 +72,7 @@ public class BenchYAML {
                 MultiConfig config = MultiConfig.getConfig(configName);
                 String datasetName = config.dataset;
 
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                Dataset ds = DataSetLoader.loadDataSet(datasetName);
 
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                         config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,

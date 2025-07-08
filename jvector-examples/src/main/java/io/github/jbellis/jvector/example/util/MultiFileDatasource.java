@@ -46,11 +46,11 @@ public class MultiFileDatasource {
         return List.of(basePath, queriesPath, groundTruthPath);
     }
 
-    public DataSet load() throws IOException {
+    public Dataset load() throws IOException {
         var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
         var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
         var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-        return DataSet.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
+        return Dataset.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
     }
 
     public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{

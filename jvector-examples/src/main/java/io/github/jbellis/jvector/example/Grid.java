@@ -18,12 +18,9 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
+import io.github.jbellis.jvector.example.util.*;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -35,17 +32,12 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
@@ -62,7 +54,6 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
@@ -76,15 +67,15 @@ public class Grid {
 
     private static final String dirPrefix = "BenchGraphDir";
 
-    static void runAll(DataSet ds,
+    static void runAll(Dataset ds,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
                        List<Boolean> addHierarchyGrid,
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DataSet, CompressorParameters>> buildCompressors,
-                       List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       List<Function<AbstractDataset, CompressorParameters>> buildCompressors,
+                       List<Function<AbstractDataset, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
@@ -124,10 +115,10 @@ public class Grid {
                             boolean addHierarchy,
                             boolean refineFinalGraph,
                             VectorCompressor<?> buildCompressor,
-                            List<Function<DataSet, CompressorParameters>> compressionGrid,
+                            List<Function<AbstractDataset, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
-                            DataSet ds,
+                            Dataset ds,
                             Path testDirectory) throws IOException
     {
         Map<Set<FeatureId>, GraphIndex> indexes;
@@ -147,11 +138,11 @@ public class Grid {
                 } else {
                     long start = System.nanoTime();
                     cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseRavv().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                 }
 
                 indexes.forEach((features, index) -> {
-                    try (var cs = new ConfiguredSystem(ds, index, cv,
+                    try (var cs = new ConfiguredSystem.StaticConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
                         testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
                     } catch (Exception e) {
@@ -175,7 +166,7 @@ public class Grid {
                                                                float neighborOverflow,
                                                                boolean addHierarchy,
                                                                boolean refineFinalGraph,
-                                                               DataSet ds,
+                                                               Dataset ds,
                                                                Path testDirectory,
                                                                VectorCompressor<?> buildCompressor)
             throws IOException
@@ -183,7 +174,7 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
 
         var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
@@ -313,14 +304,14 @@ public class Grid {
                                                                  float neighborOverflow,
                                                                  boolean addHierarchy,
                                                                  boolean refineFinalGraph,
-                                                                 DataSet ds,
+                                                                 Dataset ds,
                                                                  Path testDirectory)
             throws IOException
     {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                           floatVectors.dimension(),
                                                           M,
@@ -376,7 +367,7 @@ public class Grid {
                                           float neighborOverflow,
                                           boolean addHierarchy) {
         int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.index);
+        System.out.format("Using %s:%n", cs.getIndex());
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
                 ThroughputBenchmark.createDefault(2, 0.1),
@@ -407,10 +398,10 @@ public class Grid {
         }
     }
 
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
+    private static VectorCompressor<?> getCompressor(Function<AbstractDataset, CompressorParameters> cpSupplier, Dataset ds) {
         var cp = cpSupplier.apply(ds);
         if (!cp.supportsCaching()) {
-            return cp.computeCompressor(ds);
+            return cp.computeCompressor(ds.getBaseRavv());
         }
 
         var fname = cp.idStringFor(ds);
@@ -431,7 +422,7 @@ public class Grid {
             }
 
             var start = System.nanoTime();
-            var compressor = cp.computeCompressor(ds);
+            var compressor = cp.computeCompressor(ds.getBaseRavv());
             System.out.format("%s build in %.2fs,%n", compressor, (System.nanoTime() - start) / 1_000_000_000.0);
             if (cp.supportsCaching()) {
                 try {
@@ -445,53 +436,5 @@ public class Grid {
             }
             return compressor;
         });
-    }
-
-    public static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
-        GraphIndex index;
-        CompressedVectors cv;
-        Set<FeatureId> features;
-
-        private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            return new GraphSearcher(index);
-        });
-
-        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
-            this.ds = ds;
-            this.index = index;
-            this.cv = cv;
-            this.features = features;
-        }
-
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
-            // if we're not compressing then just use the exact score function
-            if (cv == null) {
-                return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
-            }
-
-            var scoringView = (GraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
-            } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
-            }
-            var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
-            return new DefaultSearchScoreProvider(asf, rr);
-        }
-
-        public GraphSearcher getSearcher() {
-            return searchers.get();
-        }
-
-        public DataSet getDataSet() {
-            return ds;
-        }
-
-        @Override
-        public void close() throws Exception {
-            searchers.close();
-        }
     }
 }

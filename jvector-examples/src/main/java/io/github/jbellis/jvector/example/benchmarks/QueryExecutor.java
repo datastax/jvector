@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.util.Bits;
 
@@ -32,7 +32,7 @@ public class QueryExecutor {
      * @return the SearchResult for query i.
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
-        var queryVector = cs.getDataSet().queryBundle.queryVectors.get(i);
+        var queryVector = cs.getQueryBundle().queryVectors.get(i);
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());

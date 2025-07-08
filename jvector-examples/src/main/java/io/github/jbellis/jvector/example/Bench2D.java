@@ -46,8 +46,8 @@ public class Bench2D {
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var refineFinalGraphGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
-        List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
-        List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
+        List<Function<AbstractDataset, CompressorParameters>> buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
+        List<Function<AbstractDataset, CompressorParameters>> searchCompression = Arrays.asList(
                 __ -> CompressorParameters.NONE,
                 ds -> new PQParameters(ds.getDimension(), 256, true, UNWEIGHTED)
         );

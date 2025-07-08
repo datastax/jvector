@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.List;
 import java.util.stream.IntStream;
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -56,7 +56,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().queryBundle.queryVectors.size();
+        int totalQueries = cs.getQueryBundle().queryVectors.size();
         double totalRuntime = 0;
 
         for (int run = 0; run < queryRuns; run++) {

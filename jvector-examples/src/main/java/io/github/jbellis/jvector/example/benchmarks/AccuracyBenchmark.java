@@ -21,8 +21,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.QueryBundle;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -88,7 +89,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().queryBundle.queryVectors.size();
+        int totalQueries = cs.getQueryBundle().queryVectors.size();
 
         // execute all queries in parallel and collect results
         List<SearchResult> results = IntStream.range(0, totalQueries)
@@ -101,14 +102,14 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         if (computeRecall) {
             // compute recall for this run
             double recall = AccuracyMetrics.recallFromSearchResults(
-                            cs.getDataSet().queryBundle.groundTruth, results, topK, topK
+                    cs.getQueryBundle().groundTruth, results, topK, topK
             );
             list.add(Metric.of("Recall@" + topK, formatRecall, recall));
         }
         if (computeMAP) {
             // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
-                            cs.getDataSet().queryBundle.groundTruth, results, topK
+                    cs.getQueryBundle().groundTruth, results, topK
             );
             list.add(Metric.of("MAP@" + topK, formatMAP, map));
         }

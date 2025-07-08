@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.jhdf.HdfFile;
-import io.jhdf.api.Dataset;
 import io.jhdf.object.datatype.FloatingPoint;
 
 import java.nio.file.Path;
@@ -34,7 +33,7 @@ public class Hdf5Loader {
     public static final String HDF5_DIR = "hdf5/";
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    public static DataSet load(String filename) {
+    public static Dataset load(String filename) {
         // infer the similarity
         VectorSimilarityFunction similarityFunction;
         if (filename.contains("-angular") || filename.contains("-dot")) {
@@ -56,7 +55,7 @@ public class Hdf5Loader {
             var baseVectorsArray =
                     (float[][]) hdf.getDatasetByPath("train").getData();
             baseVectors = IntStream.range(0, baseVectorsArray.length).parallel().mapToObj(i -> vectorTypeSupport.createFloatVector(baseVectorsArray[i])).toArray(VectorFloat<?>[]::new);
-            Dataset queryDataset = hdf.getDatasetByPath("test");
+            io.jhdf.api.Dataset queryDataset = hdf.getDatasetByPath("test");
             if (((FloatingPoint) queryDataset.getDataType()).getBitPrecision() == 64) {
                 // lastfm dataset contains f64 queries but f32 everything else
                 var doubles = ((double[][]) queryDataset.getData());
@@ -82,6 +81,6 @@ public class Hdf5Loader {
             }
         }
 
-        return DataSet.getScrubbedDataSet(path.getFileName().toString(), similarityFunction, Arrays.asList(baseVectors), Arrays.asList(queryVectors), gtSets);
+        return Dataset.getScrubbedDataSet(path.getFileName().toString(), similarityFunction, Arrays.asList(baseVectors), Arrays.asList(queryVectors), gtSets);
     }
 }
