@@ -103,8 +103,13 @@ public class GridDynamic {
         // TODO This is a hack for now. We load ALL vectors in memory and create a BuildScoreProvider with them.
         //  In the future, we should support a mutable BuildScoreProvider.
         var floatVectors = ds.getBaseRavv();
-        var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
+        BuildScoreProvider bsp;
+        if (buildCompressor != null) {
+            var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
+            bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
+        } else {
+            bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
+        }
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ds.getDimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
 
