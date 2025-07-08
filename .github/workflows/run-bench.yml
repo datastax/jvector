@@ -70,7 +70,7 @@ jobs:
           # Explicitly set the classpath to include SLF4J implementation
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
-            -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results.json ${{ inputs.benchmark_config != '' && inputs.benchmark_config || 'jvector-examples/yaml-configs/default.yml' }}
+            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results.json ${{ inputs.benchmark_config != '' && inputs.benchmark_config || 'jvector-examples/yaml-configs/default.yml' }}
           
           # List files in current directory to help with debugging
           echo "Files in current directory:"

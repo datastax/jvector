@@ -34,7 +34,7 @@
                     </descriptorRefs>
                     <archive>
                         <manifest>
-                            <mainClass>io.github.jbellis.jvector.example.BenchYAML</mainClass>
+                            <mainClass>io.github.jbellis.jvector.example.AutoBenchYAML</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
