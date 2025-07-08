@@ -13,7 +13,7 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx14G -Djvector.experimental.enable_native_vectorization=true \
-  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar 
+  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar 
 ```
 
 You can add additional optional JMH arguments dynamically from command line. For example, to run the benchmarks with 4 forks, 5 warmup iterations, 5 measurement iterations, 2 threads, and 10 seconds warmup time per iteration, use the following command:
@@ -24,7 +24,7 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx14G -Djvector.experimental.enable_native_vectorization=true \
-  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar \
+  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar \
   -f 4 -wi 5 -i 5 -t 2 -w 10s
 ```
 
@@ -51,7 +51,7 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx20G -Djvector.experimental.enable_native_vectorization=true \
-  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar $BENCHMARK_NAME
+  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar $BENCHMARK_NAME
 ```
 
 Same example for PQ training benchmark
@@ -64,7 +64,7 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx20G -Djvector.experimental.enable_native_vectorization=true \
-  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar $BENCHMARK_NAME
+  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar $BENCHMARK_NAME
 ```
 
 If you want to rerun a specific benchmark without testing the entire grid of scenarios defined in the benchmark.
@@ -72,7 +72,7 @@ You can just do the following to set M and beamWidth:
 ```shell
 # Get version from pom.xml
 VERSION=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
-java -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar IndexConstructionWithStaticSetBenchmark -p M=32 -p beamWidth=100 
+java -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar IndexConstructionWithStaticSetBenchmark -p M=32 -p beamWidth=100 
 ```
 ### Running benchmarks with auxiliary counters
 
@@ -87,7 +87,7 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx20G -Djvector.experimental.enable_native_vectorization=true \
-  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}-SNAPSHOT.jar $BENCHMARK_NAME -rf csv -rff results.csv
+  -jar benchmarks-jmh/target/benchmarks-jmh-${VERSION}.jar $BENCHMARK_NAME -rf csv -rff results.csv
 ```
 
 ## Formatting benchmark results
