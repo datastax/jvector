@@ -61,13 +61,7 @@ jobs:
 
       - name: Run Bench main
         run: |
-          # Print current directory and list jar files to ensure we're using the right one
-          echo "Current directory: $(pwd)"
-          echo "Available jar files:"
-          find jvector-examples/target -name "*.jar" | sort
-          
           # Use the jar-with-dependencies which includes all required dependencies
-          # Explicitly set the classpath to include SLF4J implementation
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
             -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results.json ${{ inputs.benchmark_config != '' && inputs.benchmark_config || 'jvector-examples/yaml-configs/default.yml' }}
@@ -75,14 +69,6 @@ jobs:
           # List files in current directory to help with debugging
           echo "Files in current directory:"
           ls -la
-          
-          # Check if log file exists and show its contents
-          if [ -f bench-results.log ]; then
-            echo "Contents of bench-results.log:"
-            cat bench-results.log
-          else
-            echo "bench-results.log file not found"
-          fi
 
       - name: Upload Bench Results
         uses: actions/upload-artifact@v4
