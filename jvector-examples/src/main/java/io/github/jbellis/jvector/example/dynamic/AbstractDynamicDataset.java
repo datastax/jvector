@@ -93,7 +93,6 @@ public class AbstractDynamicDataset implements DynamicDataset {
             for (int ep = 0; ep <= epoch; ep++) {
                 elementsInBatch.removeAll(deletions(ep));
             }
-            System.out.println("Epoch " + epoch + ": " + elementsInBatch.size() + " elements in batch");
 
             for (var query : queryVectors) {
                 List<VectorFloat<?>> vectorsEpoch0 = elementsInBatch.stream().map(baseVectors::get).collect(Collectors.toList());
@@ -101,9 +100,9 @@ public class AbstractDynamicDataset implements DynamicDataset {
                 var temp = Arrays.stream(gt).map(elementsInBatch::get).collect(Collectors.toList());
                 groundTruth.add(temp);
             }
-            System.out.println("Epoch " + epoch + ": " + groundTruth.size() + " queries");
             epochGroundTruth.add(groundTruth);
         }
+        System.out.println("Dynamic ground truth computed");
     }
 
     @Override

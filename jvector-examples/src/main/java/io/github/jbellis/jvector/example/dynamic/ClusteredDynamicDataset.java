@@ -53,13 +53,6 @@ public class ClusteredDynamicDataset {
             batches.get(epoch).add(i);
         }
 
-        int totalSize = 0;
-        for (int ep = 0; ep < epochs; ep++) {
-            totalSize += batches.get(ep).size();
-            System.out.println("Epoch " + ep + ": " + batches.get(ep).size() + " vectors");
-        }
-        System.out.println("Total size: " + totalSize);
-
         return new AbstractDynamicDataset(name, similarityFunction, batches, deletionLag, baseVectors, queryVectors, topK);
     }
 }
