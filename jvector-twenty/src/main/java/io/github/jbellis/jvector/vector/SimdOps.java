@@ -59,6 +59,9 @@ class SimdOps {
         vector.intoArray(((ArrayByteSequence) v).get(), offset);
     }
 
+    protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset, VectorMask<Byte> mask) {
+        vector.intoArray(((ArrayByteSequence) v).get(), offset, mask);
+    }
 
     float sum(VectorFloat<?> vector) {
         var sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
@@ -992,7 +995,7 @@ class SimdOps {
         return logitNQT(arr, inverseAlpha, x0);
     }
 
-    void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ArrayByteSequence destination) {
+    void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ByteSequence<?> destination) {
         final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(vector.length());
         final var mask = ByteVector.SPECIES_PREFERRED.indexInRange(0, FloatVector.SPECIES_PREFERRED.length());
 
@@ -1009,7 +1012,8 @@ class SimdOps {
             var bytes = arr.add(const05f)
                     .convertShape(VectorOperators.F2B, ByteVector.SPECIES_PREFERRED, 0)
                     .reinterpretAsBytes();
-            bytes.intoArray(destination.get(), i, mask);
+
+            intoByteSequence(bytes, destination, i, mask);
         }
 
         // Process the tail

@@ -186,7 +186,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        simdOps.quantizePartials(delta, partials,  partialBases, (ArrayByteSequence) quantizedPartials);
+        simdOps.quantizePartials(delta, partials,  partialBases, quantizedPartials);
     }
 
     @Override
@@ -203,21 +203,21 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue) {
         return simdOps.nvqDotProduct8bit(
-                 vector, (ArrayByteSequence) bytes,
+                 vector, bytes,
                 alpha, x0, minValue, maxValue);
     }
 
     @Override
     public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue) {
         return simdOps.nvqSquareDistance8bit(
-                 vector, (ArrayByteSequence) bytes,
+                 vector,  bytes,
                 alpha, x0, minValue, maxValue);
     }
 
     @Override
     public float[] nvqCosine8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue, VectorFloat<?> centroid) {
         return simdOps.nvqCosine8bit(
-                 vector, (ArrayByteSequence) bytes,
+                 vector,  bytes,
                 alpha, x0, minValue, maxValue,
                  centroid
         );
@@ -230,7 +230,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ByteSequence<?> destination) {
-        simdOps.nvqQuantize8bit( vector, alpha, x0, minValue, maxValue,(ArrayByteSequence) destination);
+        simdOps.nvqQuantize8bit( vector, alpha, x0, minValue, maxValue, destination);
     }
 
     @Override
