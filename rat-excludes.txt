@@ -18,3 +18,4 @@ src/main/resources/log4j2.xml
 src/test/resources/log4j2-test.xml
 scripts/test_node_setup.sh
 yaml-configs/*.yml
+src/main/resources/logback.xml
