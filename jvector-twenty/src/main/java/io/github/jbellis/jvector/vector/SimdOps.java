@@ -89,7 +89,7 @@ class SimdOps {
         }
 
         int dimension = vectors.get(0).length();
-        ArrayVectorFloat sum = new ArrayVectorFloat(dimension);
+        VectorFloat<?> sum = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimension);
 
         // Process each vector from the list
         for (VectorFloat<?> vector : vectors) {
@@ -601,41 +601,41 @@ class SimdOps {
 
     VectorFloat<?> sub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
         int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(length);
-        float[] res = new float[length];
+        VectorFloat<?> res = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(length);
 
         // Process the vectorized part
         for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
             var lhs = fromVectorFloat(FloatVector.SPECIES_PREFERRED, a, aOffset + i);
             var rhs = fromVectorFloat(FloatVector.SPECIES_PREFERRED, b, bOffset + i);
             var subResult = lhs.sub(rhs);
-            subResult.intoArray(res, i);
+            intoVectorFloat(subResult, res, i);
         }
 
         // Process the tail
         for (int i = vectorizedLength; i < length; i++) {
-            res[i] = a.get(aOffset + i) - b.get(bOffset + i);
+            res.set(i, a.get(aOffset + i) - b.get(bOffset + i));
         }
 
-        return new ArrayVectorFloat(res);
+        return res;
     }
 
     VectorFloat<?> sub(VectorFloat<?> a, int aOffset, float value, int length) {
         int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(length);
-        float[] res = new float[length];
+        VectorFloat<?> res = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(length);
 
         // Process the vectorized part
         for (int i = 0; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
             var lhs = fromVectorFloat(FloatVector.SPECIES_PREFERRED, a, aOffset + i);
             var subResult = lhs.sub(value);
-            subResult.intoArray(res, i);
+            intoVectorFloat(subResult, res, i);
         }
 
         // Process the tail
         for (int i = vectorizedLength; i < length; i++) {
-            res[i] = a.get(aOffset + i) - value;
+            res.set(i, a.get(aOffset + i) - value);
         }
 
-        return new ArrayVectorFloat(res);
+        return res;
     }
 
     void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {

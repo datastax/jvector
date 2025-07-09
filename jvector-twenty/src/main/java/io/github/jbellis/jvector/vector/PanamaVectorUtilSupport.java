@@ -225,22 +225,22 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public void nvqShuffleQueryInPlace8bit(VectorFloat<?> vector) {
-        simdOps.nvqShuffleQueryInPlace8bit( vector);
+        simdOps.nvqShuffleQueryInPlace8bit(vector);
     }
 
     @Override
     public void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ByteSequence<?> destination) {
-        simdOps.nvqQuantize8bit( vector, alpha, x0, minValue, maxValue, destination);
+        simdOps.nvqQuantize8bit(vector, alpha, x0, minValue, maxValue, destination);
     }
 
     @Override
     public float nvqLoss(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, int nBits) {
-        return simdOps.nvqLoss( vector, alpha, x0, minValue, maxValue, nBits);
+        return simdOps.nvqLoss(vector, alpha, x0, minValue, maxValue, nBits);
     }
 
     @Override
     public float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
-        return simdOps.nvqUniformLoss( vector, minValue, maxValue, nBits);
+        return simdOps.nvqUniformLoss(vector, minValue, maxValue, nBits);
     }
 }
 
