@@ -45,7 +45,7 @@ class VectorSimdOps extends SimdOps {
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset, int[] indices, int indicesOffset)
     {
-        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        throw new UnsupportedOperationException("Assembly not supported with memory segments.");
     }
 
     @Override
