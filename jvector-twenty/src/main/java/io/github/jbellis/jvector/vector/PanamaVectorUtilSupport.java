@@ -18,73 +18,81 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorSpecies;
 
 import java.util.List;
 
-final class PanamaVectorUtilSupport implements VectorUtilSupport {
+class PanamaVectorUtilSupport implements VectorUtilSupport {
+    protected final SimdOps simdOps;
+
+    PanamaVectorUtilSupport(SimdOps simdOps) {
+        this.simdOps = simdOps;
+    }
+
     @Override
     public float dotProduct(VectorFloat<?> a, VectorFloat<?> b) {
-        return SimdOps.dotProduct((ArrayVectorFloat)a, (ArrayVectorFloat)b);
+        return simdOps.dotProduct(a, b);
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return SimdOps.cosineSimilarity((ArrayVectorFloat)v1, (ArrayVectorFloat)v2);
+        return simdOps.cosineSimilarity(v1, v2);
     }
 
     @Override
     public float cosine(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length) {
-        return SimdOps.cosineSimilarity((ArrayVectorFloat)a, aoffset, (ArrayVectorFloat)b, boffset, length);
+        return simdOps.cosineSimilarity(a, aoffset, b, boffset, length);
     }
 
     @Override
     public float squareDistance(VectorFloat<?> a, VectorFloat<?> b) {
-        return SimdOps.squareDistance((ArrayVectorFloat)a, (ArrayVectorFloat)b);
+        return simdOps.squareDistance(a, b);
     }
 
     @Override
     public float squareDistance(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length) {
-        return SimdOps.squareDistance((ArrayVectorFloat) a, aoffset, (ArrayVectorFloat) b, boffset, length);
+        return simdOps.squareDistance( a, aoffset,  b, boffset, length);
     }
 
     @Override
     public float dotProduct(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length) {
-        return SimdOps.dotProduct((ArrayVectorFloat)a, aoffset, (ArrayVectorFloat)b, boffset, length);
+        return simdOps.dotProduct(a, aoffset, b, boffset, length);
     }
 
     @Override
     public VectorFloat<?> sum(List<VectorFloat<?>> vectors) {
-        return SimdOps.sum(vectors);
+        return simdOps.sum(vectors);
     }
 
     @Override
     public float sum(VectorFloat<?> vector) {
-        return SimdOps.sum((ArrayVectorFloat) vector);
+        return simdOps.sum( vector);
     }
 
     @Override
     public void scale(VectorFloat<?> vector, float multiplier) {
-        SimdOps.scale((ArrayVectorFloat) vector, multiplier);
+        simdOps.scale( vector, multiplier);
     }
 
     @Override
     public void addInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
-        SimdOps.addInPlace((ArrayVectorFloat)v1, (ArrayVectorFloat)v2);
+        simdOps.addInPlace(v1, v2);
     }
 
     @Override
     public void addInPlace(VectorFloat<?> v1, float value) {
-        SimdOps.addInPlace((ArrayVectorFloat)v1, value);
+        simdOps.addInPlace(v1, value);
     }
 
     @Override
     public void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
-        SimdOps.subInPlace((ArrayVectorFloat) v1, (ArrayVectorFloat) v2);
+        simdOps.subInPlace( v1,  v2);
     }
 
     @Override
     public void subInPlace(VectorFloat<?> vector, float value) {
-        SimdOps.subInPlace((ArrayVectorFloat) vector, value);
+        simdOps.subInPlace( vector, value);
     }
 
     @Override
@@ -92,48 +100,47 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
         if (a.length() != b.length()) {
             throw new IllegalArgumentException("Vectors must be the same length");
         }
-        return SimdOps.sub((ArrayVectorFloat)a, 0, (ArrayVectorFloat)b, 0, a.length());
+        return simdOps.sub(a, 0, b, 0, a.length());
     }
 
     @Override
     public VectorFloat<?> sub(VectorFloat<?> a, float value) {
-        return SimdOps.sub((ArrayVectorFloat)a, 0, value, a.length());
+        return simdOps.sub(a, 0, value, a.length());
     }
 
     @Override
     public VectorFloat<?> sub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
-        return SimdOps.sub((ArrayVectorFloat) a, aOffset, (ArrayVectorFloat) b, bOffset, length);
+        return simdOps.sub( a, aOffset,  b, bOffset, length);
     }
 
     @Override
     public void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
-        SimdOps.minInPlace((ArrayVectorFloat)v1, (ArrayVectorFloat)v2);
+        simdOps.minInPlace(v1, v2);
     }
 
     @Override
     public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets) {
-        return SimdOps.assembleAndSum(((ArrayVectorFloat) data).get(), dataBase, ((ByteSequence<byte[]>) baseOffsets),
-                0, baseOffsets.length());
+        return simdOps.assembleAndSum(data, dataBase, baseOffsets, 0, baseOffsets.length());
     }
 
     @Override
     public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
-        return SimdOps.assembleAndSum(((ArrayVectorFloat) data).get(), dataBase, ((ByteSequence<byte[]>) baseOffsets), baseOffsetsOffset, baseOffsetsLength);
+        return simdOps.assembleAndSum(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
     }
 
     @Override
     public int hammingDistance(long[] v1, long[] v2) {
-        return SimdOps.hammingDistance(v1, v2);
+        return simdOps.hammingDistance(v1, v2);
     }
 
     @Override
     public float max(VectorFloat<?> vector) {
-        return SimdOps.max((ArrayVectorFloat) vector);
+        return simdOps.max( vector);
     }
 
     @Override
     public float min(VectorFloat<?> vector) {
-        return SimdOps.min((ArrayVectorFloat) vector);
+        return simdOps.min( vector);
     }
 
     @Override
@@ -179,7 +186,7 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        SimdOps.quantizePartials(delta, (ArrayVectorFloat) partials, (ArrayVectorFloat) partialBases, (ArrayByteSequence) quantizedPartials);
+        simdOps.quantizePartials(delta, partials,  partialBases, (ArrayByteSequence) quantizedPartials);
     }
 
     @Override
@@ -190,50 +197,50 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
     {
-        return SimdOps.pqDecodedCosineSimilarity((ByteSequence<byte[]>) encoded, encodedOffset, encodedLength, clusterCount, (ArrayVectorFloat) partialSums, (ArrayVectorFloat) aMagnitude, bMagnitude);
+        return simdOps.pqDecodedCosineSimilarity(encoded, encodedOffset, encodedLength, clusterCount,  partialSums,  aMagnitude, bMagnitude);
     }
 
     @Override
     public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue) {
-        return SimdOps.nvqDotProduct8bit(
-                (ArrayVectorFloat) vector, (ArrayByteSequence) bytes,
+        return simdOps.nvqDotProduct8bit(
+                 vector, (ArrayByteSequence) bytes,
                 alpha, x0, minValue, maxValue);
     }
 
     @Override
     public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue) {
-        return SimdOps.nvqSquareDistance8bit(
-                (ArrayVectorFloat) vector, (ArrayByteSequence) bytes,
+        return simdOps.nvqSquareDistance8bit(
+                 vector, (ArrayByteSequence) bytes,
                 alpha, x0, minValue, maxValue);
     }
 
     @Override
     public float[] nvqCosine8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float alpha, float x0, float minValue, float maxValue, VectorFloat<?> centroid) {
-        return SimdOps.nvqCosine8bit(
-                (ArrayVectorFloat) vector, (ArrayByteSequence) bytes,
+        return simdOps.nvqCosine8bit(
+                 vector, (ArrayByteSequence) bytes,
                 alpha, x0, minValue, maxValue,
-                (ArrayVectorFloat) centroid
+                 centroid
         );
     }
 
     @Override
     public void nvqShuffleQueryInPlace8bit(VectorFloat<?> vector) {
-        SimdOps.nvqShuffleQueryInPlace8bit((ArrayVectorFloat) vector);
+        simdOps.nvqShuffleQueryInPlace8bit( vector);
     }
 
     @Override
     public void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ByteSequence<?> destination) {
-        SimdOps.nvqQuantize8bit((ArrayVectorFloat) vector, alpha, x0, minValue, maxValue,(ArrayByteSequence) destination);
+        simdOps.nvqQuantize8bit( vector, alpha, x0, minValue, maxValue,(ArrayByteSequence) destination);
     }
 
     @Override
     public float nvqLoss(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, int nBits) {
-        return SimdOps.nvqLoss((ArrayVectorFloat) vector, alpha, x0, minValue, maxValue, nBits);
+        return simdOps.nvqLoss( vector, alpha, x0, minValue, maxValue, nBits);
     }
 
     @Override
     public float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
-        return SimdOps.nvqUniformLoss((ArrayVectorFloat) vector, minValue, maxValue, nBits);
+        return simdOps.nvqUniformLoss( vector, minValue, maxValue, nBits);
     }
 }
 

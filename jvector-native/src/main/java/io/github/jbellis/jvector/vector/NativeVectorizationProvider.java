@@ -38,7 +38,7 @@ public class NativeVectorizationProvider extends VectorizationProvider {
         if (!NativeSimdOps.check_compatibility()) {
             throw new UnsupportedOperationException("Native SIMD operations are not supported on this platform due to missing CPU support.");
         }
-        this.vectorUtilSupport = new NativeVectorUtilSupport();
+        this.vectorUtilSupport = new NativeVectorUtilSupport(new VectorSimdOps());
         this.vectorTypeSupport = new MemorySegmentVectorProvider();
     }
 
