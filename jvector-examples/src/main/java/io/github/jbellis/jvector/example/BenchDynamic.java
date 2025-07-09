@@ -77,7 +77,7 @@ public class BenchDynamic {
             String datasetName = config.dataset;
             Dataset ds = DataSetLoader.loadDataSet(datasetName);
 
-            DynamicDataset dds = ClusteredDynamicDataset.create(ds, 10, 1, 100);
+            DynamicDataset dds = ClusteredDynamicDataset.create(ds, 50, 10, 100);
 
             GridDynamic.runAll(dds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
