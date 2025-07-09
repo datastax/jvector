@@ -57,9 +57,21 @@ def group_results_by_config(results: List[Dict[str, Any]]) -> Dict[str, Dict[str
         if not metrics:
             continue
         
-        # Create a configuration key that uniquely identifies this benchmark configuration
+        # Create a normalized configuration key that uniquely identifies this benchmark configuration
+        # but ignores object IDs which can change between runs
         config_key = f"{dataset}|"
-        config_key += "|".join([f"{k}={v}" for k, v in sorted(params.items())])
+        
+        # Filter out object IDs from parameters (they contain memory addresses like @aced190)
+        normalized_params = {}
+        for k, v in sorted(params.items()):
+            # If the value is a string containing an object ID (contains @ symbol), 
+            # only keep the parameter name but not the specific object ID
+            if isinstance(v, str) and '@' in v:
+                normalized_params[k] = k  # Just use the parameter name
+            else:
+                normalized_params[k] = v
+                
+        config_key += "|".join([f"{k}={normalized_params[k]}" for k in sorted(normalized_params.keys())])
         
         # Store all metrics for this configuration
         if config_key not in grouped_results:
