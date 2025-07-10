@@ -21,17 +21,21 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.yaml.ConstructionParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -53,7 +57,7 @@ public class AutoBenchYAML {
         // neighborhood-watch-100k datasets
 //        allDatasets.add("ada002-100k");
         allDatasets.add("cohere-english-v3-100k");
-//        allDatasets.add("openai-v3-small-100k");
+        allDatasets.add("openai-v3-small-100k");
 //        allDatasets.add("gecko-100k");
 //        allDatasets.add("openai-v3-large-3072-100k");
 //        allDatasets.add("openai-v3-large-1536-100k");
@@ -122,7 +126,8 @@ public class AutoBenchYAML {
                         datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                     }
                     
-                    MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
+                    MultiConfig config = MultiConfig.getDefaultConfig("autoDefault");
+                    config.dataset = datasetName;
                     logger.info("Using configuration: {}", config);
 
                     results.addAll(Grid.runAllAndCollectResults(ds, 
@@ -143,50 +148,39 @@ public class AutoBenchYAML {
             }
         }
 
-        // Process YAML configuration files
-        List<String> configNames = Arrays.stream(filteredArgs).filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
-        if (!configNames.isEmpty()) {
-            for (var configName : configNames) {
-                logger.info("Processing configuration file: {}", configName);
-                
-                try {
-                    MultiConfig config = MultiConfig.getConfig(configName);
-                    String datasetName = config.dataset;
-                    logger.info("Configuration specifies dataset: {}", datasetName);
-
-                    logger.info("Loading dataset: {}", datasetName);
-                    DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
-
-                    results.addAll(Grid.runAllAndCollectResults(ds, 
-                            config.construction.outDegree, 
-                            config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
-                            config.construction.addHierarchy,
-                            config.construction.getFeatureSets(), 
-                            config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
-                            config.search.useSearchPruning));
-                    
-                    logger.info("Benchmark completed for YAML config: {}", configName);
-                } catch (Exception e) {
-                    logger.error("Exception while processing YAML config {}", configName, e);
-                }
-            }
-        }
-
         // Calculate summary statistics
         try {
             SummaryStats stats = BenchmarkSummarizer.summarize(results);
             logger.info("Benchmark summary: {}", stats.toString());
 
-            // Write results to JSON file
+            // Write results to csv file and details to json
+            File detailsFile = new File(outputPath + ".json");
             ObjectMapper mapper = new ObjectMapper();
-            File outputFile = new File(outputPath);
-            mapper.writerWithDefaultPrettyPrinter().writeValue(outputFile, results);
-            logger.info("Benchmark results written to {} (file exists: {})", outputPath, outputFile.exists());
+            mapper.writerWithDefaultPrettyPrinter().writeValue(detailsFile, results);
+
+            File outputFile = new File(outputPath + ".csv");
             
+            // Get summary statistics by dataset
+            Map<String, SummaryStats> statsByDataset = BenchmarkSummarizer.summarizeByDataset(results);
+            
+            // Write CSV data
+            try (FileWriter writer = new FileWriter(outputFile)) {
+                // Write CSV header
+                writer.write("dataset,QPS,Mean Latency,Recall@10\n");
+                
+                // Write one row per dataset with average metrics
+                for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
+                    String dataset = entry.getKey();
+                    SummaryStats datasetStats = entry.getValue();
+                    
+                    writer.write(dataset + ",");
+                    writer.write(datasetStats.getAvgQps() + ",");
+                    writer.write(datasetStats.getAvgLatency() + ",");
+                    writer.write(datasetStats.getAvgRecall() + "\n");
+                }
+            }
+
+            logger.info("Benchmark results written to {} (file exists: {})", outputPath, outputFile.exists());
             // Double check that the file was created and log its size
             if (outputFile.exists()) {
                 logger.info("Output file size: {} bytes", outputFile.length());
@@ -197,4 +191,5 @@ public class AutoBenchYAML {
             logger.error("Exception during final processing", e);
         }
     }
+
 }

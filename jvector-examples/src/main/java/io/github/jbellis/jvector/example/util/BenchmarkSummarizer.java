@@ -191,4 +191,35 @@ public class BenchmarkSummarizer {
         }
         return null;
     }
+    
+    /**
+     * Calculate summary statistics grouped by dataset from a list of benchmark results
+     * @param results List of benchmark results to summarize
+     * @return Map of dataset names to their summary statistics
+     */
+    public static Map<String, SummaryStats> summarizeByDataset(List<BenchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return Map.of();
+        }
+
+        // Group results by dataset
+        Map<String, List<BenchResult>> resultsByDataset = new java.util.HashMap<>();
+        for (BenchResult result : results) {
+            if (result.dataset == null) continue;
+            
+            resultsByDataset.computeIfAbsent(result.dataset, k -> new java.util.ArrayList<>()).add(result);
+        }
+        
+        // Calculate summary stats for each dataset
+        Map<String, SummaryStats> statsByDataset = new java.util.HashMap<>();
+        for (Map.Entry<String, List<BenchResult>> entry : resultsByDataset.entrySet()) {
+            String dataset = entry.getKey();
+            List<BenchResult> datasetResults = entry.getValue();
+            
+            SummaryStats stats = summarize(datasetResults);
+            statsByDataset.put(dataset, stats);
+        }
+        
+        return statsByDataset;
+    }
 }

@@ -4,11 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       benchmark_config:
-        description: 'Benchmark configuration file (leave empty for default)'
-        required: false
-        default: ''
-      jdk_version:
-        description: 'Override JDK version (leave empty to use matrix)'
+        description: 'Benchmark dataset regex (leave empty for all)'
         required: false
         default: ''
   push:
@@ -64,7 +60,7 @@ jobs:
           # Use the jar-with-dependencies which includes all required dependencies
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
-            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results.json ${{ inputs.benchmark_config != '' && inputs.benchmark_config || 'jvector-examples/yaml-configs/default.yml' }}
+            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results 
           
           # List files in current directory to help with debugging
           echo "Files in current directory:"
@@ -76,37 +72,37 @@ jobs:
           name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
           path: |
             bench-results.json
-            bench-results.log
+            bench-results.csv
           if-no-files-found: warn
 
-      - name: Download Previous Benchmark Results
-        uses: dawidd6/action-download-artifact@v2
-        continue-on-error: true
-        with:
-          workflow: run-bench.yml
-          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
-          path: previous-results
-          skip_unpack: false
-          if_no_artifact_found: warn
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install argparse
-
-      - name: Compare Benchmark Results
-        if: success() && hashFiles('previous-results/bench-results.json') != ''
-        run: |
-          python compare_benchmarks.py bench-results.json previous-results/bench-results.json --output benchmark-comparison.md
-
-      - name: Upload Comparison Report
-        if: success() && hashFiles('benchmark-comparison.md') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-comparison-${{ matrix.isa }}-jdk${{ matrix.jdk }}
-          path: benchmark-comparison.md
+#      - name: Download Previous Benchmark Results
+#        uses: dawidd6/action-download-artifact@v2
+#        continue-on-error: true
+#        with:
+#          workflow: run-bench.yml
+#          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+#          path: previous-results
+#          skip_unpack: false
+#          if_no_artifact_found: warn
+#
+#      - name: Set up Python
+#        uses: actions/setup-python@v4
+#        with:
+#          python-version: '3.x'
+#
+#      - name: Install Python Dependencies
+#        run: |
+#          python -m pip install --upgrade pip
+#          pip install argparse
+#
+#      - name: Compare Benchmark Results
+#        if: success() && hashFiles('previous-results/bench-results.json') != ''
+#        run: |
+#          python compare_benchmarks.py bench-results.json previous-results/bench-results.json --output benchmark-comparison.md
+#
+#      - name: Upload Comparison Report
+#        if: success() && hashFiles('benchmark-comparison.md') != ''
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: benchmark-comparison-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+#          path: benchmark-comparison.md
