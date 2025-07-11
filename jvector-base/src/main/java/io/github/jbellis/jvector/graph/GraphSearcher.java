@@ -200,7 +200,6 @@ public class GraphSearcher implements Closeable {
      *                        that we don't search the entire graph trying to satisfy topK.
      * @return a SearchResult containing the topK results and the number of nodes visited during the search.
      */
-    @Experimental
     public SearchResult search(SearchScoreProvider scoreProvider,
                                int topK,
                                int rerankK,
