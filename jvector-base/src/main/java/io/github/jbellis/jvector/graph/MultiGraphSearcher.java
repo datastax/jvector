@@ -214,6 +214,7 @@ public class MultiGraphSearcher implements Closeable {
         expandedCount = 0;
         expandedCountBaseLayer = 0;
 
+        // TODO this loop could be parallelized
         for (var iView = 0; iView < views.size(); iView++) {
             var searcher = searchers.get(iView);
             var view = views.get(iView);
