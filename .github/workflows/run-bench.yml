@@ -7,6 +7,10 @@ on:
         description: 'Benchmark dataset regex (leave empty for all)'
         required: false
         default: ''
+      tags:
+        description: 'Space-separated list of tags to benchmark'
+        required: true
+        default: '4.0.0-rc.1'
   push:
     branches:
       - github_actions
@@ -47,15 +51,27 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Build with Maven (JDK 22)
-        if: matrix.jdk == '22'
-        run: mvn -B -Pjdk22 package --file pom.xml
+      - name: Checkout specific tag
+        run: git checkout ${{ matrix.tag }}
+
+      - name: Get version from pom.xml
+        id: get-version
+        run: |
+          VERSION=$(grep -o '<version>[^<]*</version>' pom.xml | head -1 | sed 's/<version>\(.*\)<\/version>/\1/')
+          if [[ "$VERSION" == *'${revision}'* ]]; then
+            REVISION=$(grep -o '<revision>[^<]*</revision>' pom.xml | head -1 | sed 's/<revision>\(.*\)<\/revision>/\1/')
+            if [ -n "$REVISION" ]; then
+              VERSION=${VERSION//\$\{revision\}/$REVISION}
+            fi
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Tag ${{ matrix.tag }} has version $VERSION"
 
       - name: Build with Maven (JDK 24)
         if: matrix.jdk == '24'
         run: mvn -B -Punix-amd64-profile package --file pom.xml
 
-      - name: Run Bench main
+      - name: Run Bench
         run: |
           # Use the jar-with-dependencies which includes all required dependencies
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
@@ -69,40 +85,99 @@ jobs:
       - name: Upload Bench Results
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+          name: bench-results-${{ matrix.isa }}-${{ matrix.tag }}
           path: |
             bench-results.json
             bench-results.csv
           if-no-files-found: warn
 
-#      - name: Download Previous Benchmark Results
-#        uses: dawidd6/action-download-artifact@v2
-#        continue-on-error: true
-#        with:
-#          workflow: run-bench.yml
-#          name: bench-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
-#          path: previous-results
-#          skip_unpack: false
-#          if_no_artifact_found: warn
-#
-#      - name: Set up Python
-#        uses: actions/setup-python@v4
-#        with:
-#          python-version: '3.x'
-#
-#      - name: Install Python Dependencies
-#        run: |
-#          python -m pip install --upgrade pip
-#          pip install argparse
-#
-#      - name: Compare Benchmark Results
-#        if: success() && hashFiles('previous-results/bench-results.json') != ''
-#        run: |
-#          python compare_benchmarks.py bench-results.json previous-results/bench-results.json --output benchmark-comparison.md
-#
-#      - name: Upload Comparison Report
-#        if: success() && hashFiles('benchmark-comparison.md') != ''
-#        uses: actions/upload-artifact@v4
-#        with:
-#          name: benchmark-comparison-${{ matrix.isa }}-jdk${{ matrix.jdk }}
-#          path: benchmark-comparison.md
+      - name: Download Previous Benchmark Results
+        uses: actions/download-artifact@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install argparse matplotlib pandas
+
+      - name: Combine results and create visualizations
+        run: |
+          cat > visualize.py << 'EOF'
+          import os
+          import glob
+          import pandas as pd
+          import matplotlib.pyplot as plt
+          
+          # Find all CSV files
+          csv_files = glob.glob('benchmark-results-*/benchmark-*.csv')
+          
+          # Read and combine all results
+          dfs = []
+          for file in csv_files:
+              df = pd.read_csv(file)
+              dfs.append(df)
+          
+          if not dfs:
+              print("No benchmark results found!")
+              exit(1)
+          
+          combined_df = pd.concat(dfs)
+          combined_df.to_csv('all_benchmark_results.csv', index=False)
+          print(f"Combined {len(dfs)} benchmark results")
+          
+          # Sort by version for proper ordering in plots
+          combined_df['version_sort'] = combined_df['version'].str.replace('v', '').apply(lambda x: [int(p) if p.isdigit() else p for p in x.split('.')])
+          combined_df = combined_df.sort_values('version_sort')
+          
+          # Create plots for each metric
+          metrics = ['QPS', 'Mean Latency', 'Recall@10']
+          for metric in metrics:
+              plt.figure(figsize=(10, 6))
+          
+              for dataset, group in combined_df.groupby('dataset'):
+                  plt.plot(group['version'], group[metric], marker='o', label=dataset)
+          
+              plt.title(f"{metric} Across JVector Versions")
+              plt.xlabel("Version")
+              plt.ylabel(metric)
+              plt.xticks(rotation=45)
+              plt.grid(True, linestyle='--', alpha=0.7)
+              plt.legend()
+              plt.tight_layout()
+          
+              safe_metric = metric.replace('@', '_at_').replace(' ', '_')
+              plt.savefig(f"{safe_metric}.png")
+              print(f"Created plot for {metric}")
+          
+          # Create a summary markdown report
+          with open('benchmark_report.md', 'w') as f:
+              f.write("# JVector Historical Benchmark Results\n\n")
+              f.write(f"Comparing {len(combined_df['version'].unique())} versions of JVector\n\n")
+          
+              f.write("## Summary Table\n\n")
+              f.write(combined_df[['version', 'dataset', 'QPS', 'Mean Latency', 'Recall@10']].to_markdown(index=False))
+          
+              f.write("\n\n## Visualizations\n\n")
+              for metric in metrics:
+                  safe_metric = metric.replace('@', '_at_').replace(' ', '_')
+                  f.write(f"### {metric}\n\n")
+                  f.write(f"![{metric} Chart]({safe_metric}.png)\n\n")
+          
+          print("Created benchmark report")
+          EOF
+          
+          python visualize.py
+
+      - name: Upload combined results and visualizations
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-summary
+          path: |
+            all_benchmark_results.csv
+            *.png
+            benchmark_report.md
+          retention-days: 90
