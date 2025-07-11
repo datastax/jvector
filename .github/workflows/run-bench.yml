@@ -173,7 +173,7 @@ jobs:
           python visualize.py
 
       - name: Upload combined results and visualizations
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: benchmark-summary
           path: |
