@@ -92,7 +92,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Download Previous Benchmark Results
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
