@@ -82,17 +82,30 @@ jobs:
           echo "Files in current directory:"
           ls -la
 
-      - name: Upload Bench Results
+      - name: Upload Benchmark Results
         uses: actions/upload-artifact@v4
         with:
-          name: bench-results-${{ matrix.isa }}-${{ matrix.tag }}
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
           path: |
-            bench-results.json
             bench-results.csv
           if-no-files-found: warn
 
       - name: Download Previous Benchmark Results
+        uses: dawidd6/action-download-artifact@v2
+        continue-on-error: true
+        with:
+          workflow: run-bench.yml
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+          path: previous-results
+          skip_unpack: false
+          if_no_artifact_found: warn
+
+      - name: Download All Benchmark Results
         uses: actions/download-artifact@v4
+        with:
+          path: all-benchmark-results
+          pattern: benchmark-results-*
+          merge-multiple: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -102,7 +115,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install argparse matplotlib pandas
+          pip install argparse matplotlib pandas tabulate
 
       - name: Combine results and create visualizations
         run: |
@@ -113,16 +126,41 @@ jobs:
           import matplotlib.pyplot as plt
           
           # Find all CSV files
-          csv_files = glob.glob('benchmark-results-*/benchmark-*.csv')
+          csv_files = glob.glob('all-benchmark-results/**/bench-results.csv', recursive=True)
+          
+          if not csv_files:
+              print("No benchmark results found! Checking other possible locations...")
+              csv_files = glob.glob('**/bench-results.csv', recursive=True)
+          
+          print(f"Found {len(csv_files)} CSV files:")
+          for f in csv_files:
+              print(f"  - {f}")
           
           # Read and combine all results
           dfs = []
           for file in csv_files:
-              df = pd.read_csv(file)
-              dfs.append(df)
+              try:
+                  # Extract version from path
+                  parts = file.split('/')
+                  # Try to extract version from directory name
+                  version = "unknown"
+                  for part in parts:
+                      if part.startswith("v") or part.startswith("4."):
+                          version = part
+                          break
+                  
+                  df = pd.read_csv(file)
+                  # Add version column if not present
+                  if 'version' not in df.columns:
+                      df['version'] = version
+                  
+                  dfs.append(df)
+                  print(f"Processed {file} with version {version}")
+              except Exception as e:
+                  print(f"Error processing {file}: {e}")
           
           if not dfs:
-              print("No benchmark results found!")
+              print("No valid benchmark results found!")
               exit(1)
           
           combined_df = pd.concat(dfs)
@@ -130,12 +168,29 @@ jobs:
           print(f"Combined {len(dfs)} benchmark results")
           
           # Sort by version for proper ordering in plots
-          combined_df['version_sort'] = combined_df['version'].str.replace('v', '').apply(lambda x: [int(p) if p.isdigit() else p for p in x.split('.')])
+          # Handle version strings like 4.0.0-beta.6
+          def version_key(v):
+              if isinstance(v, str):
+                  v = v.replace('v', '')
+                  parts = []
+                  for part in v.replace('-', '.').split('.'):
+                      try:
+                          parts.append(int(part))
+                      except ValueError:
+                          parts.append(part)
+                  return parts
+              return v
+          
+          combined_df['version_sort'] = combined_df['version'].apply(version_key)
           combined_df = combined_df.sort_values('version_sort')
           
           # Create plots for each metric
           metrics = ['QPS', 'Mean Latency', 'Recall@10']
           for metric in metrics:
+              if metric not in combined_df.columns:
+                  print(f"Warning: Metric {metric} not found in results")
+                  continue
+                  
               plt.figure(figsize=(10, 6))
           
               for dataset, group in combined_df.groupby('dataset'):
@@ -159,10 +214,17 @@ jobs:
               f.write(f"Comparing {len(combined_df['version'].unique())} versions of JVector\n\n")
           
               f.write("## Summary Table\n\n")
-              f.write(combined_df[['version', 'dataset', 'QPS', 'Mean Latency', 'Recall@10']].to_markdown(index=False))
+              # Use to_markdown if available, otherwise use to_string
+              try:
+                  table = combined_df[['version', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
+              except AttributeError:
+                  table = combined_df[['version', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
+              f.write(table)
           
               f.write("\n\n## Visualizations\n\n")
               for metric in metrics:
+                  if metric not in combined_df.columns:
+                      continue
                   safe_metric = metric.replace('@', '_at_').replace(' ', '_')
                   f.write(f"### {metric}\n\n")
                   f.write(f"![{metric} Chart]({safe_metric}.png)\n\n")
