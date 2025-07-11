@@ -590,9 +590,8 @@ public class TestVectorGraph extends LuceneTestCase {
 
     private void assertNeighbors(OnHeapGraphIndex graph, int node, int... expected) {
         Arrays.sort(expected);
-        ConcurrentNeighborMap.Neighbors nn = graph.getNeighbors(0, node); // TODO
-        Iterator<Integer> it = nn.iterator();
-        int[] actual = new int[nn.size()];
+        NodesIterator it = graph.getNeighborsIterator(0, node);
+        int[] actual = new int[it.size()];
         for (int i = 0; i < actual.length; i++) {
             actual[i] = it.next();
         }

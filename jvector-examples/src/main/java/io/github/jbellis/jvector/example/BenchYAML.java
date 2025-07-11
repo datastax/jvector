@@ -58,7 +58,7 @@ public class BenchYAML {
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
 
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy,
+                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                         config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
                         config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
             }
@@ -75,7 +75,7 @@ public class BenchYAML {
                 DataSet ds = DataSetLoader.loadDataSet(datasetName);
 
                 Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy,
+                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                         config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
                         config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
             }

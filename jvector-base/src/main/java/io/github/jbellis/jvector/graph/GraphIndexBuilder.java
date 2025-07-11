@@ -70,6 +70,7 @@ public class GraphIndexBuilder implements Closeable {
     private final float neighborOverflow;
     private final float alpha;
     private final boolean addHierarchy;
+    private final boolean refineFinalGraph;
 
     @VisibleForTesting
     final OnHeapGraphIndex graph;
@@ -88,6 +89,7 @@ public class GraphIndexBuilder implements Closeable {
     /**
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * By default, refineFinalGraph = true.
      *
      * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
      *                         different view over those vectors than the one used to add via addGraphNode.
@@ -114,13 +116,50 @@ public class GraphIndexBuilder implements Closeable {
                 beamWidth,
                 neighborOverflow,
                 alpha,
-                addHierarchy);
+                addHierarchy,
+                true);
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     *
+     * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
+     *                         different view over those vectors than the one used to add via addGraphNode.
+     * @param M                – the maximum number of connections a node can have
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     */
+    public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
+                             VectorSimilarityFunction similarityFunction,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph)
+    {
+        this(BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction),
+                vectorValues.dimension(),
+                M,
+                beamWidth,
+                neighborOverflow,
+                alpha,
+                addHierarchy,
+                refineFinalGraph);
     }
 
     /**
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
      * Default executor pools are used.
+     * By default, refineFinalGraph = true.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
      * @param M                the maximum number of connections a node can have
@@ -140,7 +179,35 @@ public class GraphIndexBuilder implements Closeable {
                              float alpha,
                              boolean addHierarchy)
     {
-        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, true, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * Default executor pools are used.
+     *
+     * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param M                the maximum number of connections a node can have
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph)
+    {
+        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -156,6 +223,7 @@ public class GraphIndexBuilder implements Closeable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
@@ -167,10 +235,11 @@ public class GraphIndexBuilder implements Closeable {
                              float neighborOverflow,
                              float alpha,
                              boolean addHierarchy,
+                             boolean refineFinalGraph,
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
-        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, simdExecutor, parallelExecutor);
+        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor);
     }
 
     /**
@@ -188,6 +257,7 @@ public class GraphIndexBuilder implements Closeable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
      */
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
@@ -195,9 +265,10 @@ public class GraphIndexBuilder implements Closeable {
                              int beamWidth,
                              float neighborOverflow,
                              float alpha,
-                             boolean addHierarchy)
+                             boolean addHierarchy,
+                             boolean refineFinalGraph)
     {
-        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, addHierarchy, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -214,6 +285,7 @@ public class GraphIndexBuilder implements Closeable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
@@ -225,6 +297,7 @@ public class GraphIndexBuilder implements Closeable {
                              float neighborOverflow,
                              float alpha,
                              boolean addHierarchy,
+                             boolean refineFinalGraph,
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
@@ -249,6 +322,7 @@ public class GraphIndexBuilder implements Closeable {
         this.neighborOverflow = neighborOverflow;
         this.alpha = alpha;
         this.addHierarchy = addHierarchy;
+        this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
@@ -276,6 +350,7 @@ public class GraphIndexBuilder implements Closeable {
                 other.neighborOverflow,
                 other.alpha,
                 other.addHierarchy,
+                other.refineFinalGraph,
                 other.simdExecutor,
                 other.parallelExecutor);
 
@@ -297,11 +372,11 @@ public class GraphIndexBuilder implements Closeable {
                 // Loop over 0..maxLayer, re-score neighbors for each layer
                 var sf = newProvider.searchProviderFor(i).scoreFunction();
                 for (int lvl = 0; lvl <= maxLayer; lvl++) {
-                    var oldNeighbors = other.graph.getNeighbors(lvl, i);
+                    var oldNeighborsIt = other.graph.getNeighborsIterator(lvl, i);
                     // Copy edges, compute new scores
-                    var newNeighbors = new NodeArray(oldNeighbors.size());
-                    for (var it = oldNeighbors.iterator(); it.hasNext();) {
-                        int neighbor = it.nextInt();
+                    var newNeighbors = new NodeArray(oldNeighborsIt.size());
+                    while (oldNeighborsIt.hasNext()) {
+                        int neighbor = oldNeighborsIt.nextInt();
                         // since we're using a different score provider, use insertSorted instead of addInOrder
                         newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
                     }
@@ -356,8 +431,11 @@ public class GraphIndexBuilder implements Closeable {
             return;
         }
 
-        // improve connections on everything in L1
-        if (graph.getMaxLevel() > 0) {
+        if (refineFinalGraph && graph.getMaxLevel() > 0) {
+            // improve connections on everything in L1 & L0.
+            // It may be helpful for 2D use cases, but empirically it seems unnecessary for high-dimensional vectors.
+            // It may bring a slight improvement in recall for small maximum degrees,
+            // but it can be easily be compensated by using a slightly larger neighborOverflow.
             parallelExecutor.submit(() -> {
                 graph.nodeStream(1).parallel().forEach(this::improveConnections);
             }).join();
@@ -559,13 +637,6 @@ public class GraphIndexBuilder implements Closeable {
         if (nRemoved == 0) {
             return 0;
         }
-        // make a list of remaining live nodes
-        var liveNodes = new IntArrayList();
-        for (int i = 0; i < graph.getIdUpperBound(); i++) {
-            if (graph.containsNode(i) && !toDelete.get(i)) {
-                liveNodes.add(i);
-            }
-        }
 
         for (int currentLevel = 0; currentLevel < graph.layers.size(); currentLevel++) {
             final int level = currentLevel;  // Create effectively final copy for lambda
@@ -576,15 +647,14 @@ public class GraphIndexBuilder implements Closeable {
             var newEdges = new ConcurrentHashMap<Integer, Set<Integer>>(); // new edges for key k are values v
             parallelExecutor.submit(() -> {
                 IntStream.range(0, graph.getIdUpperBound()).parallel().forEach(i -> {
-                    var neighbors = graph.getNeighbors(level, i);
-                    if (neighbors == null || toDelete.get(i)) {
+                    if (toDelete.get(i)) {
                         return;
                     }
-                    for (var it = neighbors.iterator(); it.hasNext(); ) {
+                    for (var it = graph.getNeighborsIterator(level, i); it.hasNext(); ) {
                         var j = it.nextInt();
                         if (toDelete.get(j)) {
                             var newEdgesForI = newEdges.computeIfAbsent(i, __ -> ConcurrentHashMap.newKeySet());
-                            for (var jt = graph.getNeighbors(level, j).iterator(); jt.hasNext(); ) {
+                            for (var jt = graph.getNeighborsIterator(level, j); jt.hasNext(); ) {
                                 int k = jt.nextInt();
                                 if (i != k && !toDelete.get(k)) {
                                     newEdgesForI.add(k);
@@ -618,7 +688,10 @@ public class GraphIndexBuilder implements Closeable {
                         var R = ThreadLocalRandom.current();
                         // doing actual sampling-without-replacement is expensive so we'll loop a fixed number of times instead
                         for (int i = 0; i < 2 * graph.getDegree(level); i++) {
-                            int randomNode = liveNodes.get(R.nextInt(liveNodes.size()));
+                            int randomNode = R.nextInt(graph.getIdUpperBound());
+                            while(toDelete.get(randomNode)) {
+                                randomNode = R.nextInt(graph.getIdUpperBound());
+                            }
                             if (randomNode != node && !candidates.contains(randomNode) && graph.layers.get(level).contains(randomNode)) {
                                 float score = sf.similarityTo(randomNode);
                                 candidates.insertSorted(randomNode, score);

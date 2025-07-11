@@ -86,7 +86,8 @@ public class SiftSmall {
                                                                100, // construction search depth
                                                                1.2f, // allow degree overflow during construction by this factor
                                                                1.2f, // relax neighbor diversity requirement by this factor
-                                                               false))
+                                                               false,
+                                                 true))
         {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
@@ -111,7 +112,7 @@ public class SiftSmall {
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             OnHeapGraphIndex index = builder.build(ravv);
 
             // search for a random vector using a GraphSearcher and SearchScoreProvider
@@ -132,7 +133,7 @@ public class SiftSmall {
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             OnHeapGraphIndex index = builder.build(ravv);
             // measure our recall against the (exactly computed) ground truth
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
@@ -147,7 +148,7 @@ public class SiftSmall {
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             // build the index (in memory)
             OnHeapGraphIndex index = builder.build(ravv);
             // write the index to disk with default options
@@ -171,7 +172,7 @@ public class SiftSmall {
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false)) {
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             OnHeapGraphIndex index = builder.build(ravv);
             OnDiskGraphIndex.write(index, ravv, indexPath);
         }
@@ -224,7 +225,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false);
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
              OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
                      .with(new InlineVectors(ravv.dimension()))
@@ -287,7 +288,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false);
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
              OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
                      .with(new NVQ(nvq))

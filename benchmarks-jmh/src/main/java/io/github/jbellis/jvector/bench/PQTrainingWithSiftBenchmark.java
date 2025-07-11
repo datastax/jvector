@@ -16,12 +16,9 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -39,8 +36,8 @@ import java.util.concurrent.TimeUnit;
 @Warmup(iterations = 2)
 @Measurement(iterations = 5)
 @Threads(1)
-public class PQBenchmark {
-    private static final Logger log = LoggerFactory.getLogger(PQBenchmark.class);
+public class PQTrainingWithSiftBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(PQTrainingWithSiftBenchmark.class);
     private RandomAccessVectorValues ravv;
     private List<VectorFloat<?>> baseVectors;
     private List<VectorFloat<?>> queryVectors;
