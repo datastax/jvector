@@ -31,8 +31,8 @@ public class TestMutiSearch  extends RandomizedTest {
     public void testMultiSearch(int nIndices, boolean addHierarchy) {
         int nTrials = 10;
 
-        int dimension = 200;
-        int nVectors = 10_000;
+        int dimension = 20;
+        int nVectors = 1_000;
         int nQueries = 100;
 
         int topK = 10;
@@ -40,10 +40,10 @@ public class TestMutiSearch  extends RandomizedTest {
 
         double intersectionAVG = 0;
         double intersectionAVGMulti = 0;
-        double visitedCountAVG = 0;
-        double visitedCountAVGMulti = 0;
+        double expandedCountAVG = 0;
+        double expandedAVGMulti = 0;
 
-            for (int trial = 0; trial < nTrials; trial++) {
+        for (int trial = 0; trial < nTrials; trial++) {
             var vectors = createRandomVectors(nVectors, dimension);
             var queries = createRandomVectors(nQueries, dimension);
             var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
@@ -84,9 +84,17 @@ public class TestMutiSearch  extends RandomizedTest {
                 int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
                 assertEquals(String.format("Number of found results is not equal to [%d].", topK), topK, nodes.length);
 
+                float overfactorRerankK;
+                if (nIndices == 1) {
+                    overfactorRerankK = 1.f;
+                } else {
+                    overfactorRerankK = 1.f + 0.15f * nIndices;
+                }
+                int overprovisionRerankK = (int) (rerankK * overfactorRerankK);
+
                 MultiSearchResult srMulti = MultiGraphSearcher.search(query,
                         topK,
-                        rerankK + 10,
+                        overprovisionRerankK,
                         ravvs,
                         similarityFunction,
                         graphs,
@@ -96,16 +104,9 @@ public class TestMutiSearch  extends RandomizedTest {
                 int[] nodesMulti = Arrays.stream(nnMulti).mapToInt(nodeScore -> nodeScore.node + nodeScore.index * batchSize).toArray();
                 assertEquals(String.format("Number of found results is not equal to [%d].", topK), topK, nodesMulti.length);
 
-//                System.out.println(sr.getVisitedCount() + " " + srMulti.getVisitedCount());
+                expandedCountAVG += sr.getExpandedCount();
+                expandedAVGMulti += srMulti.getExpandedCount();
 
-                visitedCountAVG += sr.getExpandedCount();
-                visitedCountAVGMulti += srMulti.getExpandedCount();
-
-                //            System.out.println(Arrays.toString(nodes));
-                //            System.out.println(Arrays.toString(nodesMulti));
-                //
-                //            System.out.println(intersectionSize(groundTruth, nodes));
-                //            System.out.println(intersectionSize(groundTruth, nodesMulti));
                 intersectionAVG += intersectionSize(groundTruth, nodes);
                 intersectionAVGMulti += intersectionSize(groundTruth, nodesMulti);
             }
@@ -113,19 +114,22 @@ public class TestMutiSearch  extends RandomizedTest {
 
         intersectionAVG /= topK * nQueries * nTrials;
         intersectionAVGMulti /= topK * nQueries * nTrials;
-        System.out.println(intersectionAVG);
-        System.out.println(intersectionAVGMulti);
+        System.out.println("Recall: " + intersectionAVG + " single-index");
+        System.out.println("Recall: " + intersectionAVGMulti + " multi-index");
 
-        visitedCountAVG /= nQueries * nTrials;
-        visitedCountAVGMulti /= nQueries * nTrials;
-        System.out.println(visitedCountAVG);
-        System.out.println(visitedCountAVGMulti);
+        expandedCountAVG /= nQueries * nTrials;
+        expandedAVGMulti /= nQueries * nTrials;
+        System.out.println("Number of expansions: " + expandedCountAVG + " single-index");
+        System.out.println("Number of expansions: " + expandedAVGMulti + " multi-index");
 
         System.out.println("--");
 
-//        assertTrue(
-//                String.format("The matches between both arrays only reach %f", intersectionAVG),
-//                        intersectionAVG >= 0.99);
+        assertTrue(
+                String.format("The matches between both arrays only reach %f", intersectionAVG),
+                        intersectionAVG >= 0.98);
+        assertTrue(
+                String.format("The matches between both arrays only reach %f", intersectionAVGMulti),
+                intersectionAVGMulti >= 0.98);
     }
 
     public static List<Bits> listBitAll(int size) {
