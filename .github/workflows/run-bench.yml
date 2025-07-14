@@ -145,12 +145,8 @@ jobs:
           # Run the benchmark
           echo "Running benchmark for branch ${{ matrix.branch }}"
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
-            -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
-            --config jvector-examples/yaml-configs/autoDefault.yml \
-            --output ${{ matrix.branch }}-bench-results || {
-              echo "Warning: Benchmark failed for branch ${{ matrix.branch }}. This may be expected if the branch doesn't have the required code."
-              exit 0
-            }
+            ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
+            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results
 
           # Move the results to the benchmark_results directory
           mv ${{ matrix.branch }}-bench-results.csv benchmark_results/ || true
@@ -161,11 +157,23 @@ jobs:
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ matrix.branch }}
           path: |
             benchmark_results/*.csv
             benchmark_results/*.json
           if-no-files-found: warn
+
+  # Job to combine results and create visualizations
+  combine-results:
+    needs: test-avx512
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-results-*
+          path: all-benchmark-results
+          merge-multiple: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -186,8 +194,8 @@ jobs:
           import pandas as pd
           import matplotlib.pyplot as plt
 
-          # Find all CSV files in the benchmark_results directory
-          csv_files = glob.glob('benchmark_results/*-bench-results.csv')
+          # Find all CSV files in the all-benchmark-results directory
+          csv_files = glob.glob('all-benchmark-results/**/*-bench-results.csv', recursive=True)
 
           if not csv_files:
               print("No benchmark results found! Checking other possible locations...")
@@ -279,8 +287,6 @@ jobs:
         with:
           name: benchmark-comparison-results
           path: |
-            benchmark_results/*.csv
-            benchmark_results/*.json
             all_benchmark_results.csv
             *.png
             benchmark_report.md

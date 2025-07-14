@@ -98,14 +98,25 @@ public class AutoBenchYAML {
 
         logger.info("Heap space available is {}", Runtime.getRuntime().maxMemory());
 
-        // Filter out --output and its argument from the args
+        // Filter out --output, --config and their arguments from the args
         String finalOutputPath = outputPath;
+        String configPath = null;
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals("--config")) configPath = args[i+1];
+        }
+        String finalConfigPath = configPath;
         String[] filteredArgs = Arrays.stream(args)
-                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath))
+                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) && 
+                               !arg.equals("--config") && !arg.equals(finalConfigPath))
                 .toArray(String[]::new);
+
+        // Log the filtered arguments for debugging
+        logger.info("Filtered arguments: {}", Arrays.toString(filteredArgs));
 
         // generate a regex that matches any regex in filteredArgs, or if filteredArgs is empty/null, match everything
         var regex = filteredArgs.length == 0 ? ".*" : Arrays.stream(filteredArgs).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
+        logger.info("Generated regex pattern: {}", regex);
+
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
@@ -125,7 +136,7 @@ public class AutoBenchYAML {
                     if (datasetName.endsWith(".hdf5")) {
                         datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                     }
-                    
+
                     MultiConfig config = MultiConfig.getDefaultConfig("autoDefault");
                     config.dataset = datasetName;
                     logger.info("Using configuration: {}", config);
@@ -140,7 +151,7 @@ public class AutoBenchYAML {
                             config.search.getCompressorParameters(), 
                             config.search.topKOverquery, 
                             config.search.useSearchPruning));
-                    
+
                     logger.info("Benchmark completed for dataset: {}", datasetName);
                 } catch (Exception e) {
                     logger.error("Exception while processing dataset {}", datasetName, e);
@@ -159,20 +170,20 @@ public class AutoBenchYAML {
             mapper.writerWithDefaultPrettyPrinter().writeValue(detailsFile, results);
 
             File outputFile = new File(outputPath + ".csv");
-            
+
             // Get summary statistics by dataset
             Map<String, SummaryStats> statsByDataset = BenchmarkSummarizer.summarizeByDataset(results);
-            
+
             // Write CSV data
             try (FileWriter writer = new FileWriter(outputFile)) {
                 // Write CSV header
                 writer.write("dataset,QPS,Mean Latency,Recall@10\n");
-                
+
                 // Write one row per dataset with average metrics
                 for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
                     String dataset = entry.getKey();
                     SummaryStats datasetStats = entry.getValue();
-                    
+
                     writer.write(dataset + ",");
                     writer.write(datasetStats.getAvgQps() + ",");
                     writer.write(datasetStats.getAvgLatency() + ",");
