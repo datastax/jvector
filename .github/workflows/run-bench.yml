@@ -11,9 +11,6 @@ on:
         description: 'Space-separated list of branches to benchmark'
         required: false
         default: 'main'
-  push:
-    branches:
-      - github_actions
   pull_request:
     branches:
       - main
@@ -50,8 +47,8 @@ jobs:
             done
             BRANCHES="$BRANCHES]"
           else
-            echo "Default event type. Using main and github_actions branches"
-            BRANCHES='["main", "github_actions"]'
+            echo "Default event type. Using main branch only"
+            BRANCHES='["main"]'
           fi
 
           echo "Generated branches matrix: $BRANCHES"
