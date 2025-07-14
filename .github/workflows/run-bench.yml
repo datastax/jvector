@@ -7,10 +7,10 @@ on:
         description: 'Benchmark dataset regex (leave empty for all)'
         required: false
         default: ''
-      tags:
-        description: 'Space-separated list of tags to benchmark'
+      branches:
+        description: 'Space-separated list of branches to benchmark'
         required: true
-        default: '4.0.0-rc.1'
+        default: 'github_actions main'
   push:
     branches:
       - github_actions
@@ -51,9 +51,6 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Checkout specific tag
-        run: git checkout ${{ matrix.tag }}
-
       - name: Get version from pom.xml
         id: get-version
         run: |
@@ -65,47 +62,58 @@ jobs:
             fi
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Tag ${{ matrix.tag }} has version $VERSION"
+          echo "Current branch has version $VERSION"
 
-      - name: Build with Maven (JDK 24)
-        if: matrix.jdk == '24'
+      # Build the current branch and save the fat jar
+      - name: Build with Maven (JDK ${{ matrix.jdk }})
         run: mvn -B -Punix-amd64-profile package --file pom.xml
 
-      - name: Run Bench
+      # Save the fat jar for later use
+      - name: Save fat jar
         run: |
-          # Use the jar-with-dependencies which includes all required dependencies
-          java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
-            ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
-            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output bench-results 
-          
-          # List files in current directory to help with debugging
-          echo "Files in current directory:"
-          ls -la
+          mkdir -p /tmp/jvector-jar
+          cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar /tmp/jvector-jar/jvector-examples-fat.jar
 
-      - name: Upload Benchmark Results
+      # Parse the branches input and run benchmarks for each branch
+      - name: Run benchmarks for each branch
+        run: |
+          # Get the list of branches to benchmark
+          IFS=' ' read -r -a BRANCHES <<< "${{ github.event.inputs.branches }}"
+
+          # Create a directory to store all benchmark results
+          mkdir -p benchmark_results
+
+          # Loop through each branch
+          for branch in "${BRANCHES[@]}"; do
+            echo "Processing branch: $branch"
+
+            # Checkout the branch
+            git checkout $branch || { echo "Failed to checkout branch $branch"; continue; }
+
+            # Build the branch
+            mvn -B -Punix-amd64-profile package --file pom.xml
+
+            # Run benchmark using the saved fat jar
+            java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
+              -jar /tmp/jvector-jar/jvector-examples-fat.jar \
+              --config jvector-examples/yaml-configs/autoDefault.yml \
+              --output ${branch}-bench-results
+
+            # Move the results to the benchmark_results directory
+            mv ${branch}-bench-results.csv benchmark_results/
+            mv ${branch}-bench-results.json benchmark_results/ || true
+
+            echo "Completed benchmarks for branch: $branch"
+          done
+
+      - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
           path: |
-            bench-results.csv
+            benchmark_results/*.csv
+            benchmark_results/*.json
           if-no-files-found: warn
-
-      - name: Download Previous Benchmark Results
-        uses: dawidd6/action-download-artifact@v2
-        continue-on-error: true
-        with:
-          workflow: run-bench.yml
-          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}
-          path: previous-results
-          skip_unpack: false
-          if_no_artifact_found: warn
-
-      - name: Download All Benchmark Results
-        uses: actions/download-artifact@v4
-        with:
-          path: all-benchmark-results
-          pattern: benchmark-results-*
-          merge-multiple: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -122,105 +130,85 @@ jobs:
           cat > visualize.py << 'EOF'
           import os
           import glob
+          import re
           import pandas as pd
           import matplotlib.pyplot as plt
-          
-          # Find all CSV files
-          csv_files = glob.glob('all-benchmark-results/**/bench-results.csv', recursive=True)
-          
+
+          # Find all CSV files in the benchmark_results directory
+          csv_files = glob.glob('benchmark_results/*-bench-results.csv')
+
           if not csv_files:
               print("No benchmark results found! Checking other possible locations...")
-              csv_files = glob.glob('**/bench-results.csv', recursive=True)
-          
+              csv_files = glob.glob('**/*-bench-results.csv', recursive=True)
+
           print(f"Found {len(csv_files)} CSV files:")
           for f in csv_files:
               print(f"  - {f}")
-          
+
           # Read and combine all results
           dfs = []
           for file in csv_files:
               try:
-                  # Extract version from path
-                  parts = file.split('/')
-                  # Try to extract version from directory name
-                  version = "unknown"
-                  for part in parts:
-                      if part.startswith("v") or part.startswith("4."):
-                          version = part
-                          break
-                  
+                  # Extract branch name from filename
+                  filename = os.path.basename(file)
+                  branch_match = re.match(r'([^-]+)-bench-results\.csv', filename)
+                  branch = branch_match.group(1) if branch_match else "unknown"
+
                   df = pd.read_csv(file)
-                  # Add version column if not present
-                  if 'version' not in df.columns:
-                      df['version'] = version
-                  
+                  # Add branch column if not present
+                  if 'branch' not in df.columns:
+                      df['branch'] = branch
+
                   dfs.append(df)
-                  print(f"Processed {file} with version {version}")
+                  print(f"Processed {file} with branch {branch}")
               except Exception as e:
                   print(f"Error processing {file}: {e}")
-          
+
           if not dfs:
               print("No valid benchmark results found!")
               exit(1)
-          
+
           combined_df = pd.concat(dfs)
           combined_df.to_csv('all_benchmark_results.csv', index=False)
           print(f"Combined {len(dfs)} benchmark results")
-          
-          # Sort by version for proper ordering in plots
-          # Handle version strings like 4.0.0-beta.6
-          def version_key(v):
-              if isinstance(v, str):
-                  v = v.replace('v', '')
-                  parts = []
-                  for part in v.replace('-', '.').split('.'):
-                      try:
-                          parts.append(int(part))
-                      except ValueError:
-                          parts.append(part)
-                  return parts
-              return v
-          
-          combined_df['version_sort'] = combined_df['version'].apply(version_key)
-          combined_df = combined_df.sort_values('version_sort')
-          
+
           # Create plots for each metric
           metrics = ['QPS', 'Mean Latency', 'Recall@10']
           for metric in metrics:
               if metric not in combined_df.columns:
                   print(f"Warning: Metric {metric} not found in results")
                   continue
-                  
+
               plt.figure(figsize=(10, 6))
-          
+
               for dataset, group in combined_df.groupby('dataset'):
-                  plt.plot(group['version'], group[metric], marker='o', label=dataset)
-          
-              plt.title(f"{metric} Across JVector Versions")
-              plt.xlabel("Version")
+                  plt.plot(group['branch'], group[metric], marker='o', label=dataset)
+
+              plt.title(f"{metric} Across JVector Branches")
+              plt.xlabel("Branch")
               plt.ylabel(metric)
               plt.xticks(rotation=45)
               plt.grid(True, linestyle='--', alpha=0.7)
               plt.legend()
               plt.tight_layout()
-          
+
               safe_metric = metric.replace('@', '_at_').replace(' ', '_')
               plt.savefig(f"{safe_metric}.png")
               print(f"Created plot for {metric}")
-          
+
           # Create a summary markdown report
           with open('benchmark_report.md', 'w') as f:
-              f.write("# JVector Historical Benchmark Results\n\n")
-              f.write(f"Comparing {len(combined_df['version'].unique())} versions of JVector\n\n")
-          
+              f.write("# JVector Branch Benchmark Comparison\n\n")
+              f.write(f"Comparing {len(combined_df['branch'].unique())} branches of JVector\n\n")
+
               f.write("## Summary Table\n\n")
               # Use to_markdown if available, otherwise use to_string
               try:
-                  table = combined_df[['version', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
+                  table = combined_df[['branch', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
               except AttributeError:
-                  table = combined_df[['version', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
+                  table = combined_df[['branch', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
               f.write(table)
-          
+
               f.write("\n\n## Visualizations\n\n")
               for metric in metrics:
                   if metric not in combined_df.columns:
@@ -228,17 +216,19 @@ jobs:
                   safe_metric = metric.replace('@', '_at_').replace(' ', '_')
                   f.write(f"### {metric}\n\n")
                   f.write(f"![{metric} Chart]({safe_metric}.png)\n\n")
-          
+
           print("Created benchmark report")
           EOF
-          
+
           python visualize.py
 
       - name: Upload combined results and visualizations
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-summary
+          name: benchmark-comparison-results
           path: |
+            benchmark_results/*.csv
+            benchmark_results/*.json
             all_benchmark_results.csv
             *.png
             benchmark_report.md
