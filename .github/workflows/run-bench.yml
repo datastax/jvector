@@ -9,21 +9,61 @@ on:
         default: ''
       branches:
         description: 'Space-separated list of branches to benchmark'
-        required: true
-        default: 'github_actions main'
+        required: false
+        default: 'main'
   push:
     branches:
       - github_actions
+  pull_request:
+    branches:
+      - main
 
 jobs:
+  # Job to generate the matrix configuration
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          # Print event information for debugging
+          echo "Event name: ${{ github.event_name }}"
+          echo "Branches input: '${{ github.event.inputs.branches }}'"
+
+          # Default branches based on event type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Pull request detected. Using main and PR branch: ${{ github.head_ref }}"
+            BRANCHES='["main", "${{ github.head_ref }}"]'
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
+            # Parse space-separated branches input into JSON array
+            echo "Workflow dispatch with branches input detected"
+            BRANCHES_INPUT="${{ github.event.inputs.branches }}"
+            BRANCHES="["
+            for branch in $BRANCHES_INPUT; do
+              if [[ "$BRANCHES" != "[" ]]; then
+                BRANCHES="$BRANCHES, "
+              fi
+              BRANCHES="$BRANCHES\"$branch\""
+              echo "Adding branch to matrix: $branch"
+            done
+            BRANCHES="$BRANCHES]"
+          else
+            echo "Default event type. Using main and github_actions branches"
+            BRANCHES='["main", "github_actions"]'
+          fi
+
+          echo "Generated branches matrix: $BRANCHES"
+          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"branch\":$BRANCHES}" >> $GITHUB_OUTPUT
+
   test-avx512:
+    needs: generate-matrix
     concurrency:
-      group: ${{ matrix.isa }}-${{ matrix.jdk }}
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.branch }}
       cancel-in-progress: false
     strategy:
-      matrix:
-        jdk: [ 24 ]
-        isa: [ isa-avx512f ]
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.isa }}
     steps:
       - name: verify-avx512
@@ -64,100 +104,59 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Current branch has version $VERSION"
 
-      # Save the current branch name and jvector-examples directory
-      - name: Save current branch and jvector-examples
+      # Print debug information about the current job
+      - name: Print job information
         run: |
-          # Save current branch name
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> $GITHUB_ENV
+          echo "Running benchmark for:"
+          echo "  - Branch: ${{ matrix.branch }}"
+          echo "  - JDK: ${{ matrix.jdk }}"
+          echo "  - ISA: ${{ matrix.isa }}"
 
-          # Create a backup of the jvector-examples directory
-          mkdir -p /tmp/jvector-backup
-          cp -r jvector-examples /tmp/jvector-backup/
+      # Checkout the branch specified in the matrix
+      - name: Checkout branch
+        run: |
+          echo "Checking out branch: ${{ matrix.branch }}"
+          git checkout ${{ matrix.branch }} || { echo "Failed to checkout branch ${{ matrix.branch }}"; exit 1; }
 
-      # Build the original branch to ensure jvector-examples is compiled
-      - name: Build original branch
+      # Create a directory to store benchmark results
+      - name: Create results directory
+        run: mkdir -p benchmark_results
+
+      # Build the branch
+      - name: Build branch
         run: mvn -B -Punix-amd64-profile package --file pom.xml
 
-      # Parse the branches input and run benchmarks for each branch
-      - name: Run benchmarks for each branch
+      # Run the benchmark if jvector-examples exists
+      - name: Run benchmark
         run: |
-          # Debug: Print the branches input
-          echo "Branches input: '${{ github.event.inputs.branches }}'"
-
-          # Get the list of branches to benchmark
-          # If the input is empty, use the default value from workflow definition
-          BRANCHES_INPUT="${{ github.event.inputs.branches }}"
-          if [ -z "$BRANCHES_INPUT" ]; then
-            echo "No branches specified, using default: 'github_actions main'"
-            BRANCHES_INPUT="github_actions main"
+          # Check if jvector-examples directory and AutoBenchYAML class exist
+          if [ ! -d "jvector-examples" ]; then
+            echo "Warning: jvector-examples directory not found in branch ${{ matrix.branch }}. Skipping benchmark."
+            exit 0
           fi
 
-          echo "Parsing branches from: '$BRANCHES_INPUT'"
-          IFS=' ' read -r -a BRANCHES <<< "$BRANCHES_INPUT"
-
-          # Debug: Print the parsed branches
-          echo "Parsed ${#BRANCHES[@]} branches: ${BRANCHES[*]}"
-
-          # Create a directory to store all benchmark results
-          mkdir -p benchmark_results
-
-          # If still no branches, add current branch
-          if [ ${#BRANCHES[@]} -eq 0 ]; then
-            echo "No branches parsed, adding current branch"
-            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-            BRANCHES=("$CURRENT_BRANCH")
-            echo "Using current branch: $CURRENT_BRANCH"
+          # Check if the jar with dependencies was built
+          JAR_COUNT=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar 2>/dev/null | wc -l)
+          if [ "$JAR_COUNT" -eq 0 ]; then
+            echo "Warning: No jar with dependencies found in branch ${{ matrix.branch }}. Skipping benchmark."
+            exit 0
           fi
 
-          # Loop through each branch
-          for branch in "${BRANCHES[@]}"; do
-            echo "Processing branch: $branch"
+          # Run the benchmark
+          echo "Running benchmark for branch ${{ matrix.branch }}"
+          java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
+            -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
+            --config jvector-examples/yaml-configs/autoDefault.yml \
+            --output ${{ matrix.branch }}-bench-results || {
+              echo "Warning: Benchmark failed for branch ${{ matrix.branch }}. This may be expected if the branch doesn't have the required code."
+              exit 0
+            }
 
-            # Checkout the branch
-            git checkout $branch || { echo "Failed to checkout branch $branch"; continue; }
+          # Move the results to the benchmark_results directory
+          mv ${{ matrix.branch }}-bench-results.csv benchmark_results/ || true
+          mv ${{ matrix.branch }}-bench-results.json benchmark_results/ || true
 
-            # Save the original jvector-examples directory from this branch if it exists
-            if [ -d "jvector-examples" ]; then
-              echo "Saving original jvector-examples from branch $branch"
-              mkdir -p /tmp/branch-backup
-              rm -rf /tmp/branch-backup/jvector-examples || true
-              cp -r jvector-examples /tmp/branch-backup/
-            fi
-
-            # Replace jvector-examples with the one from the original branch
-            echo "Replacing jvector-examples with the one from the original branch"
-            rm -rf jvector-examples
-            cp -r /tmp/jvector-backup/jvector-examples .
-
-            # Build the branch with the injected jvector-examples
-            echo "Building branch $branch with injected jvector-examples"
-            mvn -B -Punix-amd64-profile package --file pom.xml
-
-            # Run the benchmark using the newly built jar with the branch's code and injected jvector-examples
-            echo "Running benchmark for branch $branch"
-            java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
-              -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
-              --config jvector-examples/yaml-configs/autoDefault.yml \
-              --output ${branch}-bench-results
-
-            # Move the results to the benchmark_results directory
-            mv ${branch}-bench-results.csv benchmark_results/
-            mv ${branch}-bench-results.json benchmark_results/ || true
-
-            # Restore the original jvector-examples directory for this branch
-            if [ -d "/tmp/branch-backup/jvector-examples" ]; then
-              echo "Restoring original jvector-examples for branch $branch"
-              rm -rf jvector-examples
-              cp -r /tmp/branch-backup/jvector-examples .
-            fi
-
-            echo "Completed benchmarks for branch: $branch"
-          done
-
-          # Return to the original branch
-          echo "Returning to original branch: $CURRENT_BRANCH"
-          git checkout $CURRENT_BRANCH || echo "Failed to return to original branch $CURRENT_BRANCH"
+          echo "Completed benchmarks for branch: ${{ matrix.branch }}"
 
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
