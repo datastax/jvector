@@ -64,15 +64,20 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Current branch has version $VERSION"
 
-      # Build the current branch and save the fat jar
-      - name: Build with Maven (JDK ${{ matrix.jdk }})
-        run: mvn -B -Punix-amd64-profile package --file pom.xml
-
-      # Save the fat jar for later use
-      - name: Save fat jar
+      # Save the current branch name and jvector-examples directory
+      - name: Save current branch and jvector-examples
         run: |
-          mkdir -p /tmp/jvector-jar
-          cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar /tmp/jvector-jar/jvector-examples-fat.jar
+          # Save current branch name
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> $GITHUB_ENV
+
+          # Create a backup of the jvector-examples directory
+          mkdir -p /tmp/jvector-backup
+          cp -r jvector-examples /tmp/jvector-backup/
+
+      # Build the original branch to ensure jvector-examples is compiled
+      - name: Build original branch
+        run: mvn -B -Punix-amd64-profile package --file pom.xml
 
       # Parse the branches input and run benchmarks for each branch
       - name: Run benchmarks for each branch
@@ -112,12 +117,27 @@ jobs:
             # Checkout the branch
             git checkout $branch || { echo "Failed to checkout branch $branch"; continue; }
 
-            # Build the branch
+            # Save the original jvector-examples directory from this branch if it exists
+            if [ -d "jvector-examples" ]; then
+              echo "Saving original jvector-examples from branch $branch"
+              mkdir -p /tmp/branch-backup
+              rm -rf /tmp/branch-backup/jvector-examples || true
+              cp -r jvector-examples /tmp/branch-backup/
+            fi
+
+            # Replace jvector-examples with the one from the original branch
+            echo "Replacing jvector-examples with the one from the original branch"
+            rm -rf jvector-examples
+            cp -r /tmp/jvector-backup/jvector-examples .
+
+            # Build the branch with the injected jvector-examples
+            echo "Building branch $branch with injected jvector-examples"
             mvn -B -Punix-amd64-profile package --file pom.xml
 
-            # Run benchmark using the saved fat jar
+            # Run the benchmark using the newly built jar with the branch's code and injected jvector-examples
+            echo "Running benchmark for branch $branch"
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
-              -jar /tmp/jvector-jar/jvector-examples-fat.jar \
+              -jar jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar \
               --config jvector-examples/yaml-configs/autoDefault.yml \
               --output ${branch}-bench-results
 
@@ -125,8 +145,19 @@ jobs:
             mv ${branch}-bench-results.csv benchmark_results/
             mv ${branch}-bench-results.json benchmark_results/ || true
 
+            # Restore the original jvector-examples directory for this branch
+            if [ -d "/tmp/branch-backup/jvector-examples" ]; then
+              echo "Restoring original jvector-examples for branch $branch"
+              rm -rf jvector-examples
+              cp -r /tmp/branch-backup/jvector-examples .
+            fi
+
             echo "Completed benchmarks for branch: $branch"
           done
+
+          # Return to the original branch
+          echo "Returning to original branch: $CURRENT_BRANCH"
+          git checkout $CURRENT_BRANCH || echo "Failed to return to original branch $CURRENT_BRANCH"
 
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
