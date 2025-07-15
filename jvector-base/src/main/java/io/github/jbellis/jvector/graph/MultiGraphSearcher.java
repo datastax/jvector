@@ -82,6 +82,9 @@ public class MultiGraphSearcher implements Closeable {
     private int expandedCount;
     private int expandedCountBaseLayer;
 
+//    private long individualQueryTime, queryTime;
+//    private long nQueries;
+
     /**
      * Creates a new graph searcher from the given list of GraphIndex
      *
@@ -116,6 +119,10 @@ public class MultiGraphSearcher implements Closeable {
 
         this.pruneSearch = true;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
+
+//        individualQueryTime = 0;
+//        queryTime = 0;
+//        nQueries = 0;
     }
 
     private void initializeScoreProvider(List<SearchScoreProvider> scoreProviders) {
@@ -229,6 +236,8 @@ public class MultiGraphSearcher implements Closeable {
             return new MultiSearchResult(new MultiSearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
+//        long start = System.nanoTime();
+
         initializeScoreProvider(scoreProviders);
         initializeBits(acceptOrds);
 
@@ -301,8 +310,18 @@ public class MultiGraphSearcher implements Closeable {
             }
         }
 
+//        long stop1 = System.nanoTime();
+
         // Now do the main search at layer 0
-        return resume(topK, rerankK, threshold);
+        var result = resume(topK, rerankK, threshold);
+
+//        long stop2 = System.nanoTime();
+
+//        individualQueryTime = stop1 - start;
+//        queryTime = stop2 - start;
+//        nQueries++;
+
+        return result;
     }
 
     void initializeBits(List<Bits> rawAcceptOrds) {
@@ -507,6 +526,9 @@ public class MultiGraphSearcher implements Closeable {
         for (GraphIndex.View view : views) {
             view.close();
         }
+
+//        System.out.println("queryTime: " + queryTime / (nQueries * 1e6));
+//        System.out.println("individualQueryTime: " + individualQueryTime / (nQueries * 1e6));
     }
 
     private static class CachingReranker implements ScoreFunction.ExactScoreFunction {
