@@ -24,4 +24,6 @@ public interface QueryExecutor {
     SearchResult executeQuery(int topK, int rerankK, boolean usePruning, int i);
 
     List<? extends List<Integer>> getGroundTruth();
+
+    String indexName();
 }

@@ -74,7 +74,12 @@ public class BenchYAML {
         for (var config : configs) {
             DataSet ds = DataSetLoader.loadDataSet(config.dataset);
 
-            MultiGrid.runAll(2, ds, config.construction.outDegree, config.construction.efConstruction,
+            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+
+            MultiGrid.runAll(10, ds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                     config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
                     config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);

@@ -45,9 +45,12 @@ import java.util.stream.Collectors;
 
 
 /**
+ * Experimental!
+ * <p>
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
  * search algorithm, see {@link GraphIndex}.
  */
+@Experimental
 public class MultiGraphSearcher implements Closeable {
     private List<GraphIndex.View> views;
 
@@ -209,6 +212,7 @@ public class MultiGraphSearcher implements Closeable {
         initializeBits(acceptOrds);
 
         // reset the scratch data structures
+        approximateResults.clear();
         evictedResults.clear();
         candidates.clear();
         visited.clear();

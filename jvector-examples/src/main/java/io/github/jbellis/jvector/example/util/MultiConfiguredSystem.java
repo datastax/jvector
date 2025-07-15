@@ -89,6 +89,7 @@ public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
         return ds.groundTruth;
     }
 
+    @Override
     public String indexName() {
         StringBuilder sb = new StringBuilder("[");
         for (var index : indices) {

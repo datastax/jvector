@@ -27,6 +27,7 @@ import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.util.QueryExecutor;
 import io.github.jbellis.jvector.example.util.SingleConfiguredSystem;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -64,11 +65,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -375,15 +373,15 @@ public class Grid {
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
-    private static void testConfiguration(SingleConfiguredSystem cs,
-                                          Map<Integer, List<Double>> topKGrid,
-                                          List<Boolean> usePruningGrid,
-                                          int M,
-                                          int efConstruction,
-                                          float neighborOverflow,
-                                          boolean addHierarchy) {
+    static void testConfiguration(QueryExecutor queryExecutor,
+                                  Map<Integer, List<Double>> topKGrid,
+                                  List<Boolean> usePruningGrid,
+                                  int M,
+                                  int efConstruction,
+                                  float neighborOverflow,
+                                  boolean addHierarchy) {
         int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.indexName());
+        System.out.format("Using %s:%n", queryExecutor.indexName());
         // 1) Select benchmarks to run
         List<QueryBenchmark> benchmarks = List.of(
                 ThroughputBenchmark.createDefault(2, 0.1),
@@ -406,7 +404,7 @@ public class Grid {
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    var results = tester.run(queryExecutor, topK, rerankK, usePruning, queryRuns);
                     printer.printRow(overquery, results);
                 }
                 printer.printFooter();

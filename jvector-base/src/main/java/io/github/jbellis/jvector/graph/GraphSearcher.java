@@ -315,6 +315,7 @@ public class GraphSearcher implements Closeable {
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
 
         // reset the scratch data structures
+        approximateResults.clear();
         evictedResults.clear();
         candidates.clear();
         visited.clear();

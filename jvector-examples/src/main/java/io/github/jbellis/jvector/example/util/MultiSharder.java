@@ -18,7 +18,7 @@ public interface MultiSharder {
 
     Function<MultiSearchResult.NodeScore, SearchResult.NodeScore> getConverter();
 
-    public class ContiguousSharder implements MultiSharder {
+    class ContiguousSharder implements MultiSharder {
         private final List<RandomAccessVectorValues> ravvs;
 
         public ContiguousSharder(RandomAccessVectorValues ravv, int shards) {

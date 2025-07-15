@@ -63,5 +63,6 @@ public class SingleConfiguredSystem implements QueryExecutor, AutoCloseable {
         return ds.groundTruth;
     }
 
+    @Override
     public String indexName() { return index.toString(); }
 }

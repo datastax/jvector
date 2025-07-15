@@ -17,13 +17,6 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
-import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.QueryTester;
-import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.MultiConfiguredSystem;
@@ -120,27 +113,35 @@ public class MultiGrid {
 
         List<String> graphNamePrefices = new ArrayList<>();
         for (int shard = 0; shard < shards; shard++) {
-            graphNamePrefices.add("graph-shard" + shard);
+            graphNamePrefices.add("graph-shard" + shard + "-");
         }
 
         Map<Set<FeatureId>, List<GraphIndex>> shardedIndices = new HashMap<>();
 
         for (int shard = 0; shard < shards; shard++) {
             var shardRavv = sharder.getShard(shard);
-            System.out.println("Building shard " + shard + " of " + shards + " with " + shardRavv.size() + " vectors");
+            System.out.println("Building shard " + (shard + 1) + " of " + shards + " with " + shardRavv.size() + " vectors");
             Map<Set<FeatureId>, GraphIndex> indices;
             var buildCompressor = getCompressor(buildCompressorFunction, ds, shardRavv, shard);
             if (buildCompressor == null) {
-                indices = Grid.buildInMemory(shardRavv, ds.similarityFunction,featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, testDirectory, graphNamePrefices.get(shard));
+                indices = Grid.buildInMemory(
+                        shardRavv, ds.similarityFunction, featureSets,
+                        M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                        testDirectory, graphNamePrefices.get(shard)
+                );
             } else {
-                indices = Grid.buildOnDisk(shardRavv, ds.similarityFunction, featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, testDirectory, graphNamePrefices.get(shard));
+                indices = Grid.buildOnDisk(
+                        shardRavv, ds.similarityFunction, featureSets,
+                        M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor,
+                        testDirectory, graphNamePrefices.get(shard)
+                );
             }
             indices.forEach((features, index) ->
                 shardedIndices.computeIfAbsent(features, k -> new ArrayList<>()).add(index)
             );
         }
 
-//        try {
+        try {
             for (var cpSupplier : compressionGrid) {
                 List<CompressedVectors> cvs = new ArrayList<>(shards);
                 for (int shard = 0; shard < shards; shard++) {
@@ -162,7 +163,7 @@ public class MultiGrid {
 
                 shardedIndices.forEach((features, indices) -> {
                     try (var cs = new MultiConfiguredSystem(ds, sharder, indices, cvs, sharder.getConverter())) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
+                        Grid.testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -173,56 +174,17 @@ public class MultiGrid {
                     index.close();
                 }
             }
-//        } finally {
-//            for (int shard = 0; shard < shards; shard++) {
-//                for (int n = 0; n < featureSets.size(); n++) {
-//                    Files.deleteIfExists(testDirectory.resolve(graphNamePrefices.get(shard) + n));
-//                }
-//            }
-//        }
+        } finally {
+            for (int shard = 0; shard < shards; shard++) {
+                for (int n = 0; n < featureSets.size(); n++) {
+                    Files.deleteIfExists(testDirectory.resolve(graphNamePrefices.get(shard) + n));
+                }
+            }
+        }
     }
 
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
-
-    private static void testConfiguration(MultiConfiguredSystem cs,
-                                          Map<Integer, List<Double>> topKGrid,
-                                          List<Boolean> usePruningGrid,
-                                          int M,
-                                          int efConstruction,
-                                          float neighborOverflow,
-                                          boolean addHierarchy) {
-        int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.indexName());
-        // 1) Select benchmarks to run
-        List<QueryBenchmark> benchmarks = List.of(
-                ThroughputBenchmark.createDefault(2, 0.1),
-                LatencyBenchmark.createDefault(),
-                CountBenchmark.createDefault(),
-                AccuracyBenchmark.createDefault()
-        );
-        QueryTester tester = new QueryTester(benchmarks);
-
-        for (var topK : topKGrid.keySet()) {
-            for (var usePruning : usePruningGrid) {
-                BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
-                printer.printConfig(Map.of(
-                        "M",                  M,
-                        "efConstruction",     efConstruction,
-                        "neighborOverflow",   neighborOverflow,
-                        "addHierarchy",       addHierarchy,
-                        "usePruning",         usePruning
-                ));
-                for (var overquery : topKGrid.get(topK)) {
-                    int rerankK = (int) (topK * overquery);
-
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    printer.printRow(overquery, results);
-                }
-                printer.printFooter();
-            }
-        }
-    }
 
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
                                                      DataSet ds,
