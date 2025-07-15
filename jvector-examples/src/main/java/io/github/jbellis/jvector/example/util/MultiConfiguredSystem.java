@@ -25,6 +25,8 @@ public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
     private final Function<MultiSearchResult.NodeScore, SearchResult.NodeScore> converter;
     private final ExplicitThreadLocal<MultiGraphSearcher> searchers;
 
+    private final List<Bits> acceptedBits;
+
     public MultiConfiguredSystem(DataSet ds,
                                  MultiSharder sharder,
                                  List<GraphIndex> indices,
@@ -37,6 +39,11 @@ public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
         this.converter = converter;
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> new MultiGraphSearcher(indices));
+
+        acceptedBits = new ArrayList<>(indices.size());
+        for (var i = 0; i < indices.size(); i++) {
+            acceptedBits.add(Bits.ALL);
+        }
     }
 
     private SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view, int index) {
@@ -44,7 +51,7 @@ public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
 
         // if we're not compressing then just use the exact score function
         if (cv == null) {
-            return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, sharder.getShard(index));
+            return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, sharder.getShard(index).threadLocalSupplier().get());
         }
 
         var scoringView = (GraphIndex.ScoringView) view;
@@ -71,13 +78,11 @@ public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
 
         var views = searcher.getViews();
         var ssps = new ArrayList<SearchScoreProvider>(views.size());
-        var acceptOrds = new ArrayList<Bits>(views.size());
         for (var iView = 0; iView < views.size(); iView++) {
             var ssp = scoreProviderFor(queryVector, views.get(iView), iView);
             ssps.add(ssp);
-            acceptOrds.add(Bits.ALL);
         }
-        var multiSR = searcher.search(ssps, topK, rerankK, 0.f, acceptOrds);
+        var multiSR = searcher.search(ssps, topK, rerankK, 0.f, acceptedBits);
         SearchResult.NodeScore[] converted = Arrays.stream(multiSR.getNodes()).map(converter).toArray(SearchResult.NodeScore[]::new);
         return new SearchResult(converted, multiSR.getVisitedCount(), multiSR.getExpandedCount(),
                 multiSR.getExpandedCountBaseLayer(), multiSR.getRerankedCount(),
