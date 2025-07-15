@@ -190,6 +190,23 @@ jobs:
           import re
           import pandas as pd
           import matplotlib.pyplot as plt
+          import subprocess
+          from datetime import datetime
+
+          # Function to get the most recent commit date for a branch
+          def get_branch_commit_date(branch):
+              try:
+                  # Get the timestamp of the most recent commit on the branch
+                  result = subprocess.run(
+                      ["git", "show", "-s", "--format=%ct", branch],
+                      capture_output=True, text=True, check=True
+                  )
+                  timestamp = int(result.stdout.strip())
+                  return timestamp
+              except Exception as e:
+                  print(f"Error getting commit date for branch {branch}: {e}")
+                  # Return a default timestamp (epoch) for error cases
+                  return 0
 
           # Find all CSV files in the all-benchmark-results directory
           csv_files = glob.glob('all-benchmark-results/**/*-bench-results.csv', recursive=True)
@@ -202,6 +219,9 @@ jobs:
           for f in csv_files:
               print(f"  - {f}")
 
+          # Track branches and their info
+          branches = {}
+
           # Read and combine all results
           dfs = []
           for file in csv_files:
@@ -210,6 +230,17 @@ jobs:
                   filename = os.path.basename(file)
                   branch_match = re.match(r'([^-]+)-bench-results\.csv', filename)
                   branch = branch_match.group(1) if branch_match else "unknown"
+
+                  # Only process each branch once
+                  if branch not in branches:
+                      # Get commit date for this branch
+                      commit_date = get_branch_commit_date(branch)
+                      branches[branch] = {
+                          'name': branch,
+                          'commit_date': commit_date,
+                          'datetime': datetime.fromtimestamp(commit_date).strftime('%Y-%m-%d %H:%M:%S')
+                      }
+                      print(f"Branch {branch} has commit date: {branches[branch]['datetime']}")
 
                   df = pd.read_csv(file)
                   # Add branch column if not present
@@ -229,6 +260,25 @@ jobs:
           combined_df.to_csv('all_benchmark_results.csv', index=False)
           print(f"Combined {len(dfs)} benchmark results")
 
+          # Sort branches by commit date
+          sorted_branches = sorted(branches.keys(), key=lambda b: branches[b]['commit_date'])
+          print("Branches in chronological order:")
+          for branch in sorted_branches:
+              print(f"  - {branch} ({branches[branch]['datetime']})")
+
+          # Create a categorical type with our temporal branch order
+          combined_df['branch'] = pd.Categorical(
+              combined_df['branch'], 
+              categories=sorted_branches, 
+              ordered=True
+          )
+          
+          # Sort the dataframe by branch to ensure consistent order
+          combined_df = combined_df.sort_values('branch')
+
+          # Add commit dates to the dataframe
+          combined_df['commit_date'] = combined_df['branch'].apply(lambda b: branches[b]['datetime'])
+
           # Create plots for each metric
           metrics = ['QPS', 'Mean Latency', 'Recall@10']
           for metric in metrics:
@@ -236,12 +286,14 @@ jobs:
                   print(f"Warning: Metric {metric} not found in results")
                   continue
 
-              plt.figure(figsize=(10, 6))
+              plt.figure(figsize=(12, 6))
 
               for dataset, group in combined_df.groupby('dataset'):
+                  # Sort the group by our ordered branch column
+                  group = group.sort_values('branch')
                   plt.plot(group['branch'], group[metric], marker='o', label=dataset)
 
-              plt.title(f"{metric} Across JVector Branches")
+              plt.title(f"{metric} Across JVector Branches (Chronological Order)")
               plt.xlabel("Branch")
               plt.ylabel(metric)
               plt.xticks(rotation=45)
@@ -256,14 +308,21 @@ jobs:
           # Create a summary markdown report
           with open('benchmark_report.md', 'w') as f:
               f.write("# JVector Branch Benchmark Comparison\n\n")
-              f.write(f"Comparing {len(combined_df['branch'].unique())} branches of JVector\n\n")
+              f.write(f"Comparing {len(combined_df['branch'].unique())} branches of JVector (ordered by commit date)\n\n")
+
+              f.write("## Branch Timeline\n\n")
+              f.write("| Branch | Last Commit Date |\n")
+              f.write("|--------|----------------|\n")
+              for branch in sorted_branches:
+                  f.write(f"| {branch} | {branches[branch]['datetime']} |\n")
+              f.write("\n\n")
 
               f.write("## Summary Table\n\n")
               # Use to_markdown if available, otherwise use to_string
               try:
-                  table = combined_df[['branch', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
+                  table = combined_df[['branch', 'commit_date', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
               except AttributeError:
-                  table = combined_df[['branch', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
+                  table = combined_df[['branch', 'commit_date', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
               f.write(table)
 
               f.write("\n\n## Visualizations\n\n")
