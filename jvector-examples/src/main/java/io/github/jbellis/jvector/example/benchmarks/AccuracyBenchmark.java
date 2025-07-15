@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
-import io.github.jbellis.jvector.example.util.QueryExecutor;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -78,7 +78,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            QueryExecutor executor,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,

@@ -17,7 +17,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 
-public class MultiConfiguredSystem implements QueryExecutor, AutoCloseable {
+public class MultiConfiguredSystem implements ConfiguredSystem, AutoCloseable {
     private final DataSet ds;
     private final MultiSharder sharder;
     private final List<GraphIndex> indices;

@@ -17,11 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-import io.github.jbellis.jvector.example.util.QueryExecutor;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 
 /**
  * Orchestrates running a set of QueryBenchmark instances
@@ -48,7 +46,7 @@ public class QueryTester {
      * @param queryRuns   number of runs for each benchmark
      */
     public List<Metric> run(
-            QueryExecutor executor,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,

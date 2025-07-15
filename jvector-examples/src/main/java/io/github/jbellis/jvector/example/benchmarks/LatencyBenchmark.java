@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import io.github.jbellis.jvector.example.util.QueryExecutor;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -94,7 +94,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            QueryExecutor executor,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,

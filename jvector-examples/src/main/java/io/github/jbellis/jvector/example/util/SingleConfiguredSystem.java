@@ -13,7 +13,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
 
-public class SingleConfiguredSystem implements QueryExecutor, AutoCloseable {
+public class SingleConfiguredSystem implements ConfiguredSystem, AutoCloseable {
     private final DataSet ds;
     private final GraphIndex index;
     private final CompressedVectors cv;

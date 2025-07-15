@@ -12,10 +12,21 @@ import java.util.List;
 import java.util.function.Function;
 
 public interface MultiSharder {
+    /**
+     * Returns the RandomAccessVectorValues corresponding to the specified shard
+     * @param shard the selected shard
+     * @return the RandomAccessVectorValues
+     */
     RandomAccessVectorValues getShard(int shard);
 
+    /**
+     * Returns the number of shards
+     */
     int size();
 
+    /**
+     * Returns a function that converts a MultiSearchResult.NodeScore to a SearchResult.NodeScore
+     */
     Function<MultiSearchResult.NodeScore, SearchResult.NodeScore> getConverter();
 
     class ContiguousSharder implements MultiSharder {

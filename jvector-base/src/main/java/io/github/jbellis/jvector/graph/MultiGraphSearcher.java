@@ -30,7 +30,9 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.GrowableLongHeap;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -41,7 +43,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 
 /**
@@ -70,7 +74,9 @@ public class MultiGraphSearcher implements Closeable {
     private boolean pruneSearch;
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
-    private final List<GraphSearcher> searchers;
+    private final List<ExplicitThreadLocal<GraphSearcher>> searchers;
+
+    private final ForkJoinPool simdExecutor;
 
     private int visitedCount;
     private int expandedCount;
@@ -78,12 +84,25 @@ public class MultiGraphSearcher implements Closeable {
 
     /**
      * Creates a new graph searcher from the given list of GraphIndex
+     *
+     * @param graphs           List of GraphIndex
      */
     public MultiGraphSearcher(List<GraphIndex> graphs) {
+        this(graphs, PhysicalCoreExecutor.pool());
+    }
+
+    /**
+     * Creates a new graph searcher from the given list of GraphIndex
+     *
+     * @param graphs           List of GraphIndex
+     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
+     *                         the number of physical cores.
+     */
+    public MultiGraphSearcher(List<GraphIndex> graphs, ForkJoinPool simdExecutor) {
         this.views = graphs.stream().map(GraphIndex::getView).collect(Collectors.toList());
         this.searchers = new ArrayList<>();
         for (var view : views) {
-            this.searchers.add(new GraphSearcher(view));
+            this.searchers.add(ExplicitThreadLocal.withInitial(() -> new GraphSearcher(view)));
         }
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
@@ -92,6 +111,8 @@ public class MultiGraphSearcher implements Closeable {
         this.visited = new IntHashSet();
         this.pruneSearch = true;
         this.acceptOrds = new MultiviewBits(graphs.size());
+
+        this.simdExecutor = simdExecutor;
 
         this.pruneSearch = true;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
@@ -117,7 +138,7 @@ public class MultiGraphSearcher implements Closeable {
      */
     public void usePruning(boolean usage) {
         for (var searcher : searchers) {
-            searcher.usePruning(usage);
+            searcher.get().usePruning(usage);
         }
         pruneSearch = usage;
     }
@@ -133,7 +154,7 @@ public class MultiGraphSearcher implements Closeable {
                 var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors.get(iView));
                 ssps.add(ssp);
             }
-            return searcher.search(ssps, topK, acceptOrds);
+            return searcher.search(ssps, topK, topK, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -217,22 +238,54 @@ public class MultiGraphSearcher implements Closeable {
         candidates.clear();
         visited.clear();
 
+        // reset the counters
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
 
+//        // TODO this parallel code has a bug that destroys recall
+//        simdExecutor.submit(() -> {
+//            IntStream.range(0, views.size()).parallel().forEach(iView -> {
+//                var searcher = searchers.get(iView).get();
+//                var view = views.get(iView);
+//
+//                var entry = view.entryNode();
+//                if (entry != null) {
+//                    var sp = scoreProviders.get(iView);
+//
+//                    // Only rerankK matters here, topK is not used
+//                    int initialRerankK = (int) Math.sqrt(topK);
+//                    searcher.internalSearch(sp, entry, initialRerankK, initialRerankK, threshold, acceptOrds.get(iView));
+//
+//                    synchronized(this) {
+//                        int finalIView = iView;
+//                        searcher.approximateResults.foreach((node, score) -> {
+//                            int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
+//                            candidates.push(internalNodeId, score);
+//                            visited.add(internalNodeId);
+//                        });
+//
+//                        visitedCount += searcher.getVisitedCount();
+//                        expandedCount += searcher.getExpandedCount();
+//                        expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
+//                    }
+//
+//                }
+//            });
+//        }).join();
+
         // TODO this loop could be parallelized
         for (var iView = 0; iView < views.size(); iView++) {
-            var searcher = searchers.get(iView);
+            var searcher = searchers.get(iView).get();
             var view = views.get(iView);
-
 
             var entry = view.entryNode();
             if (entry != null) {
                 var sp = scoreProviders.get(iView);
 
                 // Only rerankK matters here, topK is not used
-                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
+                int initialRerankK = (int) Math.sqrt(topK);
+                searcher.internalSearch(sp, entry, initialRerankK, initialRerankK, threshold, acceptOrds.get(iView));
 
                 int finalIView = iView;
                 searcher.approximateResults.foreach((node, score) -> {
@@ -250,45 +303,6 @@ public class MultiGraphSearcher implements Closeable {
 
         // Now do the main search at layer 0
         return resume(topK, rerankK, threshold);
-    }
-
-    /**
-     * @param scoreProviders  provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
-     *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
-     *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
-     * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
-     *                        If {@link Bits#ALL}, all nodes are acceptable.
-     *                        It is caller's responsibility to ensure that there are enough acceptable nodes
-     *                        that we don't search the entire graph trying to satisfy topK.
-     * @return a SearchResult containing the topK results and the number of nodes visited during the search.
-     */
-    public MultiSearchResult search(List<SearchScoreProvider> scoreProviders,
-                                    int topK,
-                                    float threshold,
-                                    List<Bits> acceptOrds) {
-        return search(scoreProviders, topK, topK, threshold, acceptOrds);
-    }
-
-
-    /**
-     * @param scoreProviders  provides functions to return the similarity of a given node to the query vector for each index
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
-     *                        If {@link Bits#ALL}, all nodes are acceptable.
-     *                        It is caller's responsibility to ensure that there are enough acceptable nodes
-     *                        that we don't search the entire graph trying to satisfy topK.
-     * @return a SearchResult containing the topK results and the number of nodes visited during the search.
-     */
-    public MultiSearchResult search(List<SearchScoreProvider> scoreProviders,
-                                    int topK,
-                                    List<Bits> acceptOrds)
-    {
-        return search(scoreProviders, topK, 0.0f, acceptOrds);
     }
 
     void initializeBits(List<Bits> rawAcceptOrds) {

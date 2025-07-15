@@ -4,7 +4,7 @@ import io.github.jbellis.jvector.graph.SearchResult;
 
 import java.util.List;
 
-public interface QueryExecutor {
+public interface ConfiguredSystem {
     /**
      * Returns the number of query vectors.
      *
@@ -25,5 +25,9 @@ public interface QueryExecutor {
 
     List<? extends List<Integer>> getGroundTruth();
 
+    /**
+     * Returns the name of the index
+     * @return the name of the index
+     */
     String indexName();
 }
