@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.List;
 import java.util.stream.IntStream;
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.QueryExecutor;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -50,13 +50,13 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            QueryExecutor executor,
             int topK,
             int rerankK,
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = executor.size();
         double totalRuntime = 0;
 
         for (int run = 0; run < queryRuns; run++) {
@@ -66,8 +66,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
             IntStream.range(0, totalQueries)
                     .parallel()
                     .forEach(i -> {
-                        SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                        SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, i);
                         SINK += sr.getVisitedCount();
                     });
 

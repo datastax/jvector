@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.QueryExecutor;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -57,13 +57,13 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            QueryExecutor executor,
             int topK,
             int rerankK,
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = executor.size();
         int warmupCount   = (int) (totalQueries * warmupRatio);
         int testCount     = totalQueries - warmupCount;
 
@@ -73,8 +73,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 IntStream.range(0, warmupCount)
                         .parallel()
                         .forEach(i -> {
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, i);
+                            SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, i);
                             SINK += sr.getVisitedCount();
                         });
             }
@@ -88,8 +87,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 .parallel()
                 .forEach(i -> {
                     int queryIndex = i + warmupCount;
-                    SearchResult sr = QueryExecutor.executeQuery(
-                            cs, topK, rerankK, usePruning, queryIndex);
+                    SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, queryIndex);
                     // “Use” the result to prevent optimization
                     visitedAdder.add(sr.getVisitedCount());
                 });

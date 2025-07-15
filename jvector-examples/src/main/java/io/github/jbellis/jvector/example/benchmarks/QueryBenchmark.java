@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.QueryExecutor;
 
 import java.util.List;
 
@@ -27,7 +27,7 @@ public interface QueryBenchmark {
     String getBenchmarkName();
 
     List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            QueryExecutor executor,
             int topK,
             int rerankK,
             boolean usePruning,

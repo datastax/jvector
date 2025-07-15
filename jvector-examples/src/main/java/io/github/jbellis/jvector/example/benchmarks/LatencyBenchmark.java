@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.QueryExecutor;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -94,7 +94,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            QueryExecutor executor,
             int topK,
             int rerankK,
             boolean usePruning,
@@ -104,7 +104,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = executor.size();
         double mean = 0.0;
         double m2 = 0.0;
         int count = 0;
@@ -116,8 +116,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         for (int run = 0; run < queryRuns; run++) {
             for (int i = 0; i < totalQueries; i++) {
                 long start = System.nanoTime();
-                SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
+                SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, i);
                 long duration = System.nanoTime() - start;
                 // record latency for percentile computation
                 latencies.add(duration);

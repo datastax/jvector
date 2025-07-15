@@ -76,7 +76,7 @@ public class MultiGraphSearcher implements Closeable {
     /**
      * Creates a new graph searcher from the given list of GraphIndex
      */
-    private MultiGraphSearcher(List<GraphIndex> graphs) {
+    public MultiGraphSearcher(List<GraphIndex> graphs) {
         this.views = graphs.stream().map(GraphIndex::getView).collect(Collectors.toList());
         this.searchers = new ArrayList<>();
         for (var view : views) {
@@ -113,6 +113,9 @@ public class MultiGraphSearcher implements Closeable {
      * @param usage a boolean that determines whether we do early termination or not.
      */
     public void usePruning(boolean usage) {
+        for (var searcher : searchers) {
+            searcher.usePruning(usage);
+        }
         pruneSearch = usage;
     }
 

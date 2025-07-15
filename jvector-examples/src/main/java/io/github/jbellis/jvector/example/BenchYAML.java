@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -46,21 +47,17 @@ public class BenchYAML {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
+        List<MultiConfig> configs = new ArrayList<>();
+
         if (!datasetNames.isEmpty()) {
             System.out.println("Executing the following datasets: " + datasetNames);
 
             for (var datasetName : datasetNames) {
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
-
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+                configs.add(config);
             }
         }
 
@@ -70,15 +67,17 @@ public class BenchYAML {
         if (!configNames.isEmpty()) {
             for (var configName : configNames) {
                 MultiConfig config = MultiConfig.getConfig(configName);
-                String datasetName = config.dataset;
-
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
-
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+                configs.add(config);
             }
+        }
+
+        for (var config : configs) {
+            DataSet ds = DataSetLoader.loadDataSet(config.dataset);
+
+            MultiGrid.runAll(2, ds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
         }
     }
 }
