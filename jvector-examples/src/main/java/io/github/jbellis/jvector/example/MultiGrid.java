@@ -151,11 +151,15 @@ public class MultiGrid {
                     CompressedVectors cv;
                     if (compressor == null) {
                         cv = null;
-                        System.out.format("Uncompressed vectors%n");
+                        if (shard == 0) {
+                            System.out.format("Uncompressed vectors%n");
+                        }
                     } else {
                         long start = System.nanoTime();
                         cv = compressor.encodeAll(shardRavv);
-                        System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, shardRavv.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        if (shard == 0) {
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, shardRavv.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        }
                     }
 
                     cvs.add(cv);
