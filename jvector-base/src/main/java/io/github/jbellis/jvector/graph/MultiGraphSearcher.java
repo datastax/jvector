@@ -232,7 +232,7 @@ public class MultiGraphSearcher implements Closeable {
                 var sp = scoreProviders.get(iView);
 
                 // Only rerankK matters here, topK is not used
-                searcher.internalSearch(sp, entry, 1, 1, threshold, acceptOrds.get(iView));
+                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
 
                 int finalIView = iView;
                 searcher.approximateResults.foreach((node, score) -> {
