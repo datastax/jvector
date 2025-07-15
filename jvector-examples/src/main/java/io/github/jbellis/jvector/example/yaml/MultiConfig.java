@@ -36,7 +36,6 @@ public class MultiConfig {
         File configFile = new File(defaultDirectory + datasetName + ".yml");
         if (!configFile.exists()) {
             configFile = new File(defaultDirectory + "default.yml");
-            System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
         }
         return getConfig(configFile);
     }
