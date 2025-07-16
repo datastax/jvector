@@ -199,6 +199,7 @@ interface ScoreTracker {
                 recentScores = ArrayUtil.grow(recentScores, this.recentScoresSize);
             }
             this.bestScores.clear();
+            this.observationCount = 0;
             this.mean = 0;
             this.dSquared = 0;
         }
