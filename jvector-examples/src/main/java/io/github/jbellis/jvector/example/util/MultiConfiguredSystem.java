@@ -24,6 +24,7 @@ public class MultiConfiguredSystem implements ConfiguredSystem, AutoCloseable {
     private final List<CompressedVectors> cvs;
     private final Function<MultiSearchResult.NodeScore, SearchResult.NodeScore> converter;
     private final ExplicitThreadLocal<MultiGraphSearcher> searchers;
+    private final ExplicitThreadLocal<List<SearchScoreProvider>> searchScoreProviders;
 
     private final List<Bits> acceptedBits;
 
@@ -39,6 +40,7 @@ public class MultiConfiguredSystem implements ConfiguredSystem, AutoCloseable {
         this.converter = converter;
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> new MultiGraphSearcher(indices));
+        this.searchScoreProviders = ExplicitThreadLocal.withInitial(() -> new ArrayList<>(indices.size()));
 
         acceptedBits = new ArrayList<>(indices.size());
         for (var i = 0; i < indices.size(); i++) {
@@ -77,12 +79,20 @@ public class MultiConfiguredSystem implements ConfiguredSystem, AutoCloseable {
         searcher.usePruning(usePruning);
 
         var views = searcher.getViews();
-        var ssps = new ArrayList<SearchScoreProvider>(views.size());
+        var ssps = searchScoreProviders.get();
+        if (ssps.isEmpty()) { // resize the list if it's empty
+            for (var iView = 0; iView < views.size(); iView++) {
+                ssps.add(null);
+            }
+        }
         for (var iView = 0; iView < views.size(); iView++) {
             var ssp = scoreProviderFor(queryVector, views.get(iView), iView);
-            ssps.add(ssp);
+            ssps.set(iView, ssp);
         }
         var multiSR = searcher.search(ssps, topK, rerankK, 0.f, acceptedBits);
+        // This is not the most efficient way to convert the results, and it is not needed in practice.
+        // In practice, we want the MultiSearchResult returned directly. Here we perform the conversion to compute the
+        // accuracy.
         SearchResult.NodeScore[] converted = Arrays.stream(multiSR.getNodes()).map(converter).toArray(SearchResult.NodeScore[]::new);
         return new SearchResult(converted, multiSR.getVisitedCount(), multiSR.getExpandedCount(),
                 multiSR.getExpandedCountBaseLayer(), multiSR.getRerankedCount(),
