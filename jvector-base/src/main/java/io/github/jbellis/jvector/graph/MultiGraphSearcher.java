@@ -82,9 +82,6 @@ public class MultiGraphSearcher implements Closeable {
     private int expandedCount;
     private int expandedCountBaseLayer;
 
-//    private long individualQueryTime, queryTime;
-//    private long nQueries;
-
     /**
      * Creates a new graph searcher from the given list of GraphIndex
      *
@@ -119,10 +116,6 @@ public class MultiGraphSearcher implements Closeable {
 
         this.pruneSearch = true;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
-
-//        individualQueryTime = 0;
-//        queryTime = 0;
-//        nQueries = 0;
     }
 
     private void initializeScoreProvider(List<SearchScoreProvider> scoreProviders) {
@@ -236,8 +229,6 @@ public class MultiGraphSearcher implements Closeable {
             return new MultiSearchResult(new MultiSearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
-//        long start = System.nanoTime();
-
         initializeScoreProvider(scoreProviders);
         initializeBits(acceptOrds);
 
@@ -252,39 +243,7 @@ public class MultiGraphSearcher implements Closeable {
         expandedCount = 0;
         expandedCountBaseLayer = 0;
 
-//        // TODO this parallel code has a bug that destroys recall
-//        simdExecutor.submit(() -> {
-//            IntStream.range(0, views.size()).parallel().forEach(iView -> {
-//                var searcher = searchers.get(iView).get();
-//                var view = views.get(iView);
-//
-//                var entry = view.entryNode();
-//                if (entry != null) {
-//                    var sp = scoreProviders.get(iView);
-//
-//                    // Only rerankK matters here, topK is not used
-//                    int initialRerankK = (int) Math.sqrt(topK);
-//                    searcher.internalSearch(sp, entry, initialRerankK, initialRerankK, threshold, acceptOrds.get(iView));
-//
-//                    synchronized(this) {
-//                        int finalIView = iView;
-//                        searcher.approximateResults.foreach((node, score) -> {
-//                            int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
-//                            candidates.push(internalNodeId, score);
-//                            visited.add(internalNodeId);
-//                        });
-//
-//                        visitedCount += searcher.getVisitedCount();
-//                        expandedCount += searcher.getExpandedCount();
-//                        expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
-//                    }
-//
-//                }
-//            });
-//        }).join();
-
-        // TODO this loop could be parallelized
-        for (var iView = 0; iView < views.size(); iView++) {
+        IntStream.range(0, views.size()).parallel().forEach(iView -> {
             var searcher = searchers.get(iView).get();
             var view = views.get(iView);
 
@@ -292,36 +251,26 @@ public class MultiGraphSearcher implements Closeable {
             if (entry != null) {
                 var sp = scoreProviders.get(iView);
 
-                // Only rerankK matters here, topK is not used
-                int initialRerankK = (int) Math.sqrt(topK);
-                searcher.internalSearch(sp, entry, initialRerankK, initialRerankK, threshold, acceptOrds.get(iView));
+                // Only rerankK matters here
+                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
 
-                int finalIView = iView;
-                searcher.approximateResults.foreach((node, score) -> {
-                    int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
-                    candidates.push(internalNodeId, score);
-                    visited.add(internalNodeId);
+                synchronized(this) {
+                    int finalIView = iView;
+                    searcher.approximateResults.foreach((node, score) -> {
+                        int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
+                        candidates.push(internalNodeId, score);
+                        visited.add(internalNodeId);
+                    });
 
-                });
-
-                visitedCount += searcher.getVisitedCount();
-                expandedCount += searcher.getExpandedCount();
-                expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
+                    visitedCount += searcher.getVisitedCount();
+                    expandedCount += searcher.getExpandedCount();
+                    expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
+                }
             }
-        }
+        });
 
-//        long stop1 = System.nanoTime();
-
-        // Now do the main search at layer 0
-        var result = resume(topK, rerankK, threshold);
-
-//        long stop2 = System.nanoTime();
-
-//        individualQueryTime = stop1 - start;
-//        queryTime = stop2 - start;
-//        nQueries++;
-
-        return result;
+        // Now do the main multi-index search at layer 0
+        return resume(topK, rerankK, threshold);
     }
 
     void initializeBits(List<Bits> rawAcceptOrds) {
@@ -526,9 +475,6 @@ public class MultiGraphSearcher implements Closeable {
         for (GraphIndex.View view : views) {
             view.close();
         }
-
-//        System.out.println("queryTime: " + queryTime / (nQueries * 1e6));
-//        System.out.println("individualQueryTime: " + individualQueryTime / (nQueries * 1e6));
     }
 
     private static class CachingReranker implements ScoreFunction.ExactScoreFunction {
