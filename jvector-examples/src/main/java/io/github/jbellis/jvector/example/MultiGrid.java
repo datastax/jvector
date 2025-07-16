@@ -157,9 +157,7 @@ public class MultiGrid {
                     } else {
                         long start = System.nanoTime();
                         cv = compressor.encodeAll(shardRavv);
-                        if (shard == 0) {
-                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, shardRavv.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                        }
+                        System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, shardRavv.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                     }
 
                     cvs.add(cv);
