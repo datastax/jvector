@@ -25,14 +25,14 @@ import static io.github.jbellis.jvector.util.NumericUtils.sortableIntToFloat;
 
 interface ScoreTracker {
     class ScoreTrackerFactory {
-        private final TwoPhaseTracker twoPhaseTracker;
-        private final RelaxedMonotonicityTracker relaxedMonotonicityTracker;
-        private final NoOpTracker noOpTracker;
+        private TwoPhaseTracker twoPhaseTracker;
+        private RelaxedMonotonicityTracker relaxedMonotonicityTracker;
+        private NoOpTracker noOpTracker;
 
         ScoreTrackerFactory() {
-            twoPhaseTracker = new ScoreTracker.TwoPhaseTracker();
-            relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker();
-            noOpTracker = new ScoreTracker.NoOpTracker();
+            twoPhaseTracker = null;
+            relaxedMonotonicityTracker = null;
+            noOpTracker = null;
         }
 
         public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
@@ -40,13 +40,24 @@ interface ScoreTracker {
             ScoreTracker scoreTracker;
 
             if (threshold > 0) {
-                twoPhaseTracker.reset(threshold);
+                if (twoPhaseTracker == null) {
+                    twoPhaseTracker = new ScoreTracker.TwoPhaseTracker();
+                } else {
+                    twoPhaseTracker.reset(threshold);
+                }
                 scoreTracker = twoPhaseTracker;
             } else {
                 if (pruneSearch) {
-                    relaxedMonotonicityTracker.reset(rerankK);
+                    if (relaxedMonotonicityTracker == null) {
+                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker();
+                    } else {
+                        relaxedMonotonicityTracker.reset(rerankK);
+                    }
                     scoreTracker = relaxedMonotonicityTracker;
                 } else {
+                    if (noOpTracker == null) {
+                        noOpTracker = new ScoreTracker.NoOpTracker();
+                    }
                     scoreTracker = noOpTracker;
                 }
             }
