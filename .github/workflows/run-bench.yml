@@ -180,7 +180,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install argparse matplotlib pandas tabulate
+          pip install argparse matplotlib pandas tabulate psutil
 
       - name: Combine results and create visualizations
         run: |
@@ -191,6 +191,8 @@ jobs:
           import pandas as pd
           import matplotlib.pyplot as plt
           import subprocess
+          import platform
+          import psutil
           from datetime import datetime
 
           # Function to get the most recent commit date for a branch
@@ -279,6 +281,23 @@ jobs:
           # Add commit dates to the dataframe
           combined_df['commit_date'] = combined_df['branch'].apply(lambda b: branches[b]['datetime'])
 
+          # Get system information
+          # Get CPU information
+          cpu_count = psutil.cpu_count(logical=False)
+          if cpu_count is None:
+              cpu_count = psutil.cpu_count(logical=True)
+          
+          # Get memory information
+          memory_gb = round(psutil.virtual_memory().total / (1024**3), 2)
+          
+          # Get processor information
+          processor = platform.processor()
+          if not processor:
+              processor = platform.machine()
+          
+          system_info = f"CPU: {processor}, Cores: {cpu_count}, Memory: {memory_gb} GB"
+          print(f"System information: {system_info}")
+
           # Create plots for each metric
           metrics = ['QPS', 'Mean Latency', 'Recall@10']
           for metric in metrics:
@@ -299,7 +318,12 @@ jobs:
               plt.xticks(rotation=45)
               plt.grid(True, linestyle='--', alpha=0.7)
               plt.legend()
-              plt.tight_layout()
+              
+              # Add system information as text annotation at the bottom of the plot
+              plt.figtext(0.5, 0.01, system_info, ha='center', fontsize=8, 
+                         bbox={'facecolor': 'white', 'alpha': 0.8, 'pad': 5})
+              
+              plt.tight_layout(rect=[0, 0.03, 1, 1])  # Adjust layout to make room for the annotation
 
               safe_metric = metric.replace('@', '_at_').replace(' ', '_')
               plt.savefig(f"{safe_metric}.png")

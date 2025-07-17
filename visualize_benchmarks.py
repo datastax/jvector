@@ -18,6 +18,8 @@ import csv
 import os
 import sys
 import re
+import platform
+import psutil
 from collections import defaultdict
 from typing import Dict, List, Any, Tuple, Optional
 import matplotlib.pyplot as plt
@@ -172,8 +174,27 @@ def generate_plots(benchmark_data: BenchmarkData, output_dir: str):
         plt.savefig(os.path.join(output_dir, f"{safe_metric_name}.png"))
         plt.close()
 
-    # Create a combined plot with normalized values for comparison
+    # Create a combined plot with aggregated values for comparison
     plt.figure(figsize=(12, 8))
+
+    # Get system information
+    import platform
+    import psutil
+    
+    # Get CPU information
+    cpu_count = psutil.cpu_count(logical=False)
+    if cpu_count is None:
+        cpu_count = psutil.cpu_count(logical=True)
+    
+    # Get memory information
+    memory_gb = round(psutil.virtual_memory().total / (1024**3), 2)
+    
+    # Get processor information
+    processor = platform.processor()
+    if not processor:
+        processor = platform.machine()
+    
+    system_info = f"CPU: {processor}, Cores: {cpu_count}, Memory: {memory_gb} GB"
 
     for metric in benchmark_data.metrics:
         plt.subplot(len(benchmark_data.metrics), 1, list(benchmark_data.metrics).index(metric) + 1)
@@ -181,21 +202,26 @@ def generate_plots(benchmark_data: BenchmarkData, output_dir: str):
         for dataset in benchmark_data.datasets:
             releases, values = benchmark_data.get_metric_data_for_dataset(metric, dataset)
             if releases and values:
-                # Normalize values to the first release
+                # Aggregate values to the first release
                 if values[0] != 0:
-                    normalized_values = [v / values[0] for v in values]
-                    plt.plot(releases, normalized_values, marker='o', label=f"{dataset}")
+                    aggregated_values = [v / values[0] for v in values]
+                    plt.plot(releases, aggregated_values, marker='o', label=f"{dataset}")
 
-        plt.title(f"Normalized {metric}")
+        plt.title(f"Aggregated {metric}")
         plt.grid(True, linestyle='--', alpha=0.7)
         if metric == list(benchmark_data.metrics)[-1]:
             plt.xlabel("Release")
         plt.ylabel("Relative Change")
         plt.xticks(rotation=45)
+        
+        # Add system information as text annotation at the bottom of the plot
+        if metric == list(benchmark_data.metrics)[-1]:
+            plt.figtext(0.5, 0.01, system_info, ha='center', fontsize=8, 
+                       bbox={'facecolor': 'white', 'alpha': 0.8, 'pad': 5})
 
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "normalized_comparison.png"))
+    plt.tight_layout(rect=[0, 0.03, 1, 1])  # Adjust layout to make room for the annotation
+    plt.savefig(os.path.join(output_dir, "aggregated_comparison.png"))
     plt.close()
 
 
@@ -279,7 +305,7 @@ def generate_report(benchmark_data: BenchmarkData, changes: List[Dict[str, Any]]
             safe_metric_name = metric.replace('@', '_at_').replace(' ', '_')
             f.write(f"![{metric}]({safe_metric_name}.png)\n\n")
 
-        f.write("![Normalized Comparison](normalized_comparison.png)\n")
+        f.write("![Aggregated Comparison](aggregated_comparison.png)\n")
 
 
 def main():
