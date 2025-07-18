@@ -111,9 +111,10 @@ jobs:
 
       # Checkout the branch specified in the matrix
       - name: Checkout branch
-        run: |
-          echo "Checking out branch: ${{ matrix.branch }}"
-          git checkout ${{ matrix.branch }} || { echo "Failed to checkout branch ${{ matrix.branch }}"; exit 1; }
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
 
       # Create a directory to store benchmark results
       - name: Create results directory
