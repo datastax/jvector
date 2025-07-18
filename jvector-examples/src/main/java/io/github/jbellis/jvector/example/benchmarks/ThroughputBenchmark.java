@@ -16,20 +16,19 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
-import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.vector.VectorUtil;
-import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.apache.commons.math3.stat.StatUtils;
 
 /**
  * Measures throughput (queries/sec) with an optional warmup phase.
@@ -142,7 +141,6 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     });
         }
 
-        double maxQps    = 0;
         double[] qpsSamples = new double[numTestRuns];
         for (int testRun = 0; testRun < numTestRuns; testRun++) {
 
@@ -168,18 +166,20 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     });
             double elapsedSec = (System.nanoTime() - startTime) / 1e9;
             double runQps = totalQueries / elapsedSec;
-            maxQps       = Math.max(maxQps, runQps);
             qpsSamples[testRun] = runQps;
 
         }
 
         Arrays.sort(qpsSamples);
         double medianQps = qpsSamples[numTestRuns/2];  // middle element (for odd)
-        double avgQps   = DoubleStream.of(qpsSamples).average().getAsDouble();
+        double avgQps = StatUtils.mean(qpsSamples);
+        double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
+        double maxQps = StatUtils.max(qpsSamples);
 
         var list = new ArrayList<Metric>();
         if (computeAvgQps) {
             list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
+            list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
         }
         if (computeMedianQps) {
             list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
