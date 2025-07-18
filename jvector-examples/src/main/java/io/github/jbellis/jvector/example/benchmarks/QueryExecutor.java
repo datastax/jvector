@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 public class QueryExecutor {
     /**
@@ -33,6 +34,15 @@ public class QueryExecutor {
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
         var queryVector = cs.getDataSet().queryVectors.get(i);
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var sf = cs.scoreProviderFor(queryVector, searcher.getView());
+        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+    }
+
+    // Overload to allow single query injection (e.g., for warm-up with random vectors)
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector
+    ) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());

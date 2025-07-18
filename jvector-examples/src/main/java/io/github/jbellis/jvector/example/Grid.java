@@ -382,15 +382,17 @@ public class Grid {
                                           boolean addHierarchy) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
-        // 1) Select benchmarks to run
+        // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
         List<QueryBenchmark> benchmarks = List.of(
-                ThroughputBenchmark.createDefault(2, 0.1),
+                ThroughputBenchmark.createEmpty(3, 3)
+                        .displayAvgQps(),
                 LatencyBenchmark.createDefault(),
                 CountBenchmark.createDefault(),
                 AccuracyBenchmark.createDefault()
         );
         QueryTester tester = new QueryTester(benchmarks);
 
+        // 2) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
             for (var usePruning : usePruningGrid) {
                 BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
