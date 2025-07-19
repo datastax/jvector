@@ -108,6 +108,11 @@ public class NVQVectors implements CompressedVectors {
         return node2 -> function.similarityTo(compressedVectors[node2]);
     }
 
+    @Override
+    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+        throw new UnsupportedOperationException();
+    }
+
     public NVQuantization.QuantizedVector get(int ordinal) {
         return compressedVectors[ordinal];
     }

@@ -223,7 +223,6 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
-    @Override
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         VectorFloat<?> centeredQuery = pq.globalCentroid == null ? q : VectorUtil.sub(q, pq.globalCentroid);
         switch (similarityFunction) {
@@ -273,6 +272,75 @@ public abstract class PQVectors implements CompressedVectors {
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
                         sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
+                    }
+                    // scale to [0, 1]
+                    return 1 / (1 + sum);
+                };
+            default:
+                throw new IllegalArgumentException("Unsupported similarity function " + similarityFunction);
+        }
+    }
+
+    @Override
+    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+        final int subspaceCount = pq.getSubspaceCount();
+        var node1Chunk = getChunk(node1);
+        var node1Offset = getOffsetInChunk(node1);
+
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+                return (node2) -> {
+                    var node2Chunk = getChunk(node2);
+                    var node2Offset = getOffsetInChunk(node2);
+                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
+                    float dp = 0;
+                    for (int m = 0; m < subspaceCount; m++) {
+                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
+                        dp += VectorUtil.dotProduct(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+                    }
+                    // scale to [0, 1]
+                    return (1 + dp) / 2;
+                };
+            case COSINE:
+                float norm1 = 0.0f;
+                for (int m1 = 0; m1 < subspaceCount; m1++) {
+                    int centroidIndex = Byte.toUnsignedInt(node1Chunk.get(m1 + node1Offset));
+                    int centroidLength = pq.subvectorSizesAndOffsets[m1][0];
+                    var codebookOffset = centroidIndex * centroidLength;
+                    norm1 += VectorUtil.dotProduct(pq.codebooks[m1], codebookOffset, pq.codebooks[m1], codebookOffset, centroidLength);
+                }
+                final float norm1final = norm1;
+                return (node2) -> {
+                    var node2Chunk = getChunk(node2);
+                    var node2Offset = getOffsetInChunk(node2);
+                    // compute the dot product of the query and the codebook centroids corresponding to the encoded points
+                    float sum = 0;
+                    float norm2 = 0;
+                    for (int m = 0; m < subspaceCount; m++) {
+                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
+                        int codebookOffset = centroidIndex2 * centroidLength;
+                        sum += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], centroidIndex1 * centroidLength, centroidLength);
+                        norm2 += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], codebookOffset, centroidLength);
+                    }
+                    float cosine = sum / (float) Math.sqrt(norm1final * norm2);
+                    // scale to [0, 1]
+                    return (1 + cosine) / 2;
+                };
+            case EUCLIDEAN:
+                return (node2) -> {
+                    var node2Chunk = getChunk(node2);
+                    var node2Offset = getOffsetInChunk(node2);
+                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
+                    float sum = 0;
+                    for (int m = 0; m < subspaceCount; m++) {
+                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
+                        sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
                     }
                     // scale to [0, 1]
                     return 1 / (1 + sum);

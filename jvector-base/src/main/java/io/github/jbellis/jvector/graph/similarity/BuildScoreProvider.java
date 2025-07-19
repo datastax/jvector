@@ -155,9 +155,7 @@ public interface BuildScoreProvider {
                 // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
-                VectorFloat<?> v1 = reusableVector.get();
-                pqv.getCompressor().decode(pqv.get(node1), v1);
-                var asf = pqv.scoreFunctionFor(v1, vsf); // not precomputed!
+                var asf = pqv.diversityFunctionFor(node1, vsf); // not precomputed!
                 return new DefaultSearchScoreProvider(asf);
             }
 
@@ -196,7 +194,7 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
-                return new DefaultSearchScoreProvider(bqv.scoreFunctionFor(vector, null));
+                return new DefaultSearchScoreProvider(bqv.precomputedScoreFunctionFor(vector, null));
             }
 
             @Override

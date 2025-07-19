@@ -53,7 +53,11 @@ public interface CompressedVectors extends Accountable {
     ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
 
     /** no precomputation; suitable when just a handful of score computations are performed */
+    ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int nodeId, VectorSimilarityFunction similarityFunction);
+
+    /** no precomputation; suitable when just a handful of score computations are performed */
     ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
+
 
     @Deprecated
     default ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {

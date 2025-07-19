@@ -43,7 +43,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 @State(Scope.Thread)
 @Fork(1)
 @Warmup(iterations = 2)
-@Measurement(iterations = 5)
+@Measurement(iterations = 3)
 @Threads(1)
 public class IndexConstructionWithRandomSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithRandomSetBenchmark.class);
@@ -52,11 +52,11 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"768", "1536"})
+    @Param({"384"})
     private int originalDimension;
-    @Param({/*"10000",*/ "100000"/*, "1000000"*/})
+    @Param({"10000", "100000"/*, "1000000"*/})
     int numBaseVectors;
-    @Param({"0", "16"})
+    @Param({"48"})
     private int numberOfPQSubspaces;
 
     @Setup(Level.Invocation)
