@@ -118,5 +118,21 @@ public class MultiFileDatasource {
                 "wikipedia_squad/1M/textembedding-gecko_1000000_base_vectors.fvec",
                 "wikipedia_squad/1M/textembedding-gecko_1000000_query_vectors_10000.fvec",
                 "wikipedia_squad/1M/textembedding-gecko_1000000_indices_query_10000.ivec"));
+        put("dpr-1M", new MultiFileDatasource("dpr-1M",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/c4-en_base_1M_norm_files0_2.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/dpr_1m_gt_norm_ip_k100.ivecs"));
+        put("dpr-10M", new MultiFileDatasource("dpr-10M",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/c4-en_base_10M_norm_files0_2.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/dpr/dpr_10m_gt_norm_ip_k100.ivecs"));
+        put("cap-1M", new MultiFileDatasource("cap-1M",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_1m_norm_shuffle.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
+        put("cap-6M", new MultiFileDatasource("cap-6M",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+                "df933f4c1d46b52f8cc23a613a5b031f/cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
     }};
 }
