@@ -1,6 +1,6 @@
 version: 5
 
-dataset: cohere-english-v3-100k
+dataset: default
 
 construction:
   outDegree: [32]

@@ -131,7 +131,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
             for (int i = 0; i < info.size; i++) {
                 int nodeId = in.readInt();
-                assert nodeId >= 0 && nodeId < layerInfo.get(0).size :
+                assert nodeId >= 0 && nodeId < idUpperBound :
                         String.format("Node ID %d out of bounds for layer %d", nodeId, lvl);
                 int neighborCount = in.readInt();
                 assert neighborCount >= 0 && neighborCount <= info.degree
