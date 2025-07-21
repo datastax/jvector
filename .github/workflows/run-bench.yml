@@ -140,11 +140,25 @@ jobs:
             exit 0
           fi
 
+          # Determine available memory and set heap size to half of it
+          TOTAL_MEM_GB=$(free -g | awk '/^Mem:/ {print $2}')
+          # Ensure we have a valid number, default to 16GB total (8GB heap) if detection fails
+          if [[ -z "$TOTAL_MEM_GB" ]] || [[ "$TOTAL_MEM_GB" -le 0 ]]; then
+            echo "Warning: Could not detect memory size, defaulting to 16GB total memory (8GB heap)"
+            TOTAL_MEM_GB=16
+          fi
+          HALF_MEM_GB=$((TOTAL_MEM_GB / 2))
+          # Ensure minimum heap size of 1GB
+          if [[ "$HALF_MEM_GB" -lt 1 ]]; then
+            HALF_MEM_GB=1
+          fi
+          echo "Total memory: ${TOTAL_MEM_GB}GB, using ${HALF_MEM_GB}GB for Java heap"
+          
           # Run the benchmark
           echo "Running benchmark for branch ${{ matrix.branch }}"
           java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
             ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
-            -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx8g \
+            -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
             -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results
 
           # Move the results to the benchmark_results directory

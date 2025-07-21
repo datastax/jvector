@@ -440,7 +440,7 @@ public class Grid {
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
                                             List<QueryBenchmark> benchmarks = List.of(
-                                                    ThroughputBenchmark.createDefault(2, 0.1),
+                                                    ThroughputBenchmark.createDefault(),
                                                     LatencyBenchmark.createDefault(),
                                                     CountBenchmark.createDefault(),
                                                     AccuracyBenchmark.createDefault()
