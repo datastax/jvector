@@ -44,9 +44,9 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
-@Fork(1)
+@Fork(value = 1, jvmArgsAppend = {"--add-modules=jdk.incubator.vector", "--enable-preview", "-Djvector.experimental.enable_native_vectorization=false"})
 @Warmup(iterations = 2)
-@Measurement(iterations = 5)
+@Measurement(iterations = 3)
 @Threads(1)
 public class PQDistanceCalculationBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationBenchmark.class);
@@ -116,7 +116,7 @@ public class PQDistanceCalculationBenchmark {
     }
 
     @Benchmark
-    public void distanceCalculation(Blackhole blackhole) {
+    public void diversityCalculation(Blackhole blackhole) {
         float totalSimilarity = 0;
 
         for (int q = 0; q < queryCount; q++) {

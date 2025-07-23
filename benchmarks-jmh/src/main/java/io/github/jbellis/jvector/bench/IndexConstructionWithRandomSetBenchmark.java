@@ -52,11 +52,11 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"384"})
+    @Param({"768", "1536"})
     private int originalDimension;
-    @Param({"10000", "100000"/*, "1000000"*/})
+    @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
-    @Param({"48"})
+    @Param({"0", "16"})
     private int numberOfPQSubspaces;
 
     @Setup(Level.Invocation)
