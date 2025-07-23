@@ -225,6 +225,8 @@ public abstract class PQVectors implements CompressedVectors {
 
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         VectorFloat<?> centeredQuery = pq.globalCentroid == null ? q : VectorUtil.sub(q, pq.globalCentroid);
+
+        final int subspaceCount = pq.getSubspaceCount();
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return (node2) -> {
@@ -232,7 +234,7 @@ public abstract class PQVectors implements CompressedVectors {
                     var encodedOffset = getOffsetInChunk(node2);
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
                     float dp = 0;
-                    for (int m = 0; m < pq.getSubspaceCount(); m++) {
+                    for (int m = 0; m < subspaceCount; m++) {
                         int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
@@ -249,7 +251,7 @@ public abstract class PQVectors implements CompressedVectors {
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
                     float sum = 0;
                     float norm2 = 0;
-                    for (int m = 0; m < pq.getSubspaceCount(); m++) {
+                    for (int m = 0; m < subspaceCount; m++) {
                         int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
@@ -267,7 +269,7 @@ public abstract class PQVectors implements CompressedVectors {
                     var encodedOffset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
                     float sum = 0;
-                    for (int m = 0; m < pq.getSubspaceCount(); m++) {
+                    for (int m = 0; m < subspaceCount; m++) {
                         int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
                         int centroidLength = pq.subvectorSizesAndOffsets[m][0];
                         int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
