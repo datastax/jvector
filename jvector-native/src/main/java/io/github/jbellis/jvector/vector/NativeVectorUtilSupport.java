@@ -16,22 +16,55 @@
 
 package io.github.jbellis.jvector.vector;
 
+import java.nio.ByteOrder;
+
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
-
-import java.util.List;
+import jdk.incubator.vector.ByteVector;
+import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.VectorMask;
+import jdk.incubator.vector.VectorSpecies;
 
 /**
  * VectorUtilSupport implementation that prefers native/Panama SIMD.
  */
 final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
-    NativeVectorUtilSupport(SimdOps simdOps)
+    @Override
+    protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset)
     {
-        super(simdOps);
+        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
     }
 
+    @Override
+    protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset, int[] indices, int indicesOffset)
+    {
+        throw new UnsupportedOperationException("Assembly not supported with memory segments.");
+    }
+
+    @Override
+    protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset)
+    {
+        vector.intoMemorySegment(((MemorySegmentVectorFloat) v).get(), v.offset(offset), ByteOrder.LITTLE_ENDIAN);
+    }
+
+    @Override
+    protected ByteVector fromByteSequence(VectorSpecies<Byte> SPEC, ByteSequence<?> vector, int offset)
+    {
+        return ByteVector.fromMemorySegment(SPEC, ((MemorySegmentByteSequence) vector).get(), offset, ByteOrder.LITTLE_ENDIAN);
+    }
+
+    @Override
+    protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset)
+    {
+        vector.intoMemorySegment(((MemorySegmentByteSequence) v).get(), offset, ByteOrder.LITTLE_ENDIAN);
+    }
+
+    @Override
+    protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset, VectorMask<Byte> mask) {
+        vector.intoMemorySegment(((MemorySegmentByteSequence) v).get(), offset, ByteOrder.LITTLE_ENDIAN, mask);
+    }
 
     @Override
     public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets) {

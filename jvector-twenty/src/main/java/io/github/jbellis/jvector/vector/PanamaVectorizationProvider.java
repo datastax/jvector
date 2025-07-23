@@ -32,7 +32,7 @@ public class PanamaVectorizationProvider extends VectorizationProvider
     private final VectorTypeSupport vectorTypeSupport;
 
     public PanamaVectorizationProvider() {
-        this.vectorUtilSupport = new PanamaVectorUtilSupport(new SimdOps());
+        this.vectorUtilSupport = new PanamaVectorUtilSupport();
         LOG.info("Preferred f32 species is " + FloatVector.SPECIES_PREFERRED.vectorBitSize());
         this.vectorTypeSupport = new ArrayVectorProvider();
     }
