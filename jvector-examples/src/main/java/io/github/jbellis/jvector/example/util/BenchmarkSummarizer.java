@@ -98,7 +98,7 @@ public class BenchmarkSummarizer {
             }
             
             // Extract QPS metric
-            Double qps = extractMetric(result.metrics, "QPS");
+            Double qps = extractQpsMetric(result.metrics);
             if (qps != null) {
                 totalQps += qps;
                 qpsCount++;
@@ -154,6 +154,26 @@ public class BenchmarkSummarizer {
         // Look for any key containing "latency" case insensitive
         for (Map.Entry<String, Object> entry : metrics.entrySet()) {
             if (entry.getKey().toLowerCase().contains("latency")) {
+                return convertToDouble(entry.getValue());
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extract a QPS metric from the metrics map
+     * @param metrics Map of metrics
+     * @return The QPS value as a Double, or null if not found
+     */
+    private static Double extractQpsMetric(Map<String, Object> metrics) {
+        // Try exact match first
+        Double value = extractMetric(metrics, "QPS");
+        if (value != null) return value;
+        
+        // Look for any key containing "QPS" case insensitive
+        for (Map.Entry<String, Object> entry : metrics.entrySet()) {
+            if (entry.getKey().contains("QPS")) {
                 return convertToDouble(entry.getValue());
             }
         }
