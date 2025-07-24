@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
+import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.ConstructionParameters;
@@ -43,6 +44,12 @@ import java.util.stream.Collectors;
  * Automated benchmark runner for GitHub Actions workflow.
  * This class is specifically designed to handle the --output argument
  * for regression testing in the run-bench.yml workflow.
+ * 
+ * The benchmark runner supports checkpointing to allow resuming from failures.
+ * It creates a checkpoint file (outputPath + ".checkpoint.json") that records
+ * which datasets have been fully processed. If the benchmark is restarted,
+ * it will skip datasets that have already been processed, allowing it to
+ * continue from where it left off rather than starting over from the beginning.
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
@@ -56,6 +63,7 @@ public class AutoBenchYAML {
         allDatasets.add("cap-1M");
         allDatasets.add("cap-6M");
         allDatasets.add("cohere-english-v3-1M");
+        allDatasets.add("cohere-english-v3-10M");
         allDatasets.add("dpr-1M");
         allDatasets.add("dpr-10M");
 
@@ -75,6 +83,10 @@ public class AutoBenchYAML {
         }
 
         logger.info("Heap space available is {}", Runtime.getRuntime().maxMemory());
+
+        // Initialize checkpoint manager
+        CheckpointManager checkpointManager = new CheckpointManager(outputPath);
+        logger.info("Initialized checkpoint manager. Already completed datasets: {}", checkpointManager.getCompletedDatasets());
 
         // Filter out --output, --config and their arguments from the args
         String finalOutputPath = outputPath;
@@ -102,24 +114,33 @@ public class AutoBenchYAML {
 
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
+        // Add results from checkpoint if present
+        results.addAll(checkpointManager.getCompletedResults());
 
         // Process datasets from regex patterns
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
+                // Skip already completed datasets
+                if (checkpointManager.isDatasetCompleted(datasetName)) {
+                    logger.info("Skipping already completed dataset: {}", datasetName);
+                    continue;
+                }
+
                 logger.info("Loading dataset: {}", datasetName);
                 try {
                     DataSet ds = DataSetLoader.loadDataSet(datasetName);
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
 
-                    if (datasetName.endsWith(".hdf5")) {
-                        datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
+                    String normalizedDatasetName = datasetName;
+                    if (normalizedDatasetName.endsWith(".hdf5")) {
+                        normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
                     }
 
                     MultiConfig config = MultiConfig.getDefaultConfig("autoDefault");
-                    config.dataset = datasetName;
+                    config.dataset = normalizedDatasetName;
                     logger.info("Using configuration: {}", config);
 
-                    results.addAll(Grid.runAllAndCollectResults(ds, 
+                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds, 
                             config.construction.outDegree, 
                             config.construction.efConstruction,
                             config.construction.neighborOverflow, 
@@ -128,9 +149,12 @@ public class AutoBenchYAML {
                             config.construction.getCompressorParameters(),
                             config.search.getCompressorParameters(), 
                             config.search.topKOverquery, 
-                            config.search.useSearchPruning));
+                            config.search.useSearchPruning);
+                    results.addAll(datasetResults);
 
                     logger.info("Benchmark completed for dataset: {}", datasetName);
+                    // Mark dataset as completed and update checkpoint, passing results
+                    checkpointManager.markDatasetCompleted(datasetName, datasetResults);
                 } catch (Exception e) {
                     logger.error("Exception while processing dataset {}", datasetName, e);
                 }

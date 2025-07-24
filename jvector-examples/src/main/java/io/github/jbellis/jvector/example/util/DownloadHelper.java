@@ -44,7 +44,7 @@ public class DownloadHelper {
     private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
 
     private static final String fvecDir = "fvec";
-    private final static Set<String> infraDatasets = Set.of("dpr-1M", "dpr-10M", "cap-1M", "cap-6M");
+    private final static Set<String> infraDatasets = Set.of("dpr-1M", "dpr-10M", "cap-1M", "cap-6M", "cohere-english-v3-1M", "cohere-english-v3-10M");
 
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
