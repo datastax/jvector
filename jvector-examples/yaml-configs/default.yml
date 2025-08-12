@@ -1,12 +1,13 @@
-version: 4
+version: 5
 
-dataset: cohere-english-v3-100k
+dataset: default
 
 construction:
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
   compression:
     - type: PQ
       parameters:

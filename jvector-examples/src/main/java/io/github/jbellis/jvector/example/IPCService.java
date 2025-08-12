@@ -69,6 +69,7 @@ public class IPCService
         int efConstruction;
         float neighborOverflow;
         boolean addHierarchy;
+        boolean refineFinalGraph;
         VectorSimilarityFunction similarityFunction;
         RandomAccessVectorValues ravv;
         CompressedVectors cv;
@@ -113,14 +114,17 @@ public class IPCService
         int efConstruction = Integer.parseInt(args[3]);
         float neighborOverflow = Float.parseFloat(args[4]);
         boolean addHierarchy = Boolean.parseBoolean(args[5]);
+        boolean refineFinalGraph = Boolean.parseBoolean(args[6]);
 
         ctx.ravv = new UpdatableRandomAccessVectorValues(dimensions);
-        ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, neighborOverflow, 1.4f, addHierarchy);
+        ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, neighborOverflow, 1.4f, addHierarchy, refineFinalGraph);
         ctx.M = M;
         ctx.dimension = dimensions;
         ctx.efConstruction = efConstruction;
         ctx.similarityFunction = sim;
         ctx.isBulkLoad = false;
+        ctx.addHierarchy = addHierarchy;
+        ctx.refineFinalGraph = refineFinalGraph;
     }
 
     void write(String input, SessionContext ctx) {
@@ -166,7 +170,7 @@ public class IPCService
         ctx.isBulkLoad = true;
 
         var ravv = new MMapRandomAccessVectorValues(f, ctx.dimension);
-        var indexBuilder = new GraphIndexBuilder(ravv, ctx.similarityFunction, ctx.M, ctx.efConstruction, ctx.neighborOverflow, 1.4f, ctx.addHierarchy);
+        var indexBuilder = new GraphIndexBuilder(ravv, ctx.similarityFunction, ctx.M, ctx.efConstruction, ctx.neighborOverflow, 1.4f, ctx.addHierarchy, ctx.refineFinalGraph);
         System.out.println("BulkIndexing " + ravv.size());
         ctx.index = flushGraphIndex(indexBuilder.build(ravv), ravv);
         ctx.cv = pqIndex(ravv, ctx);
