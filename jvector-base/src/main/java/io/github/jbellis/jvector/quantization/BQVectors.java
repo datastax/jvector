@@ -96,6 +96,15 @@ public abstract class BQVectors implements CompressedVectors {
      * is a useful approximation for cosine distance and not really anything else.
      */
     @Override
+    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+        var qBQ = compressedVectors[node1];
+        return node2 -> {
+            var vBQ = compressedVectors[node2];
+            return similarityBetween(qBQ, vBQ);
+        };
+    }
+
+    @Override
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         var qBQ = bq.encode(q);
         return node2 -> {

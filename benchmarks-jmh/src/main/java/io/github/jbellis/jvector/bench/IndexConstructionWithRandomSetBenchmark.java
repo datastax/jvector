@@ -43,7 +43,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 @State(Scope.Thread)
 @Fork(1)
 @Warmup(iterations = 2)
-@Measurement(iterations = 5)
+@Measurement(iterations = 3)
 @Threads(1)
 public class IndexConstructionWithRandomSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithRandomSetBenchmark.class);
