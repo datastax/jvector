@@ -23,7 +23,7 @@ import org.apache.commons.math3.stat.StatUtils;
 import static io.github.jbellis.jvector.util.NumericUtils.floatToSortableInt;
 import static io.github.jbellis.jvector.util.NumericUtils.sortableIntToFloat;
 
-interface ScoreTracker {
+public interface ScoreTracker {
     class ScoreTrackerFactory {
         private TwoPhaseTracker twoPhaseTracker;
         private RelaxedMonotonicityTracker relaxedMonotonicityTracker;
@@ -37,7 +37,7 @@ interface ScoreTracker {
 
         public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
             // track scores to predict when we are done with threshold queries
-            ScoreTracker scoreTracker;
+            final ScoreTracker scoreTracker;
 
             if (threshold > 0) {
                 if (twoPhaseTracker == null) {
@@ -160,7 +160,9 @@ interface ScoreTracker {
      * (approximately the 96th percentile of the Normal distribution).
      */
     class RelaxedMonotonicityTracker implements ScoreTracker {
-        static final double SIGMA_FACTOR = 1.75;
+        private static final double SIGMA_FACTOR = 1.75;
+
+        private static final int BASE_RECENT_SCORES_SIZE = 200;
 
         // a sliding window of recent scores
         private double[] recentScores;
@@ -201,7 +203,7 @@ interface ScoreTracker {
             // A quick empirical study yields that the number of recent scores
             // that we need to consider grows by a factor of ~sqrt(bestScoresTracked / 2)
             int factor = (int) Math.round(Math.sqrt(bestScoresTracked / 2.0));
-            return 200 * factor;
+            return BASE_RECENT_SCORES_SIZE * factor;
         }
 
         void reset(int bestScoresTracked) {
