@@ -115,7 +115,6 @@ public interface VectorUtilSupport {
 
   int hammingDistance(long[] v1, long[] v2);
 
-
   // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,

@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.bench;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -41,11 +42,11 @@ import java.util.concurrent.TimeUnit;
  * Benchmark that compares the distance calculation of Product Quantized vectors vs full precision vectors.
  */
 @BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
+@OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
-@Fork(1)
+@Fork(value = 1, jvmArgsAppend = {"--add-modules=jdk.incubator.vector", "--enable-preview", "-Djvector.experimental.enable_native_vectorization=false"})
 @Warmup(iterations = 2)
-@Measurement(iterations = 5)
+@Measurement(iterations = 3)
 @Threads(1)
 public class PQDistanceCalculationBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationBenchmark.class);
@@ -100,13 +101,28 @@ public class PQDistanceCalculationBenchmark {
     }
 
     @Benchmark
-    public void distanceCalculation(Blackhole blackhole) {
+    public void cachedDistanceCalculation(Blackhole blackhole) {
         float totalSimilarity = 0;
 
         for (VectorFloat<?> query : queryVectors) {
             final SearchScoreProvider searchScoreProvider = buildScoreProvider.searchProviderFor(query);
             for (int i = 0; i < vectorCount; i++) {
                 float similarity = searchScoreProvider.scoreFunction().similarityTo(i);
+                totalSimilarity += similarity;
+            }
+        }
+
+        blackhole.consume(totalSimilarity);
+    }
+
+    @Benchmark
+    public void diversityCalculation(Blackhole blackhole) {
+        float totalSimilarity = 0;
+
+        for (int q = 0; q < queryCount; q++) {
+            for (int i = 0; i < vectorCount; i++) {
+                final ScoreFunction sf = buildScoreProvider.diversityProviderFor(i).scoreFunction();
+                float similarity = sf.similarityTo(q);
                 totalSimilarity += similarity;
             }
         }
