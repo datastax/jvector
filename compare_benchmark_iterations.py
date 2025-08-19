@@ -120,8 +120,16 @@ def load_benchmark_data(directory: str) -> BenchmarkData:
         print(f"Error: No CSV files found in {directory}")
         sys.exit(1)
     
-    # Sort files to ensure consistent ordering
-    csv_files.sort()
+    # Custom sort to ensure "main" appears last
+    def sort_key(filename):
+        release = extract_release_from_filename(filename)
+        # If the release is "main", return a tuple that sorts it last
+        if release.lower() == "main":
+            return (0, release)  # 0 ensures it comes before all 1s
+        else:
+            return (1, release)  # 1 ensures it comes after main
+    
+    csv_files.sort(key=sort_key)
     
     for filename in csv_files:
         file_path = os.path.join(directory, filename)
