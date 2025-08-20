@@ -33,6 +33,7 @@ import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -89,10 +90,17 @@ public class Bench {
     }
 
     private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+
+        Catalog catalog = new TestDataSources().addOptionalCatalogs("~/.config/jvector/catalogs"
+                                                                   + ".yaml").catalog();
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).toList();
 
         System.out.println("Executing the following datasets: " + datasetNames);
+
+
+      DataSetSource datasetSource = DataSetSource.DEFAULT.and(name -> catalog.matchOne(name)
+          .map(dse -> dse.select().profile(name)).map(TestDataViewWrapper::new));
 
         for (var datasetName : datasetNames) {
           DataSet ds =
