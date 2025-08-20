@@ -86,7 +86,8 @@ public class Bench {
 
     private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
         var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).toList();
+
         System.out.println("Executing the following datasets: " + datasetNames);
 
         for (var datasetName : datasetNames) {
