@@ -1,3 +1,7 @@
+streamable:
+  - cohere_msmarco
+
+
 neighborhood-watch-100k:
   - ada002-100k
   - cohere-english-v3-100k
