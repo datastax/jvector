@@ -121,7 +121,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
         int dim = cs.getDataSet().getDimension();
 
         // Warmup Phase: Use randomly-generated vectors

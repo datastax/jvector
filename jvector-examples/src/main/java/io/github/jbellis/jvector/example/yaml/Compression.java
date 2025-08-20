@@ -42,7 +42,7 @@ public class Compression {
                 return ds -> {
                     boolean centerData;
                     if (strCenterData == null) {
-                        centerData = ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                        centerData = ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN;
                     } else {
                         centerData = strCenterData.equals("Yes");;
                     }
