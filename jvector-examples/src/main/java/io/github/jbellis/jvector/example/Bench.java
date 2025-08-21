@@ -19,21 +19,19 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.util.DataSetSource;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.nosqlbench.vectordata.discovery.TestDataSources;
+import io.nosqlbench.vectordata.discovery.TestDataView;
 import io.nosqlbench.vectordata.downloader.Catalog;
+import io.nosqlbench.vectordata.downloader.DatasetEntry;
+import io.nosqlbench.vectordata.spec.datasets.types.DatasetView;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -91,21 +89,36 @@ public class Bench {
 
     private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
 
-        Catalog catalog = new TestDataSources().addOptionalCatalogs("~/.config/jvector/catalogs"
-                                                                   + ".yaml").catalog();
+        TestDataSources testDataSources = new TestDataSources().configure().addOptionalCatalogs("~/.config/jvector/catalogs.yaml");
+        Catalog testDataCatalog = testDataSources.catalog();
+        DataSetSource dsSource = DataSetSource.DEFAULT.and(loadStreamingDataSource(testDataCatalog));
+
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).toList();
 
         System.out.println("Executing the following datasets: " + datasetNames);
 
-
-      DataSetSource datasetSource = DataSetSource.DEFAULT.and(name -> catalog.matchOne(name)
-          .map(dse -> dse.select().profile(name)).map(TestDataViewWrapper::new));
-
         for (var datasetName : datasetNames) {
           DataSet ds =
-              datasetSource.apply(datasetName).orElseThrow(() -> new RuntimeException("Unknown dataset: " + datasetName));
+                  dsSource.apply(datasetName).orElseThrow(() -> new RuntimeException("Unknown dataset: " + datasetName));
             Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
+    }
+
+    @NotNull
+    private static DataSetSource loadStreamingDataSource(Catalog catalog) {
+        return name -> {
+            Optional<DatasetEntry> dsentryOption = catalog.matchOne(name);
+            if (dsentryOption.isEmpty()) { return Optional.empty(); }
+            DatasetEntry dsentry = dsentryOption.orElseThrow(() -> new RuntimeException("Unknown dataset: " + name));
+            TestDataView tdv = dsentry.select().profile(name);
+            tdv.getBaseVectors().orElseThrow().prebuffer();
+//            tdv.getQueryVectors().orElseThrow().prebuffer();
+//            tdv.getNeighborIndices().orElseThrow().prebuffer();
+//            tdv.getNeighborDistances().map(DatasetView::prebuffer);
+
+            TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
+            return Optional.of(tdw);
+        };
     }
 }
