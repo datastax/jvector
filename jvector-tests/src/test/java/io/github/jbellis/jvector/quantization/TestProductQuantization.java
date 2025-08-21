@@ -247,61 +247,56 @@ public class TestProductQuantization extends RandomizedTest {
         assertArrayEquals(contents1, contents2);
     }
 
-    private void validateChunkMath(int[] params, int expectedTotalVectors, int dimension) {
-        int vectorsPerChunk = params[0];
-        int totalChunks = params[1];
-        int fullSizeChunks = params[2];
-        int remainingVectors = params[3];
-
+    private void validateChunkMath(PQLayout dims, int expectedTotalVectors, int dimension) {
         // Basic parameter validation
-        assertTrue("vectorsPerChunk must be positive", vectorsPerChunk > 0);
-        assertTrue("totalChunks must be positive", totalChunks > 0);
-        assertTrue("fullSizeChunks must be non-negative", fullSizeChunks >= 0);
-        assertTrue("remainingVectors must be non-negative", remainingVectors >= 0);
-        assertTrue("fullSizeChunks must not exceed totalChunks", fullSizeChunks <= totalChunks);
-        assertTrue("remainingVectors must be less than vectorsPerChunk", remainingVectors < vectorsPerChunk);
+        assertTrue("vectorsPerChunk must be positive", dims.fullChunkVectors > 0);
+        assertTrue("totalChunks must be positive", dims.totalChunks > 0);
+        assertTrue("fullSizeChunks must be non-negative", dims.fullSizeChunks >= 0);
+        assertTrue("remainingVectors must be non-negative", dims.lastChunkVectors >= 0);
+        assertTrue("fullSizeChunks must not exceed totalChunks", dims.fullSizeChunks <= dims.totalChunks);
+        assertTrue("remainingVectors must be less than vectorsPerChunk", dims.lastChunkVectors < dims.fullChunkVectors);
 
         // Chunk size validation
         assertTrue("Chunk size must not exceed MAX_CHUNK_SIZE",
-                   (long) vectorsPerChunk * dimension <= PQVectors.MAX_CHUNK_SIZE);
+                   (long) dims.fullChunkVectors * dimension <= PQVectors.MAX_CHUNK_SIZE);
 
         // Total vectors validation
-        long calculatedTotal = (long) fullSizeChunks * vectorsPerChunk + remainingVectors;
+        long calculatedTotal = (long) dims.fullSizeChunks * dims.fullChunkVectors + dims.lastChunkVectors;
         assertEquals("Total vectors must match expected count",
                      expectedTotalVectors, calculatedTotal);
 
         // Chunk count validation
         assertEquals("Total chunks must match full + partial chunks",
-                     totalChunks, fullSizeChunks + (remainingVectors > 0 ? 1 : 0));
+                     dims.totalChunks, dims.fullSizeChunks + (dims.lastChunkVectors > 0 ? 1 : 0));
     }
 
     @Test
     public void testPQVectorsChunkCalculation() {
         // Test normal case
-        int[] params = PQVectors.calculateChunkParameters(1000, 8);
-        validateChunkMath(params, 1000, 8);
-        assertEquals(1000, params[0]); // vectorsPerChunk
-        assertEquals(1, params[1]);    // numChunks
-        assertEquals(1, params[2]);    // fullSizeChunks
-        assertEquals(0, params[3]);    // remainingVectors
+        PQLayout dims = new PQLayout(1000, 8);
+        validateChunkMath(dims, 1000, 8);
+        assertEquals(1000, dims.fullChunkVectors); // vectorsPerChunk
+        assertEquals(1, dims.totalChunks);    // numChunks
+        assertEquals(1, dims.fullSizeChunks);    // fullSizeChunks
+        assertEquals(0, dims.lastChunkVectors);    // remainingVectors
 
         // Test case requiring multiple chunks
         int bigVectorCount = Integer.MAX_VALUE - 1;
         int smallDim = 8;
-        params = PQVectors.calculateChunkParameters(bigVectorCount, smallDim);
-        validateChunkMath(params, bigVectorCount, smallDim);
-        assertTrue(params[0] > 0);
-        assertTrue(params[1] > 1);
+        PQLayout layoutBigSmall = new PQLayout(bigVectorCount, smallDim);
+        validateChunkMath(layoutBigSmall, bigVectorCount, smallDim);
+        assertTrue(layoutBigSmall.fullChunkVectors > 0);
+        assertTrue(layoutBigSmall.fullChunkVectors > 1);
 
         // Test edge case with large dimension
         int smallVectorCount = 1000;
         int bigDim = Integer.MAX_VALUE / 2;
-        params = PQVectors.calculateChunkParameters(smallVectorCount, bigDim);
-        validateChunkMath(params, smallVectorCount, bigDim);
-        assertTrue(params[0] > 0);
+        PQLayout layoutSmallBig = new PQLayout(smallVectorCount, bigDim);
+        validateChunkMath(layoutSmallBig, smallVectorCount, bigDim);
+        assertTrue(layoutSmallBig.fullChunkVectors > 0);
 
         // Test invalid inputs
-        assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(-1, 8));
-        assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(100, -1));
+        assertThrows(IllegalArgumentException.class, () -> new PQLayout(-1, 8));
+        assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, -1));
     }
 }
