@@ -64,7 +64,7 @@ public abstract class PQVectors implements CompressedVectors {
 
         // Last chunk might be smaller
         if (layout.totalChunks > layout.fullSizeChunks) {
-            chunks[layout.fullSizeChunks] = vectorTypeSupport.readByteSequence(in, layout.lastChunkVectors * compressedDimension);
+            chunks[layout.fullSizeChunks] = vectorTypeSupport.readByteSequence(in, layout.lastChunkBytes);
         }
 
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
@@ -97,7 +97,7 @@ public abstract class PQVectors implements CompressedVectors {
             chunks[i] = vectorTypeSupport.createByteSequence(dims.fullChunkBytes);
         }
         if (dims.lastChunkVectors > 0) {
-            chunks[dims.fullSizeChunks] = vectorTypeSupport.createByteSequence(dims.lastChunkVectors * compressedDimension);
+            chunks[dims.fullSizeChunks] = vectorTypeSupport.createByteSequence(dims.lastChunkBytes);
         }
 
         // Encode the vectors in parallel into the compressed data chunks
