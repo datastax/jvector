@@ -298,5 +298,10 @@ public class TestProductQuantization extends RandomizedTest {
         // Test invalid inputs
         assertThrows(IllegalArgumentException.class, () -> new PQLayout(-1, 8));
         assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, -1));
+
+        // Test last chunk sizing
+        PQLayout maxLayout = new PQLayout(Integer.MAX_VALUE, 1 >> 10);
+        assertTrue(maxLayout.lastChunkVectors <= maxLayout.fullChunkVectors);
+        assertTrue(maxLayout.lastChunkBytes <= maxLayout.fullChunkBytes);
     }
 }
