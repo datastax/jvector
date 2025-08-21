@@ -86,11 +86,7 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        // Calculate if we need to split into multiple chunks
         int compressedDimension = pq.compressedVectorSize();
-//        long totalSize = (long) vectorCount * compressedDimension;
-//        int vectorsPerChunk = totalSize <= PQVectors.MAX_CHUNK_SIZE ? vectorCount : PQVectors.MAX_CHUNK_SIZE / compressedDimension;
-
         PQLayout dims = new PQLayout(vectorCount,compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[dims.totalChunks];
         for (int i = 0; i < dims.fullSizeChunks; i++) {
