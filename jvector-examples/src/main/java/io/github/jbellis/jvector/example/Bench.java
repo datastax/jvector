@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.example.util.DataSetSource;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicator;
 import io.nosqlbench.vectordata.discovery.TestDataSources;
 import io.nosqlbench.vectordata.discovery.TestDataView;
 import io.nosqlbench.vectordata.downloader.Catalog;
@@ -32,6 +33,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -112,12 +114,17 @@ public class Bench {
             if (dsentryOption.isEmpty()) { return Optional.empty(); }
             DatasetEntry dsentry = dsentryOption.orElseThrow(() -> new RuntimeException("Unknown dataset: " + name));
             TestDataView tdv = dsentry.select().profile(name);
-            tdv.getBaseVectors().orElseThrow().prebuffer();
+            System.out.println("prebuffering dataset (assumed performance oriented testing)");
+            CompletableFuture<Void> statusFuture = tdv.getBaseVectors().orElseThrow().prebuffer();
+            if (statusFuture instanceof ProgressIndicator<?> pi) {
+                pi.monitorProgress(1000);
+            }
 //            tdv.getQueryVectors().orElseThrow().prebuffer();
 //            tdv.getNeighborIndices().orElseThrow().prebuffer();
 //            tdv.getNeighborDistances().map(DatasetView::prebuffer);
 
             TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
+            System.out.println("Loaded " + tdw.getName() + " from streaming source.");
             return Optional.of(tdw);
         };
     }
