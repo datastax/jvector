@@ -302,7 +302,46 @@ public class TestProductQuantization extends RandomizedTest {
         assertTrue(maxLayout.lastChunkBytes <= maxLayout.fullChunkBytes);
     }
 
-        @Test
+    /**
+     * Leaving this test enabled for the actual boundary checks, but here is the output:
+     * <pre><code>
+     * === PQLayout Edge Cases Test ===
+     * VectorCount  CompDim         FullChunkVecs   LastChunkVecs   FullSizeChunks  TotalChunks     FullChunkBytes  LastChunkBytes
+     * =========================================================================================================================
+     * 1            1               1               0               1               1               1               0
+     * 1            2               1               0               1               1               2               0
+     * 10           1               10              0               1               1               10              0
+     * 10           2               10              0               1               1               20              0
+     * 10           3               10              0               1               1               30              0
+     * 10           4               10              0               1               1               40              0
+     * 10           5               10              0               1               1               50              0
+     * 10           7               10              0               1               1               70              0
+     * 10           8               10              0               1               1               80              0
+     * 10           9               10              0               1               1               90              0
+     * 10           15              10              0               1               1               150             0
+     * 10           16              10              0               1               1               160             0
+     * 10           17              10              0               1               1               170             0
+     * 10           31              10              0               1               1               310             0
+     * 10           32              10              0               1               1               320             0
+     * 10           33              10              0               1               1               330             0
+     * 10           63              10              0               1               1               630             0
+     * 10           64              10              0               1               1               640             0
+     * 10           65              10              0               1               1               650             0
+     * 10           127             10              0               1               1               1270            0
+     * 10           128             10              0               1               1               1280            0
+     * 10           129             10              0               1               1               1290            0
+     * 1073741823   1               1073741823      0               1               1               1073741823      0
+     * 1073741823   2               1073741823      0               1               1               2147483646      0
+     * 1073741824   2               1073741823      1               1               2               2147483646      2
+     * 1000         1024            1000            0               1               1               1024000         0
+     * 2000000      1024            2000000         0               1               1               2048000000      0
+     * 536870911    4               536870911       0               1               1               2147483644      0
+     * 536870912    4               536870911       1               1               2               2147483644      4
+     * 100          1073741824      1               0               100             100             1073741824      0
+     * =========================================================================================================================
+     * </code></pre>
+     */
+    @Test
     public void testPQLayoutEdgeCases() {
         System.out.println("\n=== PQLayout Edge Cases Test ===");
         System.out.printf("%-12s %-15s %-15s %-15s %-15s %-15s %-15s %-15s%n",
