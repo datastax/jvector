@@ -127,9 +127,9 @@ public class SummarizerTest {
         String expected = String.format(
             "Benchmark Summary (across %d configurations):%n" +
             "  Average Recall@k: %.4f%n" +
-            "  Average QPS: %.2f%n" +
+            "  Average QPS: %.2f (± %.2f)%n" +
             "  Average Latency: %.2f ms",
-            4, 0.85, 1200.0, 5.2);
+            4, 0.85, 1200.0, 0.0, 5.2);
         
         assertEquals("toString output", expected, stats.toString());
     }

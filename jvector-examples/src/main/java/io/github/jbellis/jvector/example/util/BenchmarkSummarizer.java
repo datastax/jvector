@@ -35,13 +35,19 @@ public class BenchmarkSummarizer {
         private final double avgLatency;
         private final double indexConstruction;
         private final int totalConfigurations;
+        private final double qpsStdDev;
 
         public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations) {
+            this(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, 0.0);
+        }
+
+        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev) {
             this.avgRecall = avgRecall;
             this.avgQps = avgQps;
             this.avgLatency = avgLatency;
             this.indexConstruction = indexConstruction;
             this.totalConfigurations = totalConfigurations;
+            this.qpsStdDev = qpsStdDev;
         }
 
         public double getAvgRecall() {
@@ -62,15 +68,17 @@ public class BenchmarkSummarizer {
             return totalConfigurations;
         }
 
+        public double getQpsStdDev() { return qpsStdDev; }
+
         @Override
         public String toString() {
             return String.format(
                 "Benchmark Summary (across %d configurations):%n" +
                 "  Average Recall@k: %.4f%n" +
-                "  Average QPS: %.2f%n" +
+                "  Average QPS: %.2f (± %.2f)%n" +
                 "  Average Latency: %.2f ms%n" +
                 "  Index Construction Time: %.2f",
-                totalConfigurations, avgRecall, avgQps, avgLatency, indexConstruction);
+                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction);
         }
     }
     
@@ -81,17 +89,19 @@ public class BenchmarkSummarizer {
      */
     public static SummaryStats summarize(List<BenchResult> results) {
         if (results == null || results.isEmpty()) {
-            return new SummaryStats(0, 0, 0, 0, 0);
+            return new SummaryStats(0, 0, 0, 0, 0, 0);
         }
 
         double totalRecall = 0;
         double totalQps = 0;
         double totalLatency = 0;
         double indexConstruction = 0;
+        double totalQpsStdDev = 0;
         
         int recallCount = 0;
         int qpsCount = 0;
         int latencyCount = 0;
+        int qpsStdDevCount = 0;
 
         for (BenchResult result : results) {
             if (result.metrics == null) continue;
@@ -109,6 +119,13 @@ public class BenchmarkSummarizer {
                 totalQps += qps;
                 qpsCount++;
             }
+
+            // Extract QPS StdDev metric (key from ThroughputBenchmark is "± Std Dev")
+            Double qpsStdDev = extractQpsStdDevMetric(result.metrics);
+            if (qpsStdDev != null) {
+                totalQpsStdDev += qpsStdDev;
+                qpsStdDevCount++;
+            }
             
             // Extract latency metric (format is "Mean Latency (ms)")
             Double latency = extractLatencyMetric(result.metrics);
@@ -124,11 +141,12 @@ public class BenchmarkSummarizer {
         double avgRecall = recallCount > 0 ? totalRecall / recallCount : 0;
         double avgQps = qpsCount > 0 ? totalQps / qpsCount : 0;
         double avgLatency = latencyCount > 0 ? totalLatency / latencyCount : 0;
+        double avgQpsStdDev = qpsStdDevCount > 0 ? totalQpsStdDev / qpsStdDevCount : 0;
         
         // Count total valid configurations as the maximum count of any metric
         int totalConfigurations = Math.max(Math.max(recallCount, qpsCount), latencyCount);
 
-        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations);
+        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev);
     }
 
     private static Double extractIndexConstructionMetric(Map<String, Object> metrics) {
@@ -196,6 +214,25 @@ public class BenchmarkSummarizer {
             }
         }
         
+        return null;
+    }
+
+    /**
+     * Extract a QPS standard deviation metric from the metrics map. We accept keys like "± Std Dev" or ones containing
+     * "Std Dev" along with QPS context.
+     */
+    private static Double extractQpsStdDevMetric(Map<String, Object> metrics) {
+        // First, look for the exact key used by ThroughputBenchmark
+        Double value = extractMetric(metrics, "± Std Dev");
+        if (value != null) return value;
+
+        // Fallback: any key that contains "Std Dev" (case sensitive as produced) or case-insensitive match
+        for (Map.Entry<String, Object> entry : metrics.entrySet()) {
+            String k = entry.getKey();
+            if (k.contains("Std Dev") || k.toLowerCase().contains("std dev")) {
+                return convertToDouble(entry.getValue());
+            }
+        }
         return null;
     }
     

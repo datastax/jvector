@@ -159,7 +159,18 @@ def generate_plots(benchmark_data: BenchmarkData, output_dir: str):
         for dataset in benchmark_data.datasets:
             releases, values = benchmark_data.get_metric_data_for_dataset(metric, dataset)
             if releases and values:
-                plt.plot(releases, values, marker='o', label=dataset)
+                # For QPS, try to add error bars using corresponding stddev column
+                if metric == "QPS":
+                    std_releases, std_values = benchmark_data.get_metric_data_for_dataset("QPS StdDev", dataset)
+                    if std_releases and std_values:
+                        # Align stddev values to the QPS releases order
+                        std_map = {r: v for r, v in zip(std_releases, std_values)}
+                        yerr = [std_map.get(r, 0.0) for r in releases]
+                        plt.errorbar(releases, values, yerr=yerr, marker='o', capsize=4, label=dataset)
+                    else:
+                        plt.plot(releases, values, marker='o', label=dataset)
+                else:
+                    plt.plot(releases, values, marker='o', label=dataset)
 
         plt.title(f"{metric} Over Time")
         plt.xlabel("Release")

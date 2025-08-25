@@ -60,12 +60,14 @@ public class AutoBenchYAML {
      */
     private static List<String> getAllDatasetNames() {
         List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
-        allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
+        allDatasets.add("cohere-english-v3-100k");
+        allDatasets.add("gecko-100k");
+//        allDatasets.add("cap-1M");
+//        allDatasets.add("cap-6M");
+//        allDatasets.add("cohere-english-v3-1M");
+//        allDatasets.add("cohere-english-v3-10M");
+//        allDatasets.add("dpr-1M");
+//        allDatasets.add("dpr-10M");
 
         return allDatasets;
     }
@@ -179,7 +181,7 @@ public class AutoBenchYAML {
             // Write CSV data
             try (FileWriter writer = new FileWriter(outputFile)) {
                 // Write CSV header
-                writer.write("dataset,QPS,Mean Latency,Recall@10,Index Construction Time\n");
+                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time\n");
 
                 // Write one row per dataset with average metrics
                 for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
@@ -188,6 +190,7 @@ public class AutoBenchYAML {
 
                     writer.write(dataset + ",");
                     writer.write(datasetStats.getAvgQps() + ",");
+                    writer.write(datasetStats.getQpsStdDev() + ",");
                     writer.write(datasetStats.getAvgLatency() + ",");
                     writer.write(datasetStats.getAvgRecall() + ",");
                     writer.write(datasetStats.getIndexConstruction() + "\n");
