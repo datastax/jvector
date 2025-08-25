@@ -37,7 +37,6 @@ import java.util.stream.IntStream;
 
 public abstract class PQVectors implements CompressedVectors {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
-    static final int MAX_CHUNK_SIZE = Integer.MAX_VALUE - 16; // standard Java array size limit with some headroom
 
     final ProductQuantization pq;
     protected ByteSequence<?>[] compressedDataChunks;
@@ -87,13 +86,13 @@ public abstract class PQVectors implements CompressedVectors {
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         int compressedDimension = pq.compressedVectorSize();
-        PQLayout dims = new PQLayout(vectorCount,compressedDimension);
-        final ByteSequence<?>[] chunks = new ByteSequence<?>[dims.totalChunks];
-        for (int i = 0; i < dims.fullSizeChunks; i++) {
-            chunks[i] = vectorTypeSupport.createByteSequence(dims.fullChunkBytes);
+        PQLayout layout = new PQLayout(vectorCount,compressedDimension);
+        final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
+        for (int i = 0; i < layout.fullSizeChunks; i++) {
+            chunks[i] = vectorTypeSupport.createByteSequence(layout.fullChunkBytes);
         }
-        if (dims.lastChunkVectors > 0) {
-            chunks[dims.fullSizeChunks] = vectorTypeSupport.createByteSequence(dims.lastChunkBytes);
+        if (layout.lastChunkVectors > 0) {
+            chunks[layout.fullSizeChunks] = vectorTypeSupport.createByteSequence(layout.lastChunkBytes);
         }
 
         // Encode the vectors in parallel into the compressed data chunks
@@ -105,7 +104,7 @@ public abstract class PQVectors implements CompressedVectors {
                         .forEach(ordinal -> {
                             // Retrieve the slice and mutate it.
                             var localRavv = ravvCopy.get();
-                            var slice = PQVectors.get(chunks, ordinal, dims.fullChunkVectors, pq.getSubspaceCount());
+                            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
                             var vector = localRavv.getVector(ordinal);
                             if (vector != null)
                                 pq.encodeTo(vector, slice);
@@ -114,7 +113,7 @@ public abstract class PQVectors implements CompressedVectors {
                         }))
                 .join();
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, dims.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
 
     @Override

@@ -23,46 +23,64 @@ package io.github.jbellis.jvector.quantization;
  */
 public class PQLayout {
 
-    /** total number of vectors **/
+    /**
+     * total number of vectors
+     **/
     public final int vectorCount;
-    /** total number of chunks, including any partial **/
+    /**
+     * total number of chunks, including any partial
+     **/
     public final int totalChunks;
-    /** total number of fully-filled chunks **/
+    /**
+     * total number of fully-filled chunks
+     **/
     public final int fullSizeChunks;
-    /** number of vectore per fullSize chunk **/
+    /**
+     * number of vectors per fullSize chunk
+     **/
     public final int fullChunkVectors;
-    /** number of vectors in last partially filled chunk, if any **/
+    /**
+     * number of vectors in last partially filled chunk, if any
+     **/
     public final int lastChunkVectors;
-    /** compressed dimension of vectors **/
+    /**
+     * compressed dimension of vectors
+     **/
     public final int compressedDimension;
-    /** number of bytes in each fully-filled chunk **/
+    /**
+     * number of bytes in each fully-filled chunk
+     **/
     public final int fullChunkBytes;
-    /** number of bytes in the last partially-filled chunk, if any **/
+    /**
+     * number of bytes in the last partially-filled chunk, if any
+     **/
     public final int lastChunkBytes;
 
     public PQLayout(int vectorCount, int compressedDimension) {
-        if (vectorCount < 0) {
+        if (vectorCount <= 0) {
             throw new IllegalArgumentException("Invalid vector count " + vectorCount);
         }
         this.vectorCount = vectorCount;
 
-        if (compressedDimension < 0) {
+        if (compressedDimension <= 0) {
             throw new IllegalArgumentException("Invalid compressed dimension " + compressedDimension);
         }
         this.compressedDimension = compressedDimension;
 
-        long totalSize = (long) vectorCount * compressedDimension;
+        // Get the aligned number of bytes needed to hold a given dimension
+        // purely for overflow prevention
+        int layoutBytesPerVector = compressedDimension == 1 ? 1 : Integer.highestOneBit(compressedDimension - 1) << 1;
+        // truncation welcome here, biasing for smaller chunks
+        int addressableVectorsPerChunk = Integer.MAX_VALUE / layoutBytesPerVector;
 
-        this.fullChunkVectors = totalSize <= PQVectors.MAX_CHUNK_SIZE ? vectorCount : PQVectors.MAX_CHUNK_SIZE / compressedDimension;
-        if (fullChunkVectors == 0) {
-            throw new IllegalArgumentException("Compressed dimension " + compressedDimension + " too large for chunking");
-        }
-        this.lastChunkVectors = vectorCount % this.fullChunkVectors;
+        fullChunkVectors = Math.min(vectorCount, addressableVectorsPerChunk);
+        lastChunkVectors = vectorCount % fullChunkVectors;
 
-        this.fullChunkBytes = Math.multiplyExact(compressedDimension, this.fullChunkVectors);
-        this.lastChunkBytes = Math.multiplyExact(compressedDimension, lastChunkVectors);
+        fullChunkBytes = fullChunkVectors * compressedDimension;
+        lastChunkBytes = lastChunkVectors * compressedDimension;
 
-        this.fullSizeChunks = vectorCount / fullChunkVectors;
-        this.totalChunks = fullSizeChunks + ((vectorCount % fullChunkVectors == 0) ? 0 : 1);
+        fullSizeChunks = vectorCount / fullChunkVectors;
+        totalChunks = fullSizeChunks + (lastChunkVectors == 0 ? 0 : 1);
     }
+
 }

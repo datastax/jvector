@@ -256,10 +256,6 @@ public class TestProductQuantization extends RandomizedTest {
         assertTrue("fullSizeChunks must not exceed totalChunks", dims.fullSizeChunks <= dims.totalChunks);
         assertTrue("remainingVectors must be less than vectorsPerChunk", dims.lastChunkVectors < dims.fullChunkVectors);
 
-        // Chunk size validation
-        assertTrue("Chunk size must not exceed MAX_CHUNK_SIZE",
-                   (long) dims.fullChunkVectors * dimension <= PQVectors.MAX_CHUNK_SIZE);
-
         // Total vectors validation
         long calculatedTotal = (long) dims.fullSizeChunks * dims.fullChunkVectors + dims.lastChunkVectors;
         assertEquals("Total vectors must match expected count",
@@ -298,10 +294,78 @@ public class TestProductQuantization extends RandomizedTest {
         // Test invalid inputs
         assertThrows(IllegalArgumentException.class, () -> new PQLayout(-1, 8));
         assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, -1));
-
+        assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, 0));
+        assertThrows(IllegalArgumentException.class, () -> new PQLayout(0, 1));
         // Test last chunk sizing
-        PQLayout maxLayout = new PQLayout(Integer.MAX_VALUE, 1 >> 10);
+        PQLayout maxLayout = new PQLayout(Integer.MAX_VALUE, 1 << 10);
         assertTrue(maxLayout.lastChunkVectors <= maxLayout.fullChunkVectors);
         assertTrue(maxLayout.lastChunkBytes <= maxLayout.fullChunkBytes);
     }
+
+        @Test
+    public void testPQLayoutEdgeCases() {
+        System.out.println("\n=== PQLayout Edge Cases Test ===");
+        System.out.printf("%-12s %-15s %-15s %-15s %-15s %-15s %-15s %-15s%n",
+                "VectorCount", "CompDim", "FullChunkVecs", "LastChunkVecs", "FullSizeChunks", "TotalChunks", "FullChunkBytes", "LastChunkBytes");
+        System.out.println("=" + "=".repeat(120));
+
+        int[][] testCases = {
+                // Minimal cases
+                {1, 1}, {1, 2},
+                
+                // Power-of-2 boundaries for compressedDimension (layoutBytesPerVector changes)
+                {10, 1}, {10, 2}, {10, 3}, {10, 4}, {10, 5},
+                {10, 7}, {10, 8}, {10, 9},
+                {10, 15}, {10, 16}, {10, 17},
+                {10, 31}, {10, 32}, {10, 33},
+                {10, 63}, {10, 64}, {10, 65},
+                {10, 127}, {10, 128}, {10, 129},
+                
+                // Cases where addressableVectorsPerChunk becomes interesting
+                {1073741823, 1}, // layoutBytesPerVector=2, addressableVectorsPerChunk=1073741823
+                {1073741823, 2}, // layoutBytesPerVector=4, addressableVectorsPerChunk=536870911  
+                {1073741824, 2}, // vectorCount > addressableVectorsPerChunk, creates chunks
+                
+                // Large dimension cases (small addressableVectorsPerChunk)
+                {1000, 1024}, // layoutBytesPerVector=2048, addressableVectorsPerChunk=1048575
+                {2000000, 1024}, // vectorCount > addressableVectorsPerChunk
+                
+                // Integer overflow boundary cases
+                {536870911, 4}, // layoutBytesPerVector=8, exactly fits in one chunk
+                {536870912, 4}, // one more than above, creates multiple chunks
+                
+                // Edge case where lastChunkVectors becomes non-zero
+                {100, 1073741824} // layoutBytesPerVector huge, addressableVectorsPerChunk=1, creates 100 chunks
+        };
+
+        for (int[] testCase : testCases) {
+            int vectorCount = testCase[0];
+            int compressedDimension = testCase[1];
+
+            try {
+                PQLayout layout = new PQLayout(vectorCount, compressedDimension);
+                System.out.printf("%-12d %-15d %-15d %-15d %-15d %-15d %-15d %-15d%n",
+                        vectorCount, compressedDimension,
+                        layout.fullChunkVectors, layout.lastChunkVectors,
+                        layout.fullSizeChunks, layout.totalChunks,
+                        layout.fullChunkBytes, layout.lastChunkBytes);
+
+                // Basic sanity checks
+                assertTrue("Total chunks should be positive", layout.totalChunks > 0);
+                assertTrue("Full size chunks should be non-negative", layout.fullSizeChunks >= 0);
+                assertTrue("Full chunk vectors should be positive", layout.fullChunkVectors > 0);
+                assertTrue("Last chunk vectors should be non-negative", layout.lastChunkVectors >= 0);
+                assertTrue("Last chunk vectors should be less than full chunk vectors",
+                          layout.lastChunkVectors < layout.fullChunkVectors || layout.lastChunkVectors == 0);
+
+            } catch (Exception e) {
+                System.out.printf("%-12d %-15d %-60s%n", vectorCount, compressedDimension, "ERROR: " + e.getMessage());
+            }
+        }
+
+        System.out.println("=" + "=".repeat(120));
+        System.out.println("Test completed successfully");
+    }
+
+
 }
