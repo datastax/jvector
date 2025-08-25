@@ -247,23 +247,23 @@ public class TestProductQuantization extends RandomizedTest {
         assertArrayEquals(contents1, contents2);
     }
 
-    private void validateChunkMath(PQLayout dims, int expectedTotalVectors, int dimension) {
+    private void validateChunkMath(PQLayout layout, int expectedTotalVectors, int dimension) {
         // Basic parameter validation
-        assertTrue("vectorsPerChunk must be positive", dims.fullChunkVectors > 0);
-        assertTrue("totalChunks must be positive", dims.totalChunks > 0);
-        assertTrue("fullSizeChunks must be non-negative", dims.fullSizeChunks >= 0);
-        assertTrue("remainingVectors must be non-negative", dims.lastChunkVectors >= 0);
-        assertTrue("fullSizeChunks must not exceed totalChunks", dims.fullSizeChunks <= dims.totalChunks);
-        assertTrue("remainingVectors must be less than vectorsPerChunk", dims.lastChunkVectors < dims.fullChunkVectors);
+        assertTrue("vectorsPerChunk must be positive", layout.fullChunkVectors > 0);
+        assertTrue("totalChunks must be positive", layout.totalChunks > 0);
+        assertTrue("fullSizeChunks must be non-negative", layout.fullSizeChunks >= 0);
+        assertTrue("remainingVectors must be non-negative", layout.lastChunkVectors >= 0);
+        assertTrue("fullSizeChunks must not exceed totalChunks", layout.fullSizeChunks <= layout.totalChunks);
+        assertTrue("remainingVectors must be less than vectorsPerChunk", layout.lastChunkVectors < layout.fullChunkVectors);
 
         // Total vectors validation
-        long calculatedTotal = (long) dims.fullSizeChunks * dims.fullChunkVectors + dims.lastChunkVectors;
+        long calculatedTotal = (long) layout.fullSizeChunks * layout.fullChunkVectors + layout.lastChunkVectors;
         assertEquals("Total vectors must match expected count",
                      expectedTotalVectors, calculatedTotal);
 
         // Chunk count validation
         assertEquals("Total chunks must match full + partial chunks",
-                     dims.totalChunks, dims.fullSizeChunks + (dims.lastChunkVectors > 0 ? 1 : 0));
+                     layout.totalChunks, layout.fullSizeChunks + (layout.lastChunkVectors > 0 ? 1 : 0));
     }
 
     @Test
