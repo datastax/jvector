@@ -58,8 +58,6 @@ import static java.lang.Math.*;
  * that spawning a new Thread per call is not advisable.  This includes virtual threads.
  */
 public class GraphIndexBuilder implements Closeable {
-    private static final int BUILD_BATCH_SIZE = 50;
-
     private static final Logger logger = LoggerFactory.getLogger(GraphIndexBuilder.class);
 
     private final int beamWidth;
@@ -327,7 +325,7 @@ public class GraphIndexBuilder implements Closeable {
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
 
-        this.graph = new OnHeapGraphIndex(maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha), BUILD_BATCH_SIZE);
+        this.graph = new OnHeapGraphIndex(maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
