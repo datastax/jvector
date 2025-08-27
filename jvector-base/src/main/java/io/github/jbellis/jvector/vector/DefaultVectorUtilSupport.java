@@ -309,6 +309,36 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
+  public float assembleAndSumPQ(
+          VectorFloat<?> codebookPartialSums,
+          int subspaceCount,                  // = M
+          ByteSequence<?> vector1Ordinals,
+          int vector1OrdinalOffset,
+          ByteSequence<?> vector2Ordinals,
+          int vector2OrdinalOffset,
+          int clusterCount
+  ) {
+      final int k          = clusterCount;
+      final int blockSize  = k * (k + 1) / 2;
+      float res = 0f;
+
+      for (int i = 0; i < subspaceCount; i++) {
+          int c1 = Byte.toUnsignedInt(vector1Ordinals.get(i + vector1OrdinalOffset));
+          int c2 = Byte.toUnsignedInt(vector2Ordinals.get(i + vector2OrdinalOffset));
+          int r  = Math.min(c1, c2);
+          int c  = Math.max(c1, c2);
+
+          int offsetRow  = r * k - (r * (r - 1) / 2);
+          int idxInBlock = offsetRow + (c - r);
+          int base       = i * blockSize;
+
+          res += codebookPartialSums.get(base + idxInBlock);
+      }
+
+      return res;
+  }
+
+  @Override
   public int hammingDistance(long[] v1, long[] v2) {
     int hd = 0;
     for (int i = 0; i < v1.length; i++) {

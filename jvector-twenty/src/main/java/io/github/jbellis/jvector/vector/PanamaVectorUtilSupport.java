@@ -766,6 +766,213 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return sum;
     }
 
+    @Override
+    public float assembleAndSumPQ(
+            VectorFloat<?> codebookPartialSums,
+            int subspaceCount,                  // = M
+            ByteSequence<?> vector1Ordinals,
+            int vector1OrdinalOffset,
+            ByteSequence<?> vector2Ordinals,
+            int vector2OrdinalOffset,
+            int clusterCount                    // = k
+    ) {
+        //compute the size of the subvector
+        return switch (PREFERRED_BIT_SIZE)
+        {
+            case 512 -> assembleAndSumPQ_512(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+            case 256 -> assembleAndSumPQ_256(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+            case 128 -> assembleAndSumPQ_128(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+            default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
+        };
+    }
+
+    float assembleAndSumPQ_128(
+            VectorFloat<?> data,
+            int subspaceCount,                  // = M
+            ByteSequence<?> baseOffsets1,
+            int baseOffsetsOffset1,
+            ByteSequence<?> baseOffsets2,
+            int baseOffsetsOffset2,
+            int clusterCount                    // = k
+    ) {
+        final int k          = clusterCount;
+        final int blockSize  = k * (k + 1) / 2;
+        float res = 0f;
+
+        for (int i = 0; i < subspaceCount; i++) {
+            int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
+            int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
+            int r  = Math.min(c1, c2);
+            int c  = Math.max(c1, c2);
+
+            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int idxInBlock = offsetRow + (c - r);
+            int base       = i * blockSize;
+
+            res += data.get(base + idxInBlock);
+        }
+
+        return res;
+    }
+
+    float assembleAndSumPQ_256(
+            VectorFloat<?> data,
+            int subspaceCount,                  // = M
+            ByteSequence<?> baseOffsets1,
+            int baseOffsetsOffset1,
+            ByteSequence<?> baseOffsets2,
+            int baseOffsetsOffset2,
+            int clusterCount                    // = k
+    ) {
+        final VectorSpecies<Float> FSPECIES = FloatVector.SPECIES_256;
+        final int LANES      = FSPECIES.length();
+        final int k          = clusterCount;
+        final int blockSize  = k * (k + 1) / 2;
+        final int M          = subspaceCount;
+
+        int[] convOffsets = scratchInt256.get();
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+        FloatVector scale = FloatVector.zero(FloatVector.SPECIES_256).addIndex(blockSize);
+        FloatVector kvec = FloatVector.broadcast(FloatVector.SPECIES_256, k);
+        FloatVector onevec = FloatVector.broadcast(FloatVector.SPECIES_256, 1);
+        FloatVector twovec = FloatVector.broadcast(FloatVector.SPECIES_256, 0.5f);
+
+
+        for (int i = 0; i + LANES <= M; i += LANES) {
+
+            FloatVector c1v = fromByteSequence(ByteVector.SPECIES_64, baseOffsets1, i + baseOffsets1.offset() + baseOffsetsOffset1)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_256)
+                    .convertShape(VectorOperators.I2F, FSPECIES, 0)
+                    .reinterpretAsFloats();
+
+            FloatVector c2v = fromByteSequence(ByteVector.SPECIES_64, baseOffsets2, i + baseOffsets2.offset() + baseOffsetsOffset2)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_256)
+                    .convertShape(VectorOperators.I2F, FSPECIES, 0)
+                    .reinterpretAsFloats();
+
+            // b) r = min(c1,c2), c = max(c1,c2)
+            var r = c1v.min(c2v);
+            var c = c1v.max(c2v);
+
+            // c) offsetRow = r*k - (r*(r-1))/2
+            var rk          = r.mul(kvec);
+            var triangular  = r.mul(r.sub(onevec)).mul(twovec);
+            var offsetRow   = rk.sub(triangular);
+
+            // d) idxInBlock = offsetRow + (c - r) + (i * blockSize)
+            offsetRow.add(c.sub(r)).add(scale)
+                    .convertShape(VectorOperators.F2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts()
+                    .intoArray(convOffsets, 0);
+
+            // e) gather LANES floats from `partials` at those indices
+            FloatVector chunk = fromVectorFloat(FSPECIES, data, i * blockSize, convOffsets, 0);
+
+            // f) horizontal sum the chunk and add to our scalar accumulator
+            sum = sum.add(chunk);
+        }
+
+        float res = sum.reduceLanes(VectorOperators.ADD);
+
+        //
+        // 3) Remainder: fall back to your scalar code for i % LANES != 0
+        //
+        for (int i = (M / LANES) * LANES; i < M; i++) {
+            int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
+            int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
+            int r  = Math.min(c1, c2);
+            int c  = Math.max(c1, c2);
+
+            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int idxInBlock = offsetRow + (c - r);
+            int base       = i * blockSize;
+
+            res += data.get(base + idxInBlock);
+        }
+
+        return res;
+    }
+
+    float assembleAndSumPQ_512(
+            VectorFloat<?> data,
+            int subspaceCount,                  // = M
+            ByteSequence<?> baseOffsets1,
+            int baseOffsetsOffset1,
+            ByteSequence<?> baseOffsets2,
+            int baseOffsetsOffset2,
+            int clusterCount                    // = k
+    ) {
+        final VectorSpecies<Float> FSPECIES = FloatVector.SPECIES_512;
+        final int LANES      = FSPECIES.length();
+        final int k          = clusterCount;
+        final int blockSize  = k * (k + 1) / 2;
+        final int M          = subspaceCount;
+
+        int[] convOffsets = scratchInt512.get();
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_512);
+        FloatVector scale = FloatVector.zero(FloatVector.SPECIES_512).addIndex(blockSize);
+        FloatVector kvec = FloatVector.broadcast(FloatVector.SPECIES_512, k);
+        FloatVector onevec = FloatVector.broadcast(FloatVector.SPECIES_512, 1);
+        FloatVector twovec = FloatVector.broadcast(FloatVector.SPECIES_512, 0.5f);
+
+        for (int i = 0; i + LANES <= M; i += LANES) {
+            FloatVector c1v = fromByteSequence(ByteVector.SPECIES_128, baseOffsets1, i + baseOffsets1.offset() + baseOffsetsOffset1)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_512)
+                    .convertShape(VectorOperators.I2F, FSPECIES, 0)
+                    .reinterpretAsFloats();
+
+            FloatVector c2v = fromByteSequence(ByteVector.SPECIES_128, baseOffsets2, i + baseOffsets2.offset() + baseOffsetsOffset2)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_512)
+                    .convertShape(VectorOperators.I2F, FSPECIES, 0)
+                    .reinterpretAsFloats();
+
+            // b) r = min(c1,c2), c = max(c1,c2)
+            var r = c1v.min(c2v);
+            var c = c1v.max(c2v);
+
+            // c) offsetRow = r*k - (r*(r-1))/2
+            var rk          = r.mul(kvec);
+            var triangular  = r.mul(r.sub(onevec)).mul(twovec);
+            var offsetRow   = rk.sub(triangular);
+
+            // d) idxInBlock = offsetRow + (c - r) + (i * blockSize)
+            offsetRow.add(c.sub(r)).add(scale)
+                    .convertShape(VectorOperators.F2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts()
+                    .intoArray(convOffsets, 0);
+
+            // e) gather LANES floats from `partials` at those indices
+            FloatVector chunk = fromVectorFloat(FSPECIES, data, i * blockSize, convOffsets, 0);
+
+            // f) horizontal sum the chunk and add to our scalar accumulator
+            sum = sum.add(chunk);
+        }
+
+        float res = sum.reduceLanes(VectorOperators.ADD);
+
+        //
+        // 3) Remainder: fall back to your scalar code for i % LANES != 0
+        //
+        for (int i = (M / LANES) * LANES; i < M; i++) {
+            int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
+            int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
+            int r  = Math.min(c1, c2);
+            int c  = Math.max(c1, c2);
+
+            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int idxInBlock = offsetRow + (c - r);
+            int base       = i * blockSize;
+
+            res += data.get(base + idxInBlock);
+        }
+
+        return res;
+    }
+
     /**
      * Vectorized calculation of Hamming distance for two arrays of long integers.
      * Both arrays should have the same length.

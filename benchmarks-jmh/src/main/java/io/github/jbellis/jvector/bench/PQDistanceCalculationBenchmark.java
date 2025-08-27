@@ -68,7 +68,7 @@ public class PQDistanceCalculationBenchmark {
     @Param({"100"})
     private int queryCount;
     
-    @Param({"0", "16", "64", "192"})
+    @Param({ "0", "16", "64", "192"})
     private int M; // Number of subspaces for PQ
     
 

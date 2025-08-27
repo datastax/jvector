@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -36,6 +37,7 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -586,6 +588,35 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
     }
 
+    /**
+     * Creates a vector to hold partial sums for a single codebook.
+     * The partial sums are the dot products of each subvector centroid in the codebook with the other subvector centroids.
+     * Since the dot product is commutative, we only need to store the upper triangle of the matrix.
+     * There are M codebooks, and each codebook has k centroids, so the total number of partial sums is M * k * (k+1) / 2.
+     *
+     * @return a vector to hold partial sums for a single codebook
+     */
+    public VectorFloat<?> createCodebookPartialSums(VectorSimilarityFunction vectorSimilarityFunction) {
+        VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(getSubspaceCount() * getClusterCount() * (getClusterCount() + 1) / 2);
+        int index = 0;
+        for (int m = 0; m < M; m++) {
+            int size = subvectorSizesAndOffsets[m][0];
+            var codebook = codebooks[m];
+            for (int i = 0; i < clusterCount; i++) {
+                for (int j = i; j < clusterCount; j++) {
+
+                    float sum = vectorSimilarityFunction == VectorSimilarityFunction.EUCLIDEAN ?
+                            VectorUtil.squareL2Distance(codebook, i * size, codebook, j * size, size) :
+                            VectorUtil.dotProduct(codebook, i * size, codebook, j * size, size);
+
+                    partialSums.set(index++, sum);
+                }
+            }
+        }
+
+        return partialSums;
+    }
+
     @Override
     public int compressorSize() {
         int size = 0;
@@ -733,5 +764,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         if (clusterCount < 256) {
             LOG.warning("Using less than 256 PQ clusters will not reduce the memory footprint.");
         }
+    }
+
+    public int getOriginalDimension() {
+        return originalDimension;
     }
 }
