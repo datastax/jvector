@@ -309,6 +309,43 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
+  public float assembleAndSumPQ(
+          VectorFloat<?> codebookPartialSums,
+          int subspaceCount,                  // = M
+          ByteSequence<?> vector1Ordinals,
+          int vector1OrdinalOffset,
+          ByteSequence<?> vector2Ordinals,
+          int vector2OrdinalOffset,
+          int clusterCount
+  ) {
+    float sum = 0f;
+    int blockSize = clusterCount * (clusterCount + 1) / 2;
+    int k = clusterCount;               // number of centroids per codebook
+
+    for (int i = 0; i < subspaceCount; i++) {
+      int c1 = Byte.toUnsignedInt(vector1Ordinals.get(i + vector1OrdinalOffset));
+      int c2 = Byte.toUnsignedInt(vector2Ordinals.get(i + vector1OrdinalOffset));
+      int r  = Math.min(c1, c2);
+      int c  = Math.max(c1, c2);
+
+      // compute row offset in the flattened upper triangle
+      int offsetRow = r * k - (r * (r - 1) / 2);
+      int idxInBlock = offsetRow + (c - r);
+
+      if (idxInBlock < 0 || idxInBlock >= blockSize) {
+        throw new IllegalStateException(
+                "computed idxInBlock out of range: " + idxInBlock + " (blockSize=" + blockSize + ")");
+      }
+
+      // jump to the start of this subspace's block
+      int base = i * blockSize;
+      sum += codebookPartialSums.get(base + idxInBlock);
+    }
+
+    return sum;
+  }
+
+  @Override
   public int hammingDistance(long[] v1, long[] v2) {
     int hd = 0;
     for (int i = 0; i < v1.length; i++) {

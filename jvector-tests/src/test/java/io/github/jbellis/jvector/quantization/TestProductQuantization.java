@@ -34,6 +34,7 @@ import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -303,5 +304,33 @@ public class TestProductQuantization extends RandomizedTest {
         // Test invalid inputs
         assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(-1, 8));
         assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(100, -1));
+    }
+
+    @Test
+    public void testPQCodebookSums() {
+        // Generate a PQ for random 2D vectors
+        var vectors = createRandomVectors(10000, 384);
+        var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, 384), 48, 256, false);
+
+        MutablePQVectors pqm = new MutablePQVectors(pq);
+
+        // build the index vector-at-a-time (on disk)
+        for (int ordinal = 0; ordinal < vectors.size(); ordinal++)
+        {
+            VectorFloat<?> v = vectors.get(ordinal);
+            // compress the new vector and add it to the PQVectors
+            pqm.encodeAndSet(ordinal, v);
+        }
+
+        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+            var sf = pqm.diversityFunctionFor(10, vsf);
+
+            ImmutablePQVectors pqi = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), new ListRandomAccessVectorValues(vectors, 384), ForkJoinPool.commonPool());
+            var sf2 = pqi.diversityFunctionFor(10, vsf);
+
+            for (int i = 0; i < vectors.size(); i++) {
+                assertEquals(vsf.name(), sf.similarityTo(i), sf2.similarityTo(i), 1e-6);
+            }
+        }
     }
 }

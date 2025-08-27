@@ -41,7 +41,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
-@Fork(1)
+@Fork(value = 1, jvmArgsAppend = {"--add-modules=jdk.incubator.vector", "--enable-preview", "-Djvector.experimental.enable_native_vectorization=false"})
 @Warmup(iterations = 2)
 @Measurement(iterations = 3)
 @Threads(1)
@@ -52,14 +52,14 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"768", "1536"})
+    @Param({"1536"})
     private int originalDimension;
     @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
     @Param({"0", "16"})
     private int numberOfPQSubspaces;
 
-    @Setup(Level.Invocation)
+    @Setup(Level.Trial)
     public void setup() throws IOException {
 
         final var baseVectors = new ArrayList<VectorFloat<?>>(numBaseVectors);
