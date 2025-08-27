@@ -318,31 +318,24 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
           int vector2OrdinalOffset,
           int clusterCount
   ) {
-    float sum = 0f;
-    int blockSize = clusterCount * (clusterCount + 1) / 2;
-    int k = clusterCount;               // number of centroids per codebook
+      final int k          = clusterCount;
+      final int blockSize  = k * (k + 1) / 2;
+      float res = 0f;
 
-    for (int i = 0; i < subspaceCount; i++) {
-      int c1 = Byte.toUnsignedInt(vector1Ordinals.get(i + vector1OrdinalOffset));
-      int c2 = Byte.toUnsignedInt(vector2Ordinals.get(i + vector1OrdinalOffset));
-      int r  = Math.min(c1, c2);
-      int c  = Math.max(c1, c2);
+      for (int i = 0; i < subspaceCount; i++) {
+          int c1 = Byte.toUnsignedInt(vector1Ordinals.get(i + vector1OrdinalOffset));
+          int c2 = Byte.toUnsignedInt(vector2Ordinals.get(i + vector2OrdinalOffset));
+          int r  = Math.min(c1, c2);
+          int c  = Math.max(c1, c2);
 
-      // compute row offset in the flattened upper triangle
-      int offsetRow = r * k - (r * (r - 1) / 2);
-      int idxInBlock = offsetRow + (c - r);
+          int offsetRow  = r * k - (r * (r - 1) / 2);
+          int idxInBlock = offsetRow + (c - r);
+          int base       = i * blockSize;
 
-      if (idxInBlock < 0 || idxInBlock >= blockSize) {
-        throw new IllegalStateException(
-                "computed idxInBlock out of range: " + idxInBlock + " (blockSize=" + blockSize + ")");
+          res += codebookPartialSums.get(base + idxInBlock);
       }
 
-      // jump to the start of this subspace's block
-      int base = i * blockSize;
-      sum += codebookPartialSums.get(base + idxInBlock);
-    }
-
-    return sum;
+      return res;
   }
 
   @Override
