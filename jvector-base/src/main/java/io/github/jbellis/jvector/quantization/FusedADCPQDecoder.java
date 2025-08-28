@@ -31,6 +31,7 @@ import java.util.Arrays;
  * Performs similarity comparisons with compressed vectors without decoding them.
  * These decoders use Quick(er) ADC-style transposed vectors fused into a graph.
  */
+@Deprecated
 public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScoreFunction {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     protected final ProductQuantization pq;
@@ -56,6 +57,8 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // The main difference is that since our graph structure rapidly converges towards the best results,
     // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
     protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors neighbors, VectorFloat<?> results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
+        System.out.println("WARNING: FusedADC is now deprecated and will be removed in the next release!");
+
         this.pq = pq;
         this.query = query;
         this.esf = esf;

@@ -25,7 +25,7 @@ The upper layers of the hierarchy are represented by an in-memory adjacency list
 The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
 * Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
 * [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)
-* Fused ADC, where PQ codebooks are transposed and written inline with the graph adjacency list
+* Fused ADC, where PQ codebooks are transposed and written inline with the graph adjacency list (this option is now deprecated and will be removed in the next release)
 
 The second pass can be performed with
 * Full resolution float32 vectors

@@ -35,6 +35,7 @@ import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.Assert.assertEquals;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
+@Deprecated
 public class TestADCGraphIndex extends RandomizedTest {
 
     private Path testDirectory;
@@ -50,6 +51,7 @@ public class TestADCGraphIndex extends RandomizedTest {
     }
 
     @Test
+    @Deprecated
     public void testFusedGraph() throws Exception {
         // generate random graph, M=32, 256-dimension vectors
         var graph = new TestUtil.RandomlyConnectedGraphIndex(1000, 32, getRandom());

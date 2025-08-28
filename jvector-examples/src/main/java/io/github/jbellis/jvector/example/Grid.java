@@ -30,7 +30,6 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -235,15 +234,8 @@ public class Grid {
         // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
         writers.entrySet().stream().parallel().forEach(entry -> {
             var writer = entry.getValue();
-            var features = entry.getKey();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                writeSuppliers = new EnumMap<>(FeatureId.class);
-                var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
-            } else {
-                writeSuppliers = Map.of();
-            }
+            writeSuppliers = Map.of();
             try {
                 writer.write(writeSuppliers);
                 writer.close();
@@ -281,14 +273,6 @@ public class Grid {
                 case INLINE_VECTORS:
                     builder.with(new InlineVectors(floatVectors.dimension()));
                     suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
-                    break;
-                case FUSED_ADC:
-                    if (pq == null) {
-                        System.out.println("Skipping Fused ADC feature due to null ProductQuantization");
-                        continue;
-                    }
-                    // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
-                    builder.with(new FusedADC(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
                     int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
@@ -478,12 +462,7 @@ public class Grid {
             }
 
             var scoringView = (GraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
-            } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
-            }
+            ScoreFunction.ApproximateScoreFunction asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
             var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
             return new DefaultSearchScoreProvider(asf, rr);
         }

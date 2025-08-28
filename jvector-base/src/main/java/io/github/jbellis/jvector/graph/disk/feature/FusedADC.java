@@ -38,6 +38,7 @@ import java.io.UncheckedIOException;
 /**
  * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
  */
+@Deprecated
 public class FusedADC implements Feature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
@@ -47,6 +48,8 @@ public class FusedADC implements Feature {
     private ByteSequence<?> compressedNeighbors = null;
 
     public FusedADC(int maxDegree, ProductQuantization pq) {
+        System.out.println("WARNING: FusedADC is now deprecated and will be removed in the next release!");
+
         if (maxDegree != 32) {
             throw new IllegalArgumentException("maxDegree must be 32 for FusedADC. This limitation may be removed in future releases");
         }

@@ -151,6 +151,7 @@ public class TestUtil {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
+    @Deprecated
     public static void writeFusedGraph(GraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, Path outputPath) throws IOException {
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
                 .with(new InlineVectors(ravv.dimension()))
