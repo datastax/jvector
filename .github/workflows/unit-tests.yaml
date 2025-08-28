@@ -59,13 +59,13 @@ jobs:
       - name: Test Panama Support (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '20'
         run: >-
-          mvn -B -Pjdk20 -pl jvector-tests test -am test
+          mvn -X -B -Pjdk20 -pl jvector-tests test -am test
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
       - name: Verify native-access vector support (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '24'
         run: >-
-          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          mvn -X -B -Punix-amd64-profile -pl jvector-tests -am test
           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dtest=TestVectorizationProvider
@@ -73,7 +73,7 @@ jobs:
       - name: Compile, run tests and package (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '24'
         run: >-
-          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          mvn -X -B -Punix-amd64-profile -pl jvector-tests -am test
           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
 
       - name: Test Summary for (ISA:${{ matrix.isa}},JDK${{ matrix.jdk }})
