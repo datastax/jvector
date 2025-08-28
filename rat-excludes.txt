@@ -6,6 +6,7 @@ package.json
 README.md
 UPGRADING.md
 CHANGELOG.md
+CONTRIBUTING.md
 rat-excludes.txt
 pom.xml
 src/main/assembly/test-jar-with-dependencies.xml
