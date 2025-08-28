@@ -21,7 +21,7 @@ package io.github.jbellis.jvector.quantization;
  * This is emulative of modern Java records, but keeps to J11 standards.
  * This class consolidates the layout calculations for PQ data into one place
  */
-public class PQLayout {
+class PQLayout {
 
     /**
      * total number of vectors
