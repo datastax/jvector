@@ -22,6 +22,8 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -32,6 +34,7 @@ import org.apache.commons.math3.stat.StatUtils;
 
 /**
  * Measures throughput (queries/sec) with an optional warmup phase.
+ * Now includes comprehensive diagnostics to help identify performance variations.
  */
 public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private static final String DEFAULT_FORMAT = ".1f";
@@ -46,24 +49,28 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private String formatAvgQps;
     private String formatMedianQps;
     private String formatMaxQps;
+    private BenchmarkDiagnostics diagnostics;
 
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     public static ThroughputBenchmark createDefault() {
         return new ThroughputBenchmark(3, 3,
                 true, false, false,
-                DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+                DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT,
+                DiagnosticLevel.BASIC);
     }
 
     public static ThroughputBenchmark createEmpty(int numWarmupRuns, int numTestRuns) {
         return new ThroughputBenchmark(numWarmupRuns, numTestRuns,
                 false, false, false,
-                DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+                DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT,
+                DiagnosticLevel.NONE);
     }
 
     private ThroughputBenchmark(int numWarmupRuns, int numTestRuns,
                                 boolean computeAvgQps, boolean computeMedianQps, boolean computeMaxQps,
-                                String formatAvgQps, String formatMedianQps, String formatMaxQps) {
+                                String formatAvgQps, String formatMedianQps, String formatMaxQps,
+                                DiagnosticLevel diagnosticLevel) {
         this.numWarmupRuns = numWarmupRuns;
         this.numTestRuns = numTestRuns;
         this.computeAvgQps = computeAvgQps;
@@ -72,6 +79,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         this.formatAvgQps = formatAvgQps;
         this.formatMedianQps = formatMedianQps;
         this.formatMaxQps = formatMaxQps;
+        this.diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
     }
 
     public ThroughputBenchmark displayAvgQps() {
@@ -104,6 +112,14 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         return this;
     }
 
+    /**
+     * Configure the diagnostic level for this benchmark
+     */
+    public ThroughputBenchmark withDiagnostics(DiagnosticLevel level) {
+        this.diagnostics = new BenchmarkDiagnostics(level);
+        return this;
+    }
+
     @Override
     public String getBenchmarkName() {
         return "ThroughputBenchmark";
@@ -124,68 +140,130 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         int totalQueries = cs.getDataSet().queryVectors.size();
         int dim = cs.getDataSet().getDimension();
 
-        // Warmup Phase: Use randomly-generated vectors
+        // Warmup Phase with diagnostics
+        double[] warmupQps = new double[numWarmupRuns];
         for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
-            IntStream.range(0, totalQueries)
-                    .parallel()
-                    .forEach(k -> {
-                        // Generate a random vector
-                        VectorFloat<?> randQ = vts.createFloatVector(dim);
-                        for (int j = 0; j < dim; j++) {
-                            randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                        }
-                        VectorUtil.l2normalize(randQ);
-                        SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, randQ);
-                        SINK += sr.getVisitedCount();
-                    });
+            String warmupPhase = "Warmup-" + warmupRun;
+            
+            warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
+                IntStream.range(0, totalQueries)
+                        .parallel()
+                        .forEach(k -> {
+                            long queryStart = System.nanoTime();
+                            
+                            // Generate a random vector
+                            VectorFloat<?> randQ = vts.createFloatVector(dim);
+                            for (int j = 0; j < dim; j++) {
+                                randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                            }
+                            VectorUtil.l2normalize(randQ);
+                            SearchResult sr = QueryExecutor.executeQuery(
+                                    cs, topK, rerankK, usePruning, randQ);
+                            SINK += sr.getVisitedCount();
+                            
+                            long queryEnd = System.nanoTime();
+                            recorder.recordTime(queryEnd - queryStart);
+                        });
+                
+                return totalQueries / 1.0; // Return QPS placeholder
+            });
+            
+            System.out.printf("Warmup Run %d: %.1f QPS%n", warmupRun, warmupQps[warmupRun]);
+        }
+
+        // Analyze warmup effectiveness
+        if (numWarmupRuns > 1) {
+            double warmupVariance = StatUtils.variance(warmupQps);
+            double warmupMean = StatUtils.mean(warmupQps);
+            double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
+            System.out.printf("Warmup Analysis: Mean=%.1f QPS, CV=%.1f%%", warmupMean, warmupCV);
+            
+            if (warmupCV > 15.0) {
+                System.out.printf(" ⚠️  High warmup variance - consider more warmup runs%n");
+            } else {
+                System.out.printf(" ✓ Warmup appears stable%n");
+            }
         }
 
         double[] qpsSamples = new double[numTestRuns];
         for (int testRun = 0; testRun < numTestRuns; testRun++) {
+            String testPhase = "Test-" + testRun;
 
-            // Clear Eden and let GC complete....
-            System.gc();
-            System.runFinalization();
-            try {
-                Thread.sleep(500);   // 100 ms is usually plenty
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            }
+            // Clear Eden and let GC complete with diagnostics monitoring
+            diagnostics.monitorPhase("GC-" + testRun, () -> {
+                System.gc();
+                System.runFinalization();
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            });
 
-            // Test Phase: Execute the query set or more times
-            LongAdder visitedAdder = new LongAdder();
-            long startTime = System.nanoTime();
-            IntStream.range(0, totalQueries)
-                    .parallel()
-                    .forEach(i -> {
-                        SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
-                        // “Use” the result to prevent optimization
-                        visitedAdder.add(sr.getVisitedCount());
-                    });
-            double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-            double runQps = totalQueries / elapsedSec;
-            qpsSamples[testRun] = runQps;
+            // Test Phase with detailed monitoring
+            qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
+                LongAdder visitedAdder = new LongAdder();
+                long startTime = System.nanoTime();
+                
+                IntStream.range(0, totalQueries)
+                        .parallel()
+                        .forEach(i -> {
+                            long queryStart = System.nanoTime();
+                            
+                            SearchResult sr = QueryExecutor.executeQuery(
+                                    cs, topK, rerankK, usePruning, i);
+                            // "Use" the result to prevent optimization
+                            visitedAdder.add(sr.getVisitedCount());
+                            
+                            long queryEnd = System.nanoTime();
+                            recorder.recordTime(queryEnd - queryStart);
+                        });
+                        
+                double elapsedSec = (System.nanoTime() - startTime) / 1e9;
+                return totalQueries / elapsedSec;
+            });
 
+            System.out.printf("Test Run %d: %.1f QPS%n", testRun, qpsSamples[testRun]);
         }
 
+        // Performance variance analysis
         Arrays.sort(qpsSamples);
-        double medianQps = qpsSamples[numTestRuns/2];  // middle element (for odd)
+        double medianQps = qpsSamples[numTestRuns/2];
         double avgQps = StatUtils.mean(qpsSamples);
         double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
         double maxQps = StatUtils.max(qpsSamples);
+        double minQps = StatUtils.min(qpsSamples);
+        double coefficientOfVariation = (stdDevQps / avgQps) * 100;
+
+        System.out.printf("QPS Variance Analysis: CV=%.1f%%, Range=[%.1f - %.1f]%n", 
+            coefficientOfVariation, minQps, maxQps);
+            
+        if (coefficientOfVariation > 10.0) {
+            System.out.printf("⚠️  High performance variance detected (CV > 10%%)%n");
+        }
+
+        // Compare test runs for performance regression detection
+        if (numTestRuns > 1) {
+            diagnostics.comparePhases("Test-0", "Test-" + (numTestRuns - 1));
+        }
+
+        // Generate final diagnostics summary and recommendations
+        diagnostics.logSummary();
+        diagnostics.provideRecommendations();
 
         var list = new ArrayList<Metric>();
         if (computeAvgQps) {
             list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
             list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
+            list.add(Metric.of("CV %", ".1f", coefficientOfVariation));
         }
         if (computeMedianQps) {
             list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
         }
         if (computeMaxQps) {
             list.add(Metric.of("Max QPS (of " + numTestRuns + ")", formatMaxQps, maxQps));
+            list.add(Metric.of("Min QPS (of " + numTestRuns + ")", formatMaxQps, minQps));
         }
         return list;
     }
