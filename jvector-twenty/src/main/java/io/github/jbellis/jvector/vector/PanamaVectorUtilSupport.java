@@ -1369,5 +1369,171 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(),  clusterCount, partialSums, aMagnitude, bMagnitude);
     }
+
+    float pqDiversityEuclidean_64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_64);
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.mul(diff).add(sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.mul(diff).add(sum);
+                }
+                // Process the tail
+
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += diff * diff;
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqDiversityEuclidean_128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_128);
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.mul(diff).add(sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.mul(diff).add(sum);
+                }
+                // Process the tail
+
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += diff * diff;
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqDiversityEuclidean_256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.mul(diff).add(sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.mul(diff).add(sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += diff * diff;
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+     float pqDiversityEuclidean_512(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.mul(diff).add(sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.mul(diff).add(sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += diff * diff;
+                }
+            }
+	}
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    @Override
+    public float pqDiversityEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+	//Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length() )
+        {
+            return pqDiversityEuclidean_512( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length() )
+        {
+            return pqDiversityEuclidean_256( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+	//adding following two for completeness, will it get here?
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length())
+        {
+            return pqDiversityEuclidean_128( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        else
+        {
+            return pqDiversityEuclidean_64( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+    }
+
 }
 
