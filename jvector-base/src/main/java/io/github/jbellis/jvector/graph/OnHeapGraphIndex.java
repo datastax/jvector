@@ -77,9 +77,7 @@ public class OnHeapGraphIndex implements GraphIndex {
     // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
 
-    public final ConcurrentMap<NodeAtLevel, VectorFloat<?>> constructionBatch;
-
-    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider, int batchSize) {
+    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         setDegrees(maxDegrees);
@@ -92,7 +90,6 @@ public class OnHeapGraphIndex implements GraphIndex {
                 getDegree(0),
                 (int) (getDegree(0) * overflowRatio))
         );
-        this.constructionBatch = new ConcurrentHashMap<>(batchSize);
     }
 
     /**
