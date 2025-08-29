@@ -247,7 +247,7 @@ public class TestProductQuantization extends RandomizedTest {
         assertArrayEquals(contents1, contents2);
     }
 
-    private void validateChunkMath(PQLayout layout, int expectedTotalVectors, int dimension) {
+    private void validateChunkMath(PQVectors.PQLayout layout, int expectedTotalVectors, int dimension) {
         // Basic parameter validation
         assertTrue("vectorsPerChunk must be positive", layout.fullChunkVectors > 0);
         assertTrue("totalChunks must be positive", layout.totalChunks > 0);
@@ -269,7 +269,7 @@ public class TestProductQuantization extends RandomizedTest {
     @Test
     public void testPQVectorsChunkCalculation() {
         // Test normal case
-        PQLayout dims = new PQLayout(1000, 8);
+        PQVectors.PQLayout dims = new PQVectors.PQLayout(1000, 8);
         validateChunkMath(dims, 1000, 8);
         assertEquals(1000, dims.fullChunkVectors); // vectorsPerChunk
         assertEquals(1, dims.totalChunks);    // numChunks
@@ -279,7 +279,7 @@ public class TestProductQuantization extends RandomizedTest {
         // Test case requiring multiple chunks
         int bigVectorCount = Integer.MAX_VALUE - 1;
         int smallDim = 8;
-        PQLayout layoutBigSmall = new PQLayout(bigVectorCount, smallDim);
+        PQVectors.PQLayout layoutBigSmall = new PQVectors.PQLayout(bigVectorCount, smallDim);
         validateChunkMath(layoutBigSmall, bigVectorCount, smallDim);
         assertTrue(layoutBigSmall.fullChunkVectors > 0);
         assertTrue(layoutBigSmall.fullChunkVectors > 1);
@@ -287,17 +287,17 @@ public class TestProductQuantization extends RandomizedTest {
         // Test edge case with large dimension
         int smallVectorCount = 1000;
         int bigDim = Integer.MAX_VALUE / 2;
-        PQLayout layoutSmallBig = new PQLayout(smallVectorCount, bigDim);
+        PQVectors.PQLayout layoutSmallBig = new PQVectors.PQLayout(smallVectorCount, bigDim);
         validateChunkMath(layoutSmallBig, smallVectorCount, bigDim);
         assertTrue(layoutSmallBig.fullChunkVectors > 0);
 
         // Test invalid inputs
-        assertThrows(IllegalArgumentException.class, () -> new PQLayout(-1, 8));
-        assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, -1));
-        assertThrows(IllegalArgumentException.class, () -> new PQLayout(100, 0));
-        assertThrows(IllegalArgumentException.class, () -> new PQLayout(0, 1));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(-1, 8));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(100, -1));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(100, 0));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(0, 1));
         // Test last chunk sizing
-        PQLayout maxLayout = new PQLayout(Integer.MAX_VALUE, 1 << 10);
+        PQVectors.PQLayout maxLayout = new PQVectors.PQLayout(Integer.MAX_VALUE, 1 << 10);
         assertTrue(maxLayout.lastChunkVectors <= maxLayout.fullChunkVectors);
         assertTrue(maxLayout.lastChunkBytes <= maxLayout.fullChunkBytes);
     }
@@ -382,7 +382,7 @@ public class TestProductQuantization extends RandomizedTest {
             int compressedDimension = testCase[1];
 
             try {
-                PQLayout layout = new PQLayout(vectorCount, compressedDimension);
+                PQVectors.PQLayout layout = new PQVectors.PQLayout(vectorCount, compressedDimension);
                 System.out.printf("%-12d %-15d %-15d %-15d %-15d %-15d %-15d %-15d%n",
                         vectorCount, compressedDimension,
                         layout.fullChunkVectors, layout.lastChunkVectors,
