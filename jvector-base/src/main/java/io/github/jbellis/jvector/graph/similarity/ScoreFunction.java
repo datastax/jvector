@@ -29,8 +29,6 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  * can be defined as a simple lambda.
  */
 public interface ScoreFunction {
-    VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
-
     /**
      * @return true if the ScoreFunction returns exact, full-resolution scores
      */
