@@ -615,7 +615,7 @@ public class GraphIndexBuilder implements Closeable {
     }
 
     @VisibleForTesting
-    public void setEntryPoint(int level, int node) {
+    void setEntryPoint(int level, int node) {
         graph.updateEntryNode(new NodeAtLevel(level, node));
     }
 
