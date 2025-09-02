@@ -76,18 +76,18 @@ public interface IndexBuilder extends Closeable {
     Index build(RandomAccessVectorValues ravv);
 
     /**
-     * Cleanup the graph by completing removal of marked-for-delete nodes, trimming
-     * neighbor sets to the advertised degree, and updating the entry node.
+     * Cleanup the index before writing it to disk. Must be called before writing to disk.
      * <p>
      * Uses default threadpool to process nodes in parallel.  There is currently no way to restrict this to a single thread.
      * <p>
-     * Must be called before writing to disk.
-     * <p>
      * May be called multiple times, but should not be called during concurrent modifications to the graph.
+     * <p>
+     * @return true if the cleanup was successful, false is the cleanup could not be done as there are concurrent modifications happening.
      */
-    void cleanup();
+    boolean cleanup();
 
     /**
+     * TODO: This method should be removed and this check should be done in cleanup().
      * Number of inserts in progress, across all threads.  Useful as a sanity check
      * when calling non-threadsafe methods like cleanup().  (Do not use it to try to
      * _prevent_ races, only to detect them.)
