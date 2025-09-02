@@ -22,4 +22,5 @@ import java.util.Map;
 public class SearchParameters extends CommonParameters {
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
+    public Map<String, List<String>> benchmarks;
 }
