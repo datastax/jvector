@@ -115,7 +115,7 @@ public interface VectorUtilSupport {
   float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
 
   /**
-   * Calculates the sum of 2 vectors quantized using ProductQuantization.
+   * Calculates the distance between 2 vectors, which were quantized using Product Quantization, using a precomputed table of partial results
    *
    * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityFunction)}
    *

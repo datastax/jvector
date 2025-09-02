@@ -52,7 +52,7 @@ public class IndexConstructionWithRandomSetBenchmark {
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
-    @Param({"1536"})
+    @Param({"768", "1536"})
     private int originalDimension;
     @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
