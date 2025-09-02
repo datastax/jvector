@@ -49,15 +49,19 @@ import java.io.IOException;
 
 
 /**
- * Searches a graph to find nearest neighbors to a query vector. For more background on the
- * search algorithm, see {@link GraphIndex}.
+ * Searches an index to find nearest neighbors to a query vector.
  */
 public interface Searcher extends Closeable {
     SearchResult search(VectorFloat<?> queryVector,
                         int topK,
-                        int rerankK,
                         float threshold,
                         Bits acceptOrds);
 
-    SearchResult resume(int additionalK, int rerankK, float threshold);
+    SearchResult resume(int additionalK, float threshold);
+
+    interface RerankingSearcher extends Searcher {
+        void setRerankK(int rerankK);
+
+        int getRerankK();
+    }
 }

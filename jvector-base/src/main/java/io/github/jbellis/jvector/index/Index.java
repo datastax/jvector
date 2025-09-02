@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.index;
 
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -51,4 +52,38 @@ public interface Index extends AutoCloseable, Accountable {
     Searcher getSearcher();
 
     IndexWriter getWriter();
+
+    int size();
+
+    /**
+     * Encapsulates the state of a graph for searching.  Re-usable across search calls,
+     * but each thread needs its own.
+     */
+    interface View extends Closeable {
+        /**
+         * This method is deprecated as most View usages should not need size.
+         * Where they do, they could access the graph.
+         * @return the number of nodes in the graph
+         */
+        @Deprecated
+        int size();
+
+        /**
+         * @return the node of the graph to start searches at
+         */
+        GraphIndex.NodeAtLevel entryNode();
+
+        /**
+         * Return a Bits instance indicating which nodes are live.  The result is undefined for
+         * ordinals that do not correspond to nodes in the graph.
+         */
+        Bits liveNodes();
+
+        /**
+         * @return the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
+         */
+        default int getIdUpperBound() {
+            return size();
+        }
+    }
 }
