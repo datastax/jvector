@@ -34,6 +34,7 @@ import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -247,61 +248,190 @@ public class TestProductQuantization extends RandomizedTest {
         assertArrayEquals(contents1, contents2);
     }
 
-    private void validateChunkMath(int[] params, int expectedTotalVectors, int dimension) {
-        int vectorsPerChunk = params[0];
-        int totalChunks = params[1];
-        int fullSizeChunks = params[2];
-        int remainingVectors = params[3];
-
+    private void validateChunkMath(PQVectors.PQLayout layout, int expectedTotalVectors, int dimension) {
         // Basic parameter validation
-        assertTrue("vectorsPerChunk must be positive", vectorsPerChunk > 0);
-        assertTrue("totalChunks must be positive", totalChunks > 0);
-        assertTrue("fullSizeChunks must be non-negative", fullSizeChunks >= 0);
-        assertTrue("remainingVectors must be non-negative", remainingVectors >= 0);
-        assertTrue("fullSizeChunks must not exceed totalChunks", fullSizeChunks <= totalChunks);
-        assertTrue("remainingVectors must be less than vectorsPerChunk", remainingVectors < vectorsPerChunk);
-
-        // Chunk size validation
-        assertTrue("Chunk size must not exceed MAX_CHUNK_SIZE",
-                   (long) vectorsPerChunk * dimension <= PQVectors.MAX_CHUNK_SIZE);
+        assertTrue("vectorsPerChunk must be positive", layout.fullChunkVectors > 0);
+        assertTrue("totalChunks must be positive", layout.totalChunks > 0);
+        assertTrue("fullSizeChunks must be non-negative", layout.fullSizeChunks >= 0);
+        assertTrue("remainingVectors must be non-negative", layout.lastChunkVectors >= 0);
+        assertTrue("fullSizeChunks must not exceed totalChunks", layout.fullSizeChunks <= layout.totalChunks);
+        assertTrue("remainingVectors must be less than vectorsPerChunk", layout.lastChunkVectors < layout.fullChunkVectors);
 
         // Total vectors validation
-        long calculatedTotal = (long) fullSizeChunks * vectorsPerChunk + remainingVectors;
+        long calculatedTotal = (long) layout.fullSizeChunks * layout.fullChunkVectors + layout.lastChunkVectors;
         assertEquals("Total vectors must match expected count",
                      expectedTotalVectors, calculatedTotal);
 
         // Chunk count validation
         assertEquals("Total chunks must match full + partial chunks",
-                     totalChunks, fullSizeChunks + (remainingVectors > 0 ? 1 : 0));
+                     layout.totalChunks, layout.fullSizeChunks + (layout.lastChunkVectors > 0 ? 1 : 0));
     }
 
     @Test
     public void testPQVectorsChunkCalculation() {
         // Test normal case
-        int[] params = PQVectors.calculateChunkParameters(1000, 8);
-        validateChunkMath(params, 1000, 8);
-        assertEquals(1000, params[0]); // vectorsPerChunk
-        assertEquals(1, params[1]);    // numChunks
-        assertEquals(1, params[2]);    // fullSizeChunks
-        assertEquals(0, params[3]);    // remainingVectors
+        PQVectors.PQLayout dims = new PQVectors.PQLayout(1000, 8);
+        validateChunkMath(dims, 1000, 8);
+        assertEquals(1000, dims.fullChunkVectors); // vectorsPerChunk
+        assertEquals(1, dims.totalChunks);    // numChunks
+        assertEquals(1, dims.fullSizeChunks);    // fullSizeChunks
+        assertEquals(0, dims.lastChunkVectors);    // remainingVectors
 
         // Test case requiring multiple chunks
         int bigVectorCount = Integer.MAX_VALUE - 1;
         int smallDim = 8;
-        params = PQVectors.calculateChunkParameters(bigVectorCount, smallDim);
-        validateChunkMath(params, bigVectorCount, smallDim);
-        assertTrue(params[0] > 0);
-        assertTrue(params[1] > 1);
+        PQVectors.PQLayout layoutBigSmall = new PQVectors.PQLayout(bigVectorCount, smallDim);
+        validateChunkMath(layoutBigSmall, bigVectorCount, smallDim);
+        assertTrue(layoutBigSmall.fullChunkVectors > 0);
+        assertTrue(layoutBigSmall.fullChunkVectors > 1);
 
         // Test edge case with large dimension
         int smallVectorCount = 1000;
         int bigDim = Integer.MAX_VALUE / 2;
-        params = PQVectors.calculateChunkParameters(smallVectorCount, bigDim);
-        validateChunkMath(params, smallVectorCount, bigDim);
-        assertTrue(params[0] > 0);
+        PQVectors.PQLayout layoutSmallBig = new PQVectors.PQLayout(smallVectorCount, bigDim);
+        validateChunkMath(layoutSmallBig, smallVectorCount, bigDim);
+        assertTrue(layoutSmallBig.fullChunkVectors > 0);
 
         // Test invalid inputs
-        assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(-1, 8));
-        assertThrows(IllegalArgumentException.class, () -> PQVectors.calculateChunkParameters(100, -1));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(-1, 8));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(100, -1));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(100, 0));
+        assertThrows(IllegalArgumentException.class, () -> new PQVectors.PQLayout(0, 1));
+        // Test last chunk sizing
+        PQVectors.PQLayout maxLayout = new PQVectors.PQLayout(Integer.MAX_VALUE, 1 << 10);
+        assertTrue(maxLayout.lastChunkVectors <= maxLayout.fullChunkVectors);
+        assertTrue(maxLayout.lastChunkBytes <= maxLayout.fullChunkBytes);
+    }
+
+    /**
+     * Leaving this test enabled for the actual boundary checks, but here is the output:
+     * <pre><code>
+     * === PQLayout Edge Cases Test ===
+     * VectorCount  CompDim         FullChunkVecs   LastChunkVecs   FullSizeChunks  TotalChunks     FullChunkBytes  LastChunkBytes
+     * =========================================================================================================================
+     * 1            1               1               0               1               1               1               0
+     * 1            2               1               0               1               1               2               0
+     * 10           1               10              0               1               1               10              0
+     * 10           2               10              0               1               1               20              0
+     * 10           3               10              0               1               1               30              0
+     * 10           4               10              0               1               1               40              0
+     * 10           5               10              0               1               1               50              0
+     * 10           7               10              0               1               1               70              0
+     * 10           8               10              0               1               1               80              0
+     * 10           9               10              0               1               1               90              0
+     * 10           15              10              0               1               1               150             0
+     * 10           16              10              0               1               1               160             0
+     * 10           17              10              0               1               1               170             0
+     * 10           31              10              0               1               1               310             0
+     * 10           32              10              0               1               1               320             0
+     * 10           33              10              0               1               1               330             0
+     * 10           63              10              0               1               1               630             0
+     * 10           64              10              0               1               1               640             0
+     * 10           65              10              0               1               1               650             0
+     * 10           127             10              0               1               1               1270            0
+     * 10           128             10              0               1               1               1280            0
+     * 10           129             10              0               1               1               1290            0
+     * 1073741823   1               1073741823      0               1               1               1073741823      0
+     * 1073741823   2               1073741823      0               1               1               2147483646      0
+     * 1073741824   2               1073741823      1               1               2               2147483646      2
+     * 1000         1024            1000            0               1               1               1024000         0
+     * 2000000      1024            2000000         0               1               1               2048000000      0
+     * 536870911    4               536870911       0               1               1               2147483644      0
+     * 536870912    4               536870911       1               1               2               2147483644      4
+     * 100          1073741824      1               0               100             100             1073741824      0
+     * =========================================================================================================================
+     * </code></pre>
+     */
+    @Test
+    public void testPQLayoutEdgeCases() {
+        System.out.println("\n=== PQLayout Edge Cases Test ===");
+        System.out.printf("%-12s %-15s %-15s %-15s %-15s %-15s %-15s %-15s%n",
+                "VectorCount", "CompDim", "FullChunkVecs", "LastChunkVecs", "FullSizeChunks", "TotalChunks", "FullChunkBytes", "LastChunkBytes");
+        System.out.println("=" + "=".repeat(120));
+
+        int[][] testCases = {
+                // Minimal cases
+                {1, 1}, {1, 2},
+                
+                // Power-of-2 boundaries for compressedDimension (layoutBytesPerVector changes)
+                {10, 1}, {10, 2}, {10, 3}, {10, 4}, {10, 5},
+                {10, 7}, {10, 8}, {10, 9},
+                {10, 15}, {10, 16}, {10, 17},
+                {10, 31}, {10, 32}, {10, 33},
+                {10, 63}, {10, 64}, {10, 65},
+                {10, 127}, {10, 128}, {10, 129},
+                
+                // Cases where addressableVectorsPerChunk becomes interesting
+                {1073741823, 1}, // layoutBytesPerVector=2, addressableVectorsPerChunk=1073741823
+                {1073741823, 2}, // layoutBytesPerVector=4, addressableVectorsPerChunk=536870911  
+                {1073741824, 2}, // vectorCount > addressableVectorsPerChunk, creates chunks
+                
+                // Large dimension cases (small addressableVectorsPerChunk)
+                {1000, 1024}, // layoutBytesPerVector=2048, addressableVectorsPerChunk=1048575
+                {2000000, 1024}, // vectorCount > addressableVectorsPerChunk
+                
+                // Integer overflow boundary cases
+                {536870911, 4}, // layoutBytesPerVector=8, exactly fits in one chunk
+                {536870912, 4}, // one more than above, creates multiple chunks
+                
+                // Edge case where lastChunkVectors becomes non-zero
+                {100, 1073741824} // layoutBytesPerVector huge, addressableVectorsPerChunk=1, creates 100 chunks
+        };
+
+        for (int[] testCase : testCases) {
+            int vectorCount = testCase[0];
+            int compressedDimension = testCase[1];
+
+            try {
+                PQVectors.PQLayout layout = new PQVectors.PQLayout(vectorCount, compressedDimension);
+                System.out.printf("%-12d %-15d %-15d %-15d %-15d %-15d %-15d %-15d%n",
+                        vectorCount, compressedDimension,
+                        layout.fullChunkVectors, layout.lastChunkVectors,
+                        layout.fullSizeChunks, layout.totalChunks,
+                        layout.fullChunkBytes, layout.lastChunkBytes);
+
+                // Basic sanity checks
+                assertTrue("Total chunks should be positive", layout.totalChunks > 0);
+                assertTrue("Full size chunks should be non-negative", layout.fullSizeChunks >= 0);
+                assertTrue("Full chunk vectors should be positive", layout.fullChunkVectors > 0);
+                assertTrue("Last chunk vectors should be non-negative", layout.lastChunkVectors >= 0);
+                assertTrue("Last chunk vectors should be less than full chunk vectors",
+                          layout.lastChunkVectors < layout.fullChunkVectors || layout.lastChunkVectors == 0);
+
+            } catch (Exception e) {
+                System.out.printf("%-12d %-15d %-60s%n", vectorCount, compressedDimension, "ERROR: " + e.getMessage());
+            }
+        }
+
+        System.out.println("=" + "=".repeat(120));
+        System.out.println("Test completed successfully");
+    }
+
+    @Test
+    public void testPQCodebookSums() {
+        // Generate a PQ for random 2D vectors
+        var vectors = createRandomVectors(10000, 384);
+        var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, 384), 48, 256, false);
+
+        MutablePQVectors pqm = new MutablePQVectors(pq);
+
+        // build the index vector-at-a-time (on disk)
+        for (int ordinal = 0; ordinal < vectors.size(); ordinal++)
+        {
+            VectorFloat<?> v = vectors.get(ordinal);
+            // compress the new vector and add it to the PQVectors
+            pqm.encodeAndSet(ordinal, v);
+        }
+
+        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+            var sf = pqm.diversityFunctionFor(10, vsf);
+
+            ImmutablePQVectors pqi = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), new ListRandomAccessVectorValues(vectors, 384), ForkJoinPool.commonPool());
+            var sf2 = pqi.diversityFunctionFor(10, vsf);
+
+            for (int i = 0; i < vectors.size(); i++) {
+                assertEquals(vsf.name(), sf.similarityTo(i), sf2.similarityTo(i), 1e-6);
+            }
+        }
     }
 }

@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -112,6 +113,22 @@ public interface VectorUtilSupport {
    * @return the sum of the points
    */
   float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
+
+  /**
+   * Calculates the distance between 2 vectors, which were quantized using Product Quantization, using a precomputed table of partial results
+   *
+   * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityFunction)}
+   *
+   * @param codebookPartialSums the vector of all PQ
+   * @param subspaceCount the number of PQ subspaces
+   * @param vector1Ordinals Specifies which centroid vector is used for each of node1's subvectors
+   * @param vector1OrdinalOffset the offset into the vector1Ordinals ByteSequence for node1 (in case vector1Ordinals is a chunk of many nodes)
+   * @param node2Ordinals Specifies which centroid vector is used for each of node2's subvectors
+   * @param node2OrdinalOffset the offset into the vector1Ordinals ByteSequence for node2 (in case vector1Ordinals is a chunk of many nodes)
+   * @param clusterCount the number of PQ clusters per subvector in the codebook
+   * @return the sum of the vectors
+   */
+  float assembleAndSumPQ(VectorFloat<?> codebookPartialSums, int subspaceCount, ByteSequence<?> vector1Ordinals, int vector1OrdinalOffset, ByteSequence<?> node2Ordinals, int node2OrdinalOffset, int clusterCount);
 
   int hammingDistance(long[] v1, long[] v2);
 
