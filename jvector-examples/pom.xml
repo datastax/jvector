@@ -24,6 +24,30 @@
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <archive>
+                        <manifest>
+                            <mainClass>io.github.jbellis.jvector.example.AutoBenchYAML</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
     <dependencies>
@@ -47,6 +71,17 @@
                     <groupId>org.slf4j</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+        <!-- Add SLF4J and Logback for logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.9</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.4.11</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -85,6 +120,29 @@
             <version>2.8.1</version>
             <type>pom</type>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.17.1</version>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <version>7.3.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <profiles>
         <profile>
@@ -117,7 +175,7 @@
                                         <classpath/>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -169,7 +227,7 @@
                                         <argument>-XX:+HeapDumpOnOutOfMemoryError</argument>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -264,7 +322,7 @@
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
