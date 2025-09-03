@@ -298,13 +298,7 @@ public abstract class PQVectors implements CompressedVectors {
                     var node2Chunk = getChunk(node2);
                     var node2Offset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
-                    }
+                    float sum = VectorUtil.pqDiversityEuclidean(pq.codebooks, pq.subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
                     // scale to [0, 1]
                     return 1 / (1 + sum);
                 };
