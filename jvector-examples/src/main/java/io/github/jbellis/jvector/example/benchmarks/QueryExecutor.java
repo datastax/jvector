@@ -33,7 +33,7 @@ public class QueryExecutor {
      * @return the SearchResult for query i.
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
-        var queryVector = cs.getDataSet().queryVectors.get(i);
+        var queryVector = cs.getDataSet().getQueryVectors().get(i);
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());
