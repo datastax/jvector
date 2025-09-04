@@ -79,7 +79,16 @@ public class BenchYAML {
             }
         }
 
-        for (var config : allConfigs) {
+        // TODO: Reconcile these flows
+//        for (var datasetName : datasetNames) {
+//            String finalDatasetName = datasetName;
+//            DataSet ds = datasetSource.apply(datasetName)
+//                    .orElseThrow(() -> new IllegalArgumentException(
+//                            "Unknown dataset: " + finalDatasetName));
+//            // DataSet ds = DataSetLoader.loadDataSet(datasetName);
+
+
+            for (var config : allConfigs) {
             String datasetName = config.dataset;
 
                 DataSet ds = datasetSource.apply(datasetName)
@@ -88,10 +97,17 @@ public class BenchYAML {
                 // DataSet ds = DataSetLoader.loadDataSet(datasetName);
             DataSet ds = DataSetLoader.loadDataSet(datasetName);
 
-            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                // TODO: Reconcile these flows
+
+//                if (datasetName.endsWith(".hdf5")) {
+//                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
+//                }
+//                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
+
+                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                     config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
         }
     }
 }

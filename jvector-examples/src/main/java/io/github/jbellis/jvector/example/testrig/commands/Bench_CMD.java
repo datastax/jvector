@@ -11,6 +11,7 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 
 @CommandLine.Command(name = "bench", description = "run example benchmarks")
 public class Bench_CMD implements Callable<Integer> {
@@ -19,7 +20,7 @@ public class Bench_CMD implements Callable<Integer> {
     @Override
     public java.util.Iterator<String> iterator() {
       return VectorTestData.catalogs().catalog().datasets().stream().map(DatasetEntry::name)
-          .toList().iterator();
+          .collect(Collectors.toList()).iterator();
     }
   }
 
