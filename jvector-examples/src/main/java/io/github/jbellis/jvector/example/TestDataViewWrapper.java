@@ -31,12 +31,12 @@ public class TestDataViewWrapper implements DataSet {
   @Override
   public VectorSimilarityFunction getSimilarityFunction() {
     var df = view.getDistanceFunction();
-    return switch (df) {
-      case EUCLIDEAN -> VectorSimilarityFunction.EUCLIDEAN;
-      case COSINE -> VectorSimilarityFunction.COSINE;
-      case DOT_PRODUCT -> VectorSimilarityFunction.DOT_PRODUCT;
-      default -> throw new IllegalArgumentException("Unknown distance function " + df);
-    };
+    switch (df) {
+        case EUCLIDEAN: return VectorSimilarityFunction.EUCLIDEAN;
+        case COSINE: return VectorSimilarityFunction.COSINE;
+        case DOT_PRODUCT: return VectorSimilarityFunction.DOT_PRODUCT;
+        default: throw new IllegalArgumentException("Unknown distance function " + df);
+    }
   }
 
   @Override

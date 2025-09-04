@@ -116,8 +116,8 @@ public class Bench {
             TestDataView tdv = dsentry.select().profile(name);
             System.out.println("prebuffering dataset (assumed performance oriented testing)");
             CompletableFuture<Void> statusFuture = tdv.getBaseVectors().orElseThrow().prebuffer();
-            if (statusFuture instanceof ProgressIndicator<?> pi) {
-                pi.monitorProgress(1000);
+            if (statusFuture instanceof ProgressIndicator<?>) {
+                ((ProgressIndicator<?>)statusFuture).monitorProgress(1000);
             }
 //            tdv.getQueryVectors().orElseThrow().prebuffer();
 //            tdv.getNeighborIndices().orElseThrow().prebuffer();
