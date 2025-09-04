@@ -85,8 +85,8 @@ public class BenchHarness implements Runnable {
 
       System.out.println("Prebuffering...");
       CompletableFuture<Void> prebuffer = bv.prebuffer();
-      if (prebuffer instanceof ProgressIndicator indicator) {
-          indicator.monitorProgress(1000);
+      if (prebuffer instanceof ProgressIndicator<?>) {
+          ((ProgressIndicator<?>)prebuffer).monitorProgress(1000);
       }
       prebuffer.join();
       System.out.println("Prebuffered");
