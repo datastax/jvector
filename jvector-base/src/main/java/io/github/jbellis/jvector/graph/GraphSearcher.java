@@ -430,16 +430,15 @@ public class GraphSearcher implements Closeable {
                 int i = 0;
                 for (var it = view.getNeighborsIterator(level, topCandidateNode); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
-                    if (!visited.add(friendOrd)) {
-                        continue;
-                    }
-                    visitedCount++;
+                    if (visited.add(friendOrd)) {
+                        visitedCount++;
 
-                    float friendSimilarity = useEdgeLoading
-                            ? similarities.get(i)
-                            : scoreFunction.similarityTo(friendOrd);
-                    scoreTracker.track(friendSimilarity);
-                    candidates.push(friendOrd, friendSimilarity);
+                        float friendSimilarity = useEdgeLoading
+                                ? similarities.get(i)
+                                : scoreFunction.similarityTo(friendOrd);
+                        scoreTracker.track(friendSimilarity);
+                        candidates.push(friendOrd, friendSimilarity);
+                    }
                     i++;
                 }
             }
