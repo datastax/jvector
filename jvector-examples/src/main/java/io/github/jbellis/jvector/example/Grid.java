@@ -17,8 +17,13 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.*;
-import io.github.jbellis.jvector.example.util.AccuracyMetrics;
+import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
+import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryTester;
+import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
@@ -27,7 +32,6 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
@@ -45,7 +49,6 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -59,17 +62,15 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -91,7 +92,8 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
-                       List<Boolean> usePruningGrid) throws IOException
+                       List<Boolean> usePruningGrid,
+                       Map<String, List<String>> benchmarks) throws IOException
     {
         var testDirectory = Files.createTempDirectory(dirPrefix);
         try {
@@ -102,7 +104,7 @@ public class Grid {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
                                     var compressor = getCompressor(bc, ds);
-                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, ds, testDirectory);
+                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
                                 }
                             }
                         }
@@ -122,6 +124,21 @@ public class Grid {
         }
     }
 
+    static void runAll(DataSet ds,
+                       List<Integer> mGrid,
+                       List<Integer> efConstructionGrid,
+                       List<Float> neighborOverflowGrid,
+                       List<Boolean> addHierarchyGrid,
+                       List<Boolean> refineFinalGraphGrid,
+                       List<? extends Set<FeatureId>> featureSets,
+                       List<Function<DataSet, CompressorParameters>> buildCompressors,
+                       List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       Map<Integer, List<Double>> topKGrid,
+                       List<Boolean> usePruningGrid) throws IOException
+    {
+        runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+    }
+
     static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
                             int M,
                             int efConstruction,
@@ -132,6 +149,7 @@ public class Grid {
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
+                            Map<String, List<String>> benchmarks,
                             DataSet ds,
                             Path testDirectory) throws IOException
     {
@@ -158,7 +176,7 @@ public class Grid {
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy);
+                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -379,17 +397,13 @@ public class Grid {
                                           int M,
                                           int efConstruction,
                                           float neighborOverflow,
-                                          boolean addHierarchy) {
+                                          boolean addHierarchy,
+                                          Map<String, List<String>> benchmarkSpec) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
-        List<QueryBenchmark> benchmarks = List.of(
-                ThroughputBenchmark.createEmpty(3, 3)
-                        .displayAvgQps(),
-                LatencyBenchmark.createDefault(),
-                CountBenchmark.createDefault(),
-                AccuracyBenchmark.createDefault()
-        );
+
+        var benchmarks = setupBenchmarks(benchmarkSpec);
         QueryTester tester = new QueryTester(benchmarks);
 
         // 2) Setup benchmark table for printing
@@ -412,6 +426,85 @@ public class Grid {
                 printer.printFooter();
             }
         }
+    }
+
+    private static List<QueryBenchmark> setupBenchmarks(Map<String, List<String>> benchmarkSpec) {
+        if (benchmarkSpec == null || benchmarkSpec.isEmpty()) {
+            return List.of(
+                    ThroughputBenchmark.createEmpty(3, 3)
+                            .displayAvgQps(),
+                    LatencyBenchmark.createDefault(),
+                    CountBenchmark.createDefault(),
+                    AccuracyBenchmark.createDefault()
+            );
+        }
+
+        List<QueryBenchmark> benchmarks = new ArrayList<>();
+
+        for (var benchType : benchmarkSpec.keySet()) {
+            if (benchType.equals("throughput")) {
+                var bench = ThroughputBenchmark.createEmpty(3, 3);
+                for (var stat : benchmarkSpec.get(benchType)) {
+                    if (stat.equals("AVG")) {
+                        bench = bench.displayAvgQps();
+                    }
+                    if (stat.equals("MEDIAN")) {
+                        bench = bench.displayMedianQps();
+                    }
+                    if (stat.equals("MAX")) {
+                        bench = bench.displayMaxQps();
+                    }
+                }
+                benchmarks.add(bench);
+            }
+
+            if (benchType.equals("latency")) {
+                var bench = LatencyBenchmark.createEmpty();
+                for (var stat : benchmarkSpec.get(benchType)) {
+                    if (stat.equals("AVG")) {
+                        bench = bench.displayAvgLatency();
+                    }
+                    if (stat.equals("STD")) {
+                        bench = bench.displayLatencySTD();
+                    }
+                    if (stat.equals("P999")) {
+                        bench = bench.displayP999Latency();
+                    }
+                }
+                benchmarks.add(bench);
+            }
+
+            if (benchType.equals("count")) {
+                var bench = CountBenchmark.createEmpty();
+                for (var stat : benchmarkSpec.get(benchType)) {
+                    if (stat.equals("visited")) {
+                        bench = bench.displayAvgNodesVisited();
+                    }
+                    if (stat.equals("expanded")) {
+                        bench = bench.displayAvgNodesExpanded();
+                    }
+                    if (stat.equals("expanded base layer")) {
+                        bench = bench.displayAvgNodesExpandedBaseLayer();
+                    }
+                }
+                benchmarks.add(bench);
+            }
+
+            if (benchType.equals("accuracy")) {
+                var bench = AccuracyBenchmark.createEmpty();
+                for (var stat : benchmarkSpec.get(benchType)) {
+                    if (stat.equals("recall")) {
+                        bench = bench.displayRecall();
+                    }
+                    if (stat.equals("MAP")) {
+                        bench = bench.displayMAP();
+                    }
+                }
+                benchmarks.add(bench);
+            }
+        }
+
+        return benchmarks;
     }
 
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {

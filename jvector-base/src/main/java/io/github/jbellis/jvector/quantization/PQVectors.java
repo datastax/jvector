@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -37,7 +36,6 @@ import java.util.stream.IntStream;
 
 public abstract class PQVectors implements CompressedVectors {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
-    static final int MAX_CHUNK_SIZE = Integer.MAX_VALUE - 16; // standard Java array size limit with some headroom
 
     final ProductQuantization pq;
     protected ByteSequence<?>[] compressedDataChunks;
@@ -87,13 +85,13 @@ public abstract class PQVectors implements CompressedVectors {
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         int compressedDimension = pq.compressedVectorSize();
-        PQLayout dims = new PQLayout(vectorCount,compressedDimension);
-        final ByteSequence<?>[] chunks = new ByteSequence<?>[dims.totalChunks];
-        for (int i = 0; i < dims.fullSizeChunks; i++) {
-            chunks[i] = vectorTypeSupport.createByteSequence(dims.fullChunkBytes);
+        PQLayout layout = new PQLayout(vectorCount,compressedDimension);
+        final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
+        for (int i = 0; i < layout.fullSizeChunks; i++) {
+            chunks[i] = vectorTypeSupport.createByteSequence(layout.fullChunkBytes);
         }
-        if (dims.lastChunkVectors > 0) {
-            chunks[dims.fullSizeChunks] = vectorTypeSupport.createByteSequence(dims.lastChunkBytes);
+        if (layout.lastChunkVectors > 0) {
+            chunks[layout.fullSizeChunks] = vectorTypeSupport.createByteSequence(layout.lastChunkBytes);
         }
 
         // Encode the vectors in parallel into the compressed data chunks
@@ -105,7 +103,7 @@ public abstract class PQVectors implements CompressedVectors {
                         .forEach(ordinal -> {
                             // Retrieve the slice and mutate it.
                             var localRavv = ravvCopy.get();
-                            var slice = PQVectors.get(chunks, ordinal, dims.fullChunkVectors, pq.getSubspaceCount());
+                            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
                             var vector = localRavv.getVector(ordinal);
                             if (vector != null)
                                 pq.encodeTo(vector, slice);
@@ -114,7 +112,7 @@ public abstract class PQVectors implements CompressedVectors {
                         }))
                 .join();
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, dims.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
 
     @Override
@@ -407,4 +405,72 @@ public abstract class PQVectors implements CompressedVectors {
                 '}';
     }
 
+    /**
+     * Chunk Dimensions and Layout
+     * This is emulative of modern Java records, but keeps to J11 standards.
+     * This class consolidates the layout calculations for PQ data into one place
+     */
+    static class PQLayout {
+
+        /**
+         * total number of vectors
+         **/
+        public final int vectorCount;
+        /**
+         * total number of chunks, including any partial
+         **/
+        public final int totalChunks;
+        /**
+         * total number of fully-filled chunks
+         **/
+        public final int fullSizeChunks;
+        /**
+         * number of vectors per fullSize chunk
+         **/
+        public final int fullChunkVectors;
+        /**
+         * number of vectors in last partially filled chunk, if any
+         **/
+        public final int lastChunkVectors;
+        /**
+         * compressed dimension of vectors
+         **/
+        public final int compressedDimension;
+        /**
+         * number of bytes in each fully-filled chunk
+         **/
+        public final int fullChunkBytes;
+        /**
+         * number of bytes in the last partially-filled chunk, if any
+         **/
+        public final int lastChunkBytes;
+
+        public PQLayout(int vectorCount, int compressedDimension) {
+            if (vectorCount <= 0) {
+                throw new IllegalArgumentException("Invalid vector count " + vectorCount);
+            }
+            this.vectorCount = vectorCount;
+
+            if (compressedDimension <= 0) {
+                throw new IllegalArgumentException("Invalid compressed dimension " + compressedDimension);
+            }
+            this.compressedDimension = compressedDimension;
+
+            // Get the aligned number of bytes needed to hold a given dimension
+            // purely for overflow prevention
+            int layoutBytesPerVector = compressedDimension == 1 ? 1 : Integer.highestOneBit(compressedDimension - 1) << 1;
+            // truncation welcome here, biasing for smaller chunks
+            int addressableVectorsPerChunk = Integer.MAX_VALUE / layoutBytesPerVector;
+
+            fullChunkVectors = Math.min(vectorCount, addressableVectorsPerChunk);
+            lastChunkVectors = vectorCount % fullChunkVectors;
+
+            fullChunkBytes = fullChunkVectors * compressedDimension;
+            lastChunkBytes = lastChunkVectors * compressedDimension;
+
+            fullSizeChunks = vectorCount / fullChunkVectors;
+            totalChunks = fullSizeChunks + (lastChunkVectors == 0 ? 0 : 1);
+        }
+
+    }
 }

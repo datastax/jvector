@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -48,6 +49,8 @@ public class BenchYAML {
         DataSetSource datasetSource = DataSetLoader.DEFAULT;
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
+        List<MultiConfig> allConfigs = new ArrayList<>();
+
         if (!datasetNames.isEmpty()) {
             System.out.println("Executing the following datasets: " + datasetNames);
 
@@ -62,11 +65,7 @@ public class BenchYAML {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+                allConfigs.add(config);
             }
         }
 
@@ -75,19 +74,22 @@ public class BenchYAML {
 
         if (!configNames.isEmpty()) {
             for (var configName : configNames) {
-                MultiConfig config = MultiConfig.getConfig(configName);
-                String datasetName = config.dataset;
+                MultiConfig config = MultiConfig.getDefaultConfig(configName);
+                allConfigs.add(config);
+            }
+        }
 
                 DataSet ds = datasetSource.apply(datasetName)
                     .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown dataset: " + datasetName));
                 // DataSet ds = DataSetLoader.loadDataSet(datasetName);
 
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                        config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
-            }
+            DataSet ds = DataSetLoader.loadDataSet(datasetName);
+
+            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
         }
     }
 }
