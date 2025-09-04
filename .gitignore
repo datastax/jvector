@@ -44,4 +44,6 @@ hdf5/
 dependency-reduced-pom.xml
 results.csv
 
+# Local testing files
+local/**
 
