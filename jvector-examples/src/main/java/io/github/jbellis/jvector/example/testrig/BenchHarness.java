@@ -70,7 +70,7 @@ public class BenchHarness implements Runnable {
     this.datasetEntry = datasetEntry;
     this.profile = profile;
     this.concurrency = concurrency;
-    this.virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    this.virtualThreadExecutor = Executors.newCachedThreadPool();
     this.semaphore = new Semaphore(concurrency);
   }
 

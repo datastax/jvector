@@ -13,6 +13,7 @@
     <name>JVector Examples</name>
     <properties>
         <awssdk.version>2.21.10</awssdk.version>
+        <vectordata.version>0.1.8</vectordata.version>
     </properties>
     <build>
         <plugins>
@@ -111,17 +112,17 @@
         <dependency>
             <groupId>io.nosqlbench</groupId>
             <artifactId>vectordata</artifactId>
-            <version>0.1.7</version>
+            <version>${vectordata.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>nbvectors</artifactId>
+            <version>${vectordata.version}</version>
         </dependency>
         <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
             <version>4.7.6</version>
-        </dependency>
-        <dependency>
-            <groupId>io.nosqlbench</groupId>
-            <artifactId>nbvectors</artifactId>
-            <version>0.1.6</version>
         </dependency>
 
         <dependency>
@@ -178,9 +179,6 @@
         </profile>
         <profile>
             <id>jdk20</id>
-            <properties>
-                <maven.compiler.release>20</maven.compiler.release>
-            </properties>
             <dependencies>
                 <dependency>
                     <groupId>io.github.jbellis</groupId>

@@ -96,7 +96,7 @@ public class Bench {
         DataSetSource dsSource = DataSetSource.DEFAULT.and(loadStreamingDataSource(testDataCatalog));
 
         var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).toList();
+        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         System.out.println("Executing the following datasets: " + datasetNames);
 
