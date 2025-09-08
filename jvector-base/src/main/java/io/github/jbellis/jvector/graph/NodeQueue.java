@@ -100,22 +100,21 @@ public class NodeQueue {
     }
 
     /**
-     * Encodes the node ID and its similarity score as long.  If two scores are equals,
-     * the smaller node ID wins.
+     * Encodes the node ID and its similarity score as long.
      *
      * <p>The most significant 32 bits represent the float score, encoded as a sortable int.
      *
      * <p>The less significant 32 bits represent the node ID.
      *
-     * <p>The bits representing the node ID are complemented to guarantee the win for the smaller node
-     * ID.
+     * <p>The bits representing the node ID are reversed to ensure no bias towards smaller or greater IDs
+     * when scores are equal.
      *
      * <p>The AND with 0xFFFFFFFFL (a long with first 32 bit as 1) is necessary to obtain a long that
      * has
      *
      * <p>The most significant 32 bits to 0
      *
-     * <p>The less significant 32 bits represent the node ID.
+     * <p>The less significant 32 bits represent the encoded node ID.
      *
      * @param node  the node ID
      * @param score the node score
@@ -124,7 +123,7 @@ public class NodeQueue {
     private long encode(int node, float score) {
         assert node >= 0 : node;
         return order.apply(
-                (((long) NumericUtils.floatToSortableInt(score)) << 32) | (0xFFFFFFFFL & ~node));
+                (((long) NumericUtils.floatToSortableInt(score)) << 32) | (0xFFFFFFFFL & Integer.reverse(node)));
     }
 
     private float decodeScore(long heapValue) {
@@ -132,7 +131,7 @@ public class NodeQueue {
     }
 
     private int decodeNodeId(long heapValue) {
-        return (int) ~(order.apply(heapValue));
+        return Integer.reverse((int) order.apply(heapValue));
     }
 
     /** Removes the top element and returns its node id. */
