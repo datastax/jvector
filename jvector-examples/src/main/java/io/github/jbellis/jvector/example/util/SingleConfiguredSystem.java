@@ -55,7 +55,7 @@ public class SingleConfiguredSystem implements ConfiguredSystem, AutoCloseable {
         var searcher = searchers.get();
         searcher.usePruning(usePruning);
         var sf = scoreProviderFor(queryVector, searcher.getView());
-        return searcher.search(sf, topK, rerankK, 0.0f, Bits.ALL);
+        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
     }
 
     @Override

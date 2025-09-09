@@ -182,7 +182,7 @@ public class RecallWithRandomVectorsBenchmark {
                     );
                     ScoreFunction.ExactScoreFunction reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
                     ssp = new DefaultSearchScoreProvider(asf, reranker);
-                    searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, Bits.ALL);
+                    searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL);
                 } else { // Not quantized, used typical searcher
                     ssp = DefaultSearchScoreProvider.exact(queryVector, VectorSimilarityFunction.EUCLIDEAN, ravv);
                     searchResult = graphSearcher.search(ssp, k, Bits.ALL);

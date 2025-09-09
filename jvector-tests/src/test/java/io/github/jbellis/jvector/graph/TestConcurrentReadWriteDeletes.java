@@ -106,7 +106,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
                 int rerankK = Math.min(50, keysInserted.size());
 
                 GraphSearcher searcher = new GraphSearcher(builder.getGraph());
-                searcher.search(ssp, topK, rerankK, 0.f, liveNodes);
+                searcher.search(ssp, topK, rerankK, 0.f, 0.0f, liveNodes);
             }
         });
     }
