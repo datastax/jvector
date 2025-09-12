@@ -40,10 +40,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
@@ -785,6 +782,51 @@ public class GraphIndexBuilder implements Closeable {
             }
         }
         return memorySize;
+    }
+
+    /**
+     * Convenience method to build a new graph from an existing one, with the addition of new nodes.
+     * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     */
+    public static OnHeapGraphIndex buildAndMergeNewNodes(OnDiskGraphIndex onDiskGraphIndex,
+                                                         NeighborsScoreCache perLevelNeighborsScoreCache,
+                                                         RandomAccessVectorValues newVectors,
+                                                         BuildScoreProvider buildScoreProvider,
+                                                         int startingNodeId,
+                                                         int beamWidth,
+                                                         float overflowRatio,
+                                                         float alpha,
+                                                         boolean addHierarchy) throws IOException {
+
+
+
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(buildScoreProvider,
+                onDiskGraphIndex,
+                perLevelNeighborsScoreCache,
+                beamWidth,
+                overflowRatio,
+                alpha,
+                addHierarchy,
+                true,
+                PhysicalCoreExecutor.pool(),
+                ForkJoinPool.commonPool())) {
+
+            // Add each new vector incrementally
+            final List<ForkJoinTask<?>> forkJoinTask = new ArrayList<>(newVectors.size());
+            for (int i = 0; i < newVectors.size(); i++) {
+                final int nodeId = startingNodeId + i;
+                final VectorFloat<?> vector = newVectors.getVector(i);
+
+                // The GraphIndexBuilder can add nodes to an existing index
+                forkJoinTask.add(PhysicalCoreExecutor.pool().submit(() -> builder.addGraphNode(nodeId, vector)));
+            }
+            for (ForkJoinTask<?> task : forkJoinTask) {
+                task.join();
+            }
+
+            builder.cleanup();
+            return builder.getGraph();
+        }
     }
 
     private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
