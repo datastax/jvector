@@ -22,8 +22,8 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
@@ -41,7 +41,7 @@ public class ImmutablePQVectors extends PQVectors {
         this.compressedDataChunks = compressedDataChunks;
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
-        this.codebookPartialSumsMap = new HashMap<>();
+        this.codebookPartialSumsMap = new ConcurrentHashMap<>();
     }
 
     @Override
