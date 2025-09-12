@@ -189,7 +189,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 final Set<Integer> allResultSet = Arrays.stream(resultFromAll.getNodes()).map(nodeScore -> nodeScore.node).collect(Collectors.toSet());
                 reconstructedResultSet.retainAll(allResultSet);
                 final float resultSetsOverlap = (1.0f * reconstructedResultSet.size()) / (1.0f * allResultSet.size());
-                assertTrue(String.format("expected result set overlap is 0.9 but overlap is: %s", resultSetsOverlap),  resultSetsOverlap >= 0.9);
+                assertTrue(String.format("expected result set overlap is >= 0.9 but overlap is: %s", resultSetsOverlap),  resultSetsOverlap >= 0.90f);
             }
         }
     }

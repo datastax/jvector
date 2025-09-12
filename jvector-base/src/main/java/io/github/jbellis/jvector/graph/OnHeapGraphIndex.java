@@ -583,6 +583,8 @@ public class OnHeapGraphIndex implements GraphIndex {
      * along with other configuration details, from disk-based storage to heap-based storage.
      *
      * @param diskIndex the disk-based index to be converted
+     * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
+     *                                    organized by levels and nodes.
      * @param bsp The build score provider to be used for
      * @param overflowRatio usually 1.2f
      * @param alpha usually 1.2f

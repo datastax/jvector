@@ -19,11 +19,26 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Cache containing pre-computed neighbor scores, organized by levels and nodes.
+ * <p>
+ * This cache bridges the gap between {@link OnDiskGraphIndex} and {@link OnHeapGraphIndex}:
+ * <ul>
+ * <li>{@link OnDiskGraphIndex} stores only neighbor IDs (not scores) for space efficiency</li>
+ * <li>{@link OnHeapGraphIndex} requires neighbor scores for pruning operations</li>
+ * </ul>
+ * <p>
+ * When converting from disk to heap representation, this cache avoids expensive score 
+ * recomputation by providing pre-calculated neighbor scores for all graph levels.
+ *
+ * @see OnHeapGraphIndex#convertToHeap(OnDiskGraphIndex, NeighborsScoreCache, BuildScoreProvider, float, float)
+ */
 public class NeighborsScoreCache {
     private final Map<Integer, Map<Integer, NodeArray>> perLevelNeighborsScoreCache;
 
