@@ -34,6 +34,16 @@ hdf5/
 ### aider
 .aider*
 
+### claude
+.claude/**
+
+### junie
+.junie/**
+
 # JMH generated files
 dependency-reduced-pom.xml
 results.csv
+
+# Local testing files
+local/**
+

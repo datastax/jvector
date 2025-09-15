@@ -19,16 +19,21 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.util.DataSetSource;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicator;
+import io.nosqlbench.vectordata.discovery.TestDataSources;
+import io.nosqlbench.vectordata.discovery.TestDataView;
+import io.nosqlbench.vectordata.downloader.Catalog;
+import io.nosqlbench.vectordata.downloader.DatasetEntry;
+import io.nosqlbench.vectordata.spec.datasets.types.DatasetView;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -57,7 +62,7 @@ public class Bench {
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED),
                 __ -> CompressorParameters.NONE
         );
@@ -66,7 +71,7 @@ public class Bench {
                 // ds -> new CompressorParameters.BQParameters(),
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
@@ -85,13 +90,42 @@ public class Bench {
     }
 
     private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+
+        TestDataSources testDataSources = new TestDataSources().configure().addOptionalCatalogs("~/.config/jvector/catalogs.yaml");
+        Catalog testDataCatalog = testDataSources.catalog();
+        DataSetSource dsSource = DataSetSource.DEFAULT.and(loadStreamingDataSource(testDataCatalog));
+
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+
         System.out.println("Executing the following datasets: " + datasetNames);
 
         for (var datasetName : datasetNames) {
-            DataSet ds = DataSetLoader.loadDataSet(datasetName);
+          DataSet ds =
+                  dsSource.apply(datasetName).orElseThrow(() -> new RuntimeException("Unknown dataset: " + datasetName));
             Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
         }
+    }
+
+    @NotNull
+    private static DataSetSource loadStreamingDataSource(Catalog catalog) {
+        return name -> {
+            Optional<DatasetEntry> dsentryOption = catalog.matchOne(name);
+            if (dsentryOption.isEmpty()) { return Optional.empty(); }
+            DatasetEntry dsentry = dsentryOption.orElseThrow(() -> new RuntimeException("Unknown dataset: " + name));
+            TestDataView tdv = dsentry.select().profile(name);
+            System.out.println("prebuffering dataset (assumed performance oriented testing)");
+            CompletableFuture<Void> statusFuture = tdv.getBaseVectors().orElseThrow().prebuffer();
+            if (statusFuture instanceof ProgressIndicator<?>) {
+                ((ProgressIndicator<?>)statusFuture).monitorProgress(1000);
+            }
+//            tdv.getQueryVectors().orElseThrow().prebuffer();
+//            tdv.getNeighborIndices().orElseThrow().prebuffer();
+//            tdv.getNeighborDistances().map(DatasetView::prebuffer);
+
+            TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
+            System.out.println("Loaded " + tdw.getName() + " from streaming source.");
+            return Optional.of(tdw);
+        };
     }
 }

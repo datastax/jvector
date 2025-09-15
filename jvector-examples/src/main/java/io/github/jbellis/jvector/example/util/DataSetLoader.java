@@ -16,18 +16,49 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import java.io.IOException;
+import io.jhdf.api.Dataset;
 
-public class DataSetLoader {
-    public static DataSet loadDataSet(String fileName) throws IOException {
-        DataSet ds;
-        if (fileName.endsWith(".hdf5")) {
-            DownloadHelper.maybeDownloadHdf5(fileName);
-            ds = Hdf5Loader.load(fileName);
-        } else {
-            var mfd = DownloadHelper.maybeDownloadFvecs(fileName);
-            ds = mfd.load();
-        }
-        return ds;
+import java.io.IOException;
+import java.util.Optional;
+import java.util.function.Function;
+
+public class DataSetLoader implements DataSetSource {
+
+  private final Function<String, Optional<DataSet>>[] loaders;
+
+  public DataSetLoader(DataSetSource... loaders) {
+    this.loaders = loaders;
+  }
+
+  @Override
+  public Optional<DataSet> apply(String name) {
+    return Optional.empty();
+  }
+
+  public final static DataSetSource FVecsDownloader = new DataSetSource() {
+    @Override
+    public Optional<DataSet> apply(String name) {
+      var mfd = DownloadHelper.maybeDownloadFvecs(name);
+      try {
+        var ds = mfd.load();
+        return Optional.of(ds);
+      } catch (IOException e) {
+        System.err.println("error while trying to load dataset: " + e + ", this error handling "
+                           + "path needs to be updated");
+        return Optional.empty();
+      }
     }
+  };
+
+  public final static DataSetSource HDF5Loader = new DataSetSource() {
+
+    @Override
+    public Optional<DataSet> apply(String name) {
+      if (name.endsWith(".hdf5")) {
+        DownloadHelper.maybeDownloadHdf5(name);
+        return Optional.of(Hdf5Loader.load(name));
+      }
+      return Optional.empty();
+    }
+  };
 }
