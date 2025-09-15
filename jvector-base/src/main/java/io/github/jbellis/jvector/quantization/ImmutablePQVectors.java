@@ -54,7 +54,7 @@ public class ImmutablePQVectors extends PQVectors {
         return vectorCount;
     }
 
-    private synchronized VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
+    private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
         return codebookPartialSumsMap.computeIfAbsent(vsf, pq::createCodebookPartialSums);
     }
 
