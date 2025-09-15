@@ -16,13 +16,54 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.util.ArrayUtil;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import org.apache.commons.math3.stat.StatUtils;
 
 import static io.github.jbellis.jvector.util.NumericUtils.floatToSortableInt;
 import static io.github.jbellis.jvector.util.NumericUtils.sortableIntToFloat;
 
-interface ScoreTracker {
+public interface ScoreTracker {
+    class ScoreTrackerFactory {
+        private TwoPhaseTracker twoPhaseTracker;
+        private RelaxedMonotonicityTracker relaxedMonotonicityTracker;
+        private NoOpTracker noOpTracker;
+
+        ScoreTrackerFactory() {
+            twoPhaseTracker = null;
+            relaxedMonotonicityTracker = null;
+            noOpTracker = null;
+        }
+
+        public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
+            // track scores to predict when we are done with threshold queries
+            final ScoreTracker scoreTracker;
+
+            if (threshold > 0) {
+                if (twoPhaseTracker == null) {
+                    twoPhaseTracker = new ScoreTracker.TwoPhaseTracker();
+                } else {
+                    twoPhaseTracker.reset(threshold);
+                }
+                scoreTracker = twoPhaseTracker;
+            } else {
+                if (pruneSearch) {
+                    if (relaxedMonotonicityTracker == null) {
+                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker();
+                    } else {
+                        relaxedMonotonicityTracker.reset(rerankK);
+                    }
+                    scoreTracker = relaxedMonotonicityTracker;
+                } else {
+                    if (noOpTracker == null) {
+                        noOpTracker = new ScoreTracker.NoOpTracker();
+                    }
+                    scoreTracker = noOpTracker;
+                }
+            }
+            return scoreTracker;
+        }
+    }
 
     ScoreTracker NO_OP = new NoOpTracker();
 
@@ -59,11 +100,22 @@ interface ScoreTracker {
         // observation count
         private int observationCount;
 
-        private final double threshold;
+        private double threshold;
 
         TwoPhaseTracker(double threshold) {
             this.recentScores = new double[RECENT_SCORES_TRACKED];
             this.bestScores = new BoundedLongHeap(BEST_SCORES_TRACKED);
+            this.observationCount = 0;
+            this.threshold = threshold;
+        }
+
+        TwoPhaseTracker() {
+            this(0);
+        }
+
+        void reset(double threshold) {
+            this.bestScores.clear();
+            this.observationCount = 0;
             this.threshold = threshold;
         }
 
@@ -108,10 +160,13 @@ interface ScoreTracker {
      * (approximately the 96th percentile of the Normal distribution).
      */
     class RelaxedMonotonicityTracker implements ScoreTracker {
-        static final double SIGMA_FACTOR = 1.75;
+        private static final double SIGMA_FACTOR = 1.75;
+
+        private static final int BASE_RECENT_SCORES_SIZE = 200;
 
         // a sliding window of recent scores
-        private final double[] recentScores;
+        private double[] recentScores;
+        private int recentScoresSize;
         private int recentEntryIndex;
 
         // Heap of the best scores seen so far
@@ -132,11 +187,32 @@ interface ScoreTracker {
          *                          the results anymore. An empirical rule of thumb is bestScoresTracked=rerankK.
          */
         RelaxedMonotonicityTracker(int bestScoresTracked) {
+            this.recentScoresSize = getRecentScoresSize(bestScoresTracked);
+            this.recentScores = new double[this.recentScoresSize];
+            this.bestScores = new BoundedLongHeap(bestScoresTracked);
+            this.observationCount = 0;
+            this.mean = 0;
+            this.dSquared = 0;
+        }
+
+        RelaxedMonotonicityTracker() {
+            this(100);
+        }
+
+        private static int getRecentScoresSize(int bestScoresTracked) {
             // A quick empirical study yields that the number of recent scores
             // that we need to consider grows by a factor of ~sqrt(bestScoresTracked / 2)
             int factor = (int) Math.round(Math.sqrt(bestScoresTracked / 2.0));
-            this.recentScores = new double[200 * factor];
-            this.bestScores = new BoundedLongHeap(bestScoresTracked);
+            return BASE_RECENT_SCORES_SIZE * factor;
+        }
+
+        void reset(int bestScoresTracked) {
+            this.recentScoresSize = getRecentScoresSize(bestScoresTracked);
+            if (this.recentScoresSize > recentScores.length) {
+                recentScores = ArrayUtil.grow(recentScores, this.recentScoresSize);
+            }
+            this.bestScores.clear();
+            this.observationCount = 0;
             this.mean = 0;
             this.dSquared = 0;
         }
@@ -150,7 +226,7 @@ interface ScoreTracker {
             // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Online
             // and
             // https://nestedsoftware.com/2019/09/26/incremental-average-and-standard-deviation-with-sliding-window-470k.176143.html
-            if (observationCount <= this.recentScores.length) {
+            if (observationCount <= this.recentScoresSize) {
                 // if the buffer is not full yet, use standard Welford method
                 var meanDelta = (score - this.mean) / observationCount;
                 var newMean = this.mean + meanDelta;
@@ -163,7 +239,7 @@ interface ScoreTracker {
             } else {
                 // once the buffer is full, adjust Welford method for window size
                 var oldScore = recentScores[recentEntryIndex];
-                var meanDelta = (score - oldScore) / this.recentScores.length;
+                var meanDelta = (score - oldScore) / this.recentScoresSize;
                 var newMean = this.mean + meanDelta;
 
                 var dSquaredDelta = ((score - oldScore) * (score - newMean + oldScore - this.mean));
@@ -173,13 +249,13 @@ interface ScoreTracker {
                 this.dSquared = newDSquared;
             }
             recentScores[recentEntryIndex] = score;
-            recentEntryIndex = (recentEntryIndex + 1) % this.recentScores.length;
+            recentEntryIndex = (recentEntryIndex + 1) % this.recentScoresSize;
         }
 
         @Override
         public boolean shouldStop() {
             // don't stop if we don't have enough data points
-            if (observationCount < this.recentScores.length) {
+            if (observationCount < this.recentScoresSize) {
                 return false;
             }
 
@@ -187,7 +263,7 @@ interface ScoreTracker {
             //     mean + SIGMA_FACTOR * sqrt(variance),
             // is lower than the worst of the best scores seen.
             // (paper suggests using the median of recent scores, but experimentally that is too prone to false positives)
-            double std = Math.sqrt(this.dSquared / (this.recentScores.length - 1));
+            double std = Math.sqrt(this.dSquared / (this.recentScoresSize - 1));
             double windowPercentile = this.mean + SIGMA_FACTOR * std;
             double worstBestScore = sortableIntToFloat((int) bestScores.top());
             return windowPercentile < worstBestScore;

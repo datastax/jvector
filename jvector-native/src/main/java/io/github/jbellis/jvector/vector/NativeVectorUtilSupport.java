@@ -81,6 +81,20 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
 
     @Override
+    public float assembleAndSumPQ(
+            VectorFloat<?> codebookPartialSums,
+            int subspaceCount,                  // = M
+            ByteSequence<?> vector1Ordinals,
+            int vector1OrdinalOffset,
+            ByteSequence<?> vector2Ordinals,
+            int vector2OrdinalOffset,
+            int clusterCount                    // = k
+    ) {
+        //Use the non-panama solution for now
+        return assembleAndSumPQ_128(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+    }
+
+    @Override
     public void calculatePartialSums(VectorFloat<?> codebook, int codebookBase, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
         switch (vsf) {
             case DOT_PRODUCT -> NativeSimdOps.calculate_partial_sums_dot_f32_512(((MemorySegmentVectorFloat)codebook).get(), codebookBase, size, clusterCount, ((MemorySegmentVectorFloat)query).get(), queryOffset, ((MemorySegmentVectorFloat)partialSums).get());

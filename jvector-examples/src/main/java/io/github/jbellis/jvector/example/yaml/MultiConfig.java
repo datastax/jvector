@@ -33,7 +33,11 @@ public class MultiConfig {
     public SearchParameters search;
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
-        File configFile = new File(defaultDirectory + datasetName + ".yml");
+        var name = defaultDirectory + datasetName;
+        if (!name.endsWith(".yml")) {
+            name += ".yml";
+        }
+        File configFile = new File(name);
         boolean useDefault = !configFile.exists();
         if (useDefault) {
             configFile = new File(defaultDirectory + "default.yml");
@@ -46,8 +50,8 @@ public class MultiConfig {
         return config;
     }
 
-    public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
-        File configFile = new File(datasetName);
+    public static MultiConfig getConfig(String configName) throws FileNotFoundException {
+        File configFile = new File(configName);
         return getConfig(configFile);
     }
 
