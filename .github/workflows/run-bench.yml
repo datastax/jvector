@@ -220,6 +220,16 @@ jobs:
           echo "Found ${#files[@]} CSV files"
           for f in "${files[@]}"; do echo "  - $f"; done
 
+          # Check if any files were found
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No benchmark result files found. Skipping visualization generation."
+            echo "This can happen when benchmarks are skipped due to missing dependencies or other issues."
+            # Create empty output directory to satisfy artifact upload
+            mkdir -p benchmark_reports
+            echo "No benchmark results were available for visualization." > benchmark_reports/no_results.txt
+            exit 0
+          fi
+
           # Ensure output directory matches the script's default/output expectation
           OUTPUT_DIR="benchmark_reports"
 
