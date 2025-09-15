@@ -195,6 +195,9 @@ jobs:
           path: all-benchmark-results
           merge-multiple: true
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -203,194 +206,30 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install argparse matplotlib pandas tabulate psutil
+          pip install matplotlib numpy psutil
 
-      - name: Combine results and create visualizations
+      - name: Generate visualization using visualize_benchmarks.py
         run: |
-          cat > visualize.py << 'EOF'
-          import os
-          import glob
-          import re
-          import pandas as pd
-          import matplotlib.pyplot as plt
-          import subprocess
-          import platform
-          import psutil
-          from datetime import datetime
+          # Discover all downloaded CSV benchmark result files
+          shopt -s globstar nullglob
+          files=(all-benchmark-results/**/*-bench-results.csv)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No benchmark results found in all-benchmark-results. Searching repo as fallback..."
+            files=(**/*-bench-results.csv)
+          fi
+          echo "Found ${#files[@]} CSV files"
+          for f in "${files[@]}"; do echo "  - $f"; done
 
-          # Function to get the most recent commit date for a branch
-          def get_branch_commit_date(branch):
-              try:
-                  # Get the timestamp of the most recent commit on the branch
-                  result = subprocess.run(
-                      ["git", "show", "-s", "--format=%ct", branch],
-                      capture_output=True, text=True, check=True
-                  )
-                  timestamp = int(result.stdout.strip())
-                  return timestamp
-              except Exception as e:
-                  print(f"Error getting commit date for branch {branch}: {e}")
-                  # Return a default timestamp (epoch) for error cases
-                  return 0
+          # Ensure output directory matches the script's default/output expectation
+          OUTPUT_DIR="benchmark_reports"
 
-          # Find all CSV files in the all-benchmark-results directory
-          csv_files = glob.glob('all-benchmark-results/**/*-bench-results.csv', recursive=True)
+          # Run the visualization script with all files, default threshold (5.0)
+          python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
 
-          if not csv_files:
-              print("No benchmark results found! Checking other possible locations...")
-              csv_files = glob.glob('**/*-bench-results.csv', recursive=True)
-
-          print(f"Found {len(csv_files)} CSV files:")
-          for f in csv_files:
-              print(f"  - {f}")
-
-          # Track branches and their info
-          branches = {}
-
-          # Read and combine all results
-          dfs = []
-          for file in csv_files:
-              try:
-                  # Extract branch name from filename
-                  filename = os.path.basename(file)
-                  branch_match = re.match(r'([^-]+)-bench-results\.csv', filename)
-                  branch = branch_match.group(1) if branch_match else "unknown"
-
-                  # Only process each branch once
-                  if branch not in branches:
-                      # Get commit date for this branch
-                      commit_date = get_branch_commit_date(branch)
-                      branches[branch] = {
-                          'name': branch,
-                          'commit_date': commit_date,
-                          'datetime': datetime.fromtimestamp(commit_date).strftime('%Y-%m-%d %H:%M:%S')
-                      }
-                      print(f"Branch {branch} has commit date: {branches[branch]['datetime']}")
-
-                  df = pd.read_csv(file)
-                  # Add branch column if not present
-                  if 'branch' not in df.columns:
-                      df['branch'] = branch
-
-                  dfs.append(df)
-                  print(f"Processed {file} with branch {branch}")
-              except Exception as e:
-                  print(f"Error processing {file}: {e}")
-
-          if not dfs:
-              print("No valid benchmark results found!")
-              exit(1)
-
-          combined_df = pd.concat(dfs)
-          combined_df.to_csv('all_benchmark_results.csv', index=False)
-          print(f"Combined {len(dfs)} benchmark results")
-
-          # Sort branches by commit date
-          sorted_branches = sorted(branches.keys(), key=lambda b: branches[b]['commit_date'])
-          print("Branches in chronological order:")
-          for branch in sorted_branches:
-              print(f"  - {branch} ({branches[branch]['datetime']})")
-
-          # Create a categorical type with our temporal branch order
-          combined_df['branch'] = pd.Categorical(
-              combined_df['branch'], 
-              categories=sorted_branches, 
-              ordered=True
-          )
-          
-          # Sort the dataframe by branch to ensure consistent order
-          combined_df = combined_df.sort_values('branch')
-
-          # Add commit dates to the dataframe
-          combined_df['commit_date'] = combined_df['branch'].apply(lambda b: branches[b]['datetime'])
-
-          # Get system information
-          # Get CPU information
-          cpu_count = psutil.cpu_count(logical=False)
-          if cpu_count is None:
-              cpu_count = psutil.cpu_count(logical=True)
-          
-          # Get memory information
-          memory_gb = round(psutil.virtual_memory().total / (1024**3), 2)
-          
-          # Get processor information
-          processor = platform.processor()
-          if not processor:
-              processor = platform.machine()
-          
-          system_info = f"CPU: {processor}, Cores: {cpu_count}, Memory: {memory_gb} GB"
-          print(f"System information: {system_info}")
-
-          # Create plots for each metric
-          metrics = ['QPS', 'Mean Latency', 'Recall@10']
-          for metric in metrics:
-              if metric not in combined_df.columns:
-                  print(f"Warning: Metric {metric} not found in results")
-                  continue
-
-              plt.figure(figsize=(12, 6))
-
-              for dataset, group in combined_df.groupby('dataset'):
-                  # Sort the group by our ordered branch column
-                  group = group.sort_values('branch')
-                  plt.plot(group['branch'], group[metric], marker='o', label=dataset)
-
-              plt.title(f"{metric} Across JVector Branches (Chronological Order)")
-              plt.xlabel("Branch")
-              plt.ylabel(metric)
-              plt.xticks(rotation=45)
-              plt.grid(True, linestyle='--', alpha=0.7)
-              plt.legend()
-              
-              # Add system information as text annotation at the bottom of the plot
-              plt.figtext(0.5, 0.01, system_info, ha='center', fontsize=8, 
-                         bbox={'facecolor': 'white', 'alpha': 0.8, 'pad': 5})
-              
-              plt.tight_layout(rect=[0, 0.03, 1, 1])  # Adjust layout to make room for the annotation
-
-              safe_metric = metric.replace('@', '_at_').replace(' ', '_')
-              plt.savefig(f"{safe_metric}.png")
-              print(f"Created plot for {metric}")
-
-          # Create a summary markdown report
-          with open('benchmark_report.md', 'w') as f:
-              f.write("# JVector Branch Benchmark Comparison\n\n")
-              f.write(f"Comparing {len(combined_df['branch'].unique())} branches of JVector (ordered by commit date)\n\n")
-
-              f.write("## Branch Timeline\n\n")
-              f.write("| Branch | Last Commit Date |\n")
-              f.write("|--------|----------------|\n")
-              for branch in sorted_branches:
-                  f.write(f"| {branch} | {branches[branch]['datetime']} |\n")
-              f.write("\n\n")
-
-              f.write("## Summary Table\n\n")
-              # Use to_markdown if available, otherwise use to_string
-              try:
-                  table = combined_df[['branch', 'commit_date', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_markdown(index=False)
-              except AttributeError:
-                  table = combined_df[['branch', 'commit_date', 'dataset'] + [m for m in metrics if m in combined_df.columns]].to_string(index=False)
-              f.write(table)
-
-              f.write("\n\n## Visualizations\n\n")
-              for metric in metrics:
-                  if metric not in combined_df.columns:
-                      continue
-                  safe_metric = metric.replace('@', '_at_').replace(' ', '_')
-                  f.write(f"### {metric}\n\n")
-                  f.write(f"![{metric} Chart]({safe_metric}.png)\n\n")
-
-          print("Created benchmark report")
-          EOF
-
-          python visualize.py
-
-      - name: Upload combined results and visualizations
+      - name: Upload visualization artifacts
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-comparison-results
           path: |
-            all_benchmark_results.csv
-            *.png
-            benchmark_report.md
+            benchmark_reports/**
           retention-days: 90
