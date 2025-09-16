@@ -126,6 +126,8 @@ jobs:
 
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
+        env:
+          DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
         run: |
           # Check if jvector-examples directory and AutoBenchYAML class exist
           if [ ! -d "jvector-examples" ]; then

@@ -79,7 +79,7 @@ public class DownloadHelper {
                 }
 
                 var urlPath = pathFragment.toString().replace('\\', '/');
-                System.out.println("Downloading: " + urlPath);
+                System.out.println("Downloading dataset: " + name);
                 DownloadFileRequest downloadFileRequest =
                         DownloadFileRequest.builder()
                                 .getObjectRequest(b -> b.bucket(bucket).key(urlPath))
