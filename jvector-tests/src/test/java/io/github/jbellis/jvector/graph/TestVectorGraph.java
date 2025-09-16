@@ -700,6 +700,47 @@ public class TestVectorGraph extends LuceneTestCase {
         }
     }
 
+    @Test
+    public void testSameScoreWithCosineSimilarity()
+    {
+        testSameScoreWithCosineSimilarity(10);
+        testSameScoreWithCosineSimilarity(20);
+        testSameScoreWithCosineSimilarity(50);
+        testSameScoreWithCosineSimilarity(100);
+        testSameScoreWithCosineSimilarity(200);
+        testSameScoreWithCosineSimilarity(500);
+        testSameScoreWithCosineSimilarity(1000);
+    }
+
+    private void testSameScoreWithCosineSimilarity(final int N) {
+        // Create N vectors which differ in their magnitude but have the same direction, so they would
+        // all have the exactly same cosine similarity to the query vector.
+        Random rand = getRandom();
+        VectorFloat<?>[] vectors = new VectorFloat<?>[N];
+        for (int i = 0; i < N; i++) {
+            float x = 0.01f + rand.nextFloat();
+            vectors[i] = vectorTypeSupport.createFloatVector(new float[]{x, x});
+        }
+        MockVectorValues vectorValues = MockVectorValues.fromValues(vectors);
+
+        similarityFunction = VectorSimilarityFunction.COSINE;
+        GraphIndexBuilder builder = new GraphIndexBuilder(vectorValues, similarityFunction, 10, 20, 1.0f, 1.0f, false);
+        OnHeapGraphIndex graph = builder.build(vectorValues);
+
+        VectorFloat<?> query = vectorTypeSupport.createFloatVector(new float[]{0.5f, 0.5f});
+        SearchResult result = GraphSearcher.search(query, N, vectorValues, similarityFunction, graph, Bits.ALL);
+
+        // In perfect world, we should return all N vectors, but this is hard to guarantee considering
+        // the graph is built with a semi-randomized algorithm. And this is an edge case already, so
+        // we don't want to make the graph building algorithm more complex or less performant in order to satisfy
+        // this test. In a typical scenario we'll have many more vectors in the graph than the query limit,
+        // so missing some results is fine. We'd fall back to brute force search anyway if limit
+        // is the same order of magnitude as the graph size.
+        int minExpected = (int) (N * 0.5);
+        assertTrue("Should return almost all vectors, expected at least: " + minExpected + ", got: " + result.getNodes().length,
+                result.getNodes().length >= minExpected);
+    }
+
     /**
      * Returns vectors evenly distributed around the upper unit semicircle.
      */

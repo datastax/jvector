@@ -60,48 +60,50 @@ public class TestNodeArray extends RandomizedTest {
 
     neighbors.insertSorted(4, 1f);
     assertScoresEqual(new float[] {1, 1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 4, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {4, 0, 3, 1}, neighbors);
 
     neighbors.insertSorted(5, 1.1f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {5, 4, 0, 3, 1}, neighbors);
 
     neighbors.insertSorted(6, 0.8f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1, 6}, neighbors);
+    assertNodesEqual(new int[] {5, 4, 0, 3, 6, 1}, neighbors);
 
     neighbors.insertSorted(7, 0.8f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1, 6, 7}, neighbors);
+    assertNodesEqual(new int[] {5, 4, 0, 3, 7, 6, 1}, neighbors);
 
     neighbors.removeIndex(2);
     assertScoresEqual(new float[] {1.1f, 1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 3, 1, 6, 7}, neighbors);
+    assertNodesEqual(new int[] {5, 4, 3, 7, 6, 1}, neighbors);
 
     neighbors.removeIndex(0);
     assertScoresEqual(new float[] {1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1, 6, 7}, neighbors);
+    assertNodesEqual(new int[] {4, 3, 7, 6, 1}, neighbors);
 
     neighbors.removeIndex(4);
     assertScoresEqual(new float[] {1, 0.9f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1, 6}, neighbors);
+    assertNodesEqual(new int[] {4, 3, 7, 6}, neighbors);
 
     neighbors.removeLast();
     assertScoresEqual(new float[] {1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {4, 3, 7}, neighbors);
 
     neighbors.insertSorted(8, 0.9f);
     assertScoresEqual(new float[] {1, 0.9f, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 8, 1}, neighbors);
+    assertNodesEqual(new int[] {4, 8, 3, 7}, neighbors);
   }
 
   private void assertScoresEqual(float[] scores, NodeArray neighbors) {
+    assertEquals(scores.length, neighbors.size(), "Number of scores differs");
     for (int i = 0; i < scores.length; i++) {
       assertEquals(scores[i], neighbors.getScore(i), 0.01f);
     }
   }
 
   private void assertNodesEqual(int[] nodes, NodeArray neighbors) {
+    assertEquals(nodes.length, neighbors.size(), "Number of nodes differs");
     for (int i = 0; i < nodes.length; i++) {
       assertEquals(nodes[i], neighbors.getNode(i));
     }
@@ -181,7 +183,7 @@ public class TestNodeArray extends RandomizedTest {
     cna.insertSorted(3, 10.0f);
     cna.insertSorted(1, 10.0f); // This is a duplicate and should be ignored
     cna.insertSorted(3, 10.0f); // This is also a duplicate
-    assertArrayEquals(new int[] {1, 2, 3}, cna.copyDenseNodes());
+    assertArrayEquals(new int[] {3, 2, 1}, cna.copyDenseNodes());
     assertArrayEquals(new float[] {10.0f, 10.0f, 10.0f}, cna.copyDenseScores(), 0.01f);
     validateSortedByScore(cna);
   }

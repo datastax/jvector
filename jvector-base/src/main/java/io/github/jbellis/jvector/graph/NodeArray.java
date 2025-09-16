@@ -173,7 +173,8 @@ public class NodeArray {
         if (size == nodes.length) {
             growArrays();
         }
-        int insertionPoint = descSortFindRightMostInsertionPoint(newScore);
+
+        int insertionPoint = descSortFindLeftMostInsertionPoint(newScore);
         if (duplicateExistsNear(insertionPoint, newNode, newScore)) {
             return -1;
         }
@@ -282,12 +283,12 @@ public class NodeArray {
         return sb.toString();
     }
 
-    protected final int descSortFindRightMostInsertionPoint(float newScore) {
+    protected final int descSortFindLeftMostInsertionPoint(float newScore) {
         int start = 0;
         int end = size - 1;
         while (start <= end) {
             int mid = (start + end) / 2;
-            if (scores[mid] < newScore) end = mid - 1;
+            if (scores[mid] <= newScore) end = mid - 1;
             else start = mid + 1;
         }
         return start;
