@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -48,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -326,6 +329,98 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
     }
 
+//    public class OnDiskNodeData {
+//        private final RandomAccessReader reader;
+//        private final long baseNodeOffset;
+//
+//        OnDiskNodeData(RandomAccessReader reader, int node) throws IOException {
+//            this.reader = reader;
+//            baseNodeOffset = baseNodeOffsetFor(node);
+//            this.reader.seek(baseNodeOffset);
+//        }
+//
+//        private long baseNodeOffsetFor(int node) {
+//            int degree = layerInfo.get(0).degree;
+//
+//            // skip node ID + inline features
+//            long skipInline = Integer.BYTES + inlineBlockSize;
+//            long blockBytes = skipInline + (long) Integer.BYTES * (degree + 1);
+//
+//            long offsetWithinLayer = blockBytes * node;
+//            return neighborsOffset + offsetWithinLayer;
+//        }
+//
+//        private long offsetFor(FeatureId featureId) {
+//            Feature feature = features.get(featureId);
+//
+//            // Separated features are just global offset + node offset
+//            if (feature instanceof SeparatedFeature) {
+//                throw new RuntimeException("Trying to access separated feature in OnDiskNodeData");
+//            }
+//
+//            // Inline features are in layer 0 only
+//            // skip node ID and get to the desired inline feature
+//            long skipInNode = Integer.BYTES + inlineOffsets.get(featureId);
+//            return baseNodeOffset + skipInNode;
+//        }
+//
+//        private long neighborsOffsetFor(int level, int node) {
+//            // skip node ID + inline features
+//            long skipInline = Integer.BYTES + inlineBlockSize;
+//            return baseNodeOffset + skipInline;
+//        }
+//
+//        public int getNodeId() {
+//            return reader.readInt();
+//        }
+//
+//        public RandomAccessReader featureReader(FeatureId featureId) throws IOException {
+//            long offset = offsetFor(node, featureId);
+//            reader.seek(offset);
+//            return reader;
+//        }
+//
+//        public VectorFloat<?> getVector() {
+//            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+//            getVectorInto(node, vec, 0);
+//            return vec;
+//        }
+//
+//        public void getVectorInto(VectorFloat<?> vector, int offset) {
+//            var feature = features.get(FeatureId.INLINE_VECTORS);
+//            if (feature == null) {
+//                feature = features.get(FeatureId.SEPARATED_VECTORS);
+//            }
+//            if (feature == null) {
+//                throw new UnsupportedOperationException("No full-resolution vectors in this graph");
+//            }
+//
+//            try {
+//                long diskOffset = offsetFor(node, feature.id());
+//                reader.seek(diskOffset);
+//                vectorTypeSupport.readFloatVector(reader, dimension, vector, offset);
+//            } catch (IOException e) {
+//                throw new UncheckedIOException(e);
+//            }
+//        }
+//
+//        public NodesIterator getNeighborsIterator() {
+//            try {
+//                if (level == 0) {
+//                    // For layer 0, read from disk
+//                    reader.seek(neighborsOffsetFor(level, node));
+//                    int neighborCount = reader.readInt();
+//                    assert neighborCount <= neighbors.length
+//                            : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
+//                    reader.read(neighbors, 0, neighborCount);
+//                    return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
+//                }
+//            } catch (IOException e) {
+//                throw new UncheckedIOException(e);
+//            }
+//        }
+//    }
+
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
         protected final RandomAccessReader reader;
         private final int[] neighbors;
@@ -438,6 +533,31 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+            var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
+            if (useEdgeLoading) {
+                NodeScoreArray similarities = scoreFunction.edgeLoadingSimilarityTo(node);
+
+                for (int i = 0; i < similarities.size(); i++) {
+                    var friendOrd = similarities.getNode(i);
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = similarities.getScore(i);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                    i++;
+                }
+            } else {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
             }
         }
 

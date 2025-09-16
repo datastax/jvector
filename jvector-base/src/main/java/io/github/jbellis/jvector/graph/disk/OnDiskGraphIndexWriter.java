@@ -73,12 +73,12 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     private final long startOffset;
 
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
-                                   int version,
-                                   long startOffset,
-                                   GraphIndex graph,
-                                   OrdinalMapper oldToNewOrdinals,
-                                   int dimension,
-                                   EnumMap<FeatureId, Feature> features)
+                           int version,
+                           long startOffset,
+                           GraphIndex graph,
+                           OrdinalMapper oldToNewOrdinals,
+                           int dimension,
+                           EnumMap<FeatureId, Feature> features)
     {
         super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;

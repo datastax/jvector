@@ -17,8 +17,8 @@ construction:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
-#    - NVQ
     - FUSED+NVQ
+    - NVQ
   useSavedIndexIfExists: Yes
 
 search:
@@ -36,5 +36,5 @@ search:
   benchmarks:
     throughput: [AVG]
 #    latency: [AVG, STD, P999]
-#    count: [visited, expanded, expanded base layer]
+    count: [visited, expanded base layer]
     accuracy: [recall]

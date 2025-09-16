@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -40,7 +42,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // connected to the Graph View by caller
     protected final FusedADC.PackedNeighbors neighbors;
     // caller passes this to us for re-use across calls
-    protected final VectorFloat<?> results;
+    protected final NodeScoreArray results;
     // decoder state
     protected final VectorFloat<?> partialSums;
     protected final VectorFloat<?> partialBestDistances;
@@ -55,7 +57,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
     // The main difference is that since our graph structure rapidly converges towards the best results,
     // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
-    protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors neighbors, VectorFloat<?> results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
+    protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors neighbors, NodeScoreArray results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.query = query;
         this.esf = esf;
@@ -86,31 +88,31 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     }
 
     @Override
-    public VectorFloat<?> edgeLoadingSimilarityTo(int origin) {
+    public NodeScoreArray edgeLoadingSimilarityTo(int origin) {
         var permutedNodes = neighbors.getPackedNeighbors(origin);
-        results.zero();
+        results.clear();
 
         if (supportsQuantizedSimilarity) {
             // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
-            VectorUtil.bulkShuffleQuantizedSimilarity(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results, vsf);
+            VectorUtil.bulkShuffleQuantizedSimilarity(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results.getScores(), vsf);
             return results;
         }
 
         // we have not yet computed worstDistance or delta, so we need to assemble the results manually
         // from the PQ codebooks
-        var nodeCount = results.length();
+        var nodeCount = results.size();
         for (int i = 0; i < pq.getSubspaceCount(); i++) {
             for (int j = 0; j < nodeCount; j++) {
-                results.set(j, results.get(j) + partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * nodeCount + j))));
+                results.setScore(j, results.getScore(j) + partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * nodeCount + j))));
             }
         }
 
         // update worstDistance from our new set of results
         for (int i = 0; i < nodeCount; i++) {
-            var result = results.get(i);
+            var result = results.getScore(i);
             invocations++;
             updateWorstDistance(result);
-            results.set(i, distanceToScore(result));
+            results.setScore(i, distanceToScore(result));
         }
 
         // once we have enough data, set up delta, partialQuantizedSums, and partialQuantizedMagnitudes for the fast path
@@ -138,7 +140,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     protected abstract void updateWorstDistance(float distance);
 
     static class DotProductDecoder extends FusedADCPQDecoder {
-        public DotProductDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
+        public DotProductDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
         }
@@ -155,7 +157,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     }
 
     static class EuclideanDecoder extends FusedADCPQDecoder {
-        public EuclideanDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
+        public EuclideanDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.EUCLIDEAN);
             worstDistance = 0; // initialize at best value, update as we search
         }
@@ -186,7 +188,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         private float minSquaredMagnitude;
         private float squaredMagnitudeDelta;
 
-        protected CosineDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
+        protected CosineDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.COSINE);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
 
@@ -247,24 +249,24 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             this.queryMagnitudeSquared = queryMagSum;
             bestDistance = VectorUtil.sum(partialBestDistances);
 
-            this.resultSumAggregates = new float[results.length()];
-            this.resultMagnitudeAggregates = new float[results.length()];
+            this.resultSumAggregates = new float[results.size()];
+            this.resultMagnitudeAggregates = new float[results.size()];
         }
 
         @Override
-        public VectorFloat<?> edgeLoadingSimilarityTo(int origin) {
+        public NodeScoreArray edgeLoadingSimilarityTo(int origin) {
             var permutedNodes = neighbors.getPackedNeighbors(origin);
 
             if (supportsQuantizedSimilarity) {
-                results.zero();
+                results.clear();
                 // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
-                VectorUtil.bulkShuffleQuantizedSimilarityCosine(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude, queryMagnitudeSquared, results);
+                VectorUtil.bulkShuffleQuantizedSimilarityCosine(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude, queryMagnitudeSquared, results.getScores());
                 return results;
             }
 
             // we have not yet computed worstDistance or delta, so we need to assemble the results manually
             // from the PQ codebooks
-            var nodeCount = results.length();
+            var nodeCount = results.size();
             Arrays.fill(resultSumAggregates, 0);
             Arrays.fill(resultMagnitudeAggregates, 0);
             for (int i = 0; i < pq.getSubspaceCount(); i++) {
@@ -279,7 +281,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
                 updateWorstDistance(resultSumAggregates[i]);
                 var result = resultSumAggregates[i] / (float) Math.sqrt(resultMagnitudeAggregates[i] * queryMagnitudeSquared);
                 invocations++;
-                results.set(i, distanceToScore(result));
+                results.setScore(i, distanceToScore(result));
             }
 
             // once we have enough data, set up delta and partialQuantizedSums for the fast path
@@ -302,7 +304,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     }
 
     public static FusedADCPQDecoder newDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query,
-                                               VectorFloat<?> results, VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
+                                               NodeScoreArray results, VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new DotProductDecoder(neighbors, pq, query, results, esf);

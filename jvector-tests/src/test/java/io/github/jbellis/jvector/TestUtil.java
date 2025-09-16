@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -53,6 +54,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -292,6 +294,17 @@ public class TestUtil {
             }
 
             @Override
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
+            }
+
+            @Override
             public int size() {
                 return FullyConnectedGraphIndex.this.size(0);
             }
@@ -396,6 +409,17 @@ public class TestUtil {
             public NodesIterator getNeighborsIterator(int level, int node) {
                 var adjacency = layerAdjacency.get(level);
                 return new NodesIterator.ArrayNodesIterator(adjacency.get(node));
+            }
+
+            @Override
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
             }
 
             public int size() {

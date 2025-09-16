@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.NodeQueue;
+import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -104,18 +105,27 @@ public class TestADCGraphIndex extends RandomizedTest {
                         var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();
-                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 0.01);
+                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.getScore(j), 0.01);
                         }
                         // third pass compares fused ADC's edge similarity after quantization to edge similarity before quantization
-                        var edgeSimilaritiesCopy = edgeSimilarities.copy(); // results of second pass
+                        var edgeSimilaritiesCopy = copy(edgeSimilarities); // results of second pass
                         var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal); // results of third pass
-                        for (int j = 0; j < fusedEdgeSimilarities.length(); j++) {
-                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 0.01);
+                        for (int j = 0; j < fusedEdgeSimilarities.size(); j++) {
+                            assertEquals(fusedEdgeSimilarities.getScore(j), edgeSimilaritiesCopy.getScore(j), 0.01);
                         }
                     }
                 }
             }
         }
+    }
+
+    NodeScoreArray copy(NodeScoreArray nodeScoreArray) {
+        var copy = new NodeScoreArray(nodeScoreArray.size());
+        for (int i = 0; i < nodeScoreArray.size(); i++) {
+            copy.setNode(i, nodeScoreArray.getNode(i));
+            copy.setScore(i, nodeScoreArray.getScore(i));
+        }
+        return copy;
     }
 
     @Test

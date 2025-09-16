@@ -26,7 +26,7 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DenseIntMap;
@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -429,6 +430,17 @@ public class OnHeapGraphIndex implements GraphIndex {
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
 
+        }
+
+        @Override
+        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+            for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                var friendOrd = it.nextInt();
+                if (visited.apply(friendOrd)) {
+                    float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                    neighborProcessor.process(friendOrd, friendSimilarity);
+                }
+            }
         }
 
         @Override

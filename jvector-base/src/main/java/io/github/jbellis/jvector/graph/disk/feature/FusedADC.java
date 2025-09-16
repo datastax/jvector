@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -42,7 +43,7 @@ public class FusedADC implements Feature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
     private final int maxDegree;
-    private final ThreadLocal<VectorFloat<?>> reusableResults;
+    private final ThreadLocal<NodeScoreArray> reusableResults;
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighbors;
     private ByteSequence<?> compressedNeighbors = null;
 
@@ -55,7 +56,7 @@ public class FusedADC implements Feature {
         }
         this.maxDegree = maxDegree;
         this.pq = pq;
-        this.reusableResults = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(maxDegree));
+        this.reusableResults = ThreadLocal.withInitial(() -> new NodeScoreArray(maxDegree));
         this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
     }
 
