@@ -108,7 +108,7 @@ public class NodeArray {
         // If elements remain in a1, add them
         if (i < a1.size()) {
             // avoid duplicates while adding nodes with the same score
-            for (; i < a1.size; j++) {
+            for (; i < a1.size; i++) {
                 if (mergedNodes.add(a1.nodes[i])) {
                     merged.addInOrder(a1.nodes[i], a1.scores[i]);
                 }
@@ -199,8 +199,8 @@ public class NodeArray {
 
     private boolean duplicateExists(int insertionPoint, int newNode) {
         // Checking close to the insertion point first should be better that doing a scan from 0 to size
-        for (int i = 0; i < size ; i++) {
-            if (insertionPoint >= i && insertionPoint < size) {
+        for (int i = 0; i < size + 1; i++) {
+            if (insertionPoint >= i && insertionPoint - i < size) {
                 if (nodes[insertionPoint - i] == newNode) {
                     return true;
                 }
