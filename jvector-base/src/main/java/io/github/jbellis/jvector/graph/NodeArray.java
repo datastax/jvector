@@ -198,7 +198,7 @@ public class NodeArray {
     }
 
     private boolean duplicateExists(int insertionPoint, int newNode) {
-        // Checking in close to the insertion point first should be better that doing a scan from 0 to size
+        // Checking close to the insertion point first should be better that doing a scan from 0 to size
         for (int i = 0; i < size ; i++) {
             if (insertionPoint >= i && insertionPoint < size) {
                 if (nodes[insertionPoint - i] == newNode) {
