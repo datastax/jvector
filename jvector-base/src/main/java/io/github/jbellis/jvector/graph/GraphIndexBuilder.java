@@ -597,7 +597,7 @@ public class GraphIndexBuilder implements Closeable {
             insertionsInProgress.remove(nodeLevel);
         }
 
-        return IntStream.range(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
+        return IntStream.rangeClosed(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
     }
 
     private void updateNeighborsOneLayer(int layer, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
