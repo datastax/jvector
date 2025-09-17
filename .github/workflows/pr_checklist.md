@@ -1,4 +1,4 @@
-If you haven't seen them already, please review [CONTRIBUTIONS.md]()
+If you haven't seen them already, please review [CONTRIBUTIONS.md](https://github.com/datastax/jvector/blob/main/CONTRIBUTIONS.md)
 
 ## Summary of Changes
 
