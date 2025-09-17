@@ -1,5 +1,6 @@
 .github/CODEOWNERS
-.github/workflows/pr_checklist.md
+CONTRIBUTIONS.md
+.github/workflows/checklist_comment_on_new_pr
 .github/workflows/pr_checklist.md
 .github/workflows/unit-tests.yaml
 .github/workflows/generate-changelog.yaml
