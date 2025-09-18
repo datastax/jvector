@@ -11,7 +11,8 @@
   - At least one code owner has approved the PR
 - Pushes to a PR branch invalidate prior approvals.
 - Area code owners have final discretion, and may add or remove reviewers to address size, complexity, or other specific questions as needed.
-- Each change is tracked via a corresponding GitHub/Jira issue, and PRs are linked in the issue
+- Each change is tracked via a corresponding GitHub/Jira issue, and PRs are linked in the issue.
 - An appropriate level of unit testing is provided for new code.
 - Documentation is provided in markdown form for user-facing features.
-- Javadoc is provided sufficient to avoid failure by `mvn javadoc:jar`
+- Javadoc is provided sufficient to avoid failure by `mvn javadoc:jar`.
+
