@@ -1,6 +1,6 @@
 # JVector Contribution Guidelines
 
-## Core Requirements for Pull Requests
+## Pull Requests
 
 - PRs adhere to the checklists posted in the comments.
 - PRs may only be merged after:
