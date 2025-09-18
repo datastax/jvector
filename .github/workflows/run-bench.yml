@@ -176,7 +176,7 @@ jobs:
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG:-dpr-1M}
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG:+ }${BENCH_ARG:-dpr-1M}
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
