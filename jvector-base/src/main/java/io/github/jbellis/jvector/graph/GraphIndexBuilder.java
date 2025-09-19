@@ -63,8 +63,7 @@ public class GraphIndexBuilder implements Closeable {
     private static final Logger logger = LoggerFactory.getLogger(GraphIndexBuilder.class);
 
     private final int beamWidth;
-    private final ExplicitThreadLocal<NodeArray> naturalScratch;
-    private final ExplicitThreadLocal<NodeArray> concurrentScratch;
+    private final ExplicitThreadLocal<NodeArray> scratch;
 
     private final int dimension;
     private final float neighborOverflow;
@@ -335,8 +334,7 @@ public class GraphIndexBuilder implements Closeable {
         });
 
         // in scratch we store candidates in reverse order: worse candidates are first
-        this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
-        this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
+        this.scratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(2 * max(beamWidth, graph.maxDegree() + 1)));
 
         this.rng = new Random(0);
     }
@@ -377,10 +375,10 @@ public class GraphIndexBuilder implements Closeable {
                     var newNeighbors = new NodeArray(oldNeighborsIt.size());
                     while (oldNeighborsIt.hasNext()) {
                         int neighbor = oldNeighborsIt.nextInt();
-                        // since we're using a different score provider, use insertSorted instead of addInOrder
-                        newNeighbors.insertSorted(neighbor, sf.similarityTo(neighbor));
+                        newNeighbors.addInOrder(neighbor, sf.similarityTo(neighbor));
                     }
                     newBuilder.graph.addNode(lvl, i, newNeighbors);
+                    newBuilder.graph.markComplete(new NodeAtLevel(lvl, i));
                 }
             });
         }).join();
@@ -557,8 +555,7 @@ public class GraphIndexBuilder implements Closeable {
         var inProgressBefore = insertionsInProgress.clone();
         try (var gs = searchers.get()) {
             gs.setView(graph.getView()); // new snapshot
-            var naturalScratchPooled = naturalScratch.get();
-            var concurrentScratchPooled = concurrentScratch.get();
+            var scratchPooled = scratch.get();
 
             var bits = new ExcludingBits(nodeLevel.node);
             var entry = graph.entry();
@@ -581,7 +578,7 @@ public class GraphIndexBuilder implements Closeable {
                             neighbors[index.getAndIncrement()] = new NodeScore(neighbor, score);
                         });
                         Arrays.sort(neighbors);
-                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
+                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, scratchPooled, inProgressBefore, searchScoreProvider);
                     }
                     gs.setEntryPointsFromPreviousLayer();
                 }
@@ -590,7 +587,7 @@ public class GraphIndexBuilder implements Closeable {
                 result = gs.resume(beamWidth, beamWidth, 0.0f, 0.0f);
             }
 
-            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
+            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), scratchPooled, inProgressBefore, searchScoreProvider);
 
             graph.markComplete(nodeLevel);
         } catch (Exception e) {
@@ -602,16 +599,20 @@ public class GraphIndexBuilder implements Closeable {
         return IntStream.range(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
     }
 
-    private void updateNeighborsOneLayer(int layer, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
+    private void updateNeighborsOneLayer(int layer, int node, NodeScore[] neighbors, NodeArray scratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, SearchScoreProvider ssp) {
         // Update neighbors with these candidates.
         // The DiskANN paper calls for using the entire set of visited nodes along the search path as
         // potential candidates, but in practice we observe neighbor lists being completely filled using
         // just the topK results.  (Since the Robust Prune algorithm prioritizes closer neighbors,
         // this means that considering additional nodes from the search path, that are by definition
         // farther away than the ones in the topK, would not change the result.)
-        var natural = toScratchCandidates(neighbors, naturalScratchPooled);
-        var concurrent = getConcurrentCandidates(layer, node, inProgressBefore, concurrentScratchPooled, ssp.scoreFunction());
-        updateNeighbors(layer, node, natural, concurrent);
+        scratchPooled.clear();
+        toScratchCandidates(neighbors, scratchPooled);
+        getConcurrentCandidates(layer, node, inProgressBefore, scratchPooled, ssp.scoreFunction());
+
+        // toMerge may be approximate-scored, but insertDiverse will compute exact scores for the diverse ones
+        var graphNeighbors = graph.layers.get(layer).insertDiverse(node, scratchPooled);
+        graph.layers.get(layer).backlink(graphNeighbors, node, neighborOverflow);
     }
 
     @VisibleForTesting
@@ -742,25 +743,9 @@ public class GraphIndexBuilder implements Closeable {
         return memorySize;
     }
 
-    private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
-        // if either natural or concurrent is empty, skip the merge
-        NodeArray toMerge;
-        if (concurrent.size() == 0) {
-            toMerge = natural;
-        } else if (natural.size() == 0) {
-            toMerge = concurrent;
-        } else {
-            toMerge = NodeArray.merge(natural, concurrent);
-        }
-        // toMerge may be approximate-scored, but insertDiverse will compute exact scores for the diverse ones
-        var neighbors = graph.layers.get(layer).insertDiverse(nodeId, toMerge);
-        graph.layers.get(layer).backlink(neighbors, nodeId, neighborOverflow);
-    }
-
     private static NodeArray toScratchCandidates(NodeScore[] candidates, NodeArray scratch) {
-        scratch.clear();
         for (var candidate : candidates) {
-            scratch.addInOrder(candidate.node, candidate.score);
+            scratch.insertSorted(candidate.node, candidate.score);
         }
         return scratch;
     }
@@ -771,7 +756,6 @@ public class GraphIndexBuilder implements Closeable {
                                               NodeArray scratch,
                                               ScoreFunction scoreFunction)
     {
-        scratch.clear();
         for (NodeAtLevel n : inProgress) {
             if (n.node == newNode || n.level < layer) {
                 continue;

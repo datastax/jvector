@@ -24,7 +24,7 @@ import org.junit.Test;
 
 import java.util.stream.IntStream;
 
-import static io.github.jbellis.jvector.graph.TestNodeArray.validateSortedByScore;
+import static io.github.jbellis.jvector.graph.TestNodeArray.validateSortedByNode;
 import static org.junit.Assert.assertEquals;
 
 public class TestNeighbors extends RandomizedTest {
@@ -49,7 +49,7 @@ public class TestNeighbors extends RandomizedTest {
     assertEquals(2, neighbors.size());
     assert neighbors.contains(8);
     assert neighbors.contains(6);
-    validateSortedByScore(neighbors);
+    validateSortedByNode(neighbors);
   }
 
   private static float scoreBetween(BuildScoreProvider bsp, int i, int j) {
@@ -78,7 +78,7 @@ public class TestNeighbors extends RandomizedTest {
     assertEquals(2, neighbors.size());
     assert neighbors.contains(8);
     assert neighbors.contains(6);
-    validateSortedByScore(neighbors);
+    validateSortedByNode(neighbors);
   }
 
   @Test

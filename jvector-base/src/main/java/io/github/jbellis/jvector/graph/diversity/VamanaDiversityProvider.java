@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.diversity;
 
 import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.BitSet;
@@ -42,18 +43,17 @@ public class VamanaDiversityProvider implements DiversityProvider {
      * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
-    public double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected) {
-        for (int i = 0; i < min(diverseBefore, maxDegree); i++) {
-            selected.set(i);
-        }
-
-        int nSelected = diverseBefore;
+    public double retainDiverse(NodeArray neighbors, int maxDegree, BitSet selected) {
+        int nSelected = 0;
         double shortEdges = Double.NaN;
         // add diverse candidates, gradually increasing alpha to the threshold
         // (so that the nearest candidates are prioritized)
         float currentAlpha = 1.0f;
         while (currentAlpha <= alpha + 1E-6 && nSelected < maxDegree) {
-            for (int i = diverseBefore; i < neighbors.size() && nSelected < maxDegree; i++) {
+            NodesIterator it =  neighbors.getIteratorSortedByScores();
+            while (it.hasNext() && nSelected < maxDegree) {
+                int i = it.nextInt();
+
                 if (selected.get(i)) {
                     continue;
                 }
