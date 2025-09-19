@@ -204,15 +204,15 @@ jobs:
     needs: test-avx512
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all benchmark results
         uses: actions/download-artifact@v4
         with:
           pattern: benchmark-results-*
           path: all-benchmark-results
           merge-multiple: true
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
