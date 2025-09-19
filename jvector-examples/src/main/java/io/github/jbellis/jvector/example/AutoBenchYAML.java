@@ -60,12 +60,13 @@ public class AutoBenchYAML {
      */
     private static List<String> getAllDatasetNames() {
         List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
         allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
+//        allDatasets.add("cap-1M");
+//        allDatasets.add("cap-6M");
+//        allDatasets.add("cohere-english-v3-1M");
+//        allDatasets.add("cohere-english-v3-10M");
+//        allDatasets.add("dpr-1M");
+//        allDatasets.add("dpr-10M");
 
         return allDatasets;
     }
@@ -91,8 +92,13 @@ public class AutoBenchYAML {
         // Filter out --output, --config and their arguments from the args
         String finalOutputPath = outputPath;
         String configPath = null;
+        int diagnostic_level = 0;
         for (int i = 0; i < args.length - 1; i++) {
             if (args[i].equals("--config")) configPath = args[i+1];
+            if (args[i].equals("--diag")) diagnostic_level = Integer.parseInt(args[i+1]);
+        }
+        if (diagnostic_level > 0) {
+            Grid.setDiagnosticLevel(diagnostic_level);
         }
         String finalConfigPath = configPath;
         String[] filteredArgs = Arrays.stream(args)

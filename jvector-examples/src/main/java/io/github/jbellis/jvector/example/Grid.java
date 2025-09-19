@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.*;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
@@ -85,6 +86,8 @@ public class Grid {
     private static final String dirPrefix = "BenchGraphDir";
 
     private static final Map<String,Double> indexBuildTimes = new HashMap<>();
+
+    private static int diagnostic_level;
 
     static void runAll(DataSet ds,
                        List<Integer> mGrid,
@@ -326,6 +329,25 @@ public class Grid {
         return new BuilderWithSuppliers(builder, suppliers);
     }
 
+    public static void setDiagnosticLevel(int diagLevel) {
+        diagnostic_level = diagLevel;
+    }
+
+    private static DiagnosticLevel getDiagnosticLevel() {
+        switch (diagnostic_level) {
+            case 0:
+                return DiagnosticLevel.NONE;
+            case 1:
+                return DiagnosticLevel.BASIC;
+            case 2:
+                return DiagnosticLevel.DETAILED;
+            case 3:
+                return DiagnosticLevel.VERBOSE;
+            default:
+                return DiagnosticLevel.NONE; // fallback for invalid values
+        }
+    }
+
     private static class BuilderWithSuppliers {
         public final OnDiskGraphIndexWriter.Builder builder;
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
@@ -543,7 +565,9 @@ public class Grid {
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
                                             List<QueryBenchmark> benchmarks = List.of(
-                                                    ThroughputBenchmark.createDefault(),
+                                                    (diagnostic_level > 0 ?
+                                                            ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
+                                                            ThroughputBenchmark.createDefault()),
                                                     LatencyBenchmark.createDefault(),
                                                     CountBenchmark.createDefault(),
                                                     AccuracyBenchmark.createDefault()

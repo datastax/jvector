@@ -57,7 +57,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         return new ThroughputBenchmark(3, 3,
                 true, false, false,
                 DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT,
-                DiagnosticLevel.BASIC);
+                DiagnosticLevel.NONE);
     }
 
     public static ThroughputBenchmark createEmpty(int numWarmupRuns, int numTestRuns) {
@@ -168,7 +168,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 return totalQueries / 1.0; // Return QPS placeholder
             });
             
-            System.out.printf("Warmup Run %d: %.1f QPS%n", warmupRun, warmupQps[warmupRun]);
+            diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
         }
 
         // Analyze warmup effectiveness
@@ -176,12 +176,12 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             double warmupVariance = StatUtils.variance(warmupQps);
             double warmupMean = StatUtils.mean(warmupQps);
             double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
-            System.out.printf("Warmup Analysis: Mean=%.1f QPS, CV=%.1f%%", warmupMean, warmupCV);
+            diagnostics.console("Warmup Analysis: Mean=" + warmupMean + " QPS, CV=" + warmupCV);
             
             if (warmupCV > 15.0) {
-                System.out.printf(" ⚠️  High warmup variance - consider more warmup runs%n");
+                diagnostics.console(" ⚠️  High warmup variance - consider more warmup runs\n");
             } else {
-                System.out.printf(" ✓ Warmup appears stable%n");
+                diagnostics.console(" ✓ Warmup appears stable\n");
             }
         }
 
@@ -224,7 +224,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 return totalQueries / elapsedSec;
             });
 
-            System.out.printf("Test Run %d: %.1f QPS%n", testRun, qpsSamples[testRun]);
+            diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
         }
 
         // Performance variance analysis
@@ -236,11 +236,10 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         double minQps = StatUtils.min(qpsSamples);
         double coefficientOfVariation = (stdDevQps / avgQps) * 100;
 
-        System.out.printf("QPS Variance Analysis: CV=%.1f%%, Range=[%.1f - %.1f]%n", 
-            coefficientOfVariation, minQps, maxQps);
+        diagnostics.console("QPS Variance Analysis: CV=" + coefficientOfVariation + ", Range=[" + minQps + " - " + maxQps + "]\n");
             
         if (coefficientOfVariation > 10.0) {
-            System.out.printf("⚠️  High performance variance detected (CV > 10%%)%n");
+            diagnostics.console("⚠️  High performance variance detected (CV > 10%%)%n");
         }
 
         // Compare test runs for performance regression detection
