@@ -30,6 +30,7 @@ public class MultiFileDatasource {
     public final Path basePath;
     public final Path queriesPath;
     public final Path groundTruthPath;
+    private final static String DATASET_HASH = System.getenv("DATASET_HASH");
 
     public MultiFileDatasource(String name, String basePath, String queriesPath, String groundTruthPath) {
         this.name = name;
@@ -62,6 +63,14 @@ public class MultiFileDatasource {
                                                               "wikipedia_squad/100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec",
                                                               "wikipedia_squad/100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec",
                                                               "wikipedia_squad/100k/cohere_embed-english-v3.0_1024_indices_b100000_q10000_k100.ivec"));
+        put("cohere-english-v3-1M", new MultiFileDatasource("cohere-english-v3-1M",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_base_1m_norm.fvecs",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_query_10k_norm.fvecs",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_gt_1m_ip_k100.ivecs"));
+        put("cohere-english-v3-10M", new MultiFileDatasource("cohere-english-v3-10M",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_base_10m_norm.fvecs",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_query_10k_norm.fvecs",
+                DATASET_HASH + "/cohere/cohere_wikipedia_v3/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs"));
         put("colbert-10M", new MultiFileDatasource("colbert-10M",
                                                    "wikipedia_squad/10M/colbertv2.0_128_base_vectors_10000000.fvec",
                                                    "wikipedia_squad/10M/colbertv2.0_128_query_vectors_100000.fvec",
@@ -110,5 +119,25 @@ public class MultiFileDatasource {
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_base_vectors.fvec",
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_query_vectors_10000.fvec",
                                                   "wikipedia_squad/100k/textembedding-gecko_100000_indices_query_10000.ivec"));
+        put("gecko-1M", new MultiFileDatasource("gecko-1M",
+                "wikipedia_squad/1M/textembedding-gecko_1000000_base_vectors.fvec",
+                "wikipedia_squad/1M/textembedding-gecko_1000000_query_vectors_10000.fvec",
+                "wikipedia_squad/1M/textembedding-gecko_1000000_indices_query_10000.ivec"));
+        put("dpr-1M", new MultiFileDatasource("dpr-1M",
+                DATASET_HASH + "/dpr/c4-en_base_1M_norm_files0_2.fvecs",
+                DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+                DATASET_HASH + "/dpr/dpr_1m_gt_norm_ip_k100.ivecs"));
+        put("dpr-10M", new MultiFileDatasource("dpr-10M",
+                DATASET_HASH + "/dpr/c4-en_base_10M_norm_files0_2.fvecs",
+                DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+                DATASET_HASH + "/dpr/dpr_10m_gt_norm_ip_k100.ivecs"));
+        put("cap-1M", new MultiFileDatasource("cap-1M",
+                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_1m_norm_shuffle.fvecs",
+                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+                DATASET_HASH + "/cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
+        put("cap-6M", new MultiFileDatasource("cap-6M",
+                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
+                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+                DATASET_HASH + "/cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
     }};
 }

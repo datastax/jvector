@@ -57,6 +57,22 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     }
 
     @Test
+    public void testEstimatedBytes() throws IOException {
+        // Create test vectors where each vector is [node_id, 0]
+        var vectors = new ArrayList<VectorFloat<?>>();
+        vectors.add(vts.createFloatVector(new float[] {0, 0}));
+        vectors.add(vts.createFloatVector(new float[] {0, 1}));
+        vectors.add(vts.createFloatVector(new float[] {2, 0}));
+        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
+            var bytesUsed = builder.addGraphNode(0, ravv.getVector(0));
+            // The actual value is not critical, but this confirms we do not get unexpected changes (for this config)
+            assertEquals(92, bytesUsed);
+        }
+    }
+
+    @Test
     public void testRescore() {
         testRescore(false);
         testRescore(true);

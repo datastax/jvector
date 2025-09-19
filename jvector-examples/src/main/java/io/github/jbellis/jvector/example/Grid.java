@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
@@ -69,6 +70,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
@@ -81,6 +83,8 @@ public class Grid {
     private static final String pqCacheDir = "pq_cache";
 
     private static final String dirPrefix = "BenchGraphDir";
+
+    private static final Map<String,Double> indexBuildTimes = new HashMap<>();
 
     static void runAll(DataSet ds,
                        List<Integer> mGrid,
@@ -270,7 +274,9 @@ public class Grid {
             }
         });
         builder.close();
-        System.out.format("Build and write %s in %ss%n", featureSets, (System.nanoTime() - startTime) / 1_000_000_000.0);
+        double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
+        System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
+        indexBuildTimes.put(ds.name, totalTime);
 
         // open indexes
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
@@ -505,6 +511,86 @@ public class Grid {
         }
 
         return benchmarks;
+    }
+
+    public static List<BenchResult> runAllAndCollectResults(
+            DataSet ds,
+            List<Integer> mGrid,
+            List<Integer> efConstructionGrid,
+            List<Float> neighborOverflowGrid,
+            List<Boolean> addHierarchyGrid,
+            List<? extends Set<FeatureId>> featureSets,
+            List<Function<DataSet, CompressorParameters>> buildCompressors,
+            List<Function<DataSet, CompressorParameters>> compressionGrid,
+            Map<Integer, List<Double>> topKGrid,
+            List<Boolean> usePruningGrid) throws IOException {
+
+        List<BenchResult> results = new ArrayList<>();
+        for (int m : mGrid) {
+            for (int ef : efConstructionGrid) {
+                for (float neighborOverflow : neighborOverflowGrid) {
+                    for (boolean addHierarchy : addHierarchyGrid) {
+                        for (Set<FeatureId> features : featureSets) {
+                            for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
+                                for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
+                                    Path testDirectory = Files.createTempDirectory("bench");
+                                    try {
+                                        var compressor = getCompressor(buildCompressor, ds);
+                                        var searchCompressorObj = getCompressor(searchCompressor, ds);
+                                        CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
+                                        var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
+                                        GraphIndex index = indexes.get(features);
+                                        try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
+                                            int queryRuns = 2;
+                                            List<QueryBenchmark> benchmarks = List.of(
+                                                    ThroughputBenchmark.createDefault(),
+                                                    LatencyBenchmark.createDefault(),
+                                                    CountBenchmark.createDefault(),
+                                                    AccuracyBenchmark.createDefault()
+                                            );
+                                            QueryTester tester = new QueryTester(benchmarks);
+                                            for (int topK : topKGrid.keySet()) {
+                                                for (boolean usePruning : usePruningGrid) {
+                                                    for (double overquery : topKGrid.get(topK)) {
+                                                        int rerankK = (int) (topK * overquery);
+                                                        List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                                                        Map<String, Object> params = Map.of(
+                                                                "M", m,
+                                                                "efConstruction", ef,
+                                                                "neighborOverflow", neighborOverflow,
+                                                                "addHierarchy", addHierarchy,
+                                                                "features", features.toString(),
+                                                                "buildCompressor", buildCompressor.toString(),
+                                                                "searchCompressor", searchCompressor.toString(),
+                                                                "topK", topK,
+                                                                "overquery", overquery,
+                                                                "usePruning", usePruning
+                                                        );
+                                                        for (Metric metric : metricsList) {
+                                                            Map<String, Object> metrics = java.util.Map.of(metric.getHeader(), metric.getValue());
+                                                            results.add(new BenchResult(ds.name, params, metrics));
+                                                        }
+                                                       results.add(new BenchResult(ds.name, params, Map.of("Index Build Time", indexBuildTimes.get(ds.name))));
+                                                    }
+                                                }
+                                            }
+                                        } catch (Exception e) {
+                                            throw new RuntimeException(e);
+                                        }
+                                    } finally {
+                                        for (int n = 0; n < 1; n++) {
+                                            try { Files.deleteIfExists(testDirectory.resolve("graph" + n)); } catch (IOException e) { /* ignore */ }
+                                        }
+                                        try { Files.deleteIfExists(testDirectory); } catch (IOException e) { /* ignore */ }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return results;
     }
 
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {

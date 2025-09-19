@@ -35,11 +35,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
+import java.util.Set;
 
 public class DownloadHelper {
     private static final String bucketName = "astra-vector";
+    private static final String infraBucketName = "jvector-datasets-infratest";
+    private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
 
     private static final String fvecDir = "fvec";
+    private final static Set<String> infraDatasets = Set.of("dpr-1M", "dpr-10M", "cap-1M", "cap-6M", "cohere-english-v3-1M", "cohere-english-v3-10M");
 
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
@@ -51,6 +56,7 @@ public class DownloadHelper {
     }
 
     public static MultiFileDatasource maybeDownloadFvecs(String name) {
+        String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
         if (mfd == null) {
             throw new IllegalArgumentException("Unknown dataset: " + name);
@@ -73,10 +79,10 @@ public class DownloadHelper {
                 }
 
                 var urlPath = pathFragment.toString().replace('\\', '/');
-                System.out.println("Downloading: " + urlPath);
+                System.out.println("Downloading dataset: " + name);
                 DownloadFileRequest downloadFileRequest =
                         DownloadFileRequest.builder()
-                                .getObjectRequest(b -> b.bucket(bucketName).key(urlPath))
+                                .getObjectRequest(b -> b.bucket(bucket).key(urlPath))
                                 .addTransferListener(LoggingTransferListener.create())
                                 .destination(Paths.get(localPath.toString()))
                                 .build();

@@ -1,0 +1,247 @@
+name: Run Bench Main
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_config:
+        description: 'Benchmark dataset regex (leave empty for all)'
+        required: false
+        default: ''
+      branches:
+        description: 'Space-separated list of branches to benchmark'
+        required: false
+        default: 'main'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # Job to generate the matrix configuration
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          # Print event information for debugging
+          echo "Event name: ${{ github.event_name }}"
+          echo "Branches input: '${{ github.event.inputs.branches }}'"
+
+          # Default branches based on event type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Pull request detected. Using main and PR branch: ${{ github.head_ref }}"
+            BRANCHES='["main", "${{ github.head_ref }}"]'
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
+            # Parse space-separated branches input into JSON array
+            echo "Workflow dispatch with branches input detected"
+            BRANCHES_INPUT="${{ github.event.inputs.branches }}"
+            BRANCHES="["
+            for branch in $BRANCHES_INPUT; do
+              if [[ "$BRANCHES" != "[" ]]; then
+                BRANCHES="$BRANCHES, "
+              fi
+              BRANCHES="$BRANCHES\"$branch\""
+              echo "Adding branch to matrix: $branch"
+            done
+            BRANCHES="$BRANCHES]"
+          else
+            echo "Default event type. Using main branch only"
+            BRANCHES='["main"]'
+          fi
+
+          echo "Generated branches matrix: $BRANCHES"
+          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"branch\":$BRANCHES}" >> $GITHUB_OUTPUT
+
+  test-avx512:
+    needs: generate-matrix
+    concurrency:
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.branch }}
+      cancel-in-progress: false
+    strategy:
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.isa }}
+    steps:
+      - name: verify-avx512
+        run: |
+          # avx2 is included just for illustration
+          required="avx2 avx512f avx512cd avx512bw avx512dq avx512v"
+          printf "required ISA feature flags: %s\n" "${required}" 
+          flags="$(lscpu|grep '^Flags'|cut -d: -f2)"
+          output=""
+          for flag in ${required} ; do
+           if [[ " $flags " == *"${flag}"* ]]
+           then output="${output} $flag(OK)"
+           else output="${output} $flag(FAIL)"
+          fi ; done
+          printf "%s\n" ${output}
+          if [[ " $output " == *"FAIL"* ]] ; then exit 2 ; fi
+      - name: Set up GCC
+        run: |
+          sudo apt install -y gcc
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: temurin
+          cache: maven
+
+      - name: Get version from pom.xml
+        id: get-version
+        run: |
+          VERSION=$(grep -o '<version>[^<]*</version>' pom.xml | head -1 | sed 's/<version>\(.*\)<\/version>/\1/')
+          if [[ "$VERSION" == *'${revision}'* ]]; then
+            REVISION=$(grep -o '<revision>[^<]*</revision>' pom.xml | head -1 | sed 's/<revision>\(.*\)<\/revision>/\1/')
+            if [ -n "$REVISION" ]; then
+              VERSION=${VERSION//\$\{revision\}/$REVISION}
+            fi
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current branch has version $VERSION"
+
+      # Print debug information about the current job
+      - name: Print job information
+        run: |
+          echo "Running benchmark for:"
+          echo "  - Branch: ${{ matrix.branch }}"
+          echo "  - JDK: ${{ matrix.jdk }}"
+          echo "  - ISA: ${{ matrix.isa }}"
+
+      # Checkout the branch specified in the matrix
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      # Create a directory to store benchmark results
+      - name: Create results directory
+        run: mkdir -p benchmark_results
+
+      # Build the branch
+      - name: Build branch
+        run: mvn -B -Punix-amd64-profile package --file pom.xml
+
+      # Run the benchmark if jvector-examples exists
+      - name: Run benchmark
+        env:
+          DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
+        run: |
+          # Check if jvector-examples directory and AutoBenchYAML class exist
+          if [ ! -d "jvector-examples" ]; then
+            echo "Warning: jvector-examples directory not found in branch ${{ matrix.branch }}. Skipping benchmark."
+            exit 0
+          fi
+
+          # Check if the jar with dependencies was built
+          JAR_COUNT=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar 2>/dev/null | wc -l)
+          if [ "$JAR_COUNT" -eq 0 ]; then
+            echo "Warning: No jar with dependencies found in branch ${{ matrix.branch }}. Skipping benchmark."
+            exit 0
+          fi
+
+          # Determine available memory and set heap size to half of it
+          TOTAL_MEM_GB=$(free -g | awk '/^Mem:/ {print $2}')
+          # Ensure we have a valid number, default to 16GB total (8GB heap) if detection fails
+          if [[ -z "$TOTAL_MEM_GB" ]] || [[ "$TOTAL_MEM_GB" -le 0 ]]; then
+            echo "Warning: Could not detect memory size, defaulting to 16GB total memory (8GB heap)"
+            TOTAL_MEM_GB=16
+          fi
+          HALF_MEM_GB=$((TOTAL_MEM_GB / 2))
+          # Ensure minimum heap size of 1GB
+          if [[ "$HALF_MEM_GB" -lt 1 ]]; then
+            HALF_MEM_GB=1
+          fi
+          echo "Total memory: ${TOTAL_MEM_GB}GB, using ${HALF_MEM_GB}GB for Java heap"
+          
+          # Run the benchmark
+          echo "Running benchmark for branch ${{ matrix.branch }}"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
+              ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
+              -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results dpr-1M
+          else
+            java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
+              ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
+              -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results
+          fi
+
+          # Move the results to the benchmark_results directory
+          mv ${{ matrix.branch }}-bench-results.csv benchmark_results/ || true
+          mv ${{ matrix.branch }}-bench-results.json benchmark_results/ || true
+
+          echo "Completed benchmarks for branch: ${{ matrix.branch }}"
+
+      - name: Upload Individual Benchmark Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ matrix.branch }}
+          path: |
+            benchmark_results/*.csv
+            benchmark_results/*.json
+          if-no-files-found: warn
+
+  # Job to combine results and create visualizations
+  combine-results:
+    needs: test-avx512
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-results-*
+          path: all-benchmark-results
+          merge-multiple: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install matplotlib numpy psutil
+
+      - name: Generate visualization using visualize_benchmarks.py
+        run: |
+          # Discover all downloaded CSV benchmark result files
+          shopt -s globstar nullglob
+          files=(all-benchmark-results/**/*-bench-results.csv)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No benchmark results found in all-benchmark-results. Searching repo as fallback..."
+            files=(**/*-bench-results.csv)
+          fi
+          echo "Found ${#files[@]} CSV files"
+          for f in "${files[@]}"; do echo "  - $f"; done
+
+          # Check if any files were found
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No benchmark result files found. Skipping visualization generation."
+            echo "This can happen when benchmarks are skipped due to missing dependencies or other issues."
+            # Create empty output directory to satisfy artifact upload
+            mkdir -p benchmark_reports
+            echo "No benchmark results were available for visualization." > benchmark_reports/no_results.txt
+            exit 0
+          fi
+
+          # Ensure output directory matches the script's default/output expectation
+          OUTPUT_DIR="benchmark_reports"
+
+          # Run the visualization script with all files, default threshold (5.0)
+          python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
+
+      - name: Upload visualization artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-comparison-results
+          path: |
+            benchmark_reports/**
+          retention-days: 90

@@ -1,6 +1,12 @@
+.github/CODEOWNERS
+CONTRIBUTIONS.md
+.github/workflows/checklist_comment_on_new_pr.yml
+.github/workflows/pr_checklist.md
 .github/workflows/unit-tests.yaml
 .github/workflows/generate-changelog.yaml
 package.json
+.github/workflows/tag-release.yml
+.github/workflows/run-bench.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md
@@ -19,3 +25,4 @@ results.csv
 scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/*.yml
+src/main/resources/logback.xml
