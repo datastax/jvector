@@ -156,6 +156,12 @@ public class BenchmarkDiagnostics {
         return result;
     }
 
+    public void console(String s) {
+        if (level != DiagnosticLevel.NONE ) {
+            System.out.println(s);
+        }
+    }
+
     /**
      * Compares performance between different phases
      */

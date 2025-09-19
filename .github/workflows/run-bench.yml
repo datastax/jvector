@@ -158,21 +158,35 @@ jobs:
           
           # Run the benchmark
           echo "Running benchmark for branch ${{ matrix.branch }}"
+
+          # Determine optional benchmark config argument from workflow input
+          BENCH_ARG="${{ github.event.inputs.benchmark_config }}"
+          if [[ -z "$BENCH_ARG" ]]; then
+            echo "No benchmark_config provided; running with default dataset selection."
+            BENCH_SUFFIX=""
+          else
+            echo "Using benchmark_config: '$BENCH_ARG'"
+            BENCH_SUFFIX=" $BENCH_ARG"
+          fi
+
+          # Sanitize branch name for filenames: replace any non-alphanumeric, dash or underscore with underscore
+          SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results dpr-1M
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results dpr-1M
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${{ matrix.branch }}-bench-results
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG}
           fi
 
           # Move the results to the benchmark_results directory
-          mv ${{ matrix.branch }}-bench-results.csv benchmark_results/ || true
-          mv ${{ matrix.branch }}-bench-results.json benchmark_results/ || true
+          mv ${SAFE_BRANCH}-bench-results.csv benchmark_results/ || true
+          mv ${SAFE_BRANCH}-bench-results.json benchmark_results/ || true
 
           echo "Completed benchmarks for branch: ${{ matrix.branch }}"
 
@@ -190,15 +204,15 @@ jobs:
     needs: test-avx512
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all benchmark results
         uses: actions/download-artifact@v4
         with:
           pattern: benchmark-results-*
           path: all-benchmark-results
           merge-multiple: true
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -214,10 +228,12 @@ jobs:
         run: |
           # Discover all downloaded CSV benchmark result files
           shopt -s globstar nullglob
-          files=(all-benchmark-results/**/*-bench-results.csv)
+          echo "Listing downloaded artifact directory structure:"
+          ls -R all-benchmark-results || true
+          files=(all-benchmark-results/**/*.csv)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "No benchmark results found in all-benchmark-results. Searching repo as fallback..."
-            files=(**/*-bench-results.csv)
+            echo "No CSVs found under all-benchmark-results. Searching repo as fallback..."
+            files=(**/*.csv)
           fi
           echo "Found ${#files[@]} CSV files"
           for f in "${files[@]}"; do echo "  - $f"; done
