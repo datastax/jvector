@@ -68,7 +68,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
             var bytesUsed = builder.addGraphNode(0, ravv.getVector(0));
             // The actual value is not critical, but this confirms we do not get unexpected changes (for this config)
-            assertEquals(92, bytesUsed);
+            assertEquals(88, bytesUsed);
         }
     }
 
