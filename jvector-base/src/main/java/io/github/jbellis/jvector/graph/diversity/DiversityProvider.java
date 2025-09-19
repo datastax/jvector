@@ -29,5 +29,5 @@ public interface DiversityProvider {
      * update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
-    double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected);
+    double retainDiverse(NodeArray neighbors, int maxDegree, BitSet selected);
 }

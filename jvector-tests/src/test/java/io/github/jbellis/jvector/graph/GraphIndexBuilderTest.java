@@ -68,7 +68,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
             var bytesUsed = builder.addGraphNode(0, ravv.getVector(0));
             // The actual value is not critical, but this confirms we do not get unexpected changes (for this config)
-            assertEquals(92, bytesUsed);
+            assertEquals(88, bytesUsed);
         }
     }
 
@@ -118,10 +118,11 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
 
         // Check node 0's neighbors, score and order should be different
         var newNeighbors = newGraph.getNeighbors(0, 0);
-        assertEquals(2, newNeighbors.getNode(0));
-        assertEquals(1, newNeighbors.getNode(1));
-        assertEquals(0.2f, newNeighbors.getScore(0), 1E-6);
-        assertEquals(0.05882353f, newNeighbors.getScore(1), 1E-6);
+        assertEquals(1, newNeighbors.getNode(0));
+        assertEquals(2, newNeighbors.getNode(1));
+        assertEquals(0.05882353f, newNeighbors.getScore(0), 1E-6);
+        assertEquals(0.2f, newNeighbors.getScore(1), 1E-6);
+
 
     }
 

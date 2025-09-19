@@ -25,12 +25,10 @@
 package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
-import io.github.jbellis.jvector.util.ArrayUtil;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.util.Arrays;
 import java.util.HashSet;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -39,9 +37,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class TestNodeArray extends RandomizedTest {
-  static void validateSortedByScore(NodeArray na) {
+  static void validateSortedByNode(NodeArray na) {
     for (int i = 0; i < na.size() - 1; i++) {
-      assertTrue(na.getScore(i) >= na.getScore(i + 1));
+      assertTrue(na.getNode(i) < na.getNode(i + 1));
     }
   }
 
@@ -51,53 +49,56 @@ public class TestNodeArray extends RandomizedTest {
     neighbors.addInOrder(0, 1);
     neighbors.addInOrder(1, 0.8f);
 
-    AssertionError ex = assertThrows(AssertionError.class, () -> neighbors.addInOrder(2, 0.9f));
+    AssertionError ex = assertThrows(AssertionError.class, () -> neighbors.addInOrder(-1, 0.9f));
     assert ex.getMessage().startsWith("Nodes are added in the incorrect order!") : ex.getMessage();
 
     neighbors.insertSorted(3, 0.9f);
     assertScoresEqual(new float[] {1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 3}, neighbors);
 
     neighbors.insertSorted(4, 1f);
     assertScoresEqual(new float[] {1, 1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 4, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 3, 4}, neighbors);
 
     neighbors.insertSorted(5, 1.1f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 3, 4, 5}, neighbors);
 
     neighbors.insertSorted(6, 0.8f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1, 6}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 3, 4, 5, 6}, neighbors);
 
     neighbors.insertSorted(7, 0.8f);
     assertScoresEqual(new float[] {1.1f, 1, 1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 4, 3, 1, 6, 7}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 3, 4, 5, 6, 7}, neighbors);
 
     neighbors.removeIndex(2);
-    assertScoresEqual(new float[] {1.1f, 1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {5, 0, 3, 1, 6, 7}, neighbors);
+    assertScoresEqual(new float[] {1.1f, 1, 1, 0.8f, 0.8f, 0.8f}, neighbors);
+    assertNodesEqual(new int[] {0, 1, 4, 5, 6, 7}, neighbors);
 
     neighbors.removeIndex(0);
-    assertScoresEqual(new float[] {1, 0.9f, 0.8f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1, 6, 7}, neighbors);
+    NodesIterator it = neighbors.getIteratorSortedByScores();
+    assertScoresEqual(new float[] {1.1f, 1, 0.8f, 0.8f, 0.8f}, neighbors);
+    assertNodesEqual(new int[] {1, 4, 5, 6, 7}, neighbors);
 
     neighbors.removeIndex(4);
-    assertScoresEqual(new float[] {1, 0.9f, 0.8f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1, 6}, neighbors);
+    assertScoresEqual(new float[] {1.1f, 1, 0.8f, 0.8f}, neighbors);
+    assertNodesEqual(new int[] {1, 4, 5, 6}, neighbors);
 
     neighbors.removeLast();
-    assertScoresEqual(new float[] {1, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 1}, neighbors);
+    assertScoresEqual(new float[] {1.1f, 1, 0.8f}, neighbors);
+    assertNodesEqual(new int[] {1, 4, 5}, neighbors);
 
     neighbors.insertSorted(8, 0.9f);
-    assertScoresEqual(new float[] {1, 0.9f, 0.9f, 0.8f}, neighbors);
-    assertNodesEqual(new int[] {0, 3, 8, 1}, neighbors);
+    assertScoresEqual(new float[] {1.1f, 1, 0.9f, 0.8f}, neighbors);
+    assertNodesEqual(new int[] {1, 4, 5, 8}, neighbors);
   }
 
   private void assertScoresEqual(float[] scores, NodeArray neighbors) {
-    for (int i = 0; i < scores.length; i++) {
-      assertEquals(scores[i], neighbors.getScore(i), 0.01f);
+    NodesIterator it = neighbors.getIteratorSortedByScores();
+    int i = 0;
+    while (it.hasNext()) {
+      assertEquals(scores[i++], neighbors.getScore(it.nextInt()), 0.01f);
     }
   }
 
@@ -170,7 +171,7 @@ public class TestNodeArray extends RandomizedTest {
     cna.insertSorted(3, 8.0f); // This is also a duplicate
     Assert.assertArrayEquals(new int[] {1, 2, 3}, cna.copyDenseNodes());
     assertArrayEquals(new float[] {10.0f, 9.0f, 8.0f}, cna.copyDenseScores(), 0.01f);
-    validateSortedByScore(cna);
+    validateSortedByNode(cna);
   }
 
   @Test
@@ -183,7 +184,7 @@ public class TestNodeArray extends RandomizedTest {
     cna.insertSorted(3, 10.0f); // This is also a duplicate
     assertArrayEquals(new int[] {1, 2, 3}, cna.copyDenseNodes());
     assertArrayEquals(new float[] {10.0f, 10.0f, 10.0f}, cna.copyDenseScores(), 0.01f);
-    validateSortedByScore(cna);
+    validateSortedByNode(cna);
   }
 
   @Test
@@ -199,33 +200,32 @@ public class TestNodeArray extends RandomizedTest {
     assertArrayEquals(new int[] {0, 1}, merged.copyDenseNodes());
 
     arr1 = new NodeArray(3);
-    arr1.addInOrder(3, 3.0f);
-    arr1.addInOrder(2, 2.0f);
     arr1.addInOrder(1, 1.0f);
+    arr1.addInOrder(2, 2.0f);
+    arr1.addInOrder(3, 3.0f);
 
     arr2 = new NodeArray(3);
-    arr2.addInOrder(4, 4.0f);
+    arr2.addInOrder(1, 1.05f);
     arr2.addInOrder(2, 2.0f);
-    arr2.addInOrder(1, 1.0f);
+    arr2.addInOrder(4, 4.0f);
 
     merged = NodeArray.merge(arr1, arr2);
-    // Expected result: [4, 3, 2, 1]
-    assertArrayEquals(new int[] {4, 3, 2, 1}, merged.copyDenseNodes());
-    assertArrayEquals(new float[] {4.0f, 3.0f, 2.0f, 1.0f}, merged.copyDenseScores(), 0.0f);
+    assertArrayEquals(new int[] {1, 2, 3, 4}, merged.copyDenseNodes());
+    assertScoresEqual(new float[] {4.0f, 3.0f, 2.0f, 1.0f}, merged);
 
     // Testing boundary conditions
     arr1 = new NodeArray(2);
-    arr1.addInOrder(3, 3.0f);
     arr1.addInOrder(2, 2.0f);
+    arr1.addInOrder(3, 3.0f);
 
     arr2 = new NodeArray(1);
     arr2.addInOrder(2, 2.0f);
 
     merged = NodeArray.merge(arr1, arr2);
     // Expected result: [3, 2]
-    assertArrayEquals(new int[] {3, 2}, merged.copyDenseNodes());
-    assertArrayEquals(new float[] {3.0f, 2.0f}, merged.copyDenseScores(), 0.0f);
-    validateSortedByScore(merged);
+    assertArrayEquals(new int[] {2, 3}, merged.copyDenseNodes());
+    assertScoresEqual(new float[] {3.0f, 2.0f}, merged);
+    validateSortedByNode(merged);
   }
 
   private void testMergeCandidatesOnce() {
@@ -274,7 +274,7 @@ public class TestNodeArray extends RandomizedTest {
 
     // results should be sorted by score, and not contain duplicates
     for (int i = 0; i < merged.size() - 1; i++) {
-      assertTrue(merged.getScore(i) >= merged.getScore(i + 1));
+      assertTrue(merged.getNode(i) < merged.getNode(i + 1));
       assertTrue(uniqueNodes.add(merged.getNode(i)));
     }
     assertTrue(uniqueNodes.add(merged.getNode(merged.size() - 1)));
