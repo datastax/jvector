@@ -115,6 +115,53 @@ public abstract class PQVectors implements CompressedVectors {
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
 
+    /**
+     * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
+     * and split into chunks to avoid exceeding the maximum array size.
+     *
+     * @param pq           the ProductQuantization to use
+     * @param vectorCount  the number of vectors to encode
+     * @param ravv         the RandomAccessVectorValues to encode
+     * @param simdExecutor the ForkJoinPool to use for SIMD operations
+     * @return the PQVectors instance
+     */
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, int[] ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        // Calculate if we need to split into multiple chunks
+        int compressedDimension = pq.compressedVectorSize();
+        long totalSize = (long) vectorCount * compressedDimension;
+        int vectorsPerChunk = totalSize <= PQVectors.MAX_CHUNK_SIZE ? vectorCount : PQVectors.MAX_CHUNK_SIZE / compressedDimension;
+
+        int numChunks = vectorCount / vectorsPerChunk;
+        final ByteSequence<?>[] chunks = new ByteSequence<?>[numChunks];
+        int chunkSize = vectorsPerChunk * compressedDimension;
+        for (int i = 0; i < numChunks - 1; i++)
+            chunks[i] = vectorTypeSupport.createByteSequence(chunkSize);
+
+        // Last chunk might be smaller
+        int remainingVectors = vectorCount - (vectorsPerChunk * (numChunks - 1));
+        chunks[numChunks - 1] = vectorTypeSupport.createByteSequence(remainingVectors * compressedDimension);
+
+        // Encode the vectors in parallel into the compressed data chunks
+        // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
+        // and then we are guaranteed safe publication because we join the thread after completion.
+        var ravvCopy = ravv.threadLocalSupplier();
+        simdExecutor.submit(() -> IntStream.range(0, ordinalsMapping.length)
+                        .parallel()
+                        .forEach(ordinal -> {
+                            // Retrieve the slice and mutate it.
+                            var localRavv = ravvCopy.get();
+                            var slice = PQVectors.get(chunks, ordinal, vectorsPerChunk, pq.getSubspaceCount());
+                            var vector = localRavv.getVector(ordinalsMapping[ordinal]);
+                            if (vector != null)
+                                pq.encodeTo(vector, slice);
+                            else
+                                slice.zero();
+                        }))
+                .join();
+
+        return new ImmutablePQVectors(pq, chunks, vectorCount, vectorsPerChunk);
+    }
+
     @Override
     public void write(DataOutput out, int version) throws IOException
     {

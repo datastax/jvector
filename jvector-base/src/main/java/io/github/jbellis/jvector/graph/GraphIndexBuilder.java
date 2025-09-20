@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
+import io.github.jbellis.jvector.graph.disk.NeighborsScoreCache;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -38,10 +40,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
@@ -297,8 +296,7 @@ public class GraphIndexBuilder implements Closeable {
                              boolean addHierarchy,
                              boolean refineFinalGraph,
                              ForkJoinPool simdExecutor,
-                             ForkJoinPool parallelExecutor)
-    {
+                             ForkJoinPool parallelExecutor) {
         if (maxDegrees.stream().anyMatch(i -> i <= 0)) {
             throw new IllegalArgumentException("layer degrees must be positive");
         }
@@ -333,6 +331,50 @@ public class GraphIndexBuilder implements Closeable {
         });
 
         // in scratch we store candidates in reverse order: worse candidates are first
+        this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
+        this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
+
+        this.rng = new Random(0);
+    }
+
+    /**
+     * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
+     * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
+     *
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param onDiskGraphIndex the on-disk representation of the graph index to be processed and converted.
+     * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
+     *                                    organized by levels and nodes.
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param neighborOverflow the factor determining how many additional neighbors are allowed beyond the configured limit.
+     * @param alpha the weight factor for balancing score computations.
+     * @param addHierarchy whether to add hierarchical structures while building the graph.
+     * @param refineFinalGraph whether to perform a refinement step on the final graph structure.
+     * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
+     * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     *
+     * @throws IOException if an I/O error occurs during the graph loading or conversion process.
+     */
+    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, OnDiskGraphIndex onDiskGraphIndex, NeighborsScoreCache perLevelNeighborsScoreCache, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) throws IOException {
+        this.scoreProvider = buildScoreProvider;
+        this.neighborOverflow = neighborOverflow;
+        this.dimension = onDiskGraphIndex.getDimension();
+        this.alpha = alpha;
+        this.addHierarchy = addHierarchy;
+        this.refineFinalGraph = refineFinalGraph;
+        this.beamWidth = beamWidth;
+        this.simdExecutor = simdExecutor;
+        this.parallelExecutor = parallelExecutor;
+
+        this.graph = OnHeapGraphIndex.convertToHeap(onDiskGraphIndex, perLevelNeighborsScoreCache, buildScoreProvider, neighborOverflow, alpha);
+
+        this.searchers = ExplicitThreadLocal.withInitial(() -> {
+            var gs = new GraphSearcher(graph);
+            gs.usePruning(false);
+            return gs;
+        });
+
+        // in scratch, we store candidates in reverse order: worse candidates are first
         this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
         this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
 
@@ -738,6 +780,51 @@ public class GraphIndexBuilder implements Closeable {
             }
         }
         return memorySize;
+    }
+
+    /**
+     * Convenience method to build a new graph from an existing one, with the addition of new nodes.
+     * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     */
+    public static OnHeapGraphIndex buildAndMergeNewNodes(OnDiskGraphIndex onDiskGraphIndex,
+                                                         NeighborsScoreCache perLevelNeighborsScoreCache,
+                                                         RandomAccessVectorValues newVectors,
+                                                         BuildScoreProvider buildScoreProvider,
+                                                         int startingNodeId,
+                                                         int beamWidth,
+                                                         float overflowRatio,
+                                                         float alpha,
+                                                         boolean addHierarchy) throws IOException {
+
+
+
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(buildScoreProvider,
+                onDiskGraphIndex,
+                perLevelNeighborsScoreCache,
+                beamWidth,
+                overflowRatio,
+                alpha,
+                addHierarchy,
+                true,
+                PhysicalCoreExecutor.pool(),
+                ForkJoinPool.commonPool())) {
+
+            // Add each new vector incrementally
+            final List<ForkJoinTask<?>> forkJoinTask = new ArrayList<>(newVectors.size());
+            for (int i = 0; i < newVectors.size(); i++) {
+                final int nodeId = startingNodeId + i;
+                final VectorFloat<?> vector = newVectors.getVector(i);
+
+                // The GraphIndexBuilder can add nodes to an existing index
+                forkJoinTask.add(PhysicalCoreExecutor.pool().submit(() -> builder.addGraphNode(nodeId, vector)));
+            }
+            for (ForkJoinTask<?> task : forkJoinTask) {
+                task.join();
+            }
+
+            builder.cleanup();
+            return builder.getGraph();
+        }
     }
 
     private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
