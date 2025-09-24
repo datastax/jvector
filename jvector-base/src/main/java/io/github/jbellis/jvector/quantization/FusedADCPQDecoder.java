@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.NodeArray;
 import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -40,7 +39,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     protected final ExactScoreFunction esf;
     protected final ByteSequence<?> partialQuantizedSums;
     // connected to the Graph View by caller
-    protected final FusedADC.PackedNeighbors neighbors;
+    protected final FusedADC.PackedNeighbors packedNeighbors;
     // caller passes this to us for re-use across calls
     protected final NodeScoreArray results;
     // decoder state
@@ -57,12 +56,12 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
     // The main difference is that since our graph structure rapidly converges towards the best results,
     // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
-    protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors neighbors, NodeScoreArray results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
+    protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors packedNeighbors, NodeScoreArray results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.query = query;
         this.esf = esf;
         this.invocationThreshold = invocationThreshold;
-        this.neighbors = neighbors;
+        this.packedNeighbors = packedNeighbors;
         this.results = results;
         this.vsf = vsf;
 
@@ -89,39 +88,47 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
 
     @Override
     public NodeScoreArray edgeLoadingSimilarityTo(int origin) {
-        var permutedNodes = neighbors.getPackedNeighbors(origin);
+        packedNeighbors.read(origin);
+        var transposedNodes = packedNeighbors.getNeighborCodes();
+        var neighbors = packedNeighbors.getNeighbors(origin);
+        var nodeCount = packedNeighbors.degree();
+
         results.clear();
+
+        for (int i = 0; i < nodeCount; i++) {
+            results.setNode(i, neighbors[i]);
+        }
 
         if (supportsQuantizedSimilarity) {
             // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
-            VectorUtil.bulkShuffleQuantizedSimilarity(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results.getScores(), vsf);
-            return results;
-        }
+            VectorUtil.bulkShuffleQuantizedSimilarity(transposedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results.getScores(), vsf);
+        } else {
+            // we have not yet computed worstDistance or delta, so we need to assemble the results manually
+            // from the PQ codebooks
+            var maxDegree = packedNeighbors.maxDegree();
+            for (int i = 0; i < pq.getSubspaceCount(); i++) {
+                for (int j = 0; j < maxDegree; j++) {
+                    results.setScore(j, results.getScore(j) + partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(transposedNodes.get(i * maxDegree + j))));
+                }
+            }
 
-        // we have not yet computed worstDistance or delta, so we need to assemble the results manually
-        // from the PQ codebooks
-        var nodeCount = results.size();
-        for (int i = 0; i < pq.getSubspaceCount(); i++) {
-            for (int j = 0; j < nodeCount; j++) {
-                results.setScore(j, results.getScore(j) + partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * nodeCount + j))));
+            // update worstDistance from our new set of results
+            for (int i = 0; i < nodeCount; i++) {
+                var result = results.getScore(i);
+                invocations++;
+                updateWorstDistance(result);
+                results.setScore(i, distanceToScore(result));
+            }
+
+            // once we have enough data, set up delta, partialQuantizedSums, and partialQuantizedMagnitudes for the fast path
+            if (invocations >= invocationThreshold) {
+                delta = (worstDistance - bestDistance) / 65535;
+                VectorUtil.quantizePartials(delta, partialSums, partialBestDistances, partialQuantizedSums);
+                supportsQuantizedSimilarity = true;
             }
         }
 
-        // update worstDistance from our new set of results
-        for (int i = 0; i < nodeCount; i++) {
-            var result = results.getScore(i);
-            invocations++;
-            updateWorstDistance(result);
-            results.setScore(i, distanceToScore(result));
-        }
-
-        // once we have enough data, set up delta, partialQuantizedSums, and partialQuantizedMagnitudes for the fast path
-        if (invocations >= invocationThreshold) {
-            delta = (worstDistance - bestDistance) / 65535;
-            VectorUtil.quantizePartials(delta, partialSums, partialBestDistances, partialQuantizedSums);
-            supportsQuantizedSimilarity = true;
-        }
-
+        results.retain(nodeCount);
         return results;
     }
 
@@ -249,46 +256,53 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             this.queryMagnitudeSquared = queryMagSum;
             bestDistance = VectorUtil.sum(partialBestDistances);
 
-            this.resultSumAggregates = new float[results.size()];
-            this.resultMagnitudeAggregates = new float[results.size()];
+            this.resultSumAggregates = new float[neighbors.maxDegree()];
+            this.resultMagnitudeAggregates = new float[neighbors.maxDegree()];
         }
 
         @Override
         public NodeScoreArray edgeLoadingSimilarityTo(int origin) {
-            var permutedNodes = neighbors.getPackedNeighbors(origin);
+            packedNeighbors.read(origin);
+            var permutedNodes = packedNeighbors.getNeighborCodes();
+            var neighbors = packedNeighbors.getNeighbors(origin);
+            var nodeCount = packedNeighbors.degree();
+
+            results.clear();
+
+            for (int i = 0; i < nodeCount; i++) {
+                results.setNode(i, neighbors[i]);
+            }
 
             if (supportsQuantizedSimilarity) {
-                results.clear();
                 // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
                 VectorUtil.bulkShuffleQuantizedSimilarityCosine(permutedNodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude, queryMagnitudeSquared, results.getScores());
-                return results;
-            }
-
-            // we have not yet computed worstDistance or delta, so we need to assemble the results manually
-            // from the PQ codebooks
-            var nodeCount = results.size();
-            Arrays.fill(resultSumAggregates, 0);
-            Arrays.fill(resultMagnitudeAggregates, 0);
-            for (int i = 0; i < pq.getSubspaceCount(); i++) {
-                for (int j = 0; j < nodeCount; j++) {
-                    resultSumAggregates[j] += partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * nodeCount + j)));
-                    resultMagnitudeAggregates[j] += partialSquaredMagnitudes.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * nodeCount + j)));
+            } else {
+                // we have not yet computed worstDistance or delta, so we need to assemble the results manually
+                // from the PQ codebooks
+                var maxDegree = packedNeighbors.maxDegree();
+                Arrays.fill(resultSumAggregates, 0);
+                Arrays.fill(resultMagnitudeAggregates, 0);
+                for (int i = 0; i < pq.getSubspaceCount(); i++) {
+                    for (int j = 0; j < maxDegree; j++) {
+                        resultSumAggregates[j] += partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * maxDegree + j)));
+                        resultMagnitudeAggregates[j] += partialSquaredMagnitudes.get(i * pq.getClusterCount() + Byte.toUnsignedInt(permutedNodes.get(i * maxDegree + j)));
+                    }
                 }
-            }
 
-            // update worstDistance from our new set of results
-            for (int i = 0; i < nodeCount; i++) {
-                updateWorstDistance(resultSumAggregates[i]);
-                var result = resultSumAggregates[i] / (float) Math.sqrt(resultMagnitudeAggregates[i] * queryMagnitudeSquared);
-                invocations++;
-                results.setScore(i, distanceToScore(result));
-            }
+                // update worstDistance from our new set of results
+                for (int i = 0; i < nodeCount; i++) {
+                    updateWorstDistance(resultSumAggregates[i]);
+                    var result = resultSumAggregates[i] / (float) Math.sqrt(resultMagnitudeAggregates[i] * queryMagnitudeSquared);
+                    invocations++;
+                    results.setScore(i, distanceToScore(result));
+                }
 
-            // once we have enough data, set up delta and partialQuantizedSums for the fast path
-            if (invocations >= invocationThreshold) {
-                delta = (worstDistance - bestDistance) / 65535;
-                VectorUtil.quantizePartials(delta, partialSums, partialBestDistances, partialQuantizedSums);
-                supportsQuantizedSimilarity = true;
+                // once we have enough data, set up delta and partialQuantizedSums for the fast path
+                if (invocations >= invocationThreshold) {
+                    delta = (worstDistance - bestDistance) / 65535;
+                    VectorUtil.quantizePartials(delta, partialSums, partialBestDistances, partialQuantizedSums);
+                    supportsQuantizedSimilarity = true;
+                }
             }
 
             return results;

@@ -48,10 +48,12 @@ public class NodeScoreArray {
 
     private VectorFloat<?> scores;
     private int[] nodes;
+    private int size;
 
-    public NodeScoreArray(int size) {
-        this.nodes = new int[size];
-        this.scores = vectorTypeSupport.createFloatVector(size);
+    public NodeScoreArray(int capacity) {
+        this.nodes = new int[capacity];
+        this.scores = vectorTypeSupport.createFloatVector(capacity);
+        size = 0;
     }
 
     /**
@@ -60,14 +62,17 @@ public class NodeScoreArray {
     void insertAt(int insertionPoint, int newNode, float newScore) {
         this.nodes[insertionPoint] = newNode;
         this.scores.set(insertionPoint, newScore);
+        size = Math.max(size, insertionPoint + 1);
     }
 
     public int size() {
-        return nodes.length;
+        return size;
     }
 
     public void clear() {
-        this.scores.zero();
+        scores.zero();
+        Arrays.fill(nodes, 0);
+        size = 0;
     }
 
     public float getScore(int i) {
@@ -79,14 +84,20 @@ public class NodeScoreArray {
     }
 
     public void setScore(int i, float score) {
+        size = Math.max(size, i + 1);
         scores.set(i, score);
     }
 
     public void setNode(int i, int node) {
         nodes[i] = node;
+        size = Math.max(size, i + 1);
     }
 
     public VectorFloat<?> getScores() {
         return scores;
+    }
+
+    public void retain(int size) {
+        this.size = Math.min(this.size, size);
     }
 }

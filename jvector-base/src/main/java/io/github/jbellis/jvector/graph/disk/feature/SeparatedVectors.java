@@ -25,7 +25,7 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
-public class SeparatedVectors implements SeparatedFeature {
+public class SeparatedVectors extends AbstractSeparatedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final int dimension;
     private long offset;
@@ -48,6 +48,11 @@ public class SeparatedVectors implements SeparatedFeature {
     @Override
     public FeatureId id() {
         return FeatureId.SEPARATED_VECTORS;
+    }
+
+    @Override
+    public boolean isFused() {
+        return false;
     }
 
     @Override

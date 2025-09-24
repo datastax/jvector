@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.graph.disk.feature.*;
 import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -65,7 +66,13 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
         this.featureMap = features;
-        this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
+        if (version <= 5) {
+            // Versions <= 5 use the old feature ordering, simply provided by the FeatureId
+            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
+        } else {
+            // Version 6 uses the new feature ordering to place fused features last in the list
+            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
+        }
         this.out = out;
 
         // create a mock Header to determine the correct size

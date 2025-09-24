@@ -33,7 +33,7 @@ import java.io.UncheckedIOException;
 /**
  * Implements the storage of NuVeQ vectors in an on-disk graph index.  These can be used for reranking.
  */
-public class NVQ implements Feature {
+public class NVQ extends AbstractFeature {
     private final NVQuantization nvq;
     private final NVQScorer scorer;
     private final ThreadLocal<QuantizedVector> reusableQuantizedVector;
@@ -47,6 +47,11 @@ public class NVQ implements Feature {
     @Override
     public FeatureId id() {
         return FeatureId.NVQ_VECTORS;
+    }
+
+    @Override
+    public boolean isFused() {
+        return false;
     }
 
     @Override

@@ -24,8 +24,10 @@ import java.util.function.IntFunction;
 /**
  * A feature of an on-disk graph index. Information to use a feature is stored in the header on-disk.
  */
-public interface Feature {
+public interface Feature extends Comparable<Feature> {
     FeatureId id();
+
+    boolean isFused();
 
     int headerSize();
 

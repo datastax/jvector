@@ -39,12 +39,13 @@ import java.io.UncheckedIOException;
 /**
  * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
  */
-public class FusedADC implements Feature {
+public class FusedADC extends AbstractFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
     private final int maxDegree;
     private final ThreadLocal<NodeScoreArray> reusableResults;
-    private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighbors;
+    private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighborCodes;
+    private final ExplicitThreadLocal<int[]> reusableNeighbors;
     private ByteSequence<?> compressedNeighbors = null;
 
     public FusedADC(int maxDegree, ProductQuantization pq) {
@@ -57,12 +58,18 @@ public class FusedADC implements Feature {
         this.maxDegree = maxDegree;
         this.pq = pq;
         this.reusableResults = ThreadLocal.withInitial(() -> new NodeScoreArray(maxDegree));
-        this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
+        this.reusableNeighborCodes = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
+        this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> new int[maxDegree]);
     }
 
     @Override
     public FeatureId id() {
         return FeatureId.FUSED_ADC;
+    }
+
+    @Override
+    public boolean isFused() {
+        return true;
     }
 
     @Override
@@ -108,7 +115,8 @@ public class FusedADC implements Feature {
         int n = 0;
         compressedNeighbors.zero();
         while (neighbors.hasNext()) {
-            var compressed = pqv.get(neighbors.nextInt());
+            int node =neighbors.nextInt();
+            var compressed = pqv.get(node);
             for (int j = 0; j < pqv.getCompressedSize(); j++) {
                 compressedNeighbors.set(j * maxDegree + n, compressed.get(j));
             }
@@ -132,24 +140,52 @@ public class FusedADC implements Feature {
 
     public class PackedNeighbors {
         private final OnDiskGraphIndex.View view;
+        private int degree;
+        private int[] neighbors;
+        private ByteSequence<?> neighborCodes;
 
         public PackedNeighbors(OnDiskGraphIndex.View view) {
             this.view = view;
+            neighbors = reusableNeighbors.get();
+            neighborCodes = reusableNeighborCodes.get();
         }
 
-        public ByteSequence<?> getPackedNeighbors(int node) {
+        public void read(int node) {
             try {
-                var reader = view.featureReaderForNode(node, FeatureId.FUSED_ADC);
-                var tlNeighbors = reusableNeighbors.get();
-                vectorTypeSupport.readByteSequence(reader, tlNeighbors);
-                return tlNeighbors;
+                degree = view.getPackedNeighbors(node, FeatureId.FUSED_ADC, neighbors, neighborCodes);
+//                var it = view.getNeighborsIterator(0, node);
+//
+//                if (degree != it.size()) {
+//                    throw new RuntimeException("Mismatch");
+//                }
+//                int i = 0;
+//                while (it.hasNext()) {
+//                    int next = it.nextInt();
+//                    if (next != neighbors[i]) {
+//                        throw new RuntimeException("Mismatch");
+//                    }
+//                    System.out.println(next + " " + neighbors[i]);
+//                    i++;
+//                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }
 
+        public ByteSequence<?> getNeighborCodes() {
+            return neighborCodes;
+        }
+
+        public int[] getNeighbors(int node) {
+            return neighbors;
+        }
+
         public int maxDegree() {
             return maxDegree;
+        }
+
+        public int degree() {
+            return degree;
         }
     }
 }
