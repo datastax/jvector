@@ -73,6 +73,9 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             // Version 6 uses the new feature ordering to place fused features last in the list
             this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
         }
+        if (this.inlineFeatures.stream().filter(Feature::isFused).count() > 1) {
+            throw new IllegalArgumentException("Only one fused feature is allowed");
+        }
         this.out = out;
 
         // create a mock Header to determine the correct size
