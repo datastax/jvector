@@ -58,11 +58,6 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
     }
 
     @Override
-    public boolean isFused() {
-        return false;
-    }
-
-    @Override
     public int headerSize() {
         return nvq.compressorSize() + Long.BYTES;
     }

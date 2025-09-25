@@ -42,11 +42,6 @@ public class InlineVectors extends AbstractFeature {
     }
 
     @Override
-    public boolean isFused() {
-        return false;
-    }
-
-    @Override
     public int headerSize() {
         return 0;
     }

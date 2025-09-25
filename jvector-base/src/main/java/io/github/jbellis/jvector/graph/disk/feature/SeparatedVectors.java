@@ -51,11 +51,6 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
     }
 
     @Override
-    public boolean isFused() {
-        return false;
-    }
-
-    @Override
     public int headerSize() {
         return Long.BYTES;
     }

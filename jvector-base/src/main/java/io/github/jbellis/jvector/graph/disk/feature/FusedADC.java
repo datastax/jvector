@@ -39,13 +39,14 @@ import java.io.UncheckedIOException;
 /**
  * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
  */
-public class FusedADC extends AbstractFeature {
+public class FusedADC extends AbstractFeature implements FusedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
     private final int maxDegree;
     private final ThreadLocal<NodeScoreArray> reusableResults;
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighborCodes;
     private final ExplicitThreadLocal<int[]> reusableNeighbors;
+    private final ExplicitThreadLocal<ByteSequence<?>> pqCodeScratch;
     private ByteSequence<?> compressedNeighbors = null;
 
     public FusedADC(int maxDegree, ProductQuantization pq) {
@@ -60,16 +61,12 @@ public class FusedADC extends AbstractFeature {
         this.reusableResults = ThreadLocal.withInitial(() -> new NodeScoreArray(maxDegree));
         this.reusableNeighborCodes = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
         this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> new int[maxDegree]);
+        this.pqCodeScratch = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize()));
     }
 
     @Override
     public FeatureId id() {
         return FeatureId.FUSED_ADC;
-    }
-
-    @Override
-    public boolean isFused() {
-        return true;
     }
 
     @Override
@@ -83,7 +80,6 @@ public class FusedADC extends AbstractFeature {
     }
 
     static FusedADC load(CommonHeader header, RandomAccessReader reader) {
-        // TODO doesn't work with different degrees
         try {
             return new FusedADC(header.layerInfo.get(0).degree, ProductQuantization.load(reader));
         } catch (IOException e) {
@@ -93,7 +89,8 @@ public class FusedADC extends AbstractFeature {
 
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
-        return FusedADCPQDecoder.newDecoder(neighbors, pq, queryVector, reusableResults.get(), vsf, esf);
+        var hierarchyCachedFeatures = view.getInlineSourceFeatures();
+        return FusedADCPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableResults.get(), vsf, esf);
     }
 
     @Override
@@ -138,6 +135,37 @@ public class FusedADC extends AbstractFeature {
         }
     }
 
+    @Override
+    public void writeSourceFeature(DataOutput out, Feature.State state_) throws IOException {
+        var state = (FusedADC.State) state_;
+        var compressed = state.pqVectors.get(state.nodeId);
+        var temp = pqCodeScratch.get();
+        for (int i = 0; i < compressed.length(); i++) {
+            temp.set(i, compressed.get(i));
+        }
+        vectorTypeSupport.writeByteSequence(out, temp);
+    }
+
+    public class FusedADCInlineSource implements InlineSource {
+        private ByteSequence<?> code;
+
+        public FusedADCInlineSource(ByteSequence<?> code) {
+            this.code = code;
+        }
+
+        public ByteSequence<?> getCode() {
+            return code;
+        }
+    }
+
+    @Override
+    public InlineSource loadSourceFeature(RandomAccessReader in) throws IOException {
+        int length = pq.getSubspaceCount();
+        var code = vectorTypeSupport.createByteSequence(length);
+        vectorTypeSupport.readByteSequence(in, code);
+        return new FusedADCInlineSource(code);
+    }
+
     public class PackedNeighbors {
         private final OnDiskGraphIndex.View view;
         private int degree;
@@ -153,20 +181,6 @@ public class FusedADC extends AbstractFeature {
         public void read(int node) {
             try {
                 degree = view.getPackedNeighbors(node, FeatureId.FUSED_ADC, neighbors, neighborCodes);
-//                var it = view.getNeighborsIterator(0, node);
-//
-//                if (degree != it.size()) {
-//                    throw new RuntimeException("Mismatch");
-//                }
-//                int i = 0;
-//                while (it.hasNext()) {
-//                    int next = it.nextInt();
-//                    if (next != neighbors[i]) {
-//                        throw new RuntimeException("Mismatch");
-//                    }
-//                    System.out.println(next + " " + neighbors[i]);
-//                    i++;
-//                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

@@ -20,7 +20,6 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.NodeArray;
 import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -28,6 +27,7 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
 import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
@@ -84,6 +84,8 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     private final long neighborsOffset;
     /** For layers > 0, store adjacency fully in memory. */
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
+    // When using fused features, store the features fully in memory for layers > 0
+    private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
 
     OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
@@ -106,6 +108,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
         this.inlineBlockSize = inlineBlockSize;
         inMemoryNeighbors = new AtomicReference<>(null);
+        inMemoryFeatures = new AtomicReference<>(null);
     }
 
     private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
@@ -152,6 +155,64 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             imn.add(edges);
         }
         return imn;
+    }
+
+    private Int2ObjectHashMap<FusedFeature.InlineSource> getInMemoryFeatures(RandomAccessReader in) throws IOException {
+        return inMemoryFeatures.updateAndGet(current -> {
+            if (current != null) {
+                return current;
+            }
+            try {
+                return loadInMemoryFeatures(in);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+    }
+
+    private Int2ObjectHashMap<FusedFeature.InlineSource> loadInMemoryFeatures(RandomAccessReader in) throws IOException {
+        Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyFeatures = new Int2ObjectHashMap<>();
+
+        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long inMemorySize = 0;
+        for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
+            CommonHeader.LayerInfo info = layerInfo.get(lvl);
+            inMemorySize += Integer.BYTES * info.size * (2L + info.degree);
+        }
+        in.seek(neighborsOffset + L0size + inMemorySize);
+
+        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
+        if (version == 6) {
+            if (layerInfo.size() >= 2) {
+                int level = 1;
+                CommonHeader.LayerInfo info = layerInfo.get(level);
+                for (int i = 0; i < info.size; i++) {
+                    int nodeId = in.readInt();
+
+                    // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
+                    for (var feature : features.values()) {
+                        if (feature.isFused()) {
+                            var fusedFeature = (FusedFeature) feature;
+                            var inlineSource = fusedFeature.loadSourceFeature(in);
+                            hierarchyFeatures.put(nodeId, inlineSource);
+                        }
+                    }
+                }
+            } else {
+                // read the entry node
+                int nodeId = in.readInt();
+
+                // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
+                for (var feature : features.values()) {
+                    if (feature.isFused()) {
+                        var fusedFeature = (FusedFeature) feature;
+                        var inlineSource = fusedFeature.loadSourceFeature(in);
+                        hierarchyFeatures.put(nodeId, inlineSource);
+                    }
+                }
+            }
+        }
+        return hierarchyFeatures;
     }
 
     /**
@@ -468,6 +529,14 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
                     : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
             reader.read(neighbors, 0, neighborCount);
             return neighborCount;
+        }
+
+        public Int2ObjectHashMap<FusedFeature.InlineSource> getInlineSourceFeatures() {
+            try {
+                return OnDiskGraphIndex.this.getInMemoryFeatures(reader);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
 
         @Override

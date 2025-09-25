@@ -50,11 +50,6 @@ public class NVQ extends AbstractFeature {
     }
 
     @Override
-    public boolean isFused() {
-        return false;
-    }
-
-    @Override
     public int headerSize() {
         return nvq.compressorSize();
     }

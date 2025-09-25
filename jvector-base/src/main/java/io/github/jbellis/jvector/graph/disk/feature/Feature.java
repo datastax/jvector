@@ -27,7 +27,9 @@ import java.util.function.IntFunction;
 public interface Feature extends Comparable<Feature> {
     FeatureId id();
 
-    boolean isFused();
+    default boolean isFused() {
+        return false;
+    }
 
     int headerSize();
 
