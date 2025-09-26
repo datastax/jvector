@@ -11,10 +11,6 @@ on:
         description: 'Space-separated list of branches to benchmark'
         required: false
         default: 'main'
-      repository:
-        description: 'Repository to checkout (owner/repo) when manually triggered; defaults to current repo'
-        required: false
-        default: ''
       custom_config:
         description: 'Custom YAML configuration content (will override autoDefault.yml)'
         required: false
@@ -122,30 +118,11 @@ jobs:
           echo "  - Branch: ${{ matrix.branch }}"
           echo "  - JDK: ${{ matrix.jdk }}"
           echo "  - ISA: ${{ matrix.isa }}"
-          echo "  - Repository (manual runs): '${{ github.event.inputs.repository }}' (empty means current repo)"
 
-      # Checkout the branch specified in the matrix, supporting forks
-      - name: Checkout base main (PR)
-        if: github.event_name == 'pull_request' && matrix.branch == 'main'
+      # Checkout the branch specified in the matrix
+      - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository }}
-          ref: main
-          fetch-depth: 0
-
-      - name: Checkout PR head branch (supports forks)
-        if: github.event_name == 'pull_request' && matrix.branch != 'main'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      - name: Checkout branch (non-PR)
-        if: github.event_name != 'pull_request'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.repository && github.event.inputs.repository || github.repository }}
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
