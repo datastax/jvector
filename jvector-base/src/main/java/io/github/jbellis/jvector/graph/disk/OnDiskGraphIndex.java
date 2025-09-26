@@ -511,7 +511,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             }
         }
 
-        public int getPackedNeighbors(int node, FeatureId featureId, int[] neighbors, Consumer<RandomAccessReader> readerConsumer) throws IOException {
+        public void getPackedNeighbors(int node, FeatureId featureId, Consumer<RandomAccessReader> neighborsConsumer, Consumer<RandomAccessReader> featureConsumer) throws IOException {
             Feature feature = features.get(featureId);
             if (!feature.isFused()) {
                 throw new UnsupportedOperationException("Only fused features are supported with packed neighbors");
@@ -519,16 +519,12 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
             long offset = offsetFor(node, featureId);
             reader.seek(offset);
-            readerConsumer.accept(reader);
+            featureConsumer.accept(reader);
 
             if (version < 6) {
                 reader.seek(neighborsOffsetFor(0, node));
             }
-            int neighborCount = reader.readInt();
-            assert neighborCount <= neighbors.length
-                    : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
-            reader.read(neighbors, 0, neighborCount);
-            return neighborCount;
+            neighborsConsumer.accept(reader);
         }
 
         public Int2ObjectHashMap<FusedFeature.InlineSource> getInlineSourceFeatures() {

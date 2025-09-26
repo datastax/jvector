@@ -45,7 +45,6 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     private final int maxDegree;
     private final ThreadLocal<NodeScoreArray> reusableResults;
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighborCodes;
-    private final ExplicitThreadLocal<int[]> reusableNeighbors;
     private final ExplicitThreadLocal<ByteSequence<?>> pqCodeScratch;
     private ByteSequence<?> compressedNeighbors = null;
 
@@ -60,7 +59,6 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         this.pq = pq;
         this.reusableResults = ThreadLocal.withInitial(() -> new NodeScoreArray(maxDegree));
         this.reusableNeighborCodes = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
-        this.reusableNeighbors = ExplicitThreadLocal.withInitial(() -> new int[maxDegree]);
         this.pqCodeScratch = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize()));
     }
 
@@ -90,7 +88,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
-        return FusedADCPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableResults.get(), vsf, esf);
+        return FusedADCPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
     }
 
     @Override
@@ -169,35 +167,37 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     public class PackedNeighbors {
         private final OnDiskGraphIndex.View view;
         private int degree;
-        private int[] neighbors;
-        private ByteSequence<?> neighborCodes;
 
         public PackedNeighbors(OnDiskGraphIndex.View view) {
             this.view = view;
-            neighbors = reusableNeighbors.get();
-            neighborCodes = reusableNeighborCodes.get();
         }
 
-        public void read(int node) {
+        public void readInto(int node, NodeScoreArray nodeScoreArray, ByteSequence<?> neighborCodes) {
             try {
-                degree = view.getPackedNeighbors(node, FeatureId.FUSED_PQ, neighbors, reader -> {
-                    try {
-                        vectorTypeSupport.readByteSequence(reader, neighborCodes);
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                });
+                view.getPackedNeighbors(node, FeatureId.FUSED_PQ,
+                        reader -> {
+                            try {
+                                degree = reader.readInt();
+                                assert degree <= maxDegree
+                                        : String.format("Node %d neighborCount %d > M %d", node, degree, maxDegree);
+                                for (int i = 0; i < degree; i++) {
+                                    nodeScoreArray.setNode(i, reader.readInt());
+                                }
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        },
+                        reader -> {
+                            try {
+                                vectorTypeSupport.readByteSequence(reader, neighborCodes);
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                );
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-        }
-
-        public ByteSequence<?> getNeighborCodes() {
-            return neighborCodes;
-        }
-
-        public int[] getNeighbors(int node) {
-            return neighbors;
         }
 
         public int maxDegree() {
