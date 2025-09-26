@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.graph.NodeQueue;
 import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -81,7 +82,7 @@ public class TestADCGraphIndex extends RandomizedTest {
         var pq = ProductQuantization.compute(ravv, 8, 256, false);
         var pqv = (PQVectors) pq.encodeAll(ravv);
 
-        TestUtil.writeFusedGraph(graph, ravv, pqv, outputPath);
+        TestUtil.writeFusedGraph(graph, ravv, pqv, FeatureId.INLINE_VECTORS, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier, 0))
@@ -92,7 +93,6 @@ public class TestADCGraphIndex extends RandomizedTest {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
                     var queryVector = TestUtil.randomVector(getRandom(), 512);
                     var pqScoreFunction = pqv.precomputedScoreFunctionFor(queryVector, similarityFunction);
-                    var reranker = cachedOnDiskView.rerankerFor(queryVector, similarityFunction);
                     for (int i = 0; i < 50; i++) {
                         var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
                         var ordinal = getRandom().nextInt(graph.size());
@@ -130,14 +130,15 @@ public class TestADCGraphIndex extends RandomizedTest {
     public void testRecallOnGraphWithRandomVectors() throws IOException {
         for (var similarityFunction : List.of(VectorSimilarityFunction.COSINE, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.EUCLIDEAN)) {
             for (var addHierarchy : List.of(false, true)) {
-                testRecallOnGraphWithRandomVectors(addHierarchy, similarityFunction);
+                for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
+                    testRecallOnGraphWithRandomVectors(addHierarchy, similarityFunction, featureId);
+                }
             }
         }
-//        testRecallOnGraphWithRandomVectors(true, VectorSimilarityFunction.COSINE);
     }
 
     // build a random graph, then check that it has at least 90% recall
-    public void testRecallOnGraphWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction) throws IOException {
+    public void testRecallOnGraphWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
         var outputPath = testDirectory.resolve("random_fused_graph");
 
         int size = 1_000;
@@ -153,7 +154,7 @@ public class TestADCGraphIndex extends RandomizedTest {
         var pq = ProductQuantization.compute(vectors, 8, 256, false);
         var pqv = (PQVectors) pq.encodeAll(vectors);
 
-        TestUtil.writeFusedGraph(tempGraph, vectors, pqv, outputPath);
+        TestUtil.writeFusedGraph(tempGraph, vectors, pqv, featureId, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
             var graph = OnDiskGraphIndex.load(readerSupplier, 0)) {
@@ -195,12 +196,14 @@ public class TestADCGraphIndex extends RandomizedTest {
     public void testScoresWithRandomVectors() throws IOException {
         for (var similarityFunction : List.of(VectorSimilarityFunction.COSINE, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.EUCLIDEAN)) {
             for (var addHierarchy : List.of(false, true)) {
-                testScoresWithRandomVectors(addHierarchy, similarityFunction);
+                for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
+                    testScoresWithRandomVectors(addHierarchy, similarityFunction, featureId);
+                }
             }
         }
     }
 
-    public void testScoresWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction) throws IOException {
+    public void testScoresWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
         var outputPath = testDirectory.resolve("random_fused_graph");
 
         int size = 1_000;
@@ -213,7 +216,7 @@ public class TestADCGraphIndex extends RandomizedTest {
         var pq = ProductQuantization.compute(vectors, 8, 256, false);
         var pqv = (PQVectors) pq.encodeAll(vectors);
 
-        TestUtil.writeFusedGraph(tempGraph, vectors, pqv, outputPath);
+        TestUtil.writeFusedGraph(tempGraph, vectors, pqv, featureId, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
             var graph = OnDiskGraphIndex.load(readerSupplier, 0)) {

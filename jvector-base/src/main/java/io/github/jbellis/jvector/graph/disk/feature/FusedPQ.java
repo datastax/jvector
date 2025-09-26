@@ -39,7 +39,7 @@ import java.io.UncheckedIOException;
 /**
  * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
  */
-public class FusedADC extends AbstractFeature implements FusedFeature {
+public class FusedPQ extends AbstractFeature implements FusedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
     private final int maxDegree;
@@ -49,7 +49,7 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
     private final ExplicitThreadLocal<ByteSequence<?>> pqCodeScratch;
     private ByteSequence<?> compressedNeighbors = null;
 
-    public FusedADC(int maxDegree, ProductQuantization pq) {
+    public FusedPQ(int maxDegree, ProductQuantization pq) {
         if (maxDegree != 32) {
             throw new IllegalArgumentException("maxDegree must be 32 for FusedADC. This limitation may be removed in future releases");
         }
@@ -66,7 +66,7 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
 
     @Override
     public FeatureId id() {
-        return FeatureId.FUSED_ADC;
+        return FeatureId.FUSED_PQ;
     }
 
     @Override
@@ -79,9 +79,9 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
         return pq.compressedVectorSize() * maxDegree;
     }
 
-    static FusedADC load(CommonHeader header, RandomAccessReader reader) {
+    static FusedPQ load(CommonHeader header, RandomAccessReader reader) {
         try {
-            return new FusedADC(header.layerInfo.get(0).degree, ProductQuantization.load(reader));
+            return new FusedPQ(header.layerInfo.get(0).degree, ProductQuantization.load(reader));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -105,7 +105,7 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
         if (compressedNeighbors == null) {
             compressedNeighbors = vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree);
         }
-        var state = (FusedADC.State) state_;
+        var state = (FusedPQ.State) state_;
         var pqv = state.pqVectors;
 
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
@@ -137,7 +137,7 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
 
     @Override
     public void writeSourceFeature(DataOutput out, Feature.State state_) throws IOException {
-        var state = (FusedADC.State) state_;
+        var state = (FusedPQ.State) state_;
         var compressed = state.pqVectors.get(state.nodeId);
         var temp = pqCodeScratch.get();
         for (int i = 0; i < compressed.length(); i++) {
@@ -180,7 +180,13 @@ public class FusedADC extends AbstractFeature implements FusedFeature {
 
         public void read(int node) {
             try {
-                degree = view.getPackedNeighbors(node, FeatureId.FUSED_ADC, neighbors, neighborCodes);
+                degree = view.getPackedNeighbors(node, FeatureId.FUSED_PQ, neighbors, reader -> {
+                    try {
+                        vectorTypeSupport.readByteSequence(reader, neighborCodes);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

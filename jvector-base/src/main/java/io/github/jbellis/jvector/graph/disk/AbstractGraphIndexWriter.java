@@ -24,6 +24,7 @@ import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,7 +43,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final int dimension;
     // we don't use Map features but EnumMap is the best way to make sure we don't
     // accidentally introduce an ordering bug in the future
-    final EnumMap<FeatureId, Feature> featureMap;
+    final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
     final int headerSize;
     volatile int maxOrdinalWritten = -1;
@@ -63,14 +64,21 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.view = graph instanceof OnHeapGraphIndex ? ((OnHeapGraphIndex) graph).getFrozenView() : graph.getView();
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
-        this.featureMap = features;
+
         if (version <= 5) {
             // Versions <= 5 use the old feature ordering, simply provided by the FeatureId
+            this.featureMap = features;
             this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
         } else {
             // Version 6 uses the new feature ordering to place fused features last in the list
-            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
+            var sortedFeatures = features.values().stream().sorted().collect(Collectors.toList());
+            this.featureMap = new LinkedHashMap<>();
+            for (var feature : sortedFeatures) {
+                this.featureMap.put(feature.id(), feature);
+            }
+            this.inlineFeatures = sortedFeatures.stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
         }
+
         if (this.inlineFeatures.stream().filter(Feature::isFused).count() > 1) {
             throw new IllegalArgumentException("At most one fused feature is allowed");
         }

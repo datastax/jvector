@@ -26,14 +26,13 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.vector.types.ByteSequence;
 import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
@@ -51,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -77,12 +77,13 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     final NodeAtLevel entryNode;
     final int idUpperBound;
     final int inlineBlockSize; // total size of all inline elements contributed by features
-    final EnumMap<FeatureId, ? extends Feature> features;
+    final Map<FeatureId, ? extends Feature> features;
     final EnumMap<FeatureId, Integer> inlineOffsets;
+
     private final List<CommonHeader.LayerInfo> layerInfo;
     // offset of L0 adjacency data
     private final long neighborsOffset;
-    /** For layers > 0, store adjacency fully in memory. */
+    // For layers > 0, store adjacency fully in memory.
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
     // When using fused features, store the features fully in memory for layers > 0
     private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
@@ -128,8 +129,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
-        long L0size = 0;
-        L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
         in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
@@ -177,7 +177,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         long inMemorySize = 0;
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
             CommonHeader.LayerInfo info = layerInfo.get(lvl);
-            inMemorySize += Integer.BYTES * info.size * (2L + info.degree);
+            inMemorySize += Integer.BYTES * info.size * (1L + 1L + info.degree);
         }
         in.seek(neighborsOffset + L0size + inMemorySize);
 
@@ -511,7 +511,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             }
         }
 
-        public int getPackedNeighbors(int node, FeatureId featureId, int[] neighbors, ByteSequence<?> neighborCodes) throws IOException {
+        public int getPackedNeighbors(int node, FeatureId featureId, int[] neighbors, Consumer<RandomAccessReader> readerConsumer) throws IOException {
             Feature feature = features.get(featureId);
             if (!feature.isFused()) {
                 throw new UnsupportedOperationException("Only fused features are supported with packed neighbors");
@@ -519,7 +519,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
             long offset = offsetFor(node, featureId);
             reader.seek(offset);
-            vectorTypeSupport.readByteSequence(reader, neighborCodes);
+            readerConsumer.accept(reader);
 
             if (version < 6) {
                 reader.seek(neighborsOffsetFor(0, node));
@@ -602,8 +602,8 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         @Override
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
-            if (features.containsKey(FeatureId.FUSED_ADC)) {
-                return ((FusedADC) features.get(FeatureId.FUSED_ADC)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
+            if (features.containsKey(FeatureId.FUSED_PQ)) {
+                return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else {
                 throw new UnsupportedOperationException("No approximate score function available for this graph");
             }

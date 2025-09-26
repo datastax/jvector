@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.NodeScoreArray;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -42,7 +42,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     protected final ExactScoreFunction esf;
     protected final ByteSequence<?> partialQuantizedSums;
     // connected to the Graph View by caller
-    protected final FusedADC.PackedNeighbors packedNeighbors;
+    protected final FusedPQ.PackedNeighbors packedNeighbors;
     // caller passes this to us for re-use across calls
     protected final NodeScoreArray results;
     // decoder state
@@ -59,7 +59,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
     // The main difference is that since our graph structure rapidly converges towards the best results,
     // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
-    protected FusedADCPQDecoder(ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors packedNeighbors, NodeScoreArray results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
+    protected FusedADCPQDecoder(ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, int invocationThreshold, FusedPQ.PackedNeighbors packedNeighbors, NodeScoreArray results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.hierarchyCachedFeatures = hierarchyCachedFeatures;
         this.query = query;
@@ -150,7 +150,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     protected abstract void updateWorstDistance(float distance);
 
     static class DotProductDecoder extends FusedADCPQDecoder {
-        public DotProductDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
+        public DotProductDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
         }
@@ -160,7 +160,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             if (!hierarchyCachedFeatures.containsKey(node2)) {
                 throw new IllegalArgumentException("Node " + node2 + " is not in the hierarchy");
             }
-            var code2 = (FusedADC.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
+            var code2 = (FusedPQ.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
             return distanceToScore(decodedSimilarity(code2.getCode()));
         }
 
@@ -176,7 +176,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     }
 
     static class EuclideanDecoder extends FusedADCPQDecoder {
-        public EuclideanDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
+        public EuclideanDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.EUCLIDEAN);
             worstDistance = 0; // initialize at best value, update as we search
         }
@@ -186,7 +186,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             if (!hierarchyCachedFeatures.containsKey(node2)) {
                 throw new IllegalArgumentException("Node " + node2 + " is not in the hierarchy");
             }
-            var code2 = (FusedADC.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
+            var code2 = (FusedPQ.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
             return distanceToScore(decodedSimilarity(code2.getCode()));
         }
 
@@ -216,7 +216,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         private float minSquaredMagnitude;
         private float squaredMagnitudeDelta;
 
-        protected CosineDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
+        protected CosineDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq, Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query, NodeScoreArray results, ExactScoreFunction esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.COSINE);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
 
@@ -334,7 +334,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
             if (!hierarchyCachedFeatures.containsKey(node2)) {
                 throw new IllegalArgumentException("Node " + node2 + " is not in the hierarchy");
             }
-            var code2 = (FusedADC.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
+            var code2 = (FusedPQ.FusedADCInlineSource) hierarchyCachedFeatures.get(node2);
             float cos = VectorUtil.pqDecodedCosineSimilarity(code2.getCode(), 0, pq.getSubspaceCount(), pq.getClusterCount(), partialSums, partialSquaredMagnitudes, queryMagnitudeSquared);
             return distanceToScore(cos);
         }
@@ -348,7 +348,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         };
     }
 
-    public static FusedADCPQDecoder newDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq,
+    public static FusedADCPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                                Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
                                                NodeScoreArray results, VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
         switch (similarityFunction) {
