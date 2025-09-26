@@ -447,10 +447,19 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         public BitsPerDimension bitsPerDimension;
 
         // The NVQ parameters
+        //min max alpha and zero stored with vector and used to compute on fly
+        //better to just store delta (max - min) and ([summary of logistic] - as computed in VectorUtil impls)?
+
         public float growthRate;
         public float midpoint;
         public float maxValue;
         public float minValue;
+
+        // New values
+        public float delta; // maxValue - minValue
+        // can we do this w/4 var or do we need 5?
+
+
 
         // The number of dimensions of the input uncompressed subvector
         public int originalDimensions;
