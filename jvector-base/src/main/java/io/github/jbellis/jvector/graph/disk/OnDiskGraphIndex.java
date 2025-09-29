@@ -20,12 +20,14 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
@@ -48,6 +50,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +68,7 @@ import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWri
 public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 5;
+    public static final int CURRENT_VERSION = 6;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -73,13 +77,16 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     final NodeAtLevel entryNode;
     final int idUpperBound;
     final int inlineBlockSize; // total size of all inline elements contributed by features
-    final EnumMap<FeatureId, ? extends Feature> features;
+    final Map<FeatureId, ? extends Feature> features;
     final EnumMap<FeatureId, Integer> inlineOffsets;
+
     private final List<CommonHeader.LayerInfo> layerInfo;
     // offset of L0 adjacency data
     private final long neighborsOffset;
-    /** For layers > 0, store adjacency fully in memory. */
+    // For layers > 0, store adjacency fully in memory.
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
+    // When using fused features, store the features fully in memory for layers > 0
+    private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
 
     OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
@@ -102,6 +109,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
         this.inlineBlockSize = inlineBlockSize;
         inMemoryNeighbors = new AtomicReference<>(null);
+        inMemoryFeatures = new AtomicReference<>(null);
     }
 
     private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
@@ -121,8 +129,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
-        long L0size = 0;
-        L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
         in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
@@ -148,6 +155,64 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             imn.add(edges);
         }
         return imn;
+    }
+
+    private Int2ObjectHashMap<FusedFeature.InlineSource> getInMemoryFeatures(RandomAccessReader in) throws IOException {
+        return inMemoryFeatures.updateAndGet(current -> {
+            if (current != null) {
+                return current;
+            }
+            try {
+                return loadInMemoryFeatures(in);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+    }
+
+    private Int2ObjectHashMap<FusedFeature.InlineSource> loadInMemoryFeatures(RandomAccessReader in) throws IOException {
+        Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyFeatures = new Int2ObjectHashMap<>();
+
+        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long inMemorySize = 0;
+        for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
+            CommonHeader.LayerInfo info = layerInfo.get(lvl);
+            inMemorySize += Integer.BYTES * info.size * (1L + 1L + info.degree);
+        }
+        in.seek(neighborsOffset + L0size + inMemorySize);
+
+        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
+        if (version == 6) {
+            if (layerInfo.size() >= 2) {
+                int level = 1;
+                CommonHeader.LayerInfo info = layerInfo.get(level);
+                for (int i = 0; i < info.size; i++) {
+                    int nodeId = in.readInt();
+
+                    // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
+                    for (var feature : features.values()) {
+                        if (feature.isFused()) {
+                            var fusedFeature = (FusedFeature) feature;
+                            var inlineSource = fusedFeature.loadSourceFeature(in);
+                            hierarchyFeatures.put(nodeId, inlineSource);
+                        }
+                    }
+                }
+            } else {
+                // read the entry node
+                int nodeId = in.readInt();
+
+                // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
+                for (var feature : features.values()) {
+                    if (feature.isFused()) {
+                        var fusedFeature = (FusedFeature) feature;
+                        var inlineSource = fusedFeature.loadSourceFeature(in);
+                        hierarchyFeatures.put(nodeId, inlineSource);
+                    }
+                }
+            }
+        }
+        return hierarchyFeatures;
     }
 
     /**
@@ -421,23 +486,80 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         public NodesIterator getNeighborsIterator(int level, int node) {
             try {
+                int[] stored;
+                int neighborCount;
+
                 if (level == 0) {
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
-                    int neighborCount = reader.readInt();
+                    neighborCount = reader.readInt();
                     assert neighborCount <= neighbors.length
                             : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
                     reader.read(neighbors, 0, neighborCount);
-                    return new NodesIterator.ArrayNodesIterator(neighbors, neighborCount);
+                    stored = neighbors;
                 } else {
                     // For levels > 0, read from memory
                     var imn = getInMemoryLayers(reader);
-                    int[] stored = imn.get(level).get(node);
+                    stored = imn.get(level).get(node);
+                    neighborCount = stored.length;
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
-                    return new NodesIterator.ArrayNodesIterator(stored, stored.length);
+
                 }
+                return new NodesIterator.ArrayNodesIterator(stored, neighborCount);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
+            }
+        }
+
+        public int getPackedNeighbors(int node, FeatureId featureId, int[] neighbors, Consumer<RandomAccessReader> readerConsumer) throws IOException {
+            Feature feature = features.get(featureId);
+            if (!feature.isFused()) {
+                throw new UnsupportedOperationException("Only fused features are supported with packed neighbors");
+            }
+
+            long offset = offsetFor(node, featureId);
+            reader.seek(offset);
+            readerConsumer.accept(reader);
+
+            if (version < 6) {
+                reader.seek(neighborsOffsetFor(0, node));
+            }
+            int neighborCount = reader.readInt();
+            assert neighborCount <= neighbors.length
+                    : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
+            reader.read(neighbors, 0, neighborCount);
+            return neighborCount;
+        }
+
+        public Int2ObjectHashMap<FusedFeature.InlineSource> getInlineSourceFeatures() {
+            try {
+                return OnDiskGraphIndex.this.getInMemoryFeatures(reader);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+            var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
+            if (useEdgeLoading && level == 0) {
+                NodeScoreArray similarities = scoreFunction.edgeLoadingSimilarityTo(node);
+
+                for (int i = 0; i < similarities.size(); i++) {
+                    var friendOrd = similarities.getNode(i);
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = similarities.getScore(i);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
+            } else {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.apply(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
             }
         }
 
@@ -480,8 +602,8 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
 
         @Override
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
-            if (features.containsKey(FeatureId.FUSED_ADC)) {
-                return ((FusedADC) features.get(FeatureId.FUSED_ADC)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
+            if (features.containsKey(FeatureId.FUSED_PQ)) {
+                return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else {
                 throw new UnsupportedOperationException("No approximate score function available for this graph");
             }

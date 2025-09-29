@@ -39,6 +39,10 @@ public class ConstructionParameters extends CommonParameters {
                     return EnumSet.of(FeatureId.INLINE_VECTORS);
                 case "NVQ":
                     return EnumSet.of(FeatureId.NVQ_VECTORS);
+                case "FUSED+FP":
+                    return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
+                case "FUSED+NVQ":
+                    return EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
                 default:
                     throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
             }

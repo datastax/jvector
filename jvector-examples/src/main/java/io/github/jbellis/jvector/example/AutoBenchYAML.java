@@ -108,9 +108,20 @@ public class AutoBenchYAML {
         // Log the filtered arguments for debugging
         logger.info("Filtered arguments: {}", Arrays.toString(filteredArgs));
 
-        // generate a regex that matches any regex in filteredArgs, or if filteredArgs is empty/null, match everything
-        var regex = filteredArgs.length == 0 ? ".*" : Arrays.stream(filteredArgs).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
-        logger.info("Generated regex pattern: {}", regex);
+        // Build includeArgs list ignoring any argument starting with '--' and the argument following it
+        List<String> includeArgs = new ArrayList<>();
+        for (int i = 0; i < filteredArgs.length; i++) {
+            String a = filteredArgs[i];
+            if (a.startsWith("--")) { // skip flag and its value (next arg)
+                i++; // skip the next arg as it's the value for this flag
+                continue;
+            }
+            includeArgs.add(a);
+        }
+
+        // generate a regex that matches any of the includeArgs, or if none, match everything
+        var regex = includeArgs.isEmpty() ? ".*" : includeArgs.stream().map(Pattern::quote).collect(Collectors.joining("|"));
+        logger.info("Generated regex pattern (flags and values ignored): {}", regex);
 
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
@@ -150,6 +161,7 @@ public class AutoBenchYAML {
                             config.construction.efConstruction,
                             config.construction.neighborOverflow, 
                             config.construction.addHierarchy,
+                            config.construction.refineFinalGraph,
                             config.construction.getFeatureSets(), 
                             config.construction.getCompressorParameters(),
                             config.search.getCompressorParameters(), 

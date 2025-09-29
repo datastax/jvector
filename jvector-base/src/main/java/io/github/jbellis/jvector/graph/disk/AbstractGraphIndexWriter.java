@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
@@ -25,6 +24,7 @@ import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +43,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final int dimension;
     // we don't use Map features but EnumMap is the best way to make sure we don't
     // accidentally introduce an ordering bug in the future
-    final EnumMap<FeatureId, Feature> featureMap;
+    final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
     final int headerSize;
     volatile int maxOrdinalWritten = -1;
@@ -64,8 +64,24 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.view = graph instanceof OnHeapGraphIndex ? ((OnHeapGraphIndex) graph).getFrozenView() : graph.getView();
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
-        this.featureMap = features;
-        this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
+
+        if (version <= 5) {
+            // Versions <= 5 use the old feature ordering, simply provided by the FeatureId
+            this.featureMap = features;
+            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
+        } else {
+            // Version 6 uses the new feature ordering to place fused features last in the list
+            var sortedFeatures = features.values().stream().sorted().collect(Collectors.toList());
+            this.featureMap = new LinkedHashMap<>();
+            for (var feature : sortedFeatures) {
+                this.featureMap.put(feature.id(), feature);
+            }
+            this.inlineFeatures = sortedFeatures.stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
+        }
+
+        if (this.inlineFeatures.stream().filter(Feature::isFused).count() > 1) {
+            throw new IllegalArgumentException("At most one fused feature is allowed");
+        }
         this.out = out;
 
         // create a mock Header to determine the correct size
@@ -168,7 +184,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
     }
 
-    void writeSparseLevels() throws IOException {
+    void writeSparseLevels(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // write sparse levels
         for (int level = 1; level <= graph.getMaxLevel(); level++) {
             int layerSize = graph.size(level);
@@ -195,6 +211,58 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
             if (nodesWritten != layerSize) {
                 throw new IllegalStateException("Mismatch between layer size and nodes written");
+            }
+        }
+
+        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
+        // Since everything in level 1 is also contained in the high-levels, we only need to write the fused features for level 1.
+        if (version == 6) {
+            if (graph.getMaxLevel() >= 1) {
+                int level = 1;
+                int layerSize = graph.size(level);
+                int nodesWritten = 0;
+                for (var it = graph.getNodes(level); it.hasNext(); ) {
+                    int originalOrdinal = it.nextInt();
+
+                    // We write the ordinal (node id) so that we can map it to the corresponding feature
+                    final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
+                    out.writeInt(newOrdinal);
+
+                    // There should be only one fused feature per node. This is checked in the class constructor.
+                    for (var feature : inlineFeatures) {
+                        if (feature.isFused()) {
+                            var fusedFeature = (FusedFeature) feature;
+                            var supplier = featureStateSuppliers.get(fusedFeature.id());
+                            if (supplier == null) {
+                                throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
+                            } else {
+                                fusedFeature.writeSourceFeature(out, supplier.apply(originalOrdinal));
+                            }
+                        }
+                    }
+                    nodesWritten++;
+                }
+                if (nodesWritten != layerSize) {
+                    throw new IllegalStateException("Mismatch between layer 1 size and features written");
+                }
+            } else {
+                // Write the source feature of the entry node
+                final int originalEntryNode = view.entryNode().node;
+                final int entryNode = ordinalMapper.oldToNew(originalEntryNode);
+                out.writeInt(entryNode);
+
+                // There should be only one fused feature per node. This is checked in the class constructor.
+                for (var feature : inlineFeatures) {
+                    if (feature.isFused()) {
+                        var fusedFeature = (FusedFeature) feature;
+                        var supplier = featureStateSuppliers.get(fusedFeature.id());
+                        if (supplier == null) {
+                            throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
+                        } else {
+                            fusedFeature.writeSourceFeature(out, supplier.apply(originalEntryNode));
+                        }
+                    }
+                }
             }
         }
     }

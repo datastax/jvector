@@ -1,4 +1,4 @@
-version: 5
+version: 6
 
 dataset: ada002-100k
 
@@ -17,13 +17,14 @@ construction:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
+    - FUSED+NVQ
     - NVQ
   useSavedIndexIfExists: Yes
 
 search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
-    100: [1.0, 2.0]
+#    100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
     - type: PQ
@@ -32,3 +33,8 @@ search:
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    count: [visited, expanded base layer]
+    accuracy: [recall]
