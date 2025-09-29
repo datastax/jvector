@@ -16,8 +16,8 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
-import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 /**
@@ -45,7 +45,7 @@ public interface ScoreFunction {
      * @return the similarity to all of the nodes that `node2` has an edge towards.
      * Used when expanding the neighbors of a search candidate.
      */
-    default NodeScoreArray edgeLoadingSimilarityTo(int node2) {
+    default VectorFloat<?> edgeLoadingSimilarityTo(int node2) {
         throw new UnsupportedOperationException("bulk similarity not supported");
     }
 

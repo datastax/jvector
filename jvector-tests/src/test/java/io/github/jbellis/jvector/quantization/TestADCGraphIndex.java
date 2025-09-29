@@ -26,7 +26,6 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.NodeQueue;
-import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -102,27 +101,18 @@ public class TestADCGraphIndex extends RandomizedTest {
                         var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();
-                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.getScore(j), 0.01);
+                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 0.01);
                         }
                         // second pass compares fused ADC's edge similarity after quantization to edge similarity before quantization
-                        var edgeSimilaritiesCopy = copy(edgeSimilarities); // results of second pass
+                        var edgeSimilaritiesCopy = edgeSimilarities.copy(); // results of second pass
                         var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal); // results of third pass
-                        for (int j = 0; j < fusedEdgeSimilarities.size(); j++) {
-                            assertEquals(fusedEdgeSimilarities.getScore(j), edgeSimilaritiesCopy.getScore(j), 0.01);
+                        for (int j = 0; j < fusedEdgeSimilarities.length(); j++) {
+                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 0.01);
                         }
                     }
                 }
             }
         }
-    }
-
-    NodeScoreArray copy(NodeScoreArray nodeScoreArray) {
-        var copy = new NodeScoreArray(nodeScoreArray.size());
-        for (int i = 0; i < nodeScoreArray.size(); i++) {
-            copy.setNode(i, nodeScoreArray.getNode(i));
-            copy.setScore(i, nodeScoreArray.getScore(i));
-        }
-        return copy;
     }
 
     @Test
@@ -169,7 +159,7 @@ public class TestADCGraphIndex extends RandomizedTest {
                 VectorFloat<?> query = randomVector(dim);
 
                 for (var fused : List.of(true, false)) {
-                    SearchScoreProvider ssp = scoreProviderFor(fused, query, similarityFunction, graph.getView(), pqv);
+                    SearchScoreProvider ssp = scoreProviderFor(fused, query, similarityFunction, searcher.getView(), pqv);
                     actual = searcher.search(ssp, topK, efSearch, 0.0f, 0.0f, Bits.ALL).getNodes();
 
                     NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
@@ -233,12 +223,11 @@ public class TestADCGraphIndex extends RandomizedTest {
                     SearchScoreProvider ssp = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv);
                     var it = graph.getView().getNeighborsIterator(0, node);
                     int position = 0;
-                    assertEquals(similarities.size(), it.size());
+                    assertTrue(it.size() <= similarities.length());
                     while (it.hasNext()) {
                         int neighbor = it.next();
                         float score = ssp.scoreFunction().similarityTo(neighbor);
-                        assertEquals(similarities.getNode(position), neighbor);
-                        assertEquals(similarities.getScore(position), score, 1e-6);
+                        assertEquals(similarities.get(position), score, 1e-6);
                         position++;
                     }
                 }

@@ -20,7 +20,6 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -394,6 +393,7 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
         protected final RandomAccessReader reader;
         private final int[] neighbors;
+        private int nodeDegree;
 
         public View(RandomAccessReader reader) {
             this.reader = reader;
@@ -487,31 +487,30 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         public NodesIterator getNeighborsIterator(int level, int node) {
             try {
                 int[] stored;
-                int neighborCount;
 
                 if (level == 0) {
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
-                    neighborCount = reader.readInt();
-                    assert neighborCount <= neighbors.length
-                            : String.format("Node %d neighborCount %d > M %d", node, neighborCount, neighbors.length);
-                    reader.read(neighbors, 0, neighborCount);
+                    nodeDegree = reader.readInt();
+                    assert nodeDegree <= neighbors.length
+                            : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
+                    reader.read(neighbors, 0, nodeDegree);
                     stored = neighbors;
                 } else {
                     // For levels > 0, read from memory
                     var imn = getInMemoryLayers(reader);
                     stored = imn.get(level).get(node);
-                    neighborCount = stored.length;
+                    nodeDegree = stored.length;
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
 
                 }
-                return new NodesIterator.ArrayNodesIterator(stored, neighborCount);
+                return new NodesIterator.ArrayNodesIterator(stored, nodeDegree);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
         }
 
-        public void getPackedNeighbors(int node, FeatureId featureId, Consumer<RandomAccessReader> neighborsConsumer, Consumer<RandomAccessReader> featureConsumer) throws IOException {
+        public void getPackedNeighbors(int node, FeatureId featureId, Consumer<RandomAccessReader> featureConsumer) throws IOException {
             Feature feature = features.get(featureId);
             if (!feature.isFused()) {
                 throw new UnsupportedOperationException("Only fused features are supported with packed neighbors");
@@ -524,7 +523,12 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
             if (version < 6) {
                 reader.seek(neighborsOffsetFor(0, node));
             }
-            neighborsConsumer.accept(reader);
+
+            nodeDegree = reader.readInt();
+            assert nodeDegree <= neighbors.length
+                    : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
+            reader.read(neighbors, 0, nodeDegree);
+
         }
 
         public Int2ObjectHashMap<FusedFeature.InlineSource> getInlineSourceFeatures() {
@@ -539,12 +543,12 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
             var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
             if (useEdgeLoading && level == 0) {
-                NodeScoreArray similarities = scoreFunction.edgeLoadingSimilarityTo(node);
+                VectorFloat<?> similarities = scoreFunction.edgeLoadingSimilarityTo(node);
 
-                for (int i = 0; i < similarities.size(); i++) {
-                    var friendOrd = similarities.getNode(i);
+                for (int i = 0; i < nodeDegree; i++) {
+                    var friendOrd = neighbors[i];
                     if (visited.apply(friendOrd)) {
-                        float friendSimilarity = similarities.getScore(i);
+                        float friendSimilarity = similarities.get(i);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }

@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.NodeScoreArray;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -43,7 +42,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ProductQuantization pq;
     private final int maxDegree;
-    private final ThreadLocal<NodeScoreArray> reusableResults;
+    private final ThreadLocal<VectorFloat<?>> reusableResults;
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighborCodes;
     private final ExplicitThreadLocal<ByteSequence<?>> pqCodeScratch;
     private ByteSequence<?> compressedNeighbors = null;
@@ -57,7 +56,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         }
         this.maxDegree = maxDegree;
         this.pq = pq;
-        this.reusableResults = ThreadLocal.withInitial(() -> new NodeScoreArray(maxDegree));
+        this.reusableResults = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(maxDegree));
         this.reusableNeighborCodes = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree));
         this.pqCodeScratch = ExplicitThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(pq.compressedVectorSize()));
     }
@@ -85,6 +84,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         }
     }
 
+    /**
+     * @param view The view needs to be the one used by the searcher
+     * @param esf
+     * @return
+     */
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
@@ -166,27 +170,14 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
 
     public class PackedNeighbors {
         private final OnDiskGraphIndex.View view;
-        private int degree;
 
         public PackedNeighbors(OnDiskGraphIndex.View view) {
             this.view = view;
         }
 
-        public void readInto(int node, NodeScoreArray nodeScoreArray, ByteSequence<?> neighborCodes) {
+        public void readInto(int node, ByteSequence<?> neighborCodes) {
             try {
                 view.getPackedNeighbors(node, FeatureId.FUSED_PQ,
-                        reader -> {
-                            try {
-                                degree = reader.readInt();
-                                assert degree <= maxDegree
-                                        : String.format("Node %d neighborCount %d > M %d", node, degree, maxDegree);
-                                for (int i = 0; i < degree; i++) {
-                                    nodeScoreArray.setNode(i, reader.readInt());
-                                }
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-                        },
                         reader -> {
                             try {
                                 vectorTypeSupport.readByteSequence(reader, neighborCodes);
@@ -202,10 +193,6 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
 
         public int maxDegree() {
             return maxDegree;
-        }
-
-        public int degree() {
-            return degree;
         }
     }
 }
