@@ -75,6 +75,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
@@ -108,12 +109,12 @@ public class Grid {
     {
         // Create a simple TrackerScope with no sinks for backward compatibility
         TrackerScope defaultScope = new TrackerScope("Grid");
-        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, benchmarks);
+        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, benchmarks, null);
     }
 
     static void runAll(DataSet ds,
-                       TrackerScope parentScope,
-                       StatusTracker<?> parentTracker,
+                       TrackerScope datasetScope,
+                       StatusTracker<DatasetTask> datasetTracker,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
@@ -124,42 +125,64 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
-                       Map<String, List<String>> benchmarks) throws IOException
+                       Map<String, List<String>> benchmarks,
+                       BooleanSupplier shouldAbort) throws IOException
     {
-        // Create a dataset task if we have a parent tracker
-        DatasetTask datasetTask = null;
-        StatusTracker<DatasetTask> datasetTracker = null;
-        if (parentTracker != null) {
-            datasetTask = new DatasetTask(ds.name);
-            datasetTracker = parentTracker.createChild(datasetTask, task -> task.getTaskStatus());
-            datasetTask.start();
-        }
+        checkAbort(shouldAbort);
 
         var testDirectory = Files.createTempDirectory(dirPrefix);
         try {
             for (var addHierarchy :  addHierarchyGrid) {
+                checkAbort(shouldAbort);
                 for (var refineFinalGraph : refineFinalGraphGrid) {
+                    checkAbort(shouldAbort);
                     for (int M : mGrid) {
+                        checkAbort(shouldAbort);
                         for (float neighborOverflow : neighborOverflowGrid) {
+                            checkAbort(shouldAbort);
                             for (int efC : efConstructionGrid) {
+                                checkAbort(shouldAbort);
                                 for (var bc : buildCompressors) {
+                                    checkAbort(shouldAbort);
                                     var compressor = getCompressor(bc, ds);
                                     // Create a child scope for this specific graph configuration
                                     String configName = String.format("M%d_efC%d_no%.1f", M, efC, neighborOverflow);
-                                    TrackerScope graphScope = parentScope.createChildScope(configName);
-                                    runOneGraph(featureSets, graphScope, datasetTracker != null ? datasetTracker : parentTracker, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
+                                    TrackerScope graphScope = datasetScope.createChildScope(configName);
+                                    GraphConfigTask configTask = new GraphConfigTask(configName);
+
+                                    StatusTracker<GraphConfigTask> configTracker =
+                                            datasetTracker != null
+                                                    ? datasetTracker.executeWithContext(() -> graphScope.track(configTask))
+                                                    : graphScope.track(configTask);
+
+                                    try (configTracker) {
+                                        configTask.start();
+                                        runOneGraph(featureSets,
+                                                graphScope,
+                                                configTracker,
+                                                M,
+                                                efC,
+                                                neighborOverflow,
+                                                addHierarchy,
+                                                refineFinalGraph,
+                                                compressor,
+                                                compressionGrid,
+                                                topKGrid,
+                                                usePruningGrid,
+                                                benchmarks,
+                                                shouldAbort,
+                                                ds,
+                                                testDirectory);
+                                        configTask.complete();
+                                    } catch (Exception e) {
+                                        configTask.fail();
+                                        throw e;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            // Mark dataset as complete and close tracker
-            if (datasetTask != null) {
-                datasetTask.complete();
-            }
-            if (datasetTracker != null) {
-                datasetTracker.close();
             }
         } finally {
             try
@@ -189,12 +212,12 @@ public class Grid {
     {
         // Create a simple TrackerScope with no sinks for backward compatibility
         TrackerScope defaultScope = new TrackerScope("Grid");
-        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null, null);
     }
 
     static void runAll(DataSet ds,
-                       TrackerScope parentScope,
-                       StatusTracker<?> parentTracker,
+                       TrackerScope datasetScope,
+                       StatusTracker<DatasetTask> datasetTracker,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
@@ -206,7 +229,7 @@ public class Grid {
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        runAll(ds, parentScope, parentTracker, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, datasetScope, datasetTracker, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null, null);
     }
 
     // Backward compatibility method without TrackerScope
@@ -225,12 +248,12 @@ public class Grid {
                             Path testDirectory) throws IOException
     {
         TrackerScope defaultScope = new TrackerScope("RunOneGraph");
-        runOneGraph(featureSets, defaultScope, null, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, compressionGrid, topKGrid, usePruningGrid, benchmarks, ds, testDirectory);
+        runOneGraph(featureSets, defaultScope, null, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, compressionGrid, topKGrid, usePruningGrid, benchmarks, null, ds, testDirectory);
     }
 
     static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
-                            TrackerScope parentScope,
-                            StatusTracker<?> parentTracker,
+                            TrackerScope configScope,
+                            StatusTracker<GraphConfigTask> configTracker,
                             int M,
                             int efConstruction,
                             float neighborOverflow,
@@ -241,26 +264,32 @@ public class Grid {
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
                             Map<String, List<String>> benchmarks,
+                            BooleanSupplier shouldAbort,
                             DataSet ds,
                             Path testDirectory) throws IOException
     {
+        checkAbort(shouldAbort);
+
         Map<Set<FeatureId>, GraphIndex> indexes;
         if (buildCompressor == null) {
-            indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory);
+            TrackerScope buildScope = configScope.createChildScope("BuildInMemory");
+            indexes = buildInMemory(featureSets, buildScope, configTracker, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, shouldAbort);
         } else {
             // Create a child scope for building the index
-            TrackerScope buildScope = parentScope.createChildScope("BuildOnDisk");
-            indexes = buildOnDisk(featureSets, buildScope, parentTracker, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+            TrackerScope buildScope = configScope.createChildScope("BuildOnDisk");
+            indexes = buildOnDisk(featureSets, buildScope, configTracker, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor, shouldAbort);
         }
 
         try {
             for (var cpSupplier : compressionGrid) {
+                checkAbort(shouldAbort);
                 var compressor = getCompressor(cpSupplier, ds);
                 CompressedVectors cv;
                 if (compressor == null) {
                     cv = null;
                     System.out.format("Uncompressed vectors%n");
                 } else {
+                    checkAbort(shouldAbort);
                     // Create a task for vector compression/encoding
                     class CompressionTask implements StatusUpdate.Provider<CompressionTask> {
                         private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
@@ -284,12 +313,14 @@ public class Grid {
 
                     CompressionTask compressionTask = new CompressionTask(compressor.toString());
 
-                    // Create tracker as child of parentTracker if available
+                    // Create tracker as child of configTracker if available
                     final StatusTracker<CompressionTask> compressionTracker;
-                    if (parentTracker != null) {
-                        compressionTracker = parentTracker.createChild(compressionTask);
-                    } else if (parentScope != null) {
-                        compressionTracker = parentScope.track(compressionTask);
+                    if (configTracker != null && configScope != null) {
+                        compressionTracker = configTracker.executeWithContext(() -> configScope.track(compressionTask));
+                    } else if (configTracker != null) {
+                        compressionTracker = configTracker.createChild(compressionTask);
+                    } else if (configScope != null) {
+                        compressionTracker = configScope.track(compressionTask);
                     } else {
                         compressionTracker = null;
                     }
@@ -314,7 +345,8 @@ public class Grid {
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(parentScope, parentTracker, cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                        checkAbort(shouldAbort);
+                        testConfiguration(configScope, configTracker, cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, shouldAbort);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -331,8 +363,8 @@ public class Grid {
     }
 
     private static Map<Set<FeatureId>, GraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
-                                                               TrackerScope parentScope,
-                                                               StatusTracker<?> parentTracker,
+                                                               TrackerScope buildScope,
+                                                               StatusTracker<GraphConfigTask> configTracker,
                                                                int M,
                                                                int efConstruction,
                                                                float neighborOverflow,
@@ -340,94 +372,185 @@ public class Grid {
                                                                boolean refineFinalGraph,
                                                                DataSet ds,
                                                                Path testDirectory,
-                                                               VectorCompressor<?> buildCompressor)
+                                                               VectorCompressor<?> buildCompressor,
+                                                               BooleanSupplier shouldAbort)
             throws IOException
     {
-        // Create a status tracking task for the build process
-        class BuildTask implements StatusUpdate.Provider<BuildTask> {
-            private volatile double progress = 0.0;
-            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
-            private volatile int nodesProcessed = 0;
-            private final int totalNodes;
+        checkAbort(shouldAbort);
 
-            BuildTask(int totalNodes) {
+        class OnDiskBuildTask implements StatusUpdate.Provider<OnDiskBuildTask> {
+            private final int totalNodes;
+            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+            private volatile double pqProgress = 0.0;
+            private volatile double graphProgress = 0.0;
+
+            OnDiskBuildTask(int totalNodes) {
                 this.totalNodes = totalNodes;
             }
 
-            @Override
-            public StatusUpdate<BuildTask> getTaskStatus() {
-                return new StatusUpdate<>(progress, state, this);
-            }
-
-            void updateProgress(int completed) {
-                this.nodesProcessed = completed;
-                this.progress = totalNodes > 0 ? (double) completed / totalNodes : 0.0;
-                if (state == StatusUpdate.RunState.PENDING && progress > 0) {
-                    state = StatusUpdate.RunState.RUNNING;
+            void start() {
+                state = StatusUpdate.RunState.RUNNING;
+                if (totalNodes == 0) {
+                    pqProgress = 1.0;
+                    graphProgress = 1.0;
                 }
             }
 
+            void updatePQProgress(double progress) {
+                pqProgress = clamp(progress);
+            }
+
+            void updateGraphProgress(double progress) {
+                graphProgress = clamp(progress);
+            }
+
             void complete() {
-                this.progress = 1.0;
-                this.state = StatusUpdate.RunState.SUCCESS;
+                pqProgress = 1.0;
+                graphProgress = 1.0;
+                state = StatusUpdate.RunState.SUCCESS;
+            }
+
+            void fail() {
+                state = StatusUpdate.RunState.FAILED;
+            }
+
+            private double clamp(double value) {
+                return Math.max(0.0, Math.min(1.0, value));
+            }
+
+            @Override
+            public StatusUpdate<OnDiskBuildTask> getTaskStatus() {
+                double combined = (pqProgress + graphProgress) / 2.0;
+                return new StatusUpdate<>(combined, state, this);
             }
 
             @Override
             public String toString() {
-                return String.format("Building on-disk index [%d/%d nodes]", nodesProcessed, totalNodes);
+                return String.format("On-disk Build (%d nodes)", totalNodes);
+            }
+        }
+
+        class PQTask implements StatusUpdate.Provider<PQTask> {
+            private final OnDiskBuildTask parent;
+            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+            private volatile double progress = 0.0;
+
+            PQTask(OnDiskBuildTask parent) {
+                this.parent = parent;
+            }
+
+            void start() {
+                state = StatusUpdate.RunState.RUNNING;
+                progress = 0.0;
+                parent.updatePQProgress(progress);
+            }
+
+            void complete() {
+                progress = 1.0;
+                state = StatusUpdate.RunState.SUCCESS;
+                parent.updatePQProgress(progress);
+            }
+
+            void fail() {
+                state = StatusUpdate.RunState.FAILED;
+            }
+
+            @Override
+            public StatusUpdate<PQTask> getTaskStatus() {
+                return new StatusUpdate<>(progress, state, this);
+            }
+
+            @Override
+            public String toString() {
+                return "PQ Compression";
+            }
+        }
+
+        class GraphConstructionTask implements StatusUpdate.Provider<GraphConstructionTask> {
+            private final int totalNodes;
+            private final OnDiskBuildTask parent;
+            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+            private volatile double progress = 0.0;
+
+            GraphConstructionTask(int totalNodes, OnDiskBuildTask parent) {
+                this.totalNodes = totalNodes;
+                this.parent = parent;
+            }
+
+            void start() {
+                state = StatusUpdate.RunState.RUNNING;
+                if (totalNodes == 0) {
+                    progress = 1.0;
+                    parent.updateGraphProgress(progress);
+                }
+            }
+
+            void updateNodesProcessed(int completed) {
+                if (totalNodes > 0) {
+                    progress = Math.min(1.0, (double) completed / totalNodes);
+                } else {
+                    progress = 1.0;
+                }
+                parent.updateGraphProgress(progress);
+            }
+
+            void complete() {
+                progress = 1.0;
+                state = StatusUpdate.RunState.SUCCESS;
+                parent.updateGraphProgress(progress);
+            }
+
+            void fail() {
+                state = StatusUpdate.RunState.FAILED;
+            }
+
+            @Override
+            public StatusUpdate<GraphConstructionTask> getTaskStatus() {
+                return new StatusUpdate<>(progress, state, this);
+            }
+
+            @Override
+            public String toString() {
+                return "Graph Construction & Write";
             }
         }
 
         var floatVectors = ds.getBaseRavv();
-        BuildTask buildTask = new BuildTask(floatVectors.size());
+        OnDiskBuildTask buildTask = new OnDiskBuildTask(floatVectors.size());
 
-        // Create tracker as a child of parentTracker if available, otherwise use scope
-        StatusTracker<BuildTask> tracker;
-        if (parentTracker != null) {
-            tracker = parentTracker.createChild(buildTask);
-        } else {
-            tracker = parentScope.track(buildTask);
-        }
+        StatusTracker<OnDiskBuildTask> tracker =
+                configTracker != null && buildScope != null
+                        ? configTracker.executeWithContext(() -> buildScope.track(buildTask))
+                        : configTracker != null
+                            ? configTracker.createChild(buildTask)
+                            : buildScope.track(buildTask);
 
         try (tracker) {
+            buildTask.start();
 
-            buildTask.state = StatusUpdate.RunState.RUNNING;
-
-            // Create a child task for PQ compression
-            class PQTask implements StatusUpdate.Provider<PQTask> {
-                private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
-                private volatile double progress = 0.0;
-
-                @Override
-                public StatusUpdate<PQTask> getTaskStatus() {
-                    return new StatusUpdate<>(progress, state, this);
-                }
-
-                @Override
-                public String toString() {
-                    return "PQ Compression";
-                }
-            }
-
-            PQTask pqTask = new PQTask();
+            PQTask pqTask = new PQTask(buildTask);
             PQVectors pq;
 
             try (StatusTracker<PQTask> pqTracker = tracker.createChild(pqTask)) {
-                pqTask.state = StatusUpdate.RunState.RUNNING;
+                checkAbort(shouldAbort);
+                pqTask.start();
                 pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-                pqTask.progress = 1.0;
-                pqTask.state = StatusUpdate.RunState.SUCCESS;
+                pqTask.complete();
+            } catch (Exception e) {
+                pqTask.fail();
+                buildTask.fail();
+                throw e;
             }
 
             var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
             GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
-            // use the inline vectors index as the score provider for graph construction
             Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
             Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
             OnDiskGraphIndexWriter scoringWriter = null;
             int n = 0;
             for (var features : featureSets) {
+                checkAbort(shouldAbort);
                 var graphPath = testDirectory.resolve("graph" + n++);
                 var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor());
                 var writer = bws.builder.build();
@@ -441,69 +564,82 @@ public class Grid {
                 throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
             }
 
-            // build the graph incrementally
+            GraphConstructionTask graphTask = new GraphConstructionTask(floatVectors.size(), buildTask);
             long startTime = System.nanoTime();
-            var vv = floatVectors.threadLocalSupplier();
-            var nodeCounter = new java.util.concurrent.atomic.AtomicInteger(0);
 
-            PhysicalCoreExecutor.pool().submit(() -> {
-                IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                    writers.forEach((features, writer) -> {
-                        try {
-                            var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                            suppliers.get(features).forEach((featureId, supplier) -> {
-                                stateMap.put(featureId, supplier.apply(node));
-                            });
-                            writer.writeInline(node, stateMap);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
+            try (StatusTracker<GraphConstructionTask> graphTracker = tracker.createChild(graphTask)) {
+                graphTask.start();
+
+                var vv = floatVectors.threadLocalSupplier();
+                var nodeCounter = new java.util.concurrent.atomic.AtomicInteger(0);
+
+                PhysicalCoreExecutor.pool().submit(() -> {
+                    IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+                        checkAbort(shouldAbort);
+                        writers.forEach((features, writer) -> {
+                            try {
+                                var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+                                suppliers.get(features).forEach((featureId, supplier) -> {
+                                    stateMap.put(featureId, supplier.apply(node));
+                                });
+                                writer.writeInline(node, stateMap);
+                            } catch (IOException e) {
+                                throw new UncheckedIOException(e);
+                            }
+                        });
+                        builder.addGraphNode(node, vv.get().getVector(node));
+
+                        int completed = nodeCounter.incrementAndGet();
+                        if (completed % 1000 == 0 || completed == floatVectors.size()) {
+                            graphTask.updateNodesProcessed(completed);
                         }
                     });
-                    builder.addGraphNode(node, vv.get().getVector(node));
+                }).join();
+                builder.cleanup();
 
-                    // Update progress periodically
-                    int completed = nodeCounter.incrementAndGet();
-                    if (completed % 1000 == 0 || completed == floatVectors.size()) {
-                        buildTask.updateProgress(completed);
+                writers.entrySet().stream().parallel().forEach(entry -> {
+                    checkAbort(shouldAbort);
+                    var writer = entry.getValue();
+                    var features = entry.getKey();
+                    Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
+                    if (features.contains(FeatureId.FUSED_ADC)) {
+                        writeSuppliers = new EnumMap<>(FeatureId.class);
+                        var view = builder.getGraph().getView();
+                        writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
+                    } else {
+                        writeSuppliers = Map.of();
+                    }
+                    try {
+                        writer.write(writeSuppliers);
+                        writer.close();
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
                     }
                 });
-            }).join();
-            builder.cleanup();
+                builder.close();
 
-            // write the edge lists and close the writers
-            // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
-            writers.entrySet().stream().parallel().forEach(entry -> {
-                var writer = entry.getValue();
-                var features = entry.getKey();
-                Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-                if (features.contains(FeatureId.FUSED_ADC)) {
-                    writeSuppliers = new EnumMap<>(FeatureId.class);
-                    var view = builder.getGraph().getView();
-                    writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
-                } else {
-                    writeSuppliers = Map.of();
-                }
-                try {
-                    writer.write(writeSuppliers);
-                    writer.close();
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
-            builder.close();
+                graphTask.complete();
+            } catch (Exception e) {
+                graphTask.fail();
+                buildTask.fail();
+                throw e;
+            }
 
-            // Mark task as complete
             buildTask.complete();
 
             double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
             System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
             indexBuildTimes.put(ds.name, totalTime);
+        } catch (Exception e) {
+            buildTask.fail();
+            throw e;
         }
 
         // open indexes
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         int n = 0;
-        for (var features : featureSets) {
+       for (var features : featureSets) {
+            checkAbort(shouldAbort);
             var graphPath = testDirectory.resolve("graph" + n++);
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
@@ -578,68 +714,167 @@ public class Grid {
     }
 
     private static Map<Set<FeatureId>, GraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
+                                                                 TrackerScope buildScope,
+                                                                 StatusTracker<GraphConfigTask> configTracker,
                                                                  int M,
                                                                  int efConstruction,
                                                                  float neighborOverflow,
                                                                  boolean addHierarchy,
                                                                  boolean refineFinalGraph,
                                                                  DataSet ds,
-                                                                 Path testDirectory)
+                                                                 Path testDirectory,
+                                                                 BooleanSupplier shouldAbort)
             throws IOException
     {
+        checkAbort(shouldAbort);
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                          floatVectors.dimension(),
-                                                          M,
-                                                          efConstruction,
-                                                          neighborOverflow,
-                                                          1.2f,
-                                                          addHierarchy,
-                                                          refineFinalGraph,
-                                                          PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
-        start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
-        System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
-                          "full res",
-                          M,
-                          neighborOverflow,
-                          efConstruction,
-                          (System.nanoTime() - start) / 1_000_000_000.0);
-        for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
-            System.out.format("  L%d: %d nodes, %.2f avg degree%n",
-                              i,
-                              onHeapGraph.getLayerSize(i),
-                              onHeapGraph.getAverageDegree(i));
-        }
-        int n = 0;
+
+        int writableFeatureSets = 0;
         for (var features : featureSets) {
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                System.out.println("Skipping Fused ADC feature when building in memory");
-                continue;
+            if (!features.contains(FeatureId.FUSED_ADC)) {
+                writableFeatureSets++;
             }
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null);
-            try (var writer = bws.builder.build()) {
-                start = System.nanoTime();
-                writer.write(bws.suppliers);
-                System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+        }
+
+        class InMemoryBuildTask implements StatusUpdate.Provider<InMemoryBuildTask> {
+            private final int totalOutputs;
+            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+            private volatile double progress = 0.0;
+            private int completedOutputs = 0;
+
+            InMemoryBuildTask(int totalOutputs) {
+                this.totalOutputs = totalOutputs;
             }
 
-            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
-            indexes.put(features, index);
+            void start() {
+                state = StatusUpdate.RunState.RUNNING;
+                progress = totalOutputs == 0 ? 1.0 : 0.0;
+            }
+
+            void graphBuilt() {
+                if (totalOutputs == 0) {
+                    progress = 1.0;
+                } else {
+                    progress = Math.max(progress, 0.5);
+                }
+            }
+
+            void featureWritten() {
+                if (totalOutputs == 0) {
+                    progress = 1.0;
+                    return;
+                }
+                completedOutputs++;
+                progress = 0.5 + 0.5 * ((double) completedOutputs / totalOutputs);
+            }
+
+            void complete() {
+                progress = 1.0;
+                state = StatusUpdate.RunState.SUCCESS;
+            }
+
+            void fail() {
+                state = StatusUpdate.RunState.FAILED;
+            }
+
+            @Override
+            public StatusUpdate<InMemoryBuildTask> getTaskStatus() {
+                return new StatusUpdate<>(progress, state, this);
+            }
+
+            @Override
+            public String toString() {
+                return "Build (in-memory index)";
+            }
         }
-        return indexes;
+
+        InMemoryBuildTask buildTask = new InMemoryBuildTask(writableFeatureSets);
+        StatusTracker<InMemoryBuildTask> buildTracker;
+        if (configTracker != null && buildScope != null) {
+            buildTracker = configTracker.executeWithContext(() -> buildScope.track(buildTask));
+        } else if (configTracker != null) {
+            buildTracker = configTracker.createChild(buildTask);
+        } else if (buildScope != null) {
+            buildTracker = buildScope.track(buildTask);
+        } else {
+            buildTracker = null;
+        }
+
+        try (StatusTracker<InMemoryBuildTask> ignored = buildTracker) {
+            if (buildTracker != null) {
+                buildTask.start();
+            }
+
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+            GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
+                                                              floatVectors.dimension(),
+                                                              M,
+                                                              efConstruction,
+                                                              neighborOverflow,
+                                                              1.2f,
+                                                              addHierarchy,
+                                                              refineFinalGraph,
+                                                              PhysicalCoreExecutor.pool(),
+                                                              FilteredForkJoinPool.createFilteredPool());
+            start = System.nanoTime();
+            checkAbort(shouldAbort);
+            var onHeapGraph = builder.build(floatVectors);
+            if (buildTracker != null) {
+                buildTask.graphBuilt();
+            }
+            System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
+                              "full res",
+                              M,
+                              neighborOverflow,
+                              efConstruction,
+                              (System.nanoTime() - start) / 1_000_000_000.0);
+            for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+                System.out.format("  L%d: %d nodes, %.2f avg degree%n",
+                                  i,
+                                  onHeapGraph.getLayerSize(i),
+                                  onHeapGraph.getAverageDegree(i));
+            }
+            int n = 0;
+            for (var features : featureSets) {
+                checkAbort(shouldAbort);
+                if (features.contains(FeatureId.FUSED_ADC)) {
+                    System.out.println("Skipping Fused ADC feature when building in memory");
+                    continue;
+                }
+                var graphPath = testDirectory.resolve("graph" + n++);
+                var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null);
+                try (var writer = bws.builder.build()) {
+                    start = System.nanoTime();
+                    writer.write(bws.suppliers);
+                    System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+                }
+
+                if (buildTracker != null) {
+                    buildTask.featureWritten();
+                }
+
+                var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
+                indexes.put(features, index);
+            }
+            if (buildTracker != null) {
+                buildTask.complete();
+            }
+            return indexes;
+        } catch (Exception e) {
+            if (buildTracker != null) {
+                buildTask.fail();
+            }
+            throw e;
+        }
     }
 
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
     private static void testConfiguration(TrackerScope parentScope,
-                                          StatusTracker<?> parentTracker,
+                                          StatusTracker<GraphConfigTask> parentTracker,
                                           ConfiguredSystem cs,
                                           Map<Integer, List<Double>> topKGrid,
                                           List<Boolean> usePruningGrid,
@@ -647,7 +882,8 @@ public class Grid {
                                           int efConstruction,
                                           float neighborOverflow,
                                           boolean addHierarchy,
-                                          Map<String, List<String>> benchmarkSpec) {
+                                          Map<String, List<String>> benchmarkSpec,
+                                          BooleanSupplier shouldAbort) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
@@ -660,27 +896,104 @@ public class Grid {
             parentScope.createChildScope(String.format("TestConfig_M%d_efC%d", M, efConstruction)) :
             null;
 
-        // 2) Setup benchmark table for printing
+        int totalRuns = 0;
         for (var topK : topKGrid.keySet()) {
-            for (var usePruning : usePruningGrid) {
-                BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
-                printer.printConfig(Map.of(
-                        "M",                  M,
-                        "efConstruction",     efConstruction,
-                        "neighborOverflow",   neighborOverflow,
-                        "addHierarchy",       addHierarchy,
-                        "usePruning",         usePruning
-                ));
-                for (var overquery : topKGrid.get(topK)) {
-                    int rerankK = (int) (topK * overquery);
+            checkAbort(shouldAbort);
+            int overqueryCount = topKGrid.get(topK).size();
+            totalRuns += overqueryCount * usePruningGrid.size();
+        }
 
-                    var results = testConfigScope != null ?
-                        tester.run(testConfigScope, cs, topK, rerankK, usePruning, queryRuns) :
-                        tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    printer.printRow(overquery, results);
-                }
-                printer.printFooter();
+        QuerySuiteTask suiteTask = new QuerySuiteTask(totalRuns, M, efConstruction);
+        StatusTracker<QuerySuiteTask> suiteTracker;
+        if (parentTracker != null && testConfigScope != null) {
+            suiteTracker = parentTracker.executeWithContext(() -> testConfigScope.track(suiteTask));
+        } else if (parentTracker != null) {
+            suiteTracker = parentTracker.createChild(suiteTask);
+        } else if (testConfigScope != null) {
+            suiteTracker = testConfigScope.track(suiteTask);
+        } else {
+            suiteTracker = null;
+        }
+
+        try (StatusTracker<QuerySuiteTask> ignored = suiteTracker) {
+            if (suiteTracker != null) {
+                suiteTask.start();
             }
+
+            // 2) Setup benchmark table for printing
+            for (var topK : topKGrid.keySet()) {
+                checkAbort(shouldAbort);
+                for (var usePruning : usePruningGrid) {
+                    checkAbort(shouldAbort);
+                    BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
+                    printer.printConfig(Map.of(
+                            "M",                  M,
+                            "efConstruction",     efConstruction,
+                            "neighborOverflow",   neighborOverflow,
+                            "addHierarchy",       addHierarchy,
+                            "usePruning",         usePruning
+                    ));
+                    for (var overquery : topKGrid.get(topK)) {
+                        checkAbort(shouldAbort);
+                        int rerankK = (int) (topK * overquery);
+
+                        TrackerScope groupScope = testConfigScope != null ?
+                                testConfigScope.createChildScope(String.format("Benchmarks_topK%d_oq%.2f_prune_%s",
+                                        topK, overquery, usePruning ? "on" : "off")) :
+                                null;
+
+                        BenchmarkPhaseGroupTask groupTask = new BenchmarkPhaseGroupTask(topK, rerankK, usePruning, overquery);
+                        StatusTracker<BenchmarkPhaseGroupTask> groupTracker;
+                        if (suiteTracker != null && groupScope != null) {
+                            groupTracker = suiteTracker.executeWithContext(() -> groupScope.track(groupTask));
+                        } else if (suiteTracker != null) {
+                            groupTracker = suiteTracker.createChild(groupTask);
+                        } else if (groupScope != null) {
+                            groupTracker = groupScope.track(groupTask);
+                        } else {
+                            groupTracker = null;
+                        }
+
+                        try (StatusTracker<BenchmarkPhaseGroupTask> ignoredGroup = groupTracker) {
+                            if (groupTracker != null) {
+                                groupTask.start();
+                            }
+
+                            var results = groupScope != null ?
+                                    tester.run(groupScope, groupTracker, cs, topK, rerankK, usePruning, queryRuns) :
+                                    tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                            printer.printRow(overquery, results);
+
+                            if (suiteTracker != null) {
+                                suiteTask.advance();
+                            }
+
+                            if (groupTracker != null) {
+                                groupTask.complete();
+                            }
+                        } catch (Exception e) {
+                            if (groupTracker != null) {
+                                groupTask.fail();
+                            }
+                            throw e;
+                        } finally {
+                            if (groupScope != null) {
+                                groupScope.close();
+                            }
+                        }
+                    }
+                    printer.printFooter();
+                }
+            }
+
+            if (suiteTracker != null) {
+                suiteTask.complete();
+            }
+        } catch (Exception e) {
+            if (suiteTracker != null) {
+                suiteTask.fail();
+            }
+            throw e;
         }
     }
 
@@ -790,7 +1103,7 @@ public class Grid {
                                         CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
                                         // Create a simple TrackerScope for this standalone build
                                         TrackerScope buildScope = new TrackerScope("StandaloneBuild");
-                                        var indexes = buildOnDisk(List.of(features), buildScope, null, m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
+                                        var indexes = buildOnDisk(List.of(features), buildScope, null, m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor, null);
                                         GraphIndex index = indexes.get(features);
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
@@ -936,6 +1249,150 @@ public class Grid {
     }
 
     /**
+     * Task representing the evaluation of a single graph configuration.
+     */
+    static class GraphConfigTask implements StatusUpdate.Provider<GraphConfigTask> {
+        private final String configName;
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+
+        GraphConfigTask(String configName) {
+            this.configName = configName;
+        }
+
+        void start() {
+            state = StatusUpdate.RunState.RUNNING;
+        }
+
+        void complete() {
+            progress = 1.0;
+            state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        void fail() {
+            state = StatusUpdate.RunState.FAILED;
+        }
+
+        @Override
+        public StatusUpdate<GraphConfigTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
+        }
+
+        @Override
+        public String toString() {
+            return "Configuration: " + configName;
+        }
+    }
+
+    /**
+     * Task representing all query benchmarks executed for a single configuration.
+     */
+    static class QuerySuiteTask implements StatusUpdate.Provider<QuerySuiteTask> {
+        private final int totalRuns;
+        private final int m;
+        private final int efConstruction;
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+        private int completedRuns = 0;
+
+        QuerySuiteTask(int totalRuns, int m, int efConstruction) {
+            this.totalRuns = totalRuns;
+            this.m = m;
+            this.efConstruction = efConstruction;
+        }
+
+        void start() {
+            state = StatusUpdate.RunState.RUNNING;
+            progress = totalRuns == 0 ? 1.0 : 0.0;
+        }
+
+        void advance() {
+            if (totalRuns == 0) {
+                progress = 1.0;
+                return;
+            }
+            completedRuns++;
+            progress = Math.min(1.0, (double) completedRuns / totalRuns);
+        }
+
+        void complete() {
+            progress = 1.0;
+            state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        void fail() {
+            state = StatusUpdate.RunState.FAILED;
+        }
+
+        @Override
+        public StatusUpdate<QuerySuiteTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Search Benchmarks (M=%d, efC=%d) %d/%d", m, efConstruction, completedRuns, Math.max(totalRuns, 1));
+        }
+    }
+
+    /**
+     * Groups all benchmark variants (throughput, latency, count, accuracy) executed for a specific
+     * combination of query parameters.
+     */
+    static class BenchmarkPhaseGroupTask implements StatusUpdate.Provider<BenchmarkPhaseGroupTask> {
+        private final int topK;
+        private final int rerankK;
+        private final boolean usePruning;
+        private final double overquery;
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+
+        BenchmarkPhaseGroupTask(int topK, int rerankK, boolean usePruning, double overquery) {
+            this.topK = topK;
+            this.rerankK = rerankK;
+            this.usePruning = usePruning;
+            this.overquery = overquery;
+        }
+
+        void start() {
+            state = StatusUpdate.RunState.RUNNING;
+            progress = 0.0;
+        }
+
+        void complete() {
+            progress = 1.0;
+            state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        void fail() {
+            state = StatusUpdate.RunState.FAILED;
+        }
+
+        @Override
+        public StatusUpdate<BenchmarkPhaseGroupTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("Benchmark Set (topK=%d, rerankK=%d, oq=%.2f, pruning=%s)",
+                    topK, rerankK, overquery, usePruning ? "on" : "off");
+        }
+    }
+
+    private static void checkAbort(BooleanSupplier shouldAbort) {
+        if (shouldAbort != null && shouldAbort.getAsBoolean()) {
+            throw new BenchmarkAbortedException();
+        }
+    }
+
+    static final class BenchmarkAbortedException extends RuntimeException {
+        BenchmarkAbortedException() {
+            super("Benchmark aborted by user");
+        }
+    }
+
+    /**
      * Task representing processing of a single dataset
      */
     static class DatasetTask implements StatusUpdate.Provider<DatasetTask> {
@@ -958,6 +1415,10 @@ public class Grid {
         public void complete() {
             this.progress = 1.0;
             this.state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        public void fail() {
+            this.state = StatusUpdate.RunState.FAILED;
         }
 
         @Override

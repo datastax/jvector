@@ -46,6 +46,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -201,6 +202,8 @@ public class Bench implements Callable<Integer> {
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
 
+        // Invariant: every TrackerScope we create must expose a matching StatusTracker node
+        // so the runtime hierarchy mirrors the control-flow nesting.
         TrackerScope rootScope;
         ConsolePanelSink consolePanelSink = null;
 
@@ -227,22 +230,51 @@ public class Bench implements Callable<Integer> {
         // Create the root bench task
         BenchTask benchTask = new BenchTask(datasetNames.size());
 
+        BooleanSupplier abortSignal = consolePanelSink != null ? consolePanelSink::isClosed : null;
+
+        boolean aborted = false;
+
         try (StatusTracker<BenchTask> rootTracker = rootScope.track(benchTask)) {
             benchTask.start();
 
             for (var datasetName : datasetNames) {
+                if (abortSignal != null && abortSignal.getAsBoolean()) {
+                    aborted = true;
+                    break;
+                }
                 // Create a child scope for each dataset
                 TrackerScope datasetScope = rootScope.createChildScope(datasetName);
+                Grid.DatasetTask datasetTask = new Grid.DatasetTask(datasetName);
 
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                Grid.runAll(ds, datasetScope, rootTracker, mGrid, efConstructionGrid, neighborOverflowGrid,
-                           addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression,
-                           compressionGrid, topKGrid, usePruningGrid);
+                try (StatusTracker<Grid.DatasetTask> datasetTracker =
+                             rootTracker.executeWithContext(() -> datasetScope.track(datasetTask))) {
+                    datasetTask.start();
 
+                    DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                    try {
+                        Grid.runAll(ds, datasetScope, datasetTracker, mGrid, efConstructionGrid, neighborOverflowGrid,
+                                   addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression,
+                                   compressionGrid, topKGrid, usePruningGrid, null, abortSignal);
+
+                        datasetTask.complete();
+                    } catch (Grid.BenchmarkAbortedException e) {
+                        datasetTask.fail();
+                        aborted = true;
+                        break;
+                    }
+                }
+
+                if (aborted) {
+                    break;
+                }
                 benchTask.datasetCompleted();
             }
 
-            benchTask.complete();
+            if (aborted) {
+                benchTask.fail();
+            } else {
+                benchTask.complete();
+            }
         } finally {
             // Close the scope and sink when done
             rootScope.close();

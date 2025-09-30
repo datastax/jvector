@@ -16,13 +16,15 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.StatusUpdate;
+import io.github.jbellis.jvector.status.TrackerScope;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
-import io.github.jbellis.jvector.status.TrackerScope;
 
 /**
  * Orchestrates running a set of QueryBenchmark instances
@@ -82,15 +84,32 @@ public class QueryTester {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+        return run(parentScope, null, cs, topK, rerankK, usePruning, queryRuns);
+    }
+
+    /**
+     * Run each benchmark once with both a parent scope and an optional parent tracker.
+     */
+    public List<Metric> run(
+            TrackerScope parentScope,
+            StatusTracker<?> parentTracker,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
 
         List<Metric> results = new ArrayList<>();
 
         for (var benchmark : benchmarks) {
-            var metrics = benchmark.runBenchmark(parentScope, cs, topK, rerankK, usePruning, queryRuns);
+            TrackerScope benchmarkScope = parentScope != null ?
+                    parentScope.createChildScope(benchmark.getBenchmarkName()) :
+                    null;
+
+            var metrics = benchmark.runBenchmark(benchmarkScope, parentTracker, cs, topK, rerankK, usePruning, queryRuns);
             results.addAll(metrics);
         }
 
         return results;
     }
 }
-

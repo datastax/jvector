@@ -157,6 +157,18 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+        return runBenchmark(parentScope, null, cs, topK, rerankK, usePruning, queryRuns);
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            TrackerScope parentScope,
+            StatusTracker<?> parentTracker,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
 
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
             throw new RuntimeException("At least one metric must be displayed");
@@ -305,7 +317,10 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             Map<String, BenchmarkPhaseTask> phaseTaskMap = new HashMap<>();
             Map<String, StatusTracker<BenchmarkPhaseTask>> phaseTrackerMap = new HashMap<>();
 
-            try (StatusTracker<BenchmarkMainTask> mainTracker = benchmarkScope.track(mainTask)) {
+            try (StatusTracker<BenchmarkMainTask> mainTracker =
+                         parentTracker != null
+                                 ? parentTracker.executeWithContext(() -> benchmarkScope.track(mainTask))
+                                 : benchmarkScope.track(mainTask)) {
                 mainTask.start();
 
                 // Pre-declare all phase trackers as children of the main tracker

@@ -30,6 +30,11 @@ import org.jline.utils.Display;
 
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -39,7 +44,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.nio.charset.StandardCharsets;
 
 /**
  * A sophisticated terminal-based status sink that provides a hierarchical, stateful view
@@ -109,6 +113,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     private final LogCapturePrintStream capturedErr;
     private volatile int lastTaskContentHeight = 10;
     private volatile int lastLogContentHeight = 5;
+    private volatile List<String> lastRenderSnapshot = Collections.emptyList();
 
 
     // ANSI color codes for different states
@@ -124,6 +129,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     private static final AttributedStyle STYLE_SECONDARY = AttributedStyle.DEFAULT.foreground(AttributedStyle.BRIGHT | AttributedStyle.CYAN);
     private static final AttributedStyle STYLE_BORDER = AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.BRIGHT | AttributedStyle.CYAN);
     private static final AttributedStyle STYLE_BORDER_TITLE = AttributedStyle.DEFAULT.bold().foreground(AttributedStyle.YELLOW);
+    private static final DateTimeFormatter SCREENSHOT_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
     private ConsolePanelSink(Builder builder) {
         try {
@@ -250,7 +256,9 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 }
 
                 // Small sleep to prevent CPU spinning
-                Thread.sleep(10);
+                if (!closed.get()) {
+                    Thread.sleep(10);
+                }
             }
         } catch (Exception e) {
             if (!closed.get()) {
@@ -353,8 +361,30 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         try {
             // Handle quit command
             if (c == 'q' || c == 'Q') {
+                // Log exit message before closing
+                addLogMessage("User requested exit with 'q' command - shutting down console panel...");
+
+                // Clear the display and show exit message
+                try {
+                    List<AttributedString> exitMessage = new ArrayList<>();
+                    exitMessage.add(new AttributedStringBuilder()
+                        .style(AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW))
+                        .append("Console panel shutting down...")
+                        .toAttributedString());
+                    exitMessage.add(new AttributedStringBuilder()
+                        .append("Restoring normal terminal...")
+                        .toAttributedString());
+                    display.update(exitMessage, exitMessage.size());
+                    terminal.flush();
+                } catch (Exception e) {
+                    // Ignore display errors during shutdown
+                }
+
                 // Signal to close - don't call close() directly to avoid deadlock
                 closed.set(true);
+                synchronized (this) {
+                    notifyAll();
+                }
                 return;
             }
 
@@ -367,6 +397,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             if (c == ']') {
                 // Shrink task panel, expand log panel
                 splitOffset = Math.min(10, splitOffset + 2);
+                return;
+            }
+
+            if (c == 's' || c == 'S') {
+                saveScreenshot();
                 return;
             }
 
@@ -610,6 +645,12 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             // Position cursor at bottom right to hide it
             display.update(lines, size.cursorPos(size.getRows() - 1, size.getColumns() - 1));
             terminal.flush();
+
+            List<String> snapshot = new ArrayList<>(lines.size());
+            for (AttributedString line : lines) {
+                snapshot.add(line.toString());
+            }
+            lastRenderSnapshot = snapshot;
 
             if (debugThisRefresh) {
                 System.err.println("[ConsolePanelSink] Display update completed");
@@ -874,25 +915,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     }
 
     private String formatTaskLine(TaskNode node, String prefix, boolean isLast, int availableWidth) {
-        StringBuilder line = new StringBuilder();
-
-        // Tree connector
-        if (!prefix.isEmpty()) {
-            line.append(prefix);
-            line.append(isLast ? "└─ " : "├─ ");
-        }
-
-        // Status icon
-        String statusIcon = getStatusIcon(node);
-        line.append(statusIcon).append(" ");
-
-        // Task name
-        String taskName = getTaskName(node.tracker);
-        line.append(taskName);
-
-        // Build the right-aligned portion (duration, then progress bar with percentage)
         StringBuilder rightPortion = new StringBuilder();
 
+        // Build the right-aligned portion (duration, then progress bar with percentage)
+        
         // Duration first - use elapsed running time if task is/was running
         long duration;
         if (node.tracker != null && node.tracker.getRunningStartTime() != null) {
@@ -909,7 +935,8 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             // Fallback to old calculation
             duration = (node.finishTime > 0 ? node.finishTime : System.currentTimeMillis()) - node.startTime;
         }
-        rightPortion.append(String.format(" (%.1fs) ", duration / 1000.0));
+        long seconds = Math.max(0, Math.round(duration / 1000.0));
+        rightPortion.append(String.format(" (%ds) ", seconds));
 
         // Progress bar with percentage centered in it (fixed 22 characters total)
         if (node.lastStatus != null) {
@@ -927,6 +954,23 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 rightPortion.append(" ✗");
             }
         }
+
+        StringBuilder line = new StringBuilder();
+
+        // Tree connector and base prefix
+        if (!prefix.isEmpty()) {
+            line.append(prefix);
+            line.append(isLast ? "└─ " : "├─ ");
+        }
+
+        // Status icon
+        String statusIcon = getStatusIcon(node);
+        line.append(statusIcon).append(" ");
+
+        // Determine maximum available width for the task name before adding context/spaces
+        int maxNameWidth = Math.max(0, availableWidth - line.length() - rightPortion.length());
+        String taskName = getTaskName(node.tracker, maxNameWidth);
+        line.append(taskName);
 
         // Calculate space for contextual details
         int leftLength = line.length();
@@ -1326,23 +1370,35 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         return bar.toString();
     }
 
-    private String getTaskName(StatusTracker<?> tracker) {
+    private String getTaskName(StatusTracker<?> tracker, int maxWidth) {
         Object tracked = tracker.getTracked();
         try {
             java.lang.reflect.Method getNameMethod = tracked.getClass().getMethod("getName");
             Object name = getNameMethod.invoke(tracked);
             if (name instanceof String) {
-                return (String) name;
+                return fitTaskName((String) name, maxWidth);
             }
         } catch (Exception ignored) {
         }
 
         String fullName = tracked.toString();
-        // Truncate if too long
-        if (fullName.length() > 20) {
-            return fullName.substring(0, 17) + "...";
+        return fitTaskName(fullName, maxWidth);
+    }
+
+    private String fitTaskName(String name, int maxWidth) {
+        if (maxWidth <= 0) {
+            return "";
         }
-        return fullName;
+
+        if (name.length() <= maxWidth) {
+            return name;
+        }
+
+        if (maxWidth <= 3) {
+            return name.substring(0, maxWidth);
+        }
+
+        return name.substring(0, maxWidth - 3) + "...";
     }
 
     public boolean isClosed() {
@@ -1355,11 +1411,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             // Clear the active sink
             LogBuffer.clearActiveSink();
 
-            // Restore original streams
-            System.setOut(originalOut);
-            System.setErr(originalErr);
-
-            // Stop the render thread
+            // Stop the render thread first
             try {
                 renderThread.join(2000); // Wait up to 2 seconds for clean shutdown
             } catch (InterruptedException e) {
@@ -1367,8 +1419,24 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             }
 
             try {
-                // Clear the display and restore terminal
+                // Clear the display with a final message
+                List<AttributedString> finalMessage = new ArrayList<>();
+                finalMessage.add(new AttributedStringBuilder()
+                    .style(AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN))
+                    .append("Console panel closed successfully")
+                    .toAttributedString());
+                display.update(finalMessage, finalMessage.size());
+                terminal.flush();
+
+                // Small delay to ensure the message is visible
+                Thread.sleep(100);
+
+                // Now clear the display completely
                 display.update(Collections.emptyList(), 0);
+                terminal.puts(org.jline.utils.InfoCmp.Capability.clear_screen);
+                terminal.puts(org.jline.utils.InfoCmp.Capability.cursor_address, 0, 0);
+                terminal.writer().print("\033[0m\033[?25h");
+                terminal.writer().flush();
 
                 // Exit raw mode to restore normal terminal behavior
                 terminal.getAttributes().setLocalFlag(org.jline.terminal.Attributes.LocalFlag.ICANON, true);
@@ -1378,7 +1446,13 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 terminal.flush();
                 terminal.close();
             } catch (Exception e) {
-                // Ignore close errors
+                // Ignore close errors but try to restore streams
+            } finally {
+                // Always restore original streams, even if terminal cleanup fails
+                System.setOut(originalOut);
+                System.setErr(originalErr);
+                originalOut.println();
+                originalOut.flush();
             }
         }
     }
@@ -1517,6 +1591,23 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         }
     }
 
+    private void saveScreenshot() {
+        List<String> snapshot = lastRenderSnapshot;
+        if (snapshot == null || snapshot.isEmpty()) {
+            addLogMessage("No screen content available to save.");
+            return;
+        }
+
+        String timestamp = LocalDateTime.now().format(SCREENSHOT_FORMAT);
+        Path path = Paths.get(String.format("console-panel-%s.txt", timestamp));
+        try {
+            Files.write(path, snapshot, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
+            addLogMessage("Saved console snapshot to " + path.toAbsolutePath());
+        } catch (IOException e) {
+            addLogMessage("Failed to save console snapshot: " + e.getMessage());
+        }
+    }
+
     /**
      * Internal class representing a task node in the hierarchy
      */
@@ -1551,7 +1642,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
      * Builder for configuring ConsolePanelSink
      */
     public static class Builder {
-        private long refreshRateMs = 100;
+        private long refreshRateMs = 250;
         private long completedRetentionMs = 5000;
         private boolean useColors = true;
         private int maxLogLines = 1000;

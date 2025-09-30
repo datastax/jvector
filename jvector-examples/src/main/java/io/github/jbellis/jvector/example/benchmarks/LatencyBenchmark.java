@@ -16,16 +16,19 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Collections;
-
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.StatusUpdate;
+import io.github.jbellis.jvector.status.TrackerScope;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
- * Measures per‐query latency (mean and standard deviation) over N runs,
- * and counts correct top‐K results.
+ * Measures per-query latency (mean and standard deviation) over N runs,
+ * and counts correct top-K results.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
     private static final String DEFAULT_FORMAT = ".3f";
@@ -48,7 +51,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
     }
 
     private LatencyBenchmark(boolean computeAvgLatency, boolean computeLatencySTD, boolean computeP999Latency,
-                            String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
+                             String formatAvgLatency, String formatLatencySTD, String formatP999Latency) {
         this.computeAvgLatency = computeAvgLatency;
         this.computeLatencySTD = computeLatencySTD;
         this.computeP999Latency = computeP999Latency;
@@ -99,61 +102,157 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             int rerankK,
             boolean usePruning,
             int queryRuns) {
+        return runInternal(null, null, cs, topK, rerankK, usePruning, queryRuns);
+    }
 
+    @Override
+    public List<Metric> runBenchmark(
+            TrackerScope parentScope,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
+        return runInternal(parentScope, null, cs, topK, rerankK, usePruning, queryRuns);
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            TrackerScope parentScope,
+            StatusTracker<?> parentTracker,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
+        return runInternal(parentScope, parentTracker, cs, topK, rerankK, usePruning, queryRuns);
+    }
+
+    private List<Metric> runInternal(
+            TrackerScope parentScope,
+            StatusTracker<?> parentTracker,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
         if (!(computeAvgLatency || computeLatencySTD || computeP999Latency)) {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
         int totalQueries = cs.getDataSet().queryVectors.size();
-        double mean = 0.0;
-        double m2 = 0.0;
-        int count = 0;
+        LatencyComputationTask task = new LatencyComputationTask(getBenchmarkName(), Math.max(1, queryRuns));
 
-        // Collect every query latency
-        List<Long> latencies = new ArrayList<>(totalQueries * queryRuns);
+        StatusTracker<LatencyComputationTask> tracker = null;
+        if (parentTracker != null) {
+            tracker = parentTracker.createChild(task);
+        } else if (parentScope != null) {
+            tracker = parentScope.track(task);
+        }
 
-        // Run the full set of queries queryRuns times
-        for (int run = 0; run < queryRuns; run++) {
-            for (int i = 0; i < totalQueries; i++) {
-                long start = System.nanoTime();
-                SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
-                long duration = System.nanoTime() - start;
-                // record latency for percentile computation
-                latencies.add(duration);
-                SINK += sr.getVisitedCount();
-
-                // Welford’s online algorithm for variance
-                count++;
-                double delta = duration - mean;
-                mean += delta / count;
-                m2 += delta * (duration - mean);
+        try (StatusTracker<LatencyComputationTask> ignored = tracker) {
+            if (tracker != null) {
+                task.start();
             }
+
+            double mean = 0.0;
+            double m2 = 0.0;
+            int count = 0;
+
+            List<Long> latencies = new ArrayList<>(totalQueries * Math.max(1, queryRuns));
+
+            for (int run = 0; run < queryRuns; run++) {
+                for (int i = 0; i < totalQueries; i++) {
+                    long start = System.nanoTime();
+                    SearchResult sr = QueryExecutor.executeQuery(
+                            cs, topK, rerankK, usePruning, i);
+                    long duration = System.nanoTime() - start;
+                    latencies.add(duration);
+                    SINK += sr.getVisitedCount();
+
+                    count++;
+                    double delta = duration - mean;
+                    mean += delta / count;
+                    m2 += delta * (duration - mean);
+                }
+
+                if (tracker != null) {
+                    task.updateProgress(run + 1);
+                }
+            }
+
+            mean /= 1e6;
+            double standardDeviation = (count > 0) ? Math.sqrt(m2 / count) / 1e6 : 0.0;
+
+            Collections.sort(latencies);
+            int idx = (int) Math.ceil(0.999 * latencies.size()) - 1;
+            if (idx < 0) idx = 0;
+            if (idx >= latencies.size()) idx = latencies.size() - 1;
+            double p999Latency = latencies.get(idx) / 1e6;
+
+            var list = new ArrayList<Metric>();
+            if (computeAvgLatency) {
+                list.add(Metric.of("Mean Latency (ms)", formatAvgLatency, mean));
+            }
+            if (computeLatencySTD) {
+                list.add(Metric.of("STD Latency (ms)", formatLatencySTD, standardDeviation));
+            }
+            if (computeP999Latency) {
+                list.add(Metric.of("p999 Latency (ms)", formatP999Latency, p999Latency));
+            }
+
+            if (tracker != null) {
+                task.complete();
+            }
+            return list;
+        } catch (Exception e) {
+            if (tracker != null) {
+                task.fail();
+            }
+            throw e;
+        }
+    }
+
+    private static final class LatencyComputationTask implements StatusUpdate.Provider<LatencyComputationTask> {
+        private final String name;
+        private final int totalRuns;
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+
+        LatencyComputationTask(String name, int totalRuns) {
+            this.name = name;
+            this.totalRuns = Math.max(1, totalRuns);
         }
 
-        mean /= 1e6;
-        double standardDeviation = (count > 0) ? Math.sqrt(m2 / count) / 1e6: 0.0;
+        void start() {
+            state = StatusUpdate.RunState.RUNNING;
+            progress = totalRuns == 0 ? 1.0 : 0.0;
+        }
 
-        // Compute 99.9th percentile
-        Collections.sort(latencies);
-        int idx = (int)Math.ceil(0.999 * latencies.size()) - 1;
-        if (idx < 0) idx = 0;
-        if (idx >= latencies.size()) idx = latencies.size() - 1;
-        double p999Latency = latencies.get(idx) / 1e6;
+        void updateProgress(int completedRuns) {
+            if (state == StatusUpdate.RunState.PENDING) {
+                state = StatusUpdate.RunState.RUNNING;
+            }
+            progress = Math.max(0.0, Math.min(1.0, (double) completedRuns / totalRuns));
+        }
 
-        var list = new ArrayList<Metric>();
-        if (computeAvgLatency) {
-            list.add(Metric.of("Mean Latency (ms)", formatAvgLatency, mean));
+        void complete() {
+            progress = 1.0;
+            state = StatusUpdate.RunState.SUCCESS;
         }
-        if (computeLatencySTD) {
-            list.add(Metric.of("STD Latency (ms)", formatLatencySTD, standardDeviation));
+
+        void fail() {
+            state = StatusUpdate.RunState.FAILED;
         }
-        if (computeP999Latency) {
-            list.add(Metric.of("p999 Latency (ms)", formatP999Latency, p999Latency));
+
+        @Override
+        public StatusUpdate<LatencyComputationTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
         }
-        return list;
+
+        @Override
+        public String toString() {
+            return name;
+        }
     }
 }
-
-
-
