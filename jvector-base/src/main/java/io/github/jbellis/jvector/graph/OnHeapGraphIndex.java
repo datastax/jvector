@@ -25,14 +25,13 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.NeighborsScoreCache;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.DenseIntMap;
-import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.util.SparseIntMap;
-import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.IntArrayList;
 
@@ -41,9 +40,12 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
@@ -267,7 +269,7 @@ public class OnHeapGraphIndex implements GraphIndex {
     /**
      * A View that assumes no concurrent modifications are made
      */
-    public GraphIndex.View getFrozenView() {
+    public FrozenView getFrozenView() {
         return new FrozenView();
     }
 
@@ -421,7 +423,7 @@ public class OnHeapGraphIndex implements GraphIndex {
         }
     }
 
-    private class FrozenView implements View {
+    public class FrozenView implements View {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -571,5 +573,69 @@ public class OnHeapGraphIndex implements GraphIndex {
                 sl.unlockWrite(stamp);
             }
         }
+    }
+
+    /**
+     * Converts an OnDiskGraphIndex to an OnHeapGraphIndex by copying all nodes, their levels, and neighbors,
+     * along with other configuration details, from disk-based storage to heap-based storage.
+     *
+     * @param diskIndex the disk-based index to be converted
+     * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
+     *                                    organized by levels and nodes.
+     * @param bsp The build score provider to be used for
+     * @param overflowRatio usually 1.2f
+     * @param alpha usually 1.2f
+     * @return an OnHeapGraphIndex that is equivalent to the provided OnDiskGraphIndex but operates in heap memory
+     * @throws IOException if an I/O error occurs during the conversion process
+     */
+    public static OnHeapGraphIndex convertToHeap(OnDiskGraphIndex diskIndex,
+                                                 NeighborsScoreCache perLevelNeighborsScoreCache,
+                                                 BuildScoreProvider bsp,
+                                                 float overflowRatio,
+                                                 float alpha) throws IOException {
+
+        // Create a new OnHeapGraphIndex with the appropriate configuration
+        List<Integer> maxDegrees = new ArrayList<>();
+        for (int level = 0; level <= diskIndex.getMaxLevel(); level++) {
+            maxDegrees.add(diskIndex.getDegree(level));
+        }
+
+        OnHeapGraphIndex heapIndex = new OnHeapGraphIndex(
+                maxDegrees,
+                overflowRatio, // overflow ratio
+                new VamanaDiversityProvider(bsp, alpha) // diversity provider - can be null for basic usage
+        );
+
+        // Copy all nodes and their connections from disk to heap
+        try (var view = diskIndex.getView()) {
+            // Copy nodes level by level
+            for (int level = 0; level <= diskIndex.getMaxLevel(); level++) {
+                final NodesIterator nodesIterator = diskIndex.getNodes(level);
+                final Map<Integer, NodeArray> levelNeighborsScoreCache = perLevelNeighborsScoreCache.getNeighborsScoresInLevel(level);
+                if (levelNeighborsScoreCache == null) {
+                    throw new IllegalStateException("No neighbors score cache found for level " + level);
+                }
+                if (nodesIterator.size() != levelNeighborsScoreCache.size()) {
+                    throw new IllegalStateException("Neighbors score cache size mismatch for level " + level +
+                            ". Expected (currently in index): " + nodesIterator.size() + ", but got (in cache): " + levelNeighborsScoreCache.size());
+                }
+
+                while (nodesIterator.hasNext()) {
+                    int nodeId = nodesIterator.next();
+
+                    // Copy neighbors
+                    final NodeArray neighbors = levelNeighborsScoreCache.get(nodeId).copy();
+
+                    // Add the node with its neighbors
+                    heapIndex.addNode(level, nodeId, neighbors);
+                    heapIndex.markComplete(new NodeAtLevel(level, nodeId));
+                }
+            }
+
+            // Set the entry point
+            heapIndex.updateEntryNode(view.entryNode());
+        }
+
+        return heapIndex;
     }
 }

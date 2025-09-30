@@ -78,4 +78,20 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
         };
         return new DefaultSearchScoreProvider(sf);
     }
+
+    /**
+     * A SearchScoreProvider for a single-pass search based on exact similarity.
+     * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
+     * e.g. during construction.
+     */
+    public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
+        // don't use ESF.reranker, we need thread safety here
+        var sf = new ScoreFunction.ExactScoreFunction() {
+            @Override
+            public float similarityTo(int node2) {
+                return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
+            }
+        };
+        return new DefaultSearchScoreProvider(sf);
+    }
 }
