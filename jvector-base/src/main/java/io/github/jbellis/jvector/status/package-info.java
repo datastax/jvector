@@ -56,7 +56,7 @@
  *
  * <h3>Monitoring Sinks</h3>
  * <ul>
- *   <li><strong>{@link io.github.jbellis.jvector.status.sinks.ConsoleStatusSink}</strong> - Human-readable
+ *   <li><strong>{@link io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink}</strong> - Human-readable
  *       console output with progress bars and configurable formatting</li>
  *   <li><strong>{@link io.github.jbellis.jvector.status.sinks.LoggerStatusSink}</strong> - Java logging
  *       framework integration with configurable levels and hierarchies</li>

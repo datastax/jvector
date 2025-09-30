@@ -1,3 +1,19 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.status;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
@@ -117,26 +133,25 @@ public class StatusTrackerTest extends RandomizedTest {
     @Test
     public void testWithInstrumented() {
         InstrumentedTask task = new InstrumentedTask("instrumented-task");
-        StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task);
 
-        assertNotNull(statusTracker);
-        assertEquals(task, statusTracker.getTracked());
+        try (StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task)) {
+            assertNotNull(statusTracker);
+            assertEquals(task, statusTracker.getTracked());
 
-        StatusUpdate<InstrumentedTask> status = statusTracker.getStatus();
-        assertNotNull(status);
-        assertEquals(0.0, status.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.PENDING, status.runstate);
+            StatusUpdate<InstrumentedTask> status = statusTracker.getStatus();
+            assertNotNull(status);
+            assertEquals(0.0, status.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.PENDING, status.runstate);
 
-        task.setProgress(0.5);
-        status = statusTracker.getStatus();
-        assertEquals(0.0, status.progress, 0.001);
+            task.setProgress(0.5);
+            status = statusTracker.getStatus();
+            assertEquals(0.0, status.progress, 0.001);
 
-        task.setProgress(1.0);
-        StatusUpdate<InstrumentedTask> newStatus = task.getTaskStatus();
-        assertEquals(1.0, newStatus.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.SUCCESS, newStatus.runstate);
-
-        statusTracker.close();
+            task.setProgress(1.0);
+            StatusUpdate<InstrumentedTask> newStatus = task.getTaskStatus();
+            assertEquals(1.0, newStatus.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.SUCCESS, newStatus.runstate);
+        }
     }
 
     /**
@@ -172,27 +187,25 @@ public class StatusTrackerTest extends RandomizedTest {
             return new StatusUpdate<>(t.getProgress(), state);
         };
 
-        StatusTracker<RegularTask> statusTracker = StatusTracker.withFunctors(task, statusFunction);
+        try (StatusTracker<RegularTask> statusTracker = StatusTracker.withFunctors(task, statusFunction)) {
+            assertNotNull(statusTracker);
+            assertEquals(task, statusTracker.getTracked());
 
-        assertNotNull(statusTracker);
-        assertEquals(task, statusTracker.getTracked());
+            StatusUpdate<RegularTask> status = statusTracker.getStatus();
+            assertNotNull(status);
+            assertEquals(0.0, status.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.PENDING, status.runstate);
 
-        StatusUpdate<RegularTask> status = statusTracker.getStatus();
-        assertNotNull(status);
-        assertEquals(0.0, status.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.PENDING, status.runstate);
+            task.setProgress(0.75);
+            StatusUpdate<RegularTask> newStatus = statusFunction.apply(task);
+            assertEquals(0.75, newStatus.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.RUNNING, newStatus.runstate);
 
-        task.setProgress(0.75);
-        StatusUpdate<RegularTask> newStatus = statusFunction.apply(task);
-        assertEquals(0.75, newStatus.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.RUNNING, newStatus.runstate);
-
-        task.setProgress(1.0);
-        newStatus = statusFunction.apply(task);
-        assertEquals(1.0, newStatus.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.SUCCESS, newStatus.runstate);
-
-        statusTracker.close();
+            task.setProgress(1.0);
+            newStatus = statusFunction.apply(task);
+            assertEquals(1.0, newStatus.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.SUCCESS, newStatus.runstate);
+        }
     }
 
     /**
@@ -218,25 +231,22 @@ public class StatusTrackerTest extends RandomizedTest {
         InstrumentedTask task2 = new InstrumentedTask("task-2");
         InstrumentedTask task3 = new InstrumentedTask("task-3");
 
-        StatusTracker<InstrumentedTask> statusTracker1 = StatusTracker.withInstrumented(task1);
-        StatusTracker<InstrumentedTask> statusTracker2 = StatusTracker.withInstrumented(task2);
-        StatusTracker<InstrumentedTask> statusTracker3 = StatusTracker.withInstrumented(task3);
+        try (StatusTracker<InstrumentedTask> statusTracker1 = StatusTracker.withInstrumented(task1);
+             StatusTracker<InstrumentedTask> statusTracker2 = StatusTracker.withInstrumented(task2);
+             StatusTracker<InstrumentedTask> statusTracker3 = StatusTracker.withInstrumented(task3)) {
 
-        task1.setProgress(0.25);
-        task2.setProgress(0.50);
-        task3.setProgress(1.00);
+            task1.setProgress(0.25);
+            task2.setProgress(0.50);
+            task3.setProgress(1.00);
 
-        assertEquals("task-1", statusTracker1.getTracked().getName());
-        assertEquals("task-2", statusTracker2.getTracked().getName());
-        assertEquals("task-3", statusTracker3.getTracked().getName());
+            assertEquals("task-1", statusTracker1.getTracked().getName());
+            assertEquals("task-2", statusTracker2.getTracked().getName());
+            assertEquals("task-3", statusTracker3.getTracked().getName());
 
-        StatusUpdate<InstrumentedTask> status3 = task3.getTaskStatus();
-        assertEquals(1.0, status3.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.SUCCESS, status3.runstate);
-
-        statusTracker1.close();
-        statusTracker2.close();
-        statusTracker3.close();
+            StatusUpdate<InstrumentedTask> status3 = task3.getTaskStatus();
+            assertEquals(1.0, status3.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.SUCCESS, status3.runstate);
+        }
     }
 
     /**
@@ -262,28 +272,26 @@ public class StatusTrackerTest extends RandomizedTest {
         InstrumentedTask instrTask = new InstrumentedTask("instrumented");
         RegularTask regTask = new RegularTask("regular");
 
-        StatusTracker<InstrumentedTask> instrStatusTracker = StatusTracker.withInstrumented(instrTask);
-        StatusTracker<RegularTask> regStatusTracker = StatusTracker.withFunctors(regTask,
-            t -> new StatusUpdate<>(t.getProgress(), StatusUpdate.RunState.RUNNING));
+        try (StatusTracker<InstrumentedTask> instrStatusTracker = StatusTracker.withInstrumented(instrTask);
+             StatusTracker<RegularTask> regStatusTracker = StatusTracker.withFunctors(regTask,
+                 t -> new StatusUpdate<>(t.getProgress(), StatusUpdate.RunState.RUNNING))) {
 
-        assertNotNull(instrStatusTracker);
-        assertNotNull(regStatusTracker);
+            assertNotNull(instrStatusTracker);
+            assertNotNull(regStatusTracker);
 
-        assertEquals(instrTask, instrStatusTracker.getTracked());
-        assertEquals(regTask, regStatusTracker.getTracked());
+            assertEquals(instrTask, instrStatusTracker.getTracked());
+            assertEquals(regTask, regStatusTracker.getTracked());
 
-        instrTask.setProgress(0.5);
-        regTask.setProgress(0.5);
+            instrTask.setProgress(0.5);
+            regTask.setProgress(0.5);
 
-        StatusUpdate<InstrumentedTask> instrStatus = instrTask.getTaskStatus();
-        assertEquals(0.5, instrStatus.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.RUNNING, instrStatus.runstate);
+            StatusUpdate<InstrumentedTask> instrStatus = instrTask.getTaskStatus();
+            assertEquals(0.5, instrStatus.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.RUNNING, instrStatus.runstate);
 
-        StatusUpdate<RegularTask> regStatus = regStatusTracker.getStatus();
-        assertEquals(0.0, regStatus.progress, 0.001);
-
-        instrStatusTracker.close();
-        regStatusTracker.close();
+            StatusUpdate<RegularTask> regStatus = regStatusTracker.getStatus();
+            assertEquals(0.0, regStatus.progress, 0.001);
+        }
     }
 
     /**
@@ -346,19 +354,17 @@ public class StatusTrackerTest extends RandomizedTest {
             return new StatusUpdate<>(adjustedProgress, state);
         };
 
-        StatusTracker<RegularTask> statusTracker = StatusTracker.withFunctors(task, customFunction);
+        try (StatusTracker<RegularTask> statusTracker = StatusTracker.withFunctors(task, customFunction)) {
+            task.setProgress(0.5);
+            StatusUpdate<RegularTask> status = customFunction.apply(task);
+            assertEquals(0.6, status.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.RUNNING, status.runstate);
 
-        task.setProgress(0.5);
-        StatusUpdate<RegularTask> status = customFunction.apply(task);
-        assertEquals(0.6, status.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.RUNNING, status.runstate);
-
-        task.setProgress(0.9);
-        status = customFunction.apply(task);
-        assertEquals(1.0, status.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.SUCCESS, status.runstate);
-
-        statusTracker.close();
+            task.setProgress(0.9);
+            status = customFunction.apply(task);
+            assertEquals(1.0, status.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.SUCCESS, status.runstate);
+        }
     }
 
     /**
@@ -471,22 +477,21 @@ public class StatusTrackerTest extends RandomizedTest {
     @Test
     public void testMonitorStopsOnTaskCompletion() throws InterruptedException {
         InstrumentedTask task = new InstrumentedTask("completion-stop");
-        StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task);
 
-        task.setProgress(0.5);
-        Thread.sleep(100);
+        try (StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task)) {
+            task.setProgress(0.5);
+            Thread.sleep(100);
 
-        StatusUpdate<InstrumentedTask> runningStatus = statusTracker.getStatus();
-        assertEquals(StatusUpdate.RunState.RUNNING, runningStatus.runstate);
+            StatusUpdate<InstrumentedTask> runningStatus = statusTracker.getStatus();
+            assertEquals(StatusUpdate.RunState.RUNNING, runningStatus.runstate);
 
-        task.setProgress(1.0);
-        Thread.sleep(200);
+            task.setProgress(1.0);
+            Thread.sleep(200);
 
-        StatusUpdate<InstrumentedTask> completedStatus = statusTracker.getStatus();
-        assertEquals(1.0, completedStatus.progress, 0.001);
-        assertEquals(StatusUpdate.RunState.SUCCESS, completedStatus.runstate);
-
-        statusTracker.close();
+            StatusUpdate<InstrumentedTask> completedStatus = statusTracker.getStatus();
+            assertEquals(1.0, completedStatus.progress, 0.001);
+            assertEquals(StatusUpdate.RunState.SUCCESS, completedStatus.runstate);
+        }
     }
 
     // =============================================================================
@@ -565,18 +570,20 @@ public class StatusTrackerTest extends RandomizedTest {
     @Test
     public void testTrackerCleanupOnClose() throws InterruptedException {
         InstrumentedTask task = new InstrumentedTask("cleanup-test");
-        StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task);
 
-        task.setProgress(0.5);
-        Thread.sleep(100);
+        try (StatusTracker<InstrumentedTask> statusTracker = StatusTracker.withInstrumented(task)) {
+            task.setProgress(0.5);
+            Thread.sleep(100);
 
-        StatusUpdate<InstrumentedTask> statusBeforeClose = statusTracker.getStatus();
-        assertNotNull(statusBeforeClose);
+            StatusUpdate<InstrumentedTask> statusBeforeClose = statusTracker.getStatus();
+            assertNotNull(statusBeforeClose);
 
-        statusTracker.close();
+            // Manually close to test explicit cleanup behavior
+            statusTracker.close();
 
-        StatusUpdate<InstrumentedTask> statusAfterClose = statusTracker.getStatus();
-        assertNotNull(statusAfterClose);
+            StatusUpdate<InstrumentedTask> statusAfterClose = statusTracker.getStatus();
+            assertNotNull(statusAfterClose);
+        }
     }
 
     /**

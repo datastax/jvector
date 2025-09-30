@@ -20,15 +20,30 @@ import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.util.LoggerConfig;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
+import io.github.jbellis.jvector.status.sinks.ConsolePanelSink;
+import io.github.jbellis.jvector.status.sinks.LogBuffer;
+import io.github.jbellis.jvector.status.sinks.OutputMode;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Option;
+import picocli.CommandLine.Parameters;
+
+
 import java.io.IOException;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -38,22 +53,115 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 /**
  * Tests GraphIndexes against vectors from various datasets
  */
-public class Bench {
-    public static void main(String[] args) throws IOException {
-        System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+@Command(
+    name = "bench",
+    mixinStandardHelpOptions = true,
+    version = "JVector Benchmark 4.0.0",
+    description = "Benchmark JVector indexes against various datasets",
+    headerHeading = "%n",
+    header = "JVector Benchmark Tool"
+)
+public class Bench implements Callable<Integer> {
 
-        var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
+    @Option(
+        names = {"-o", "--output"},
+        description = "Output mode: ${COMPLETION-CANDIDATES}",
+        defaultValue = "AUTO"
+    )
+    private OutputMode outputMode = OutputMode.AUTO;
+
+    @Option(
+        names = {"-m", "--max-connections"},
+        description = "M parameter for graph construction",
+        defaultValue = "32"
+    )
+    private int m = 32;
+
+    @Option(
+        names = {"-e", "--ef-construction"},
+        description = "EF construction parameter",
+        defaultValue = "100"
+    )
+    private int efConstruction = 100;
+
+    @Option(
+        names = {"--neighbor-overflow"},
+        description = "Neighbor overflow factor",
+        defaultValue = "1.2"
+    )
+    private float neighborOverflow = 1.2f;
+
+    @Option(
+        names = {"--no-hierarchy"},
+        description = "Disable hierarchical index construction",
+        negatable = true
+    )
+    private boolean addHierarchy = true;
+
+    @Option(
+        names = {"--no-refine"},
+        description = "Disable final graph refinement",
+        negatable = true
+    )
+    private boolean refineFinalGraph = true;
+
+    @Option(
+        names = {"--no-pruning"},
+        description = "Disable graph pruning",
+        negatable = true
+    )
+    private boolean usePruning = true;
+
+    @Parameters(
+        description = "Dataset patterns (regex) to match",
+        arity = "0..*"
+    )
+    private List<String> datasetPatterns = new ArrayList<>();
+
+
+    static {
+        // Static initializer to configure logging as early as possible
+        LoggerConfig.configureForStaticInit();
+    }
+
+    public static void main(String[] args) {
+        int exitCode = new CommandLine(new Bench()).execute(args);
+        System.exit(exitCode);
+    }
+
+    @Override
+    public Integer call() throws Exception {
+        // Resolve AUTO to actual mode if needed
+        if (outputMode == OutputMode.AUTO) {
+            outputMode = OutputMode.detect();
+        }
+
+        // Configure logging with the resolved mode
+        LoggerConfig.configure(outputMode);
+
+        System.out.println("Heap space available: " + Runtime.getRuntime().maxMemory());
+        System.out.println("Output mode: " + outputMode.getName() + " - " + outputMode.getDescription());
+
+        // Run the benchmark
+        runBenchmark(outputMode);
+
+        return 0;
+    }
+
+    private void runBenchmark(OutputMode outputMode) throws IOException {
+
+        var mGrid = List.of(m);
+        var efConstructionGrid = List.of(efConstruction);
         var topKGrid = Map.of(
                 10, // topK
                 List.of(1.0, 2.0, 5.0, 10.0), // oq
                 100, // topK
                 List.of(1.0, 2.0) // oq
         ); // rerankK = oq * topK
-        var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
-        var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var refineFinalGraphGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(true); // List.of(false, true);
+        var neighborOverflowGrid = List.of(neighborOverflow);
+        var addHierarchyGrid = List.of(addHierarchy);
+        var refineFinalGraphGrid = List.of(refineFinalGraph);
+        var usePruningGrid = List.of(usePruning);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
@@ -75,23 +183,61 @@ public class Bench {
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
 
-        // args is list of regexes, possibly needing to be split by whitespace.
-        // generate a regex that matches any regex in args, or if args is empty/null, match everything
-        var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
+        // Convert dataset patterns to regex
+        String[] patternArray = datasetPatterns.toArray(new String[0]);
+        var regex = patternArray.length == 0 ? ".*" : Arrays.stream(patternArray).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
+        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid, outputMode);
     }
 
-    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+
+
+    private void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid, OutputMode outputMode) throws IOException {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
 
-        for (var datasetName : datasetNames) {
-            DataSet ds = DataSetLoader.loadDataSet(datasetName);
-            Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
+        TrackerScope rootScope;
+        ConsolePanelSink consolePanelSink = null;
+
+        if (outputMode == OutputMode.INTERACTIVE) {
+            // Use ConsolePanelSink for interactive mode
+            consolePanelSink = ConsolePanelSink.builder()
+                    .withRefreshRateMs(100)
+                    .withCaptureSystemStreams(true)  // Capture System streams in hierarchical mode
+                    .build();
+
+            // Register the sink with the log appender
+            LogBuffer.setActiveSink(consolePanelSink);
+
+            rootScope = new TrackerScope("Bench",
+                    Duration.ofMillis(500),
+                    List.of(consolePanelSink));
+        } else {
+            // Use simple console output
+            rootScope = new TrackerScope("Bench",
+                    Duration.ofMillis(500),
+                    List.of(new ConsoleLoggerSink()));
+        }
+
+        try {
+            for (var datasetName : datasetNames) {
+                // Create a child scope for each dataset
+                TrackerScope datasetScope = rootScope.createChildScope(datasetName);
+
+                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                Grid.runAll(ds, datasetScope, mGrid, efConstructionGrid, neighborOverflowGrid,
+                           addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression,
+                           compressionGrid, topKGrid, usePruningGrid);
+            }
+        } finally {
+            // Close the scope and sink when done
+            rootScope.close();
+            if (consolePanelSink != null) {
+                consolePanelSink.close();
+            }
         }
     }
 }

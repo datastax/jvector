@@ -1,11 +1,26 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.status;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 
-import io.github.jbellis.jvector.status.sinks.ConsoleStatusSink;
+import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 import io.github.jbellis.jvector.status.sinks.MetricsStatusSink;
 import io.github.jbellis.jvector.status.sinks.NoopStatusSink;
-import io.github.jbellis.jvector.status.sinks.StatusSinkTest;
 import org.junit.Test;
 import org.junit.jupiter.api.Tag;
 
@@ -129,7 +144,7 @@ public class StatusTrackingIntegrationTest extends RandomizedTest {
     @Test
     public void testCompleteWorkflowWithInstrumentedTasks() throws InterruptedException, ExecutionException, TimeoutException {
         ByteArrayOutputStream consoleOutput = new ByteArrayOutputStream();
-        ConsoleStatusSink consoleSink = new ConsoleStatusSink(new PrintStream(consoleOutput), false, true);
+        ConsoleLoggerSink consoleSink = new ConsoleLoggerSink(new PrintStream(consoleOutput), false, true);
         MetricsStatusSink metricsSink = new MetricsStatusSink();
 
         SimulatedWorkTask workTask = new SimulatedWorkTask("data-processing", 1000);
@@ -302,7 +317,7 @@ public class StatusTrackingIntegrationTest extends RandomizedTest {
     @Test
     public void testFailureHandling() throws InterruptedException {
         ByteArrayOutputStream consoleOutput = new ByteArrayOutputStream();
-        ConsoleStatusSink consoleSink = new ConsoleStatusSink(new PrintStream(consoleOutput), false, false);
+        ConsoleLoggerSink consoleSink = new ConsoleLoggerSink(new PrintStream(consoleOutput), false, false);
         MetricsStatusSink metricsSink = new MetricsStatusSink();
 
         SimulatedWorkTask failingTask = new SimulatedWorkTask("failing-task", 1000);
@@ -563,7 +578,7 @@ public class StatusTrackingIntegrationTest extends RandomizedTest {
         SimulatedWorkTask task = new SimulatedWorkTask("mixed-sink-task", 300);
 
         ByteArrayOutputStream consoleOutput = new ByteArrayOutputStream();
-        ConsoleStatusSink consoleSink = new ConsoleStatusSink(new PrintStream(consoleOutput), true, true);
+        ConsoleLoggerSink consoleSink = new ConsoleLoggerSink(new PrintStream(consoleOutput), true, true);
         MetricsStatusSink metricsSink = new MetricsStatusSink();
 
         try (StatusTracker<SimulatedWorkTask> statusTracker = StatusTracker.withInstrumented(task)) {
@@ -584,6 +599,10 @@ public class StatusTrackingIntegrationTest extends RandomizedTest {
 
             Thread.sleep(200);
 
+            // Ensure we capture the final status at 100% completion
+            StatusUpdate<SimulatedWorkTask> finalStatus = statusTracker.getStatus();
+            consoleSink.taskUpdate(statusTracker, finalStatus);
+
             NoopStatusSink.getInstance().taskFinished(statusTracker);
             consoleSink.taskFinished(statusTracker);
             metricsSink.taskFinished(statusTracker);
@@ -594,9 +613,8 @@ public class StatusTrackingIntegrationTest extends RandomizedTest {
 
             assertEquals(1, metricsSink.getTotalTasksStarted());
             assertEquals(1, metricsSink.getTotalTasksFinished());
-            assertEquals(3, metricsSink.getTotalUpdates());
+            assertEquals(3, metricsSink.getTotalUpdates()); // Still 3 because we only updated consoleSink, not metricsSink
 
-            StatusUpdate<SimulatedWorkTask> finalStatus = statusTracker.getStatus();
             assertEquals(1.0, finalStatus.progress, 0.001);
             assertEquals(StatusUpdate.RunState.SUCCESS, finalStatus.runstate);
         }

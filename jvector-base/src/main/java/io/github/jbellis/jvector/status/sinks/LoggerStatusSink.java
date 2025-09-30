@@ -1,17 +1,35 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.status.sinks;
 
 import io.github.jbellis.jvector.status.StatusSink;
 import io.github.jbellis.jvector.status.StatusUpdate;
 import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.TrackerScope;
 
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * A task sink that integrates with Java's standard logging framework (java.util.logging)
- * to record task progress and lifecycle events. This sink is ideal for production
- * environments where task monitoring needs to be integrated with existing logging
- * infrastructure and centralized log management systems.
+ * A task sink that integrates with Logback logging framework to record task progress
+ * and lifecycle events. This sink is ideal for production environments where task
+ * monitoring needs to be integrated with existing logging infrastructure and
+ * centralized log management systems.
  *
  * <p>This sink provides:
  * <ul>
@@ -127,8 +145,8 @@ import java.util.logging.Logger;
  * </ul>
  *
  * <h2>Thread Safety</h2>
- * <p>This sink is thread-safe through Java's logging framework, which handles
- * concurrent access to loggers and their handlers.</p>
+ * <p>This sink is thread-safe through Logback's logging framework, which handles
+ * concurrent access to loggers and their appenders.</p>
  *
  * @see StatusSink
  * @see StatusTracker
@@ -151,17 +169,17 @@ public class LoggerStatusSink implements StatusSink {
     }
 
     public LoggerStatusSink(String loggerName) {
-        this(Logger.getLogger(loggerName), Level.INFO);
+        this((Logger) LoggerFactory.getLogger(loggerName), Level.INFO);
     }
 
     public LoggerStatusSink(String loggerName, Level level) {
-        this(Logger.getLogger(loggerName), level);
+        this((Logger) LoggerFactory.getLogger(loggerName), level);
     }
 
     @Override
     public void taskStarted(StatusTracker<?> task) {
         String taskName = getTaskName(task);
-        logger.log(level, "Task started: " + taskName);
+        log("Task started: " + taskName);
     }
 
     @Override
@@ -169,13 +187,31 @@ public class LoggerStatusSink implements StatusSink {
         String taskName = getTaskName(task);
         double progress = status.progress * 100;
 
-        logger.log(level, String.format("Task update: %s [%.1f%%] - %s", taskName, progress, status.runstate));
+        log(String.format("Task update: %s [%.1f%%] - %s", taskName, progress, status.runstate));
     }
 
     @Override
     public void taskFinished(StatusTracker<?> task) {
         String taskName = getTaskName(task);
-        logger.log(level, "Task finished: " + taskName);
+        log("Task finished: " + taskName);
+    }
+
+    private void log(String message) {
+        // Use Logback's level-specific methods
+        if (level == Level.TRACE) {
+            logger.trace(message);
+        } else if (level == Level.DEBUG) {
+            logger.debug(message);
+        } else if (level == Level.INFO) {
+            logger.info(message);
+        } else if (level == Level.WARN) {
+            logger.warn(message);
+        } else if (level == Level.ERROR) {
+            logger.error(message);
+        } else {
+            // Default to info for any other level
+            logger.info(message);
+        }
     }
 
     private String getTaskName(StatusTracker<?> task) {

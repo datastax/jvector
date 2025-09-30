@@ -83,6 +83,24 @@
             <artifactId>logback-classic</artifactId>
             <version>1.4.11</version>
         </dependency>
+        <!-- Bridge Log4j2 to SLF4J -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-to-slf4j</artifactId>
+            <version>2.20.0</version>
+        </dependency>
+        <!-- Bridge JUL to SLF4J (for any AWS SDK components using java.util.logging) -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>jul-to-slf4j</artifactId>
+            <version>2.0.9</version>
+        </dependency>
+        <!-- Picocli for command-line parsing -->
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
+            <version>4.7.5</version>
+        </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3-transfer-manager</artifactId>
@@ -92,12 +110,32 @@
                     <artifactId>slf4j-api</artifactId>
                     <groupId>org.slf4j</groupId>
                 </exclusion>
+                <!-- Exclude Log4j 2 implementation to force use of bridge -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>aws-crt-client</artifactId>
             <version>${awssdk.version}</version>
+            <exclusions>
+                <!-- Exclude Log4j 2 implementation to force use of bridge -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -111,6 +149,15 @@
                 <exclusion>
                     <artifactId>commons-codec</artifactId>
                     <groupId>commons-codec</groupId>
+                </exclusion>
+                <!-- Exclude Log4j 2 implementation to force use of bridge -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>

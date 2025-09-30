@@ -1,3 +1,19 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.status.sinks;
 
 import io.github.jbellis.jvector.status.*;
@@ -116,22 +132,22 @@ import java.time.format.DateTimeFormatter;
  * @see TrackerScope
  * @since 4.0.0
  */
-public class ConsoleStatusSink implements StatusSink {
+public class ConsoleLoggerSink implements StatusSink {
 
     private final PrintStream output;
     private final boolean showTimestamp;
     private final boolean useProgressBar;
     private final DateTimeFormatter timeFormatter;
 
-    public ConsoleStatusSink() {
+    public ConsoleLoggerSink() {
         this(System.out, true, true);
     }
 
-    public ConsoleStatusSink(PrintStream output) {
+    public ConsoleLoggerSink(PrintStream output) {
         this(output, true, true);
     }
 
-    public ConsoleStatusSink(PrintStream output, boolean showTimestamp, boolean useProgressBar) {
+    public ConsoleLoggerSink(PrintStream output, boolean showTimestamp, boolean useProgressBar) {
         this.output = output;
         this.showTimestamp = showTimestamp;
         this.useProgressBar = useProgressBar;

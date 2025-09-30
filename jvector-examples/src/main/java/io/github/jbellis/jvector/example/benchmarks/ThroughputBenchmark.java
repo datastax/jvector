@@ -18,6 +18,9 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.StatusUpdate;
+import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -140,12 +143,83 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         int totalQueries = cs.getDataSet().queryVectors.size();
         int dim = cs.getDataSet().getDimension();
 
-        // Warmup Phase with diagnostics
-        double[] warmupQps = new double[numWarmupRuns];
-        for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
-            String warmupPhase = "Warmup-" + warmupRun;
-            
-            warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
+        // Create a status tracking task for the benchmark process
+        class BenchmarkTask implements StatusUpdate.Provider<BenchmarkTask> {
+            private volatile double progress = 0.0;
+            private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+            private volatile String currentPhase = "Initializing";
+            private volatile String detailedStatus = "";
+            private volatile int totalSteps;
+            private volatile int completedSteps = 0;
+            private volatile int queriesProcessed = 0;
+
+            BenchmarkTask(int warmupRuns, int testRuns) {
+                // Calculate total steps: warmup (prep + exec per run) + warmup analysis (if > 1) +
+                // test (GC + prep + exec per run) + performance analysis + regression analysis (if > 1) + final analysis
+                this.totalSteps = (warmupRuns * 2) + (warmupRuns > 1 ? 1 : 0) +
+                                 (testRuns * 3) + 1 + (testRuns > 1 ? 1 : 0) + 1;
+            }
+
+            @Override
+            public StatusUpdate<BenchmarkTask> getTaskStatus() {
+                return new StatusUpdate<>(progress, state, this);
+            }
+
+            void updatePhase(String phase, String details) {
+                this.currentPhase = phase;
+                this.detailedStatus = details;
+                if (state == StatusUpdate.RunState.PENDING && progress > 0) {
+                    state = StatusUpdate.RunState.RUNNING;
+                }
+            }
+
+            void incrementProgress() {
+                this.completedSteps++;
+                this.progress = Math.min(1.0, (double) completedSteps / totalSteps);
+                if (state == StatusUpdate.RunState.PENDING && progress > 0) {
+                    state = StatusUpdate.RunState.RUNNING;
+                }
+            }
+
+            void setQueriesProcessed(int queries) {
+                this.queriesProcessed = queries;
+            }
+
+            void complete() {
+                this.progress = 1.0;
+                this.state = StatusUpdate.RunState.SUCCESS;
+            }
+
+            @Override
+            public String toString() {
+                return String.format("ThroughputBenchmark [%s: %s, %.1f%% complete, %d queries]",
+                        currentPhase, detailedStatus, progress * 100, queriesProcessed);
+            }
+        }
+
+        BenchmarkTask benchmarkTask = new BenchmarkTask(numWarmupRuns, numTestRuns);
+        ConsoleLoggerSink consoleSink = new ConsoleLoggerSink(System.out, true, false);
+
+        try (StatusTracker<BenchmarkTask> tracker = StatusTracker.withInstrumented(benchmarkTask,
+                java.time.Duration.ofMillis(500),
+                consoleSink)) {
+
+            benchmarkTask.state = StatusUpdate.RunState.RUNNING;
+
+            // Warmup Phase with diagnostics
+            double[] warmupQps = new double[numWarmupRuns];
+            for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
+                // Preparation phase for warmup
+                benchmarkTask.updatePhase("Warmup Preparation", String.format("Run %d/%d - Initializing", warmupRun + 1, numWarmupRuns));
+                benchmarkTask.incrementProgress();
+                try { Thread.sleep(10); } catch (InterruptedException e) {} // Small delay to ensure status is visible
+
+                // Execution phase for warmup
+                benchmarkTask.updatePhase("Warmup Execution", String.format("Run %d/%d - Processing %d queries", warmupRun + 1, numWarmupRuns, totalQueries));
+                benchmarkTask.setQueriesProcessed(totalQueries);
+                String warmupPhase = "Warmup-" + warmupRun;
+
+                warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
                 IntStream.range(0, totalQueries)
                         .parallel()
                         .forEach(k -> {
@@ -165,44 +239,62 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                             recorder.recordTime(queryEnd - queryStart);
                         });
                 
-                return totalQueries / 1.0; // Return QPS placeholder
-            });
-            
-            diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
-        }
+                    return totalQueries / 1.0; // Return QPS placeholder
+                });
 
-        // Analyze warmup effectiveness
-        if (numWarmupRuns > 1) {
-            double warmupVariance = StatUtils.variance(warmupQps);
-            double warmupMean = StatUtils.mean(warmupQps);
-            double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
-            diagnostics.console("Warmup Analysis: Mean=" + warmupMean + " QPS, CV=" + warmupCV);
-            
-            if (warmupCV > 15.0) {
-                diagnostics.console(" ⚠️  High warmup variance - consider more warmup runs\n");
-            } else {
-                diagnostics.console(" ✓ Warmup appears stable\n");
+                benchmarkTask.incrementProgress();
+                benchmarkTask.setQueriesProcessed(0);
+                diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
             }
-        }
 
-        double[] qpsSamples = new double[numTestRuns];
-        for (int testRun = 0; testRun < numTestRuns; testRun++) {
-            String testPhase = "Test-" + testRun;
+            // Analyze warmup effectiveness
+            if (numWarmupRuns > 1) {
+                benchmarkTask.updatePhase("Warmup Analysis", "Analyzing warmup stability");
+                try { Thread.sleep(10); } catch (InterruptedException e) {}
 
-            // Clear Eden and let GC complete with diagnostics monitoring
-            diagnostics.monitorPhase("GC-" + testRun, () -> {
-                System.gc();
-                System.runFinalization();
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+                double warmupVariance = StatUtils.variance(warmupQps);
+                double warmupMean = StatUtils.mean(warmupQps);
+                double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
+                diagnostics.console("Warmup Analysis: Mean=" + warmupMean + " QPS, CV=" + warmupCV);
+
+                if (warmupCV > 15.0) {
+                    diagnostics.console(" ⚠️  High warmup variance - consider more warmup runs\n");
+                } else {
+                    diagnostics.console(" ✓ Warmup appears stable\n");
                 }
-                return null;
-            });
+                benchmarkTask.incrementProgress();
+            }
 
-            // Test Phase with detailed monitoring
-            qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
+            double[] qpsSamples = new double[numTestRuns];
+            for (int testRun = 0; testRun < numTestRuns; testRun++) {
+                // GC phase before test run
+                benchmarkTask.updatePhase("Garbage Collection", String.format("Before test run %d/%d", testRun + 1, numTestRuns));
+                benchmarkTask.incrementProgress();
+
+                // Clear Eden and let GC complete with diagnostics monitoring
+                diagnostics.monitorPhase("GC-" + testRun, () -> {
+                    System.gc();
+                    System.runFinalization();
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+
+                // Test preparation phase
+                benchmarkTask.updatePhase("Test Preparation", String.format("Run %d/%d - Initializing", testRun + 1, numTestRuns));
+                benchmarkTask.incrementProgress();
+                try { Thread.sleep(10); } catch (InterruptedException e) {}
+
+                // Test execution phase
+                benchmarkTask.updatePhase("Test Execution", String.format("Run %d/%d - Processing %d queries", testRun + 1, numTestRuns, totalQueries));
+                benchmarkTask.setQueriesProcessed(totalQueries);
+                String testPhase = "Test-" + testRun;
+
+                // Test Phase with detailed monitoring
+                qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
                 LongAdder visitedAdder = new LongAdder();
                 long startTime = System.nanoTime();
                 
@@ -220,50 +312,65 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                             recorder.recordTime(queryEnd - queryStart);
                         });
                         
-                double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-                return totalQueries / elapsedSec;
-            });
+                    double elapsedSec = (System.nanoTime() - startTime) / 1e9;
+                    return totalQueries / elapsedSec;
+                });
 
-            diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
-        }
+                benchmarkTask.incrementProgress();
+                benchmarkTask.setQueriesProcessed(0);
+                diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
+            }
 
-        // Performance variance analysis
-        Arrays.sort(qpsSamples);
-        double medianQps = qpsSamples[numTestRuns/2];
-        double avgQps = StatUtils.mean(qpsSamples);
-        double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
-        double maxQps = StatUtils.max(qpsSamples);
-        double minQps = StatUtils.min(qpsSamples);
-        double coefficientOfVariation = (stdDevQps / avgQps) * 100;
+            // Performance variance analysis phase
+            benchmarkTask.updatePhase("Performance Analysis", "Computing statistics");
+            try { Thread.sleep(10); } catch (InterruptedException e) {}
 
-        diagnostics.console("QPS Variance Analysis: CV=" + coefficientOfVariation + ", Range=[" + minQps + " - " + maxQps + "]\n");
-            
-        if (coefficientOfVariation > 10.0) {
-            diagnostics.console("⚠️  High performance variance detected (CV > 10%%)%n");
-        }
+            Arrays.sort(qpsSamples);
+            double medianQps = qpsSamples[numTestRuns/2];
+            double avgQps = StatUtils.mean(qpsSamples);
+            double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
+            double maxQps = StatUtils.max(qpsSamples);
+            double minQps = StatUtils.min(qpsSamples);
+            double coefficientOfVariation = (stdDevQps / avgQps) * 100;
 
-        // Compare test runs for performance regression detection
-        if (numTestRuns > 1) {
-            diagnostics.comparePhases("Test-0", "Test-" + (numTestRuns - 1));
-        }
+            diagnostics.console("QPS Variance Analysis: CV=" + coefficientOfVariation + ", Range=[" + minQps + " - " + maxQps + "]\n");
 
-        // Generate final diagnostics summary and recommendations
-        diagnostics.logSummary();
-        diagnostics.provideRecommendations();
+            if (coefficientOfVariation > 10.0) {
+                diagnostics.console("⚠️  High performance variance detected (CV > 10%%)%n");
+            }
 
-        var list = new ArrayList<Metric>();
-        if (computeAvgQps) {
-            list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
-            list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
-            list.add(Metric.of("CV %", ".1f", coefficientOfVariation));
+            // Compare test runs for performance regression detection
+            if (numTestRuns > 1) {
+                benchmarkTask.updatePhase("Regression Analysis", "Comparing test runs");
+                diagnostics.comparePhases("Test-0", "Test-" + (numTestRuns - 1));
+            }
+
+            benchmarkTask.incrementProgress();
+
+            // Generate final diagnostics summary and recommendations
+            benchmarkTask.updatePhase("Final Analysis", "Generating diagnostics summary");
+            diagnostics.logSummary();
+            diagnostics.provideRecommendations();
+
+            benchmarkTask.incrementProgress();
+
+            // Mark benchmark as complete
+            benchmarkTask.complete();
+
+            var list = new ArrayList<Metric>();
+            if (computeAvgQps) {
+                list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
+                list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
+                list.add(Metric.of("CV %", ".1f", coefficientOfVariation));
+            }
+            if (computeMedianQps) {
+                list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
+            }
+            if (computeMaxQps) {
+                list.add(Metric.of("Max QPS (of " + numTestRuns + ")", formatMaxQps, maxQps));
+                list.add(Metric.of("Min QPS (of " + numTestRuns + ")", formatMaxQps, minQps));
+            }
+            return list;
         }
-        if (computeMedianQps) {
-            list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
-        }
-        if (computeMaxQps) {
-            list.add(Metric.of("Max QPS (of " + numTestRuns + ")", formatMaxQps, maxQps));
-            list.add(Metric.of("Min QPS (of " + numTestRuns + ")", formatMaxQps, minQps));
-        }
-        return list;
     }
 }
