@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.status.TrackerScope;
 
 /**
  * Orchestrates running a set of QueryBenchmark instances
@@ -58,6 +59,34 @@ public class QueryTester {
 
         for (var benchmark : benchmarks) {
             var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+            results.addAll(metrics);
+        }
+
+        return results;
+    }
+
+    /**
+     * Run each benchmark once with a parent TrackerScope for hierarchical tracking.
+     *
+     * @param parentScope the parent scope for tracking
+     * @param cs          the configured system under test
+     * @param topK        the top‑K parameter for all benchmarks
+     * @param rerankK     the rerank‑K parameter
+     * @param usePruning  whether to enable pruning
+     * @param queryRuns   number of runs for each benchmark
+     */
+    public List<Metric> run(
+            TrackerScope parentScope,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
+
+        List<Metric> results = new ArrayList<>();
+
+        for (var benchmark : benchmarks) {
+            var metrics = benchmark.runBenchmark(parentScope, cs, topK, rerankK, usePruning, queryRuns);
             results.addAll(metrics);
         }
 

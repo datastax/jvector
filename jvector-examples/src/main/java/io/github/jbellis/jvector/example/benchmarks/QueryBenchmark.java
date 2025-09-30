@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.status.TrackerScope;
 
 import java.util.List;
 
@@ -33,6 +34,23 @@ public interface QueryBenchmark {
             boolean usePruning,
             int queryRuns
     );
+
+    /**
+     * Run the benchmark with an optional parent scope for hierarchical tracking.
+     * Default implementation creates its own scope if none provided.
+     */
+    default List<Metric> runBenchmark(
+            TrackerScope parentScope,
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns
+    ) {
+        // Default implementation just calls the original method
+        // Implementations should override this to use the parent scope
+        return runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+    }
 }
 
 

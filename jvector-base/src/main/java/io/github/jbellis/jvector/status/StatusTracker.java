@@ -143,6 +143,13 @@ public class StatusTracker<T> implements AutoCloseable {
     private final StatusMonitor<T> monitor;
     private final List<StatusSink> sinks;
     private volatile boolean closed = false;
+    private final StatusTracker<?> parent;
+    private TrackerScope scope; // The scope that created this tracker
+    private final List<StatusTracker<?>> children = new CopyOnWriteArrayList<>(); // Child trackers
+
+    // ThreadLocal to track the currently active tracker in this thread
+    // This allows child trackers to automatically discover their parent
+    private static final ThreadLocal<StatusTracker<?>> currentTracker = new ThreadLocal<>();
 
     private StatusTracker(T tracked, Function<T, StatusUpdate<T>> statusFunction) {
         this(tracked, statusFunction, Duration.ofMillis(100), new ArrayList<>());
@@ -156,10 +163,23 @@ public class StatusTracker<T> implements AutoCloseable {
         this.tracked = tracked;
         this.statusFunction=statusFunction;
         this.sinks = new CopyOnWriteArrayList<>(sinks);
-        this.monitor = new StatusMonitor<>(tracked, statusFunction, pollInterval, this::handleStatusChange);
 
-        notifyTaskStarted();
-        this.monitor.start();
+        // Capture parent tracker from ThreadLocal
+        this.parent = currentTracker.get();
+
+        // Set this as the current tracker for any children created in the same thread
+        StatusTracker<?> previousTracker = currentTracker.get();
+        currentTracker.set(this);
+
+        try {
+            this.monitor = new StatusMonitor<>(tracked, statusFunction, pollInterval, this::handleStatusChange);
+
+            notifyTaskStarted();
+            this.monitor.start();
+        } finally {
+            // Restore the previous tracker
+            currentTracker.set(previousTracker);
+        }
     }
 
     private void handleStatusChange(StatusUpdate<T> newStatus) {
@@ -265,10 +285,140 @@ public class StatusTracker<T> implements AutoCloseable {
         return tracked;
     }
 
+    /**
+     * Gets the parent tracker of this tracker, if any.
+     *
+     * @return the parent tracker, or null if this is a root tracker
+     */
+    public StatusTracker<?> getParent() {
+        return parent;
+    }
+
+    /**
+     * Creates a child tracker for an instrumented object.
+     * The child will inherit sinks and configuration from this tracker's scope.
+     * The child tracker will have this tracker as its parent.
+     *
+     * @param childTracked the object to track
+     * @return a new child StatusTracker
+     */
+    public <U extends StatusUpdate.Provider<U>> StatusTracker<U> createChild(U childTracked) {
+        // Set this as current tracker so the child will have us as parent
+        StatusTracker<?> previous = currentTracker.get();
+        currentTracker.set(this);
+        try {
+            // Create the child tracker with the same sinks
+            StatusTracker<U> child = StatusTracker.withInstrumented(childTracked,
+                Duration.ofMillis(100), sinks);
+
+            // Set the scope if we have one
+            if (scope != null) {
+                child.setScope(scope);
+            }
+
+            // Add to our children list
+            children.add(child);
+
+            // Register with scope if it tracks active trackers
+            if (scope != null) {
+                scope.getActiveTrackers().add(child);
+            }
+
+            return child;
+        } finally {
+            currentTracker.set(previous);
+        }
+    }
+
+    /**
+     * Creates a child tracker with a custom status function.
+     *
+     * @param childTracked the object to track
+     * @param statusFunction function to get status from the object
+     * @return a new child StatusTracker
+     */
+    public <U> StatusTracker<U> createChild(U childTracked, Function<U, StatusUpdate<U>> statusFunction) {
+        // Set this as current tracker so the child will have us as parent
+        StatusTracker<?> previous = currentTracker.get();
+        currentTracker.set(this);
+        try {
+            // Create the child tracker with the same sinks
+            StatusTracker<U> child = StatusTracker.withFunctors(childTracked, statusFunction,
+                Duration.ofMillis(100), sinks);
+
+            // Set the scope if we have one
+            if (scope != null) {
+                child.setScope(scope);
+            }
+
+            // Add to our children list
+            children.add(child);
+
+            // Register with scope if it tracks active trackers
+            if (scope != null) {
+                scope.getActiveTrackers().add(child);
+            }
+
+            return child;
+        } finally {
+            currentTracker.set(previous);
+        }
+    }
+
+    /**
+     * Gets the child trackers of this tracker.
+     *
+     * @return list of child trackers
+     */
+    public List<StatusTracker<?>> getChildren() {
+        return new ArrayList<>(children);
+    }
+
+    /**
+     * Sets the scope that created this tracker.
+     * Used internally by TrackerScope for lifecycle management.
+     *
+     * @param scope the scope that created this tracker
+     */
+    void setScope(TrackerScope scope) {
+        this.scope = scope;
+    }
+
+    /**
+     * Gets the current active tracker for this thread.
+     * This is used to automatically establish parent-child relationships.
+     *
+     * @return the current tracker, or null if no tracker is active
+     */
+    public static StatusTracker<?> getCurrentTracker() {
+        return currentTracker.get();
+    }
+
+    /**
+     * Sets the current active tracker for this thread.
+     * This should be managed internally by the tracker lifecycle.
+     *
+     * @param tracker the tracker to set as current
+     */
+    static void setCurrentTracker(StatusTracker<?> tracker) {
+        currentTracker.set(tracker);
+    }
+
     @Override
     public void close() {
         if (!closed) {
             closed = true;
+
+            // Ensure we're removed from the current tracker if we're still set
+            if (currentTracker.get() == this) {
+                currentTracker.set(parent);
+            }
+
+            // Remove from scope if we have one
+            if (scope != null) {
+                scope.removeTracker(this);
+            }
+
             if (monitor != null) {
                 monitor.stop();
             }
@@ -278,8 +428,60 @@ public class StatusTracker<T> implements AutoCloseable {
         }
     }
 
+    /**
+     * Executes the given runnable with this tracker as the current tracker.
+     * This ensures proper parent-child relationships for any trackers created
+     * within the runnable.
+     *
+     * @param runnable the code to execute
+     */
+    public void executeWithContext(Runnable runnable) {
+        StatusTracker<?> previous = currentTracker.get();
+        currentTracker.set(this);
+        try {
+            runnable.run();
+        } finally {
+            currentTracker.set(previous);
+        }
+    }
+
+    /**
+     * Executes the given supplier with this tracker as the current tracker.
+     * This ensures proper parent-child relationships for any trackers created
+     * within the supplier.
+     *
+     * @param <R> the return type
+     * @param supplier the code to execute
+     * @return the result of the supplier
+     */
+    public <R> R executeWithContext(java.util.function.Supplier<R> supplier) {
+        StatusTracker<?> previous = currentTracker.get();
+        currentTracker.set(this);
+        try {
+            return supplier.get();
+        } finally {
+            currentTracker.set(previous);
+        }
+    }
+
     public StatusUpdate<T> getStatus() {
         return monitor != null ? monitor.getCurrentStatus() : null;
+    }
+
+    /**
+     * Returns the elapsed time in milliseconds since the task started running,
+     * or 0 if the task hasn't started running yet.
+     */
+    public long getElapsedRunningTime() {
+        return monitor != null ? monitor.getElapsedRunningTime() : 0;
+    }
+
+    /**
+     * Returns the time (in milliseconds) when the task transitioned to RUNNING state,
+     * or null if the task hasn't started running yet.
+     */
+    public Long getRunningStartTime() {
+        return monitor != null ? monitor.getRunningStartTime() : null;
     }
 
 

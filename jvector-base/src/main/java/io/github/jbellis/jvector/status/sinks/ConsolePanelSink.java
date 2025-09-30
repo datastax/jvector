@@ -34,7 +34,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -85,7 +84,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
     private Terminal terminal;
     private Display display;
-    private final ScheduledExecutorService refreshExecutor;
+    private final Thread renderThread;
     private final Map<StatusTracker<?>, TaskNode> taskNodes;
     private final TaskNode rootNode;
     private final DateTimeFormatter timeFormatter;
@@ -93,9 +92,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     private final long completedRetentionMs;
     private final boolean useColors;
     private final AtomicBoolean closed;
+    private final AtomicBoolean shouldRender;
 
     // Logging panel components
-    private final List<String> logBuffer;
+    private final LinkedList<String> logBuffer;  // Simple linked list for efficient head/tail operations
     private final int maxLogLines;
     private volatile int logScrollOffset;
     private volatile int taskScrollOffset;
@@ -134,6 +134,9 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                     .color(builder.useColors)  // Explicitly set color support
                     .build();
 
+            // Enter raw mode to capture single keystrokes without waiting for Enter
+            terminal.enterRawMode();
+
             // Create display with fullscreen mode enabled for proper rendering
             this.display = new Display(terminal, true);
 
@@ -163,9 +166,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         this.rootNode = new TaskNode(null, null);
         this.timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
         this.closed = new AtomicBoolean(false);
+        this.shouldRender = new AtomicBoolean(true);
 
         // Initialize logging components
-        this.logBuffer = new CopyOnWriteArrayList<>();
+        this.logBuffer = new LinkedList<>();
         this.logScrollOffset = 0;
         this.splitOffset = 0;  // Start with default split
         this.isUserScrollingLogs = false;
@@ -184,44 +188,133 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             System.setErr(capturedErr);
         }
 
-        // Start the refresh thread
-        this.refreshExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "ConsolePanelSink-Refresh");
-            t.setDaemon(true);
-            return t;
-        });
+        // Create and start the dedicated render thread
+        this.renderThread = new Thread(this::renderLoop, "ConsolePanelSink-Renderer");
+        this.renderThread.setDaemon(true);
+        this.renderThread.start();
 
-        // Setup terminal input handler for scrolling
-        setupInputHandler();
+        // Add shutdown hook to properly clean up terminal on exit
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (!closed.get()) {
+                close();
+            }
+        }, "ConsolePanelSink-Shutdown"));
 
-        refreshExecutor.scheduleAtFixedRate(this::refresh, 0, refreshRateMs, TimeUnit.MILLISECONDS);
+        // Force an immediate full frame render to initialize the layout
+        try {
+            Thread.sleep(50); // Brief pause to let thread start
+            // Do a direct refresh call to trigger immediate render
+            refresh();
+            Thread.sleep(50); // Give time for the initial render to complete
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
-    private void setupInputHandler() {
-        Thread inputThread = new Thread(() -> {
-            NonBlockingReader reader = null;
-            try {
-                reader = terminal.reader();
-                while (!closed.get()) {
-                    int c = reader.read(100);
-                    if (c == -1 || c == -2) {
-                        continue;
-                    }
+    private void renderLoop() {
+        // Render loop with non-blocking input handling
+        NonBlockingReader reader = null;
+        try {
+            // Set up non-blocking reader for keyboard input
+            reader = terminal.reader();
 
-                    handleInput(reader, c);
+            long lastRenderTime = System.currentTimeMillis();
+            long lastCleanupTime = System.currentTimeMillis();
+
+            // Log that render loop has started
+            System.err.println("[ConsolePanelSink] Render loop started with non-blocking input");
+
+            while (!closed.get()) {
+                long now = System.currentTimeMillis();
+
+                // Check for keyboard input (non-blocking)
+                try {
+                    int c = reader.read(1); // Non-blocking read with 1ms timeout
+                    if (c != -2 && c != -1) { // -2 means no input available, -1 means EOF
+                        handleInput(reader, c);
+                    }
+                } catch (IOException e) {
+                    // Ignore read errors to prevent interrupting the render loop
                 }
-            } catch (IOException e) {
-                // Ignore on shutdown
+
+                // Clean up completed tasks periodically
+                if (now - lastCleanupTime >= 1000) { // Check every second
+                    cleanupCompletedTasks(now);
+                    lastCleanupTime = now;
+                }
+
+                // Render at specified refresh rate
+                if (now - lastRenderTime >= refreshRateMs) {
+                    refresh();
+                    lastRenderTime = now;
+                }
+
+                // Small sleep to prevent CPU spinning
+                Thread.sleep(10);
             }
-        }, "ConsolePanelSink-Input");
-        inputThread.setDaemon(true);
-        inputThread.start();
+        } catch (Exception e) {
+            if (!closed.get()) {
+                System.err.println("[ConsolePanelSink] Render loop error: " + e.getMessage());
+                e.printStackTrace();
+            }
+        } finally {
+            // Clean up reader
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException e) {
+                    // Ignore
+                }
+            }
+            System.err.println("[ConsolePanelSink] Render loop exited");
+        }
+    }
+
+    private void cleanupCompletedTasks(long now) {
+        // Remove completed tasks based on parent completion status
+        // A completed task is removed only when:
+        // 1. It has no parent (root task) and exceeded retention time, OR
+        // 2. Its parent task is also completed
+        List<Map.Entry<StatusTracker<?>, TaskNode>> toRemove = new ArrayList<>();
+
+        for (Map.Entry<StatusTracker<?>, TaskNode> entry : taskNodes.entrySet()) {
+            TaskNode node = entry.getValue();
+            if (node.finishTime > 0) {
+                // Check if this completed task should be removed
+                if (node.parent == null) {
+                    // Root task - use standard retention time
+                    if ((now - node.finishTime) > completedRetentionMs) {
+                        toRemove.add(entry);
+                    }
+                } else if (node.parent.finishTime > 0) {
+                    // Parent is also completed - remove child after brief delay
+                    // This ensures the final state is visible before cleanup
+                    if ((now - node.finishTime) > 1000) {  // 1 second minimum visibility
+                        toRemove.add(entry);
+                    }
+                }
+                // If parent is still running, keep this completed child visible
+            }
+        }
+
+        for (Map.Entry<StatusTracker<?>, TaskNode> entry : toRemove) {
+            StatusTracker<?> tracker = entry.getKey();
+            TaskNode node = entry.getValue();
+
+            taskNodes.remove(tracker);
+            if (node.parent != null) {
+                node.parent.children.remove(node);
+            } else {
+                rootNode.children.remove(node);
+            }
+        }
     }
 
 
     /**
      * Add a log message to the display buffer.
      * This is called by LogBuffer to add logging framework messages.
+     * Only sink methods should mutate the logBuffer.
      */
     void addLogMessage(String message) {
         if (message == null || message.trim().isEmpty()) {
@@ -235,11 +328,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 message = "[" + LocalDateTime.now().format(timeFormatter) + "] " + message;
             }
 
-            logBuffer.add(message);
+            logBuffer.addLast(message);
 
-            // Limit buffer size
+            // Limit buffer size to maxLogLines (default 1000)
             while (logBuffer.size() > maxLogLines) {
-                logBuffer.remove(0);
+                logBuffer.removeFirst();
                 if (logScrollOffset > 0) {
                     logScrollOffset--;
                 }
@@ -265,6 +358,18 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 return;
             }
 
+            // Handle [ and ] for adjusting split position
+            if (c == '[') {
+                // Expand task panel, shrink log panel
+                splitOffset = Math.max(-10, splitOffset - 2);
+                return;
+            }
+            if (c == ']') {
+                // Shrink task panel, expand log panel
+                splitOffset = Math.min(10, splitOffset + 2);
+                return;
+            }
+
             // Handle arrow keys and special sequences
             if (c == 27) { // ESC sequence
                 try {
@@ -285,6 +390,24 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                                     isUserScrollingLogs = true; // User is manually scrolling
                                 } else if (logScrollOffset == maxLogScroll) {
                                     isUserScrollingLogs = false; // At bottom, resume auto-follow
+                                }
+                                break;
+                            case '1': // ESC[1;2A or ESC[1;2B - Shift+arrows
+                                int next2 = reader.read(10);
+                                if (next2 == ';') {
+                                    int modifier = reader.read(10);
+                                    if (modifier == '2') { // Shift modifier
+                                        int direction = reader.read(10);
+                                        int pageSize = getLogPanelHeight() - 1;
+                                        if (direction == 'A') { // Shift+Up - page up
+                                            logScrollOffset = Math.max(0, logScrollOffset - pageSize);
+                                            isUserScrollingLogs = true;
+                                        } else if (direction == 'B') { // Shift+Down - page down
+                                            int maxScroll = Math.max(0, logBuffer.size() - getLogPanelHeight());
+                                            logScrollOffset = Math.min(maxScroll, logScrollOffset + pageSize);
+                                            isUserScrollingLogs = logScrollOffset < maxScroll;
+                                        }
+                                    }
                                 }
                                 break;
                             case '5': // Page Up (ESC[5~) - Expand task panel, shrink log panel
@@ -321,47 +444,58 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     public void taskStarted(StatusTracker<?> task) {
         if (closed.get()) return;
 
+        // Buffer the update - no rendering here, just update data structures
         TaskNode node = new TaskNode(task, findParent(task));
         taskNodes.put(task, node);
 
         TaskNode parent = node.parent != null ? node.parent : rootNode;
         parent.children.add(node);
+        // Note: Render thread will pick up this change at next refresh cycle
     }
 
     @Override
     public void taskUpdate(StatusTracker<?> task, StatusUpdate<?> status) {
         if (closed.get()) return;
 
+        // Buffer the update - no rendering here, just update data structures
         TaskNode node = taskNodes.get(task);
         if (node != null) {
             node.lastStatus = status;
             node.lastUpdateTime = System.currentTimeMillis();
         }
+        // Note: Render thread will pick up this change at next refresh cycle
     }
 
     @Override
     public void taskFinished(StatusTracker<?> task) {
         if (closed.get()) return;
 
+        // Buffer the update - no rendering here, just update data structures
         TaskNode node = taskNodes.get(task);
         if (node != null) {
             node.finishTime = System.currentTimeMillis();
-
-            // Schedule removal after retention period
-            refreshExecutor.schedule(() -> {
-                taskNodes.remove(task);
-                if (node.parent != null) {
-                    node.parent.children.remove(node);
+            // Get the final status to ensure we show 100% for SUCCESS tasks
+            StatusUpdate<?> finalStatus = task.getStatus();
+            if (finalStatus != null) {
+                // Ensure completed tasks show 100% progress if they succeeded
+                if (finalStatus.runstate == StatusUpdate.RunState.SUCCESS) {
+                    node.lastStatus = new StatusUpdate<>(1.0, StatusUpdate.RunState.SUCCESS, finalStatus.tracked);
                 } else {
-                    rootNode.children.remove(node);
+                    node.lastStatus = finalStatus;
                 }
-            }, completedRetentionMs, TimeUnit.MILLISECONDS);
+                node.lastUpdateTime = System.currentTimeMillis();
+            }
+            // Note: Completed tasks will be cleaned up by the render thread
+            // based on completedRetentionMs
         }
     }
 
     private TaskNode findParent(StatusTracker<?> task) {
-        // Try to determine parent based on thread context or other logic
-        // For now, return null to add all tasks at root level
+        // Use the parent relationship from StatusTracker
+        StatusTracker<?> parentTracker = task.getParent();
+        if (parentTracker != null) {
+            return taskNodes.get(parentTracker);
+        }
         return null;
     }
 
@@ -373,6 +507,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
         try {
             refreshCount++;
+
+//            // Debug: log refresh attempts
+//            if (refreshCount == 1 || refreshCount % 50 == 0) {
+//                System.err.println("[ConsolePanelSink] Refresh #" + refreshCount + " starting");
+//            }
 
             // Get terminal size
             Size size = terminal.getSize();
@@ -570,16 +709,56 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         logLock.readLock().lock();
         try {
             int totalLogs = logBuffer.size();
-            int startIdx = Math.max(0, totalLogs - contentHeight);
-            if (isUserScrollingLogs) {
-                startIdx = Math.min(logScrollOffset, Math.max(0, totalLogs - contentHeight));
-            }
-            int endIdx = Math.min(totalLogs, startIdx + contentHeight);
 
-            for (int i = startIdx; i < endIdx; i++) {
-                String logLine = fitLine(logBuffer.get(i), innerWidth);
-                AttributedStyle style = getLogStyle(logLine);
-                result.add(new AttributedStringBuilder().style(style).append(logLine).toAttributedString());
+            if (totalLogs > 0) {
+                // Calculate starting position for display
+                int startIdx = Math.max(0, totalLogs - contentHeight);
+                if (isUserScrollingLogs) {
+                    startIdx = Math.min(logScrollOffset, Math.max(0, totalLogs - contentHeight));
+                }
+
+                // Most common case: showing recent logs (at or near the end)
+                // Use descending iterator and collect the needed lines
+                if (startIdx >= totalLogs - contentHeight * 2) {
+                    // We're close to the end, use descending iterator
+                    Iterator<String> descIter = logBuffer.descendingIterator();
+                    List<String> tempLines = new ArrayList<>();
+
+                    // Skip the newest lines we don't need
+                    int toSkip = totalLogs - startIdx - contentHeight;
+                    for (int i = 0; i < toSkip && descIter.hasNext(); i++) {
+                        descIter.next();
+                    }
+
+                    // Collect the lines we need (in reverse order)
+                    for (int i = 0; i < contentHeight && descIter.hasNext(); i++) {
+                        tempLines.add(descIter.next());
+                    }
+
+                    // Reverse to get correct order and process
+                    Collections.reverse(tempLines);
+                    for (String line : tempLines) {
+                        String logLine = fitLine(line, innerWidth);
+                        AttributedStyle style = getLogStyle(logLine);
+                        result.add(new AttributedStringBuilder().style(style).append(logLine).toAttributedString());
+                    }
+                } else {
+                    // We're closer to the start, use forward iterator
+                    Iterator<String> iter = logBuffer.iterator();
+
+                    // Skip to start position
+                    for (int i = 0; i < startIdx && iter.hasNext(); i++) {
+                        iter.next();
+                    }
+
+                    // Collect the lines we need
+                    for (int i = 0; i < contentHeight && iter.hasNext(); i++) {
+                        String line = iter.next();
+                        String logLine = fitLine(line, innerWidth);
+                        AttributedStyle style = getLogStyle(logLine);
+                        result.add(new AttributedStringBuilder().style(style).append(logLine).toAttributedString());
+                    }
+                }
             }
         } finally {
             logLock.readLock().unlock();
@@ -675,7 +854,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
     private void collectTaskLines(TaskNode node, List<SectionLine> lines, String prefix, boolean isLast, int innerWidth) {
         if (node.tracker != null) {
-            String taskLine = formatTaskLine(node, prefix, isLast);
+            String taskLine = formatTaskLine(node, prefix, isLast, innerWidth);
             taskLine = fitLine(taskLine, innerWidth);
             lines.add(new SectionLine(taskLine, AttributedStyle.DEFAULT));
         }
@@ -694,7 +873,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         }
     }
 
-    private String formatTaskLine(TaskNode node, String prefix, boolean isLast) {
+    private String formatTaskLine(TaskNode node, String prefix, boolean isLast, int availableWidth) {
         StringBuilder line = new StringBuilder();
 
         // Tree connector
@@ -707,38 +886,87 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         String statusIcon = getStatusIcon(node);
         line.append(statusIcon).append(" ");
 
-        // Timestamp
-        LocalDateTime startTime = LocalDateTime.now().minusNanos(
-            (System.currentTimeMillis() - node.startTime) * 1_000_000);
-        line.append("[").append(startTime.format(timeFormatter)).append("] ");
-
         // Task name
         String taskName = getTaskName(node.tracker);
-        line.append(String.format("%-20s ", taskName));
+        line.append(taskName);
 
-        // Progress bar
-        if (node.lastStatus != null) {
-            String progressBar = createProgressBar(node.lastStatus.progress);
-            line.append(progressBar);
+        // Build the right-aligned portion (duration, then progress bar with percentage)
+        StringBuilder rightPortion = new StringBuilder();
 
-            // Percentage
-            line.append(String.format(" %3.0f%% ", node.lastStatus.progress * 100));
+        // Duration first - use elapsed running time if task is/was running
+        long duration;
+        if (node.tracker != null && node.tracker.getRunningStartTime() != null) {
+            // Task has started running - use actual running time
+            if (node.finishTime > 0) {
+                duration = node.finishTime - node.tracker.getRunningStartTime();
+            } else {
+                duration = node.tracker.getElapsedRunningTime();
+            }
+        } else if (node.lastStatus != null && node.lastStatus.runstate == StatusUpdate.RunState.PENDING) {
+            // Task hasn't started yet
+            duration = 0;
         } else {
-            line.append("[░░░░░░░░░░░░░░░░░░░░]   0% ");
+            // Fallback to old calculation
+            duration = (node.finishTime > 0 ? node.finishTime : System.currentTimeMillis()) - node.startTime;
         }
+        rightPortion.append(String.format(" (%.1fs) ", duration / 1000.0));
 
-        // Duration
-        long duration = (node.finishTime > 0 ? node.finishTime : System.currentTimeMillis()) - node.startTime;
-        line.append(String.format("(%.1fs)", duration / 1000.0));
+        // Progress bar with percentage centered in it (fixed 22 characters total)
+        if (node.lastStatus != null) {
+            String progressBarWithPercent = createProgressBarWithCenteredPercent(node.lastStatus.progress);
+            rightPortion.append(progressBarWithPercent);
+        } else {
+            rightPortion.append("[        0%          ]");
+        }
 
         // Completion marker
         if (node.finishTime > 0 && node.lastStatus != null) {
             if (node.lastStatus.runstate == StatusUpdate.RunState.SUCCESS) {
-                line.append(" ✓");
+                rightPortion.append(" ✓");
             } else if (node.lastStatus.runstate == StatusUpdate.RunState.FAILED) {
-                line.append(" ✗");
+                rightPortion.append(" ✗");
             }
         }
+
+        // Calculate space for contextual details
+        int leftLength = line.length();
+        int rightLength = rightPortion.length();
+        int totalUsed = leftLength + rightLength;
+        int spacesNeeded = Math.max(1, availableWidth - totalUsed);
+
+        // Add contextual details in the middle if space allows
+        if (spacesNeeded > 5) {
+            StringBuilder context = new StringBuilder();
+
+            // Add task state if not running
+            if (node.lastStatus != null) {
+                if (node.lastStatus.runstate == StatusUpdate.RunState.PENDING) {
+                    context.append(" [pending]");
+                } else if (node.lastStatus.runstate == StatusUpdate.RunState.RUNNING) {
+                    // Add any additional context from the task if available
+                    Object tracked = node.lastStatus.tracked;
+                    if (tracked != null && tracked.toString().contains(":")) {
+                        // Extract detail after colon if present
+                        String detail = tracked.toString();
+                        int colonIdx = detail.indexOf(":");
+                        if (colonIdx >= 0 && colonIdx < detail.length() - 1) {
+                            context.append(" -").append(detail.substring(colonIdx + 1).trim());
+                        }
+                    }
+                }
+            }
+
+            line.append(context);
+            spacesNeeded = Math.max(1, availableWidth - leftLength - context.length() - rightLength);
+        }
+
+        // Fill with spaces
+        for (int i = 0; i < spacesNeeded; i++) {
+            line.append(" ");
+        }
+
+        // Add right-aligned portion
+        line.append(rightPortion);
 
         return line.toString();
     }
@@ -1017,18 +1245,84 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
     private String createProgressBar(double progress) {
         int barLength = 20;
-        int filled = (int) (barLength * progress);
-        int empty = barLength - filled;
+
+        // Braille patterns for 1/8 increments
+        char[] brailleProgress = {
+            ' ',     // 0/8 - empty
+            '⡀',     // 1/8
+            '⡄',     // 2/8
+            '⡆',     // 3/8
+            '⡇',     // 4/8
+            '⣇',     // 5/8
+            '⣧',     // 6/8
+            '⣷',     // 7/8
+        };
+        char fullBlock = '⣿';  // 8/8 - full
+
+        // Calculate progress in terms of 1/8 increments
+        double totalEighths = barLength * 8.0 * progress;
+        int fullChars = (int) (totalEighths / 8);
+        int remainder = (int) (totalEighths % 8);
 
         StringBuilder bar = new StringBuilder("[");
-        for (int i = 0; i < filled; i++) {
-            bar.append("█");
-        }
-        for (int i = 0; i < empty; i++) {
-            bar.append("░");
-        }
-        bar.append("]");
 
+        for (int i = 0; i < barLength; i++) {
+            if (i < fullChars) {
+                bar.append(fullBlock);
+            } else if (i == fullChars && remainder > 0) {
+                bar.append(brailleProgress[remainder]);
+            } else {
+                bar.append(' ');
+            }
+        }
+
+        bar.append("]");
+        return bar.toString();
+    }
+
+    private String createProgressBarWithCenteredPercent(double progress) {
+        int barLength = 20;  // Total bar length
+        String percentStr = String.format("%3.0f%%", progress * 100);
+        int percentLen = percentStr.length();
+
+        // Braille patterns for 1/8 increments (0/8 to 7/8 filled)
+        // Using vertical Braille patterns that fill from left to right
+        char[] brailleProgress = {
+            ' ',     // 0/8 - empty
+            '⡀',     // 1/8
+            '⡄',     // 2/8
+            '⡆',     // 3/8
+            '⡇',     // 4/8
+            '⣇',     // 5/8
+            '⣧',     // 6/8
+            '⣷',     // 7/8
+        };
+        char fullBlock = '⣿';  // 8/8 - full
+
+        // Calculate progress in terms of 1/8 increments
+        double totalEighths = barLength * 8.0 * progress;
+        int fullChars = (int) (totalEighths / 8);
+        int remainder = (int) (totalEighths % 8);
+
+        // Calculate where to place the percentage (centered)
+        int percentStart = (barLength - percentLen) / 2;
+
+        StringBuilder bar = new StringBuilder("[");
+
+        for (int i = 0; i < barLength; i++) {
+            // Check if we should insert percentage text here
+            if (i >= percentStart && i < percentStart + percentLen) {
+                bar.append(percentStr.charAt(i - percentStart));
+            } else if (i < fullChars) {
+                bar.append(fullBlock);
+            } else if (i == fullChars && remainder > 0) {
+                bar.append(brailleProgress[remainder]);
+            } else {
+                bar.append(' ');
+            }
+        }
+
+        bar.append("]");
         return bar.toString();
     }
 
@@ -1051,6 +1345,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         return fullName;
     }
 
+    public boolean isClosed() {
+        return closed.get();
+    }
+
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
@@ -1061,19 +1359,22 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             System.setOut(originalOut);
             System.setErr(originalErr);
 
-            refreshExecutor.shutdown();
+            // Stop the render thread
             try {
-                if (!refreshExecutor.awaitTermination(1, TimeUnit.SECONDS)) {
-                    refreshExecutor.shutdownNow();
-                }
+                renderThread.join(2000); // Wait up to 2 seconds for clean shutdown
             } catch (InterruptedException e) {
-                refreshExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
 
             try {
                 // Clear the display and restore terminal
                 display.update(Collections.emptyList(), 0);
+
+                // Exit raw mode to restore normal terminal behavior
+                terminal.getAttributes().setLocalFlag(org.jline.terminal.Attributes.LocalFlag.ICANON, true);
+                terminal.getAttributes().setLocalFlag(org.jline.terminal.Attributes.LocalFlag.ECHO, true);
+                terminal.setAttributes(terminal.getAttributes());
+
                 terminal.flush();
                 terminal.close();
             } catch (Exception e) {
@@ -1197,10 +1498,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                     }
                 }
 
-                logBuffer.add(decorated);
+                logBuffer.addLast(decorated);
 
                 while (logBuffer.size() > maxLogLines) {
-                    logBuffer.remove(0);
+                    logBuffer.removeFirst();
                     if (logScrollOffset > 0) {
                         logScrollOffset--;
                     }

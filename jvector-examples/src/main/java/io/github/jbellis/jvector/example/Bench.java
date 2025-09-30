@@ -23,6 +23,8 @@ import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.util.LoggerConfig;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.StatusUpdate;
 import io.github.jbellis.jvector.status.TrackerScope;
 import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 import io.github.jbellis.jvector.status.sinks.ConsolePanelSink;
@@ -222,22 +224,73 @@ public class Bench implements Callable<Integer> {
                     List.of(new ConsoleLoggerSink()));
         }
 
-        try {
+        // Create the root bench task
+        BenchTask benchTask = new BenchTask(datasetNames.size());
+
+        try (StatusTracker<BenchTask> rootTracker = rootScope.track(benchTask)) {
+            benchTask.start();
+
             for (var datasetName : datasetNames) {
                 // Create a child scope for each dataset
                 TrackerScope datasetScope = rootScope.createChildScope(datasetName);
 
                 DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                Grid.runAll(ds, datasetScope, mGrid, efConstructionGrid, neighborOverflowGrid,
+                Grid.runAll(ds, datasetScope, rootTracker, mGrid, efConstructionGrid, neighborOverflowGrid,
                            addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression,
                            compressionGrid, topKGrid, usePruningGrid);
+
+                benchTask.datasetCompleted();
             }
+
+            benchTask.complete();
         } finally {
             // Close the scope and sink when done
             rootScope.close();
             if (consolePanelSink != null) {
                 consolePanelSink.close();
             }
+        }
+    }
+
+    /**
+     * Root task representing the entire bench session
+     */
+    static class BenchTask implements StatusUpdate.Provider<BenchTask> {
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+        private final int totalDatasets;
+        private int completedDatasets = 0;
+
+        public BenchTask(int totalDatasets) {
+            this.totalDatasets = totalDatasets;
+        }
+
+        public void start() {
+            this.state = StatusUpdate.RunState.RUNNING;
+        }
+
+        public void datasetCompleted() {
+            completedDatasets++;
+            this.progress = (double) completedDatasets / totalDatasets;
+        }
+
+        public void complete() {
+            this.progress = 1.0;
+            this.state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        public void fail() {
+            this.state = StatusUpdate.RunState.FAILED;
+        }
+
+        @Override
+        public StatusUpdate<BenchTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
+        }
+
+        @Override
+        public String toString() {
+            return "Bench Session";
         }
     }
 }

@@ -108,11 +108,12 @@ public class Grid {
     {
         // Create a simple TrackerScope with no sinks for backward compatibility
         TrackerScope defaultScope = new TrackerScope("Grid");
-        runAll(ds, defaultScope, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, benchmarks);
+        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, benchmarks);
     }
 
     static void runAll(DataSet ds,
                        TrackerScope parentScope,
+                       StatusTracker<?> parentTracker,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
@@ -125,6 +126,15 @@ public class Grid {
                        List<Boolean> usePruningGrid,
                        Map<String, List<String>> benchmarks) throws IOException
     {
+        // Create a dataset task if we have a parent tracker
+        DatasetTask datasetTask = null;
+        StatusTracker<DatasetTask> datasetTracker = null;
+        if (parentTracker != null) {
+            datasetTask = new DatasetTask(ds.name);
+            datasetTracker = parentTracker.createChild(datasetTask, task -> task.getTaskStatus());
+            datasetTask.start();
+        }
+
         var testDirectory = Files.createTempDirectory(dirPrefix);
         try {
             for (var addHierarchy :  addHierarchyGrid) {
@@ -137,12 +147,19 @@ public class Grid {
                                     // Create a child scope for this specific graph configuration
                                     String configName = String.format("M%d_efC%d_no%.1f", M, efC, neighborOverflow);
                                     TrackerScope graphScope = parentScope.createChildScope(configName);
-                                    runOneGraph(featureSets, graphScope, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
+                                    runOneGraph(featureSets, graphScope, datasetTracker != null ? datasetTracker : parentTracker, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
                                 }
                             }
                         }
                     }
                 }
+            }
+            // Mark dataset as complete and close tracker
+            if (datasetTask != null) {
+                datasetTask.complete();
+            }
+            if (datasetTracker != null) {
+                datasetTracker.close();
             }
         } finally {
             try
@@ -172,11 +189,12 @@ public class Grid {
     {
         // Create a simple TrackerScope with no sinks for backward compatibility
         TrackerScope defaultScope = new TrackerScope("Grid");
-        runAll(ds, defaultScope, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, defaultScope, null, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
     }
 
     static void runAll(DataSet ds,
                        TrackerScope parentScope,
+                       StatusTracker<?> parentTracker,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
@@ -188,7 +206,7 @@ public class Grid {
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        runAll(ds, parentScope, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, parentScope, parentTracker, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
     }
 
     // Backward compatibility method without TrackerScope
@@ -207,11 +225,12 @@ public class Grid {
                             Path testDirectory) throws IOException
     {
         TrackerScope defaultScope = new TrackerScope("RunOneGraph");
-        runOneGraph(featureSets, defaultScope, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, compressionGrid, topKGrid, usePruningGrid, benchmarks, ds, testDirectory);
+        runOneGraph(featureSets, defaultScope, null, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, compressionGrid, topKGrid, usePruningGrid, benchmarks, ds, testDirectory);
     }
 
     static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
                             TrackerScope parentScope,
+                            StatusTracker<?> parentTracker,
                             int M,
                             int efConstruction,
                             float neighborOverflow,
@@ -231,7 +250,7 @@ public class Grid {
         } else {
             // Create a child scope for building the index
             TrackerScope buildScope = parentScope.createChildScope("BuildOnDisk");
-            indexes = buildOnDisk(featureSets, buildScope, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+            indexes = buildOnDisk(featureSets, buildScope, parentTracker, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
         }
 
         try {
@@ -242,15 +261,60 @@ public class Grid {
                     cv = null;
                     System.out.format("Uncompressed vectors%n");
                 } else {
-                    long start = System.nanoTime();
-                    cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                    // Create a task for vector compression/encoding
+                    class CompressionTask implements StatusUpdate.Provider<CompressionTask> {
+                        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+                        private volatile double progress = 0.0;
+                        private final String compressorName;
+
+                        CompressionTask(String compressorName) {
+                            this.compressorName = compressorName;
+                        }
+
+                        @Override
+                        public StatusUpdate<CompressionTask> getTaskStatus() {
+                            return new StatusUpdate<>(progress, state, this);
+                        }
+
+                        @Override
+                        public String toString() {
+                            return "Vector Compression (" + compressorName + ")";
+                        }
+                    }
+
+                    CompressionTask compressionTask = new CompressionTask(compressor.toString());
+
+                    // Create tracker as child of parentTracker if available
+                    final StatusTracker<CompressionTask> compressionTracker;
+                    if (parentTracker != null) {
+                        compressionTracker = parentTracker.createChild(compressionTask);
+                    } else if (parentScope != null) {
+                        compressionTracker = parentScope.track(compressionTask);
+                    } else {
+                        compressionTracker = null;
+                    }
+
+                    if (compressionTracker != null) {
+                        try (compressionTracker) {
+                            compressionTask.state = StatusUpdate.RunState.RUNNING;
+                            long start = System.nanoTime();
+                            cv = compressor.encodeAll(ds.getBaseRavv());
+                            compressionTask.progress = 1.0;
+                            compressionTask.state = StatusUpdate.RunState.SUCCESS;
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        }
+                    } else {
+                        // No tracking available, just do the compression
+                        long start = System.nanoTime();
+                        cv = compressor.encodeAll(ds.getBaseRavv());
+                        System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                    }
                 }
 
                 indexes.forEach((features, index) -> {
                     try (var cs = new ConfiguredSystem(ds, index, cv,
                                                        index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                        testConfiguration(parentScope, parentTracker, cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -268,6 +332,7 @@ public class Grid {
 
     private static Map<Set<FeatureId>, GraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
                                                                TrackerScope parentScope,
+                                                               StatusTracker<?> parentTracker,
                                                                int M,
                                                                int efConstruction,
                                                                float neighborOverflow,
@@ -316,12 +381,44 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
         BuildTask buildTask = new BuildTask(floatVectors.size());
 
-        // Use the parent scope to track the build task
-        try (StatusTracker<BuildTask> tracker = parentScope.track(buildTask)) {
+        // Create tracker as a child of parentTracker if available, otherwise use scope
+        StatusTracker<BuildTask> tracker;
+        if (parentTracker != null) {
+            tracker = parentTracker.createChild(buildTask);
+        } else {
+            tracker = parentScope.track(buildTask);
+        }
+
+        try (tracker) {
 
             buildTask.state = StatusUpdate.RunState.RUNNING;
 
-            var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
+            // Create a child task for PQ compression
+            class PQTask implements StatusUpdate.Provider<PQTask> {
+                private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+                private volatile double progress = 0.0;
+
+                @Override
+                public StatusUpdate<PQTask> getTaskStatus() {
+                    return new StatusUpdate<>(progress, state, this);
+                }
+
+                @Override
+                public String toString() {
+                    return "PQ Compression";
+                }
+            }
+
+            PQTask pqTask = new PQTask();
+            PQVectors pq;
+
+            try (StatusTracker<PQTask> pqTracker = tracker.createChild(pqTask)) {
+                pqTask.state = StatusUpdate.RunState.RUNNING;
+                pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
+                pqTask.progress = 1.0;
+                pqTask.state = StatusUpdate.RunState.SUCCESS;
+            }
+
             var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
             GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
@@ -541,7 +638,9 @@ public class Grid {
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
-    private static void testConfiguration(ConfiguredSystem cs,
+    private static void testConfiguration(TrackerScope parentScope,
+                                          StatusTracker<?> parentTracker,
+                                          ConfiguredSystem cs,
                                           Map<Integer, List<Double>> topKGrid,
                                           List<Boolean> usePruningGrid,
                                           int M,
@@ -555,6 +654,11 @@ public class Grid {
 
         var benchmarks = setupBenchmarks(benchmarkSpec);
         QueryTester tester = new QueryTester(benchmarks);
+
+        // Create a child scope for this test configuration
+        TrackerScope testConfigScope = parentScope != null ?
+            parentScope.createChildScope(String.format("TestConfig_M%d_efC%d", M, efConstruction)) :
+            null;
 
         // 2) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
@@ -570,7 +674,9 @@ public class Grid {
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    var results = testConfigScope != null ?
+                        tester.run(testConfigScope, cs, topK, rerankK, usePruning, queryRuns) :
+                        tester.run(cs, topK, rerankK, usePruning, queryRuns);
                     printer.printRow(overquery, results);
                 }
                 printer.printFooter();
@@ -684,7 +790,7 @@ public class Grid {
                                         CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
                                         // Create a simple TrackerScope for this standalone build
                                         TrackerScope buildScope = new TrackerScope("StandaloneBuild");
-                                        var indexes = buildOnDisk(List.of(features), buildScope, m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
+                                        var indexes = buildOnDisk(List.of(features), buildScope, null, m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
                                         GraphIndex index = indexes.get(features);
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
@@ -826,6 +932,42 @@ public class Grid {
         @Override
         public void close() throws Exception {
             searchers.close();
+        }
+    }
+
+    /**
+     * Task representing processing of a single dataset
+     */
+    static class DatasetTask implements StatusUpdate.Provider<DatasetTask> {
+        private volatile StatusUpdate.RunState state = StatusUpdate.RunState.PENDING;
+        private volatile double progress = 0.0;
+        private final String datasetName;
+
+        public DatasetTask(String datasetName) {
+            this.datasetName = datasetName;
+        }
+
+        public void start() {
+            this.state = StatusUpdate.RunState.RUNNING;
+        }
+
+        public void updateProgress(double p) {
+            this.progress = p;
+        }
+
+        public void complete() {
+            this.progress = 1.0;
+            this.state = StatusUpdate.RunState.SUCCESS;
+        }
+
+        @Override
+        public StatusUpdate<DatasetTask> getTaskStatus() {
+            return new StatusUpdate<>(progress, state, this);
+        }
+
+        @Override
+        public String toString() {
+            return "Dataset: " + datasetName;
         }
     }
 }

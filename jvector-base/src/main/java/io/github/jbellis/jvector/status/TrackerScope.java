@@ -119,8 +119,14 @@ public class TrackerScope implements AutoCloseable {
     public <U extends StatusUpdate.Provider<U>> StatusTracker<U> track(U tracked) {
         checkNotClosed();
         List<StatusSink> allSinks = getAllSinks();
+
+        // Create tracker without automatic parent assignment
+        // Parent-child relationships should be established explicitly via createChild()
         StatusTracker<U> statusTracker = StatusTracker.withInstrumented(tracked, defaultPollInterval, allSinks);
+
         activeStatusTrackers.add(statusTracker);
+        // Set the scope so the tracker can remove itself when closing
+        statusTracker.setScope(this);
         return statusTracker;
     }
 
@@ -131,10 +137,16 @@ public class TrackerScope implements AutoCloseable {
     public <T> StatusTracker<T> track(T tracked, Function<T, StatusUpdate<T>> statusFunction) {
         checkNotClosed();
         List<StatusSink> allSinks = getAllSinks();
+
+        // Create tracker without automatic parent assignment
+        // Parent-child relationships should be established explicitly via createChild()
         StatusTracker<T> statusTracker = allSinks.isEmpty()
-            ? StatusTracker.withFunctors(tracked, statusFunction)
-            : StatusTracker.withFunctors(tracked, statusFunction, defaultPollInterval, allSinks);
+                ? StatusTracker.withFunctors(tracked, statusFunction)
+                : StatusTracker.withFunctors(tracked, statusFunction, defaultPollInterval, allSinks);
+
         activeStatusTrackers.add(statusTracker);
+        // Set the scope so the tracker can remove itself when closing
+        statusTracker.setScope(this);
         return statusTracker;
     }
 
@@ -144,10 +156,16 @@ public class TrackerScope implements AutoCloseable {
     public <U extends StatusUpdate.Provider<U>> StatusTracker<U> track(U tracked, Duration pollInterval) {
         checkNotClosed();
         List<StatusSink> allSinks = getAllSinks();
+
+        // Create tracker without automatic parent assignment
+        // Parent-child relationships should be established explicitly via createChild()
         StatusTracker<U> statusTracker = allSinks.isEmpty()
-            ? StatusTracker.withInstrumented(tracked)
-            : StatusTracker.withInstrumented(tracked, pollInterval, allSinks);
+                ? StatusTracker.withInstrumented(tracked)
+                : StatusTracker.withInstrumented(tracked, pollInterval, allSinks);
+
         activeStatusTrackers.add(statusTracker);
+        // Set the scope so the tracker can remove itself when closing
+        statusTracker.setScope(this);
         return statusTracker;
     }
 
@@ -157,10 +175,16 @@ public class TrackerScope implements AutoCloseable {
     public <T> StatusTracker<T> track(T tracked, Function<T, StatusUpdate<T>> statusFunction, Duration pollInterval) {
         checkNotClosed();
         List<StatusSink> allSinks = getAllSinks();
+
+        // Create tracker without automatic parent assignment
+        // Parent-child relationships should be established explicitly via createChild()
         StatusTracker<T> statusTracker = allSinks.isEmpty()
-            ? StatusTracker.withFunctors(tracked, statusFunction)
-            : StatusTracker.withFunctors(tracked, statusFunction, pollInterval, allSinks);
+                ? StatusTracker.withFunctors(tracked, statusFunction)
+                : StatusTracker.withFunctors(tracked, statusFunction, pollInterval, allSinks);
+
         activeStatusTrackers.add(statusTracker);
+        // Set the scope so the tracker can remove itself when closing
+        statusTracker.setScope(this);
         return statusTracker;
     }
 

@@ -141,6 +141,7 @@ public class StatusMonitor<T> {
     private final AtomicBoolean shutdown = new AtomicBoolean(false);
 
     private volatile StatusUpdate<T> currentStatus;
+    private volatile Long runningStartTime = null; // Track when task enters RUNNING state
     private ExecutorService executor;
     private CompletableFuture<Void> monitoringTask;
 
@@ -223,6 +224,25 @@ public class StatusMonitor<T> {
         return shutdown.get();
     }
 
+    /**
+     * Returns the time (in milliseconds) when the task transitioned to RUNNING state,
+     * or null if the task hasn't started running yet.
+     */
+    public Long getRunningStartTime() {
+        return runningStartTime;
+    }
+
+    /**
+     * Returns the elapsed time in milliseconds since the task started running,
+     * or 0 if the task hasn't started running yet.
+     */
+    public long getElapsedRunningTime() {
+        if (runningStartTime == null) {
+            return 0;
+        }
+        return System.currentTimeMillis() - runningStartTime;
+    }
+
     private void monitorLoop() {
         try {
             while (running.get() && !shutdown.get() && !Thread.currentThread().isInterrupted()) {
@@ -230,6 +250,14 @@ public class StatusMonitor<T> {
                     StatusUpdate<T> newStatus = statusFunction.apply(tracked);
                     if (newStatus != null) {
                         StatusUpdate<T> previousStatus = currentStatus;
+
+                        // Track when task transitions to RUNNING state
+                        if (runningStartTime == null &&
+                            newStatus.runstate == StatusUpdate.RunState.RUNNING &&
+                            (previousStatus == null || previousStatus.runstate != StatusUpdate.RunState.RUNNING)) {
+                            runningStartTime = System.currentTimeMillis();
+                        }
+
                         currentStatus = newStatus;
 
                         if (statusChangeCallback != null && !statusEquals(previousStatus, newStatus)) {
