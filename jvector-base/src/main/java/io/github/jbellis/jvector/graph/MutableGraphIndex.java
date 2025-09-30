@@ -164,7 +164,7 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
 
     /**
-     * A View that assumes no concurrent modifications are made
+     * A View compatible with concurrent modifications
      */
     View getConcurrentView();
 }
