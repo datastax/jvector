@@ -73,7 +73,7 @@ public class TestADCGraphIndex extends RandomizedTest {
                     var reranker = cachedOnDiskView.rerankerFor(queryVector, similarityFunction);
                     for (int i = 0; i < 50; i++) {
                         var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
-                        var ordinal = getRandom().nextInt(graph.size());
+                        var ordinal = getRandom().nextInt(graph.size(0));
                         // first pass compares fused ADC's direct similarity to reranker's similarity, used for comparisons to a specific node
                         var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal);
                         for (; neighbors.hasNext(); ) {

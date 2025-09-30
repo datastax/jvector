@@ -94,7 +94,9 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         builder.addGraphNode(0, ravv.getVector(0));
         builder.addGraphNode(1, ravv.getVector(1));
         builder.addGraphNode(2, ravv.getVector(2));
-        var neighbors = builder.graph.getNeighbors(0, 0);
+
+        var ohgi = (OnHeapGraphIndex) builder.graph;
+        var neighbors = ohgi.getNeighbors(0, 0);
         assertEquals(1, neighbors.getNode(0));
         assertEquals(2, neighbors.getNode(1));
         assertEquals(0.5f, neighbors.getScore(0), 1E-6);
@@ -111,7 +113,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         var rescored = GraphIndexBuilder.rescore(builder, bsp);
 
         // Verify edges still exist
-        var newGraph = rescored.getGraph();
+        var newGraph = (OnHeapGraphIndex) rescored.getGraph();
         assertTrue(newGraph.containsNode(0));
         assertTrue(newGraph.containsNode(1));
         assertTrue(newGraph.containsNode(2));
@@ -140,7 +142,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         var graph = TestUtil.buildSequentially(builder, ravv);
 
         try (var out = TestUtil.openDataOutputStream(indexDataPath)) {
-            graph.save(out);
+            ((OnHeapGraphIndex) graph).save(out);
         }
 
         builder = newBuilder.get();
@@ -148,7 +150,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             builder.load(readerSupplier.get());
         }
 
-        assertEquals(ravv.size(), builder.graph.size());
+        assertEquals(ravv.size(), builder.graph.size(0));
         for (int i = 0; i < ravv.size(); i++) {
             assertTrue(builder.graph.containsNode(i));
         }

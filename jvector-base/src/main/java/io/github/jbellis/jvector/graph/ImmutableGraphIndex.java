@@ -29,6 +29,8 @@ import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+
+import java.util.List;
 import java.util.Objects;
 
 import java.io.Closeable;
@@ -44,7 +46,7 @@ import java.io.IOException;
  * All methods are threadsafe.  Operations that require persistent state are wrapped
  * in a View that should be created per accessing thread.
  */
-public interface GraphIndex extends AutoCloseable, Accountable {
+public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     /** Returns the number of nodes in the graph */
     @Deprecated
     default int size() {
@@ -76,6 +78,8 @@ public interface GraphIndex extends AutoCloseable, Accountable {
      */
     int maxDegree();
 
+    List<Integer> maxDegrees();
+
     /**
      * @return the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases;
      * May be different from size() if nodes are being added concurrently, or if nodes have been
@@ -106,6 +110,14 @@ public interface GraphIndex extends AutoCloseable, Accountable {
      * @return the maximum out-degree of the given level
      */
     int getDegree(int level);
+
+    /**
+     * Returns the average degree computed over nodes in the specified layer.
+     *
+     * @param level the level of interest.
+     * @return the average degree or NaN if no nodes are present.
+     */
+    double getAverageDegree(int level);
 
     /**
      * Return the number of vectors/nodes in the given level.
@@ -150,6 +162,11 @@ public interface GraphIndex extends AutoCloseable, Accountable {
         default int getIdUpperBound() {
             return size();
         }
+
+        /**
+         * Whether the given node is present in the given layer of the graph.
+         */
+        boolean contains(int level, int node);
     }
 
     /**
@@ -161,7 +178,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }
 
-    static String prettyPrint(GraphIndex graph) {
+    static String prettyPrint(ImmutableGraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
         sb.append("\n");

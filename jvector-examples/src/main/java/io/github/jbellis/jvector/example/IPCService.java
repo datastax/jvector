@@ -18,16 +18,14 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
@@ -74,7 +72,7 @@ public class IPCService
         RandomAccessVectorValues ravv;
         CompressedVectors cv;
         GraphIndexBuilder indexBuilder;
-        GraphIndex index;
+        ImmutableGraphIndex index;
         GraphSearcher searcher;
         final StringBuffer result = new StringBuffer(1024);
     }
@@ -191,13 +189,13 @@ public class IPCService
         return cv;
     }
 
-    private static GraphIndex flushGraphIndex(OnHeapGraphIndex onHeapIndex, RandomAccessVectorValues ravv) {
+    private static ImmutableGraphIndex flushGraphIndex(ImmutableGraphIndex index, RandomAccessVectorValues ravv) {
         try {
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
 
-            OnDiskGraphIndex.write(onHeapIndex, ravv, graphPath);
-            return onHeapIndex;
+            OnDiskGraphIndex.write(index, ravv, graphPath);
+            return index;
         } catch (IOException e) {
             throw new IOError(e);
         }
@@ -263,8 +261,8 @@ public class IPCService
             if (ctx.cv != null) {
                 ScoreFunction.ApproximateScoreFunction sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
                 try (var view = ctx.index.getView()) {
-                    var rr = view instanceof GraphIndex.ScoringView
-                            ? ((GraphIndex.ScoringView) view).rerankerFor(queryVector, ctx.similarityFunction)
+                    var rr = view instanceof ImmutableGraphIndex.ScoringView
+                            ? ((ImmutableGraphIndex.ScoringView) view).rerankerFor(queryVector, ctx.similarityFunction)
                             : ctx.ravv.rerankerFor(queryVector, ctx.similarityFunction);
                     var ssp = new DefaultSearchScoreProvider(sf, rr);
                     r = new GraphSearcher(ctx.index).search(ssp, searchEf, Bits.ALL);

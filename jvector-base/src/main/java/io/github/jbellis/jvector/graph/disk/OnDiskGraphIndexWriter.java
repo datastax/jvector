@@ -18,15 +18,10 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -75,7 +70,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   GraphIndex graph,
+                                   ImmutableGraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features)
@@ -258,11 +253,11 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
 
-        public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
         }
 
-        public Builder(GraphIndex graphIndex, RandomAccessWriter out) {
+        public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
             super(graphIndex, out);
         }
 

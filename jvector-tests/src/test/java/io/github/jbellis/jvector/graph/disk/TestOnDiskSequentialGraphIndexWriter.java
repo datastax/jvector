@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
@@ -84,7 +84,7 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
         // Create random vectors and build a graph
         var ravv = new ListRandomAccessVectorValues(new ArrayList<>(TestUtil.createRandomVectors(size, dimension)), dimension);
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, maxConnections, beamWidth, neighborOverflow, alpha, addHierarchy);
-        GraphIndex graph = TestUtil.buildSequentially(builder, ravv);
+        ImmutableGraphIndex graph = TestUtil.buildSequentially(builder, ravv);
 
         // Create a sequential writer and write the graph
         Path indexPath = testDirectory.resolve("graph.index_with_hierarchy_" + addHierarchy);

@@ -65,7 +65,7 @@ public class TestDeletions extends LuceneTestCase {
         // check that asking for the entire graph back still doesn't surface the deleted one
         var v = ravv.getVector(n).copy();
         var results = GraphSearcher.search(v, ravv.size(), ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
-        assertEquals(GraphIndex.prettyPrint(graph), ravv.size() - 1, results.getNodes().length);
+        assertEquals(ImmutableGraphIndex.prettyPrint(graph), ravv.size() - 1, results.getNodes().length);
         for (var ns : results.getNodes()) {
             assertNotEquals(n, ns.node);
         }
@@ -88,7 +88,7 @@ public class TestDeletions extends LuceneTestCase {
         int nodeToIsolate = getRandom().nextInt(ravv.size());
         int nDeleted = 0;
         try (var view = graph.getView()) {
-            for (var i = 0; i < view.size(); i++) {
+            for (var i = 0; i < graph.size(0); i++) {
                 for (var it = view.getNeighborsIterator(0, i); it.hasNext(); ) { // TODO hardcoded level
                     if (nodeToIsolate == it.nextInt()) {
                         builder.markNodeDeleted(i);
@@ -102,18 +102,20 @@ public class TestDeletions extends LuceneTestCase {
 
         // cleanup removes the deleted nodes
         builder.cleanup();
-        assertEquals(ravv.size() - nDeleted, graph.size());
+        assertEquals(ravv.size() - nDeleted, graph.size(0));
 
         // cleanup should have added new connections to the node that would otherwise have been disconnected
         var v = ravv.getVector(nodeToIsolate).copy();
         var results = GraphSearcher.search(v, 10, ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
         assertEquals(nodeToIsolate, results.getNodes()[0].node);
 
+        var ohgi = (OnHeapGraphIndex) graph;
+
         // check that we can save and load the graph with "holes" from the deletion
         var testDirectory = Files.createTempDirectory(this.getClass().getSimpleName());
         var outputPath = testDirectory.resolve("on_heap_graph");
         try (var out = TestUtil.openDataOutputStream(outputPath)) {
-            graph.save(out);
+            ohgi.save(out);
         }
 
         var b2 = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 4, 10, 1.0f, 1.0f, addHierarchy);
@@ -138,14 +140,14 @@ public class TestDeletions extends LuceneTestCase {
         var graph = TestUtil.buildSequentially(builder, ravv);
 
         // mark all deleted
-        for (var i = 0; i < graph.size(); i++) {
-            graph.markDeleted(i);
+        for (var i = 0; i < graph.size(0); i++) {
+            builder.markNodeDeleted(i);
         }
 
         // removeDeletedNodes should leave the graph empty
         builder.removeDeletedNodes();
-        assertEquals(0, graph.size());
-        assertNull(graph.entry());
+        assertEquals(0, graph.size(0));
+        assertNull(graph.getView().entryNode());
     }
 
     @Test

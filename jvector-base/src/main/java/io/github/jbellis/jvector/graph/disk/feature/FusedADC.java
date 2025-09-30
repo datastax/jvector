@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -118,11 +118,11 @@ public class FusedADC implements Feature {
     }
 
     public static class State implements Feature.State {
-        public final GraphIndex.View view;
+        public final ImmutableGraphIndex.View view;
         public final PQVectors pqVectors;
         public final int nodeId;
 
-        public State(GraphIndex.View view, PQVectors pqVectors, int nodeId) {
+        public State(ImmutableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
             this.view = view;
             this.pqVectors = pqVectors;
             this.nodeId = nodeId;

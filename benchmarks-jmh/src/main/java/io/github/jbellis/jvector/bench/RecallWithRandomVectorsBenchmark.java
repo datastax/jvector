@@ -52,7 +52,7 @@ public class RecallWithRandomVectorsBenchmark {
     private ArrayList<VectorFloat<?>> baseVectors;
     private ArrayList<VectorFloat<?>> queryVectors;
     private GraphIndexBuilder graphIndexBuilder;
-    private GraphIndex graphIndex;
+    private ImmutableGraphIndex graphIndex;
     private PQVectors pqVectors;
 
     // Add ground truth storage

@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -61,7 +61,7 @@ import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWri
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
-public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
+public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
     public static final int CURRENT_VERSION = 5;
@@ -240,6 +240,11 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     @Override
+    public List<Integer> maxDegrees() {
+        return layerInfo.stream().map(l -> l.degree).collect(Collectors.toList());
+    }
+
+    @Override
     public int getIdUpperBound() {
         return idUpperBound;
     }
@@ -324,6 +329,18 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    @Override
+    public double getAverageDegree(int level) {
+        var view = this.getView();
+        var it = this.getNodes(level);
+        long sum = 0;
+        while (it.hasNext()) {
+            int node = it.next();
+            sum += view.getNeighborsIterator(level, node).size();
+        }
+        return (double) sum / it.size();
     }
 
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
@@ -458,6 +475,21 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
         }
 
         @Override
+        public boolean contains(int level, int node) {
+            try {
+                if (level == 0) {
+                    return node < idUpperBound;
+                } else {
+                    // For levels > 0, read from memory
+                    var imn = getInMemoryLayers(reader);
+                    return imn.get(level).containsKey(node);
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
         public Bits liveNodes() {
             return Bits.ALL;
         }
@@ -489,12 +521,12 @@ public class OnDiskGraphIndex implements GraphIndex, AutoCloseable, Accountable
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(GraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
+    public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(GraphIndex graph,
+    public static void write(ImmutableGraphIndex graph,
                              RandomAccessVectorValues vectors,
                              Map<Integer, Integer> oldToNewOrdinals,
                              Path path)

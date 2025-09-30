@@ -26,14 +26,13 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
@@ -42,8 +41,6 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,13 +48,13 @@ import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
- * An {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-public class OnHeapGraphIndex implements GraphIndex {
+public class OnHeapGraphIndex implements MutableGraphIndex {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
@@ -72,7 +69,7 @@ public class OnHeapGraphIndex implements GraphIndex {
     private final AtomicInteger maxNodeId = new AtomicInteger(-1);
 
     // Maximum number of neighbors (edges) per node per layer
-    final IntArrayList maxDegrees;
+    final List<Integer> maxDegrees;
     // The ratio by which we can overflow the neighborhood of a node during construction. Since it is a multiplicative
     // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
@@ -106,14 +103,13 @@ public class OnHeapGraphIndex implements GraphIndex {
         return layers.get(level).get(node);
     }
 
-    /**
-     * Returns an iterator over the neighbors for the given node at the specified level.
-     *
-     * @param level the layer
-     * @param node  the node id
-     * @return a NodesIterator, which can be empty
-     */
-    NodesIterator getNeighborsIterator(int level, int node) {
+    @Override
+    public NodesIterator getNeighborsIterator(NodeAtLevel nodeAtLevel) {
+        return getNeighborsIterator(nodeAtLevel.level, nodeAtLevel.node);
+    }
+
+    @Override
+    public NodesIterator getNeighborsIterator(int level, int node) {
         if (level >= layers.size()) {
             return NodesIterator.EMPTY_NODE_ITERATOR;
         }
@@ -126,29 +122,44 @@ public class OnHeapGraphIndex implements GraphIndex {
     }
 
     @Override
+    public int getMaxLevelForNode(int node) {
+        int maxLayer = -1;
+        for (int lvl = 0; lvl < layers.size(); lvl++) {
+            if (getNeighbors(lvl, node) == null) {
+                break;
+            }
+            maxLayer = lvl;
+        }
+        return maxLayer;
+    }
+
+    @Override
     public int size(int level) {
         return layers.get(level).size();
     }
 
-    /**
-     * Add the given node ordinal with an empty set of neighbors.
-     *
-     * <p>Nodes can be inserted out of order, but it requires that the nodes preceded by the node
-     * inserted out of order are eventually added.
-     *
-     * <p>Actually populating the neighbors, and establishing bidirectional links, is the
-     * responsibility of the caller.
-     *
-     * <p>It is also the responsibility of the caller to ensure that each node is only added once.
-     */
     public void addNode(NodeAtLevel nodeLevel) {
-        ensureLayersExist(nodeLevel.level);
+        addNode(nodeLevel.level, nodeLevel.node);
+    }
+
+    public void addNode(int level, int node) {
+        ensureLayersExist(level);
 
         // add the node to each layer
-        for (int i = 0; i <= nodeLevel.level; i++) {
-            layers.get(i).addNode(nodeLevel.node);
+        for (int i = 0; i <= level; i++) {
+            layers.get(i).addNode(node);
         }
-        maxNodeId.accumulateAndGet(nodeLevel.node, Math::max);
+        maxNodeId.accumulateAndGet(node, Math::max);
+    }
+
+    @Override
+    public boolean contains(NodeAtLevel nodeLevel) {
+        return contains(nodeLevel.level, nodeLevel.node);
+    }
+
+    @Override
+    public boolean contains(int level, int node) {
+        return layers.get(level).contains(node);
     }
 
     private void ensureLayersExist(int level) {
@@ -166,14 +177,15 @@ public class OnHeapGraphIndex implements GraphIndex {
         }
     }
 
-    /**
-     * Only for use by Builder loading a saved graph
-     */
-    void addNode(int level, int nodeId, NodeArray nodes) {
+    public void connectNode(NodeAtLevel nodeLevel, NodeArray nodes) {
+        connectNode(nodeLevel.level, nodeLevel.node, nodes);
+    }
+
+    public void connectNode(int level, int node, NodeArray nodes) {
         assert nodes != null;
         ensureLayersExist(level);
-        this.layers.get(level).addNode(nodeId, nodes);
-        maxNodeId.accumulateAndGet(nodeId, Math::max);
+        this.layers.get(level).addNode(node, nodes);
+        maxNodeId.accumulateAndGet(node, Math::max);
     }
 
     /**
@@ -183,8 +195,7 @@ public class OnHeapGraphIndex implements GraphIndex {
         deletedNodes.set(node);
     }
 
-    /** must be called after addNode once neighbors are linked in all levels. */
-    void markComplete(NodeAtLevel nodeLevel) {
+    public void markComplete(NodeAtLevel nodeLevel) {
         entryPoint.accumulateAndGet(
                 nodeLevel,
                 (oldEntry, newEntry) -> {
@@ -197,11 +208,12 @@ public class OnHeapGraphIndex implements GraphIndex {
         completions.markComplete(nodeLevel.node);
     }
 
-    void updateEntryNode(NodeAtLevel newEntry) {
+    public void updateEntryNode(NodeAtLevel newEntry) {
         entryPoint.set(newEntry);
     }
 
-    NodeAtLevel entry() {
+    @Override
+    public NodeAtLevel entryNode() {
         return entryPoint.get();
     }
 
@@ -211,11 +223,8 @@ public class OnHeapGraphIndex implements GraphIndex {
                                                    layers.get(level).size());
     }
 
-    /**
-     * this does call get() internally to filter level 0, so if you're going to use it in a pipeline
-     * that also calls get(), consider using your own raw IntStream.range instead
-     */
-    IntStream nodeStream(int level) {
+    @Override
+    public IntStream nodeStream(int level) {
         var layer = layers.get(level);
         return level == 0
                 ? IntStream.range(0, getIdUpperBound()).filter(i -> layer.get(i) != null)
@@ -228,7 +237,7 @@ public class OnHeapGraphIndex implements GraphIndex {
         return graphBytesUsed + completions.ramBytesUsed();
     }
 
-    public long ramBytesUsedOneLayer(int layer) {
+    private long ramBytesUsedOneLayer(int layer) {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         var REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         var AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
@@ -241,6 +250,24 @@ public class OnHeapGraphIndex implements GraphIndex {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         return REF_BYTES + Neighbors.ramBytesUsed(layers.get(layer).nodeArrayLength());
+    }
+
+    @Override
+    public void enforceDegree(int node) {
+        for (int layer = 0; layer <= getMaxLevel(); layer++) {
+            layers.get(layer).enforceDegree(node);
+        }
+    }
+
+    @Override
+    public void addEdges(int level, int node, NodeArray candidates, float overflowRatio) {
+        var newNeighbors = layers.get(level).insertDiverse(node, candidates);
+        layers.get(level).backlink(newNeighbors, node, overflowRatio);
+    }
+
+    @Override
+    public void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates) {
+        layers.get(level).replaceDeletedNeighbors(node, toDelete, candidates);
     }
 
     @Override
@@ -260,41 +287,21 @@ public class OnHeapGraphIndex implements GraphIndex {
      * <p>Multiple Views may be searched concurrently.
      */
     @Override
-    public ConcurrentGraphIndexView getView() {
-        return new ConcurrentGraphIndexView();
-    }
-
-    /**
-     * A View that assumes no concurrent modifications are made
-     */
-    public GraphIndex.View getFrozenView() {
+    public View getView() {
         return new FrozenView();
     }
 
-    /**
-     * Validates that the current entry node has been completely added.
-     */
-    void validateEntryNode() {
-        if (size(0) == 0) {
-            return;
-        }
-        NodeAtLevel entry = getView().entryNode();
-        if (entry == null || getNeighbors(entry.level, entry.node) == null) {
-            throw new IllegalStateException("Entry node was incompletely added! " + entry);
-        }
+    @Override
+    public View getConcurrentView() {
+        return new ConcurrentGraphIndexView();
     }
 
     public ThreadSafeGrowableBitSet getDeletedNodes() {
         return deletedNodes;
     }
 
-    /**
-     * Removes the given node from all layers.
-     *
-     * @param node the node id to remove
-     * @return the number of layers from which it was removed
-     */
-    int removeNode(int node) {
+    @Override
+    public int removeNode(int node) {
         int found = 0;
         for (var layer : layers) {
             if (layer.remove(node) != null) {
@@ -351,8 +358,9 @@ public class OnHeapGraphIndex implements GraphIndex {
         return maxDegrees.stream().mapToInt(i -> i).max().orElseThrow();
     }
 
-    public int getLayerSize(int level) {
-        return layers.get(level).size();
+    @Override
+    public List<Integer> maxDegrees() {
+        return maxDegrees;
     }
 
     public void setDegrees(List<Integer> layerDegrees) {
@@ -448,6 +456,11 @@ public class OnHeapGraphIndex implements GraphIndex {
         @Override
         public int getIdUpperBound() {
             return OnHeapGraphIndex.this.getIdUpperBound();
+        }
+
+        @Override
+        public boolean contains(int level, int node) {
+            return OnHeapGraphIndex.this.contains(level, node);
         }
 
         @Override
