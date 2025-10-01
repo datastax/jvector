@@ -136,6 +136,7 @@ public interface VectorUtilSupport {
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
+   * It assumes 256 clusters per codebook.
    * @param shuffles a sequence of shuffles to be used against partial pre-computed fragments. These are transposed PQ-encoded
    *                 vectors using the same codebooks as the partials. Due to the transposition, rather than this being
    *                 contiguous encoded vectors, the first component of all vectors is stored contiguously, then the second, and so on.
@@ -149,10 +150,8 @@ public interface VectorUtilSupport {
   default void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
     for (int i = 0; i < codebookCount; i++) {
       for (int j = 0; j < results.length(); j++) {
-        var shuffle = Byte.toUnsignedInt(shuffles.get(i * results.length() + j)) * 2;
-        var lowByte = quantizedPartials.get(i * 512 + shuffle);
-        var highByte = quantizedPartials.get(i * 512 + shuffle + 1);
-        var val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+        var shuffle = computeSingleShuffle(i, j, shuffles, results.length());
+        var val = combineBytes(i, shuffle, quantizedPartials, results);
         results.set(j, results.get(j) + val);
       }
     }
@@ -175,6 +174,7 @@ public interface VectorUtilSupport {
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
+   * It assumes 256 clusters per codebook.
    * @param shuffles a sequence of shuffles to be used against partial pre-computed fragments. These are transposed PQ-encoded
    *                 vectors using the same codebooks as the partials. Due to the transposition, rather than this being
    *                 contiguous encoded vectors, the first component of all vectors is stored contiguously, then the second, and so on.
@@ -195,18 +195,15 @@ public interface VectorUtilSupport {
                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
+    // The following code assumes that we have 256 clusters per codebook.
     float[] sums = new float[results.length()];
     float[] magnitudes = new float[results.length()];
     for (int i = 0; i < codebookCount; i++) {
       for (int j = 0; j < results.length(); j++) {
-        var shuffle = Byte.toUnsignedInt(shuffles.get(i * results.length() + j)) * 2;
-        var lowByte = quantizedPartialSums.get(i * 512 + shuffle);
-        var highByte = quantizedPartialSums.get(i * 512 + shuffle + 1);
-        var val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+        var shuffle = computeSingleShuffle(i, j, shuffles, results.length());
+        var val = combineBytes(i, shuffle, quantizedPartialSums, results);
         sums[j] += val;
-        lowByte = quantizedPartialSquaredMagnitudes.get(i * 512 + shuffle);
-        highByte = quantizedPartialSquaredMagnitudes.get(i * 512 + shuffle + 1);
-        val = ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+        val = combineBytes(i, shuffle, quantizedPartialSquaredMagnitudes, results);
         magnitudes[j] += val;
       }
     }
@@ -217,6 +214,18 @@ public interface VectorUtilSupport {
         double divisor = Math.sqrt(unquantizedMagnitude * queryMagnitudeSquared);
         results.set(i, (1 + (float) (unquantizedSum / divisor)) / 2);
     }
+  }
+
+  private static int combineBytes(int i, int shuffle, ByteSequence<?> quantizedPartials, VectorFloat<?> results) {
+    // This is a 16-bit value stored in two bytes, so we need to move in multiples of two and then combine them.
+    var lowByte = quantizedPartials.get(i * 512 + shuffle);
+    var highByte = quantizedPartials.get(i * 512 + shuffle + 1);
+    return ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+  }
+
+  private static int computeSingleShuffle(int i, int j, ByteSequence<?> shuffles, int nNeighbors) {
+    // This points to a 16-bit value stored in two bytes, so we need to move in multiples of two.
+    return Byte.toUnsignedInt(shuffles.get(i * nNeighbors + j)) * 2;
   }
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
