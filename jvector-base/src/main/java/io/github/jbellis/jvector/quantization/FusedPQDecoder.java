@@ -33,7 +33,7 @@ import java.util.Arrays;
  * Performs similarity comparisons with compressed vectors without decoding them.
  * These decoders use Quick(er) ADC-style transposed vectors fused into a graph.
  */
-public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScoreFunction {
+public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFunction {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     protected final ProductQuantization pq;
     Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
@@ -60,11 +60,11 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
     // The main difference is that since our graph structure rapidly converges towards the best results,
     // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
-    protected FusedADCPQDecoder(ProductQuantization pq,
-                                Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-                                VectorFloat<?> query, int invocationThreshold, FusedPQ.PackedNeighbors packedNeighbors,
-                                ByteSequence<?> neighborCodes, VectorFloat<?> results, ExactScoreFunction esf,
-                                VectorSimilarityFunction vsf) {
+    protected FusedPQDecoder(ProductQuantization pq,
+                             Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
+                             VectorFloat<?> query, int invocationThreshold, FusedPQ.PackedNeighbors packedNeighbors,
+                             ByteSequence<?> neighborCodes, VectorFloat<?> results, ExactScoreFunction esf,
+                             VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.hierarchyCachedFeatures = hierarchyCachedFeatures;
         this.query = query;
@@ -146,7 +146,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
 
     protected abstract void updateWorstDistance(float distance);
 
-    static class DotProductDecoder extends FusedADCPQDecoder {
+    static class DotProductDecoder extends FusedPQDecoder {
         public DotProductDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                  Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                  VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
@@ -175,7 +175,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         }
     }
 
-    static class EuclideanDecoder extends FusedADCPQDecoder {
+    static class EuclideanDecoder extends FusedPQDecoder {
         public EuclideanDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
@@ -208,7 +208,7 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     // CosineDecoder differs from DotProductDecoder/EuclideanDecoder because there are two different tables of quantized fragments to sum: query to codebook entry dot products,
     // and codebook entry to codebook entry dot products. The latter can be calculated once per ProductQuantization, but for lookups to go at the appropriate speed, they must
     // also be quantized. We use a similar quantization to partial sums, but we know exactly the worst/best bounds, so overflow does not matter.
-    static class CosineDecoder extends FusedADCPQDecoder {
+    static class CosineDecoder extends FusedPQDecoder {
         private final float queryMagnitudeSquared;
         private final VectorFloat<?> partialSquaredMagnitudes;
         private final ByteSequence<?> partialQuantizedSquaredMagnitudes;
@@ -347,10 +347,10 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         };
     }
 
-    public static FusedADCPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
-                                               Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
-                                               ByteSequence<?> reusableNeighborCodes, VectorFloat<?> results,
-                                               VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
+    public static FusedPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+                                            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
+                                            ByteSequence<?> reusableNeighborCodes, VectorFloat<?> results,
+                                            VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new DotProductDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);
