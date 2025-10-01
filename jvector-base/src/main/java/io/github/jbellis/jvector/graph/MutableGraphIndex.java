@@ -136,13 +136,12 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     int removeNode(int node);
 
     /**
-     * this does call get() internally to filter level 0, so if you're going to use it in a pipeline
-     * that also calls get(), consider using your own raw IntStream.range instead
+     * Returns an Integer stream with the nodes contained in the specified level.
      */
     IntStream nodeStream(int level);
 
     /**
-     * @return the maximum (coarser) level that contains a vector in the graph.
+     * Returns the maximum (coarser) level that contains a vector in the graph or -1 if the node is not in the graph.
      */
     int getMaxLevelForNode(int node);
 
@@ -164,7 +163,8 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
 
     /**
-     * A View compatible with concurrent modifications
+     * Signals that all mutations have been completed and the graph will not be mutated any further.
+     * Should be called by the builder after all mutations are completed (during cleanup).
      */
-    View getConcurrentView();
+    void allMutationsCompleted();
 }

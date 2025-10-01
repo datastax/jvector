@@ -455,6 +455,8 @@ public class GraphIndexBuilder implements Closeable {
                 }
             });
         }).join();
+
+        graph.allMutationsCompleted();
     }
 
     private void improveConnections(int node) {
@@ -561,7 +563,7 @@ public class GraphIndexBuilder implements Closeable {
         insertionsInProgress.add(nodeLevel);
         var inProgressBefore = insertionsInProgress.clone();
         try (var gs = searchers.get()) {
-            var view = graph.getConcurrentView();
+            var view = graph.getView();
             gs.setView(view); // new snapshot
             var naturalScratchPooled = naturalScratch.get();
             var concurrentScratchPooled = concurrentScratch.get();

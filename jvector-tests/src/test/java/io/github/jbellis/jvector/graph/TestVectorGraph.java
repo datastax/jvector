@@ -489,6 +489,9 @@ public class TestVectorGraph extends LuceneTestCase {
         assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
+
+        view = builder.graph.getView();
+
         assertNeighbors(view, 0, 1, 2);
         // we added 3 here
         assertNeighbors(view, 1, 0, 3);
@@ -497,6 +500,8 @@ public class TestVectorGraph extends LuceneTestCase {
 
         // supplant an existing neighbor
         builder.addGraphNode(4, vectors.getVector(4));
+
+        view = builder.graph.getView();
 
         // 4 is the same distance from 0 that 2 is; we leave the existing node in place
         assertNeighbors(view, 0, 1, 2);
@@ -507,6 +512,9 @@ public class TestVectorGraph extends LuceneTestCase {
         assertNeighbors(view, 4, 1, 3);
 
         builder.addGraphNode(5, vectors.getVector(5));
+
+        view = builder.graph.getView();
+
         assertNeighbors(view, 0, 1, 2);
         assertNeighbors(view, 1, 0, 3, 4, 5);
         assertNeighbors(view, 2, 0);
@@ -552,6 +560,9 @@ public class TestVectorGraph extends LuceneTestCase {
         assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
+
+        view = builder.graph.getView();
+
         // this is one case we are testing; 2 has been displaced by 3
         assertNeighbors(view, 0, 1, 3);
         assertNeighbors(view, 1, 0);
@@ -591,6 +602,9 @@ public class TestVectorGraph extends LuceneTestCase {
         assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
+
+        view = builder.graph.getView();
+
         // this is one case we are testing; 1 has been displaced by 3
         assertNeighbors(view, 0, 2, 3);
         assertNeighbors(view, 1, 0, 3);

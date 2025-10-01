@@ -74,6 +74,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
 
+    private boolean allMutationsCompleted = false;
+
     OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
@@ -280,20 +282,13 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         // No resources to close.
     }
 
-    /**
-     * Returns a view of the graph that is safe to use concurrently with updates performed on the
-     * underlying graph.
-     *
-     * <p>Multiple Views may be searched concurrently.
-     */
     @Override
     public View getView() {
-        return new FrozenView();
-    }
-
-    @Override
-    public View getConcurrentView() {
-        return new ConcurrentGraphIndexView();
+        if (allMutationsCompleted) {
+            return new FrozenView();
+        } else {
+            return new ConcurrentGraphIndexView();
+        }
     }
 
     public ThreadSafeGrowableBitSet getDeletedNodes() {
@@ -363,10 +358,17 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return maxDegrees;
     }
 
+    @Override
     public void setDegrees(List<Integer> layerDegrees) {
         maxDegrees.clear();
         maxDegrees.addAll(layerDegrees);
     }
+
+    @Override
+    public void allMutationsCompleted() {
+        allMutationsCompleted = true;
+    }
+
 
     /**
      * A concurrent View of the graph that is safe to search concurrently with updates and with other
@@ -408,7 +410,15 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
                 @Override
                 public int size() {
-                    throw new UnsupportedOperationException();
+                    NodesIterator it = OnHeapGraphIndex.this.getNeighborsIterator(level, node);
+                    int size = 0;
+                    while (it.hasNext()) {
+                        int n = it.nextInt();
+                        if (completions.completedAt(n) < timestamp) {
+                            size++;
+                        }
+                    }
+                    return size;
                 }
 
                 @Override
@@ -478,6 +488,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     /**
      * Saves the graph to the given DataOutput for reloading into memory later
      */
+    @Deprecated
     public void save(DataOutput out) {
         if (deletedNodes.cardinality() > 0) {
             throw new IllegalStateException("Cannot save a graph that has deleted nodes. Call cleanup() first");
