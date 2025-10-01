@@ -608,7 +608,7 @@ public class GraphIndexBuilder implements Closeable {
         return IntStream.rangeClosed(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
     }
 
-    private void updateNeighborsOneLayer(int layer, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
+    private void updateNeighborsOneLayer(int level, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
         // Update neighbors with these candidates.
         // The DiskANN paper calls for using the entire set of visited nodes along the search path as
         // potential candidates, but in practice we observe neighbor lists being completely filled using
@@ -616,8 +616,8 @@ public class GraphIndexBuilder implements Closeable {
         // this means that considering additional nodes from the search path, that are by definition
         // farther away than the ones in the topK, would not change the result.)
         var natural = toScratchCandidates(neighbors, naturalScratchPooled);
-        var concurrent = getConcurrentCandidates(layer, node, inProgressBefore, concurrentScratchPooled, ssp.scoreFunction());
-        updateNeighbors(layer, node, natural, concurrent);
+        var concurrent = getConcurrentCandidates(level, node, inProgressBefore, concurrentScratchPooled, ssp.scoreFunction());
+        updateNeighbors(level, node, natural, concurrent);
     }
 
     @VisibleForTesting
@@ -748,7 +748,7 @@ public class GraphIndexBuilder implements Closeable {
         return memorySize;
     }
 
-    private void updateNeighbors(int layer, int nodeId, NodeArray natural, NodeArray concurrent) {
+    private void updateNeighbors(int level, int nodeId, NodeArray natural, NodeArray concurrent) {
         // if either natural or concurrent is empty, skip the merge
         NodeArray toMerge;
         if (concurrent.size() == 0) {
@@ -759,7 +759,7 @@ public class GraphIndexBuilder implements Closeable {
             toMerge = NodeArray.merge(natural, concurrent);
         }
         // toMerge may be approximate-scored, but insertDiverse will compute exact scores for the diverse ones
-        graph.addEdges(layer, nodeId, toMerge, neighborOverflow);
+        graph.addEdges(level, nodeId, toMerge, neighborOverflow);
     }
 
     private static NodeArray toScratchCandidates(NodeScore[] candidates, NodeArray scratch) {
@@ -770,7 +770,7 @@ public class GraphIndexBuilder implements Closeable {
         return scratch;
     }
 
-    private NodeArray getConcurrentCandidates(int layer,
+    private NodeArray getConcurrentCandidates(int level,
                                               int newNode,
                                               Set<NodeAtLevel> inProgress,
                                               NodeArray scratch,
@@ -778,7 +778,7 @@ public class GraphIndexBuilder implements Closeable {
     {
         scratch.clear();
         for (NodeAtLevel n : inProgress) {
-            if (n.node == newNode || n.level < layer) {
+            if (n.node == newNode || n.level < level) {
                 continue;
             }
             scratch.insertSorted(n.node, scoreFunction.similarityTo(n.node));

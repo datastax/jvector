@@ -237,25 +237,25 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return graphBytesUsed + completions.ramBytesUsed();
     }
 
-    private long ramBytesUsedOneLayer(int layer) {
+    private long ramBytesUsedOneLayer(int level) {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         var REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         var AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
 
-        long neighborSize = ramBytesUsedOneNode(layer) * layers.get(layer).size();
+        long neighborSize = ramBytesUsedOneNode(level) * layers.get(level).size();
         return OH_BYTES + REF_BYTES * 2L + AH_BYTES + neighborSize;
     }
 
-    public long ramBytesUsedOneNode(int layer) {
+    public long ramBytesUsedOneNode(int level) {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(layer).nodeArrayLength());
+        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(level).nodeArrayLength());
     }
 
     @Override
     public void enforceDegree(int node) {
-        for (int layer = 0; layer <= getMaxLevel(); layer++) {
-            layers.get(layer).enforceDegree(node);
+        for (int level = 0; level <= getMaxLevel(); level++) {
+            layers.get(level).enforceDegree(node);
         }
     }
 
