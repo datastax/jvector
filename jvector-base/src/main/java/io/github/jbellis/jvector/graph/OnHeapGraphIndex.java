@@ -232,19 +232,19 @@ public class OnHeapGraphIndex implements GraphIndex {
         return graphBytesUsed + completions.ramBytesUsed();
     }
 
-    public long ramBytesUsedOneLayer(int layer) {
+    public long ramBytesUsedOneLayer(int level) {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         var REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         var AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
 
-        long neighborSize = ramBytesUsedOneNode(layer) * layers.get(layer).size();
+        long neighborSize = ramBytesUsedOneNode(level) * layers.get(level).size();
         return OH_BYTES + REF_BYTES * 2L + AH_BYTES + neighborSize;
     }
 
-    public long ramBytesUsedOneNode(int layer) {
+    public long ramBytesUsedOneNode(int level) {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(layer).nodeArrayLength());
+        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(level).nodeArrayLength());
     }
 
     @Override
