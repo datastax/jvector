@@ -74,7 +74,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
 
-    private boolean allMutationsCompleted = false;
+    private volatile boolean allMutationsCompleted = false;
 
     OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
