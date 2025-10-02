@@ -52,7 +52,9 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter.*;
+import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOTER_MAGIC;
+import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOTER_MAGIC_SIZE;
+import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOTER_OFFSET_SIZE;
 
 /**
  * A class representing a graph index stored on disk. The base graph contains only graph structure.
