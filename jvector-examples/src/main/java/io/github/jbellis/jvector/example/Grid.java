@@ -254,6 +254,9 @@ public class Grid {
             });
         }).join();
         builder.cleanup();
+        double totalTime_phase1 = (System.nanoTime() - startTime) / 1_000_000_000.0;
+        System.out.format("Build %s in %ss%n", featureSets, totalTime_phase1);
+        long startTime_phase2 = System.nanoTime();
 
         // write the edge lists and close the writers
         // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
@@ -276,6 +279,9 @@ public class Grid {
             }
         });
         builder.close();
+        double totalTime_phase2 = (System.nanoTime() - startTime_phase2) / 1_000_000_000.0;
+        System.out.format("Write %s in %ss%n", featureSets, totalTime_phase2);
+
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
         indexBuildTimes.put(ds.name, totalTime);
@@ -566,8 +572,6 @@ public class Grid {
                                     for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
                                         try {
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                            // TODO: searchCompressorObj is an instance of ProductQuantization, not CompressedVectors. What is the relationship and correct behavior?
-                                            //CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
                                             CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
                                             GraphIndex index = indexes.get(features);
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, (index instanceof OnDiskGraphIndex ? features : Set.of()))) {
