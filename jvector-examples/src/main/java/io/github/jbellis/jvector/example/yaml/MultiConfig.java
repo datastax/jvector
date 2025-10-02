@@ -52,6 +52,10 @@ public class MultiConfig {
 
     public static MultiConfig getConfig(String configName) throws FileNotFoundException {
         File configFile = new File(configName);
+        // If the file doesn't exist as an absolute path, try relative to the default directory
+        if (!configFile.exists() && !configName.startsWith("/") && !configName.contains(":")) {
+            configFile = new File(defaultDirectory + configName);
+        }
         return getConfig(configFile);
     }
 

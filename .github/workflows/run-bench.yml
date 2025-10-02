@@ -11,9 +11,19 @@ on:
         description: 'Space-separated list of branches to benchmark'
         required: false
         default: 'main'
+      custom_config:
+        description: 'Custom YAML configuration content (will override autoDefault.yml)'
+        required: false
+        type: string
+        default: ''
   pull_request:
+    types: [opened,synchronize,ready_for_review]
     branches:
       - main
+    paths:
+      - '**/src/main/java/**'
+      - 'pom.xml'
+      - '**/pom.xml'
 
 jobs:
   # Job to generate the matrix configuration
@@ -126,6 +136,7 @@ jobs:
 
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
+        id: run-benchmark
         env:
           DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
         run: |
@@ -169,19 +180,33 @@ jobs:
             BENCH_SUFFIX=" $BENCH_ARG"
           fi
 
+          # Handle custom configuration if provided
+          CUSTOM_CONFIG="${{ github.event.inputs.custom_config }}"
+          CONFIG_ARG=""
+          if [[ -n "$CUSTOM_CONFIG" ]]; then
+            echo "Custom configuration provided, creating temporary config file..."
+            CUSTOM_CONFIG_FILE="custom-benchmark-config.yml"
+            echo "$CUSTOM_CONFIG" > "$CUSTOM_CONFIG_FILE"
+            CONFIG_ARG="--config $CUSTOM_CONFIG_FILE"
+            echo "Using custom config: $CUSTOM_CONFIG_FILE"
+          else
+            echo "No custom configuration provided, using default autoDefault.yml"
+          fi
+
           # Sanitize branch name for filenames: replace any non-alphanumeric, dash or underscore with underscore
           SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+          echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results dpr-1M
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} dpr-1M
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG}
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG}${BENCH_SUFFIX:+ }${BENCH_ARG}
           fi
 
           # Move the results to the benchmark_results directory
@@ -193,7 +218,7 @@ jobs:
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ matrix.branch }}
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ steps.run-benchmark.outputs.safe_branch }}
           path: |
             benchmark_results/*.csv
             benchmark_results/*.json
