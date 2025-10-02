@@ -284,6 +284,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public View getView() {
+        // Before all completions are completed, we need a View that is thread-safe and allows concurrent mutations in the graph.
+        // Once all completions are completed, we can freeze the graph and just need  a View that is thread-safe.
         if (allMutationsCompleted) {
             return new FrozenView();
         } else {
