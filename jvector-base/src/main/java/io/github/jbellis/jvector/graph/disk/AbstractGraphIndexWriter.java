@@ -36,7 +36,6 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE; // The total size of the footer
     final int version;
     final ImmutableGraphIndex graph;
-    final ImmutableGraphIndex.View view;
     final OrdinalMapper ordinalMapper;
     final int dimension;
     // we don't use Map features but EnumMap is the best way to make sure we don't
@@ -59,7 +58,6 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         }
         this.version = version;
         this.graph = graph;
-        this.view = graph.getView();
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
         this.featureMap = features;
@@ -131,7 +129,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(long headerOffset) throws IOException {
+    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 dimension,
@@ -153,7 +151,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * Public so that you can write the index size (and thus usefully open an OnDiskGraphIndex against the index)
      * to read Features from it before writing the edges.
      */
-    public synchronized void writeHeader(long startOffset) throws IOException {
+    public synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
         // graph-level properties
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
@@ -166,7 +164,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
     }
 
-    void writeSparseLevels() throws IOException {
+    void writeSparseLevels(ImmutableGraphIndex.View view) throws IOException {
         // write sparse levels
         for (int level = 1; level <= graph.getMaxLevel(); level++) {
             int layerSize = graph.size(level);

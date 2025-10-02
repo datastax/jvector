@@ -71,7 +71,6 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
     @Override
     public synchronized void close() throws IOException {
-        view.close();
         // Note: we don't close the output streams since we don't own them in this writer
     }
 
@@ -86,8 +85,6 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        final var startOffset = out.position();
-        writeHeader(startOffset);
         if (graph instanceof OnHeapGraphIndex) {
             var ohgi = (OnHeapGraphIndex) graph;
             if (ohgi.getDeletedNodes().cardinality() > 0) {
@@ -104,6 +101,11 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
                     ordinalMapper.maxOrdinal(), graph.size(0));
             throw new IllegalStateException(msg);
         }
+
+        var view = graph.getView();
+
+        final var startOffset = out.position();
+        writeHeader(view, startOffset);
 
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -154,13 +156,15 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
             }
         }
 
-        writeSparseLevels();
+        writeSparseLevels(view);
 
         writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the footer with all the metadata info about the graph
-        writeFooter(out.position());
+        writeFooter(view, out.position());
         // Note: flushing the data output is the responsibility of the caller we are not going to make assumptions about further uses of the data outputs
+
+        view.close();
     }
 
     /**

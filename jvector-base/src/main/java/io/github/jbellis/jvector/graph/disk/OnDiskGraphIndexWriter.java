@@ -85,7 +85,6 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      */
     @Override
     public synchronized void close() throws IOException {
-        view.close();
         out.close();
     }
 
@@ -152,7 +151,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
             throw new IllegalStateException(msg);
         }
 
-        writeHeader(); // sets position to start writing features
+        var view = graph.getView();
+
+        writeHeader(view); // sets position to start writing features
 
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -212,20 +213,21 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         }
 
         // We will use the abstract method because no random access is needed
-        writeSparseLevels();
+        writeSparseLevels(view);
 
         // We will use the abstract method because no random access is needed
         writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the header again with updated offsets
         if (version >= 5) {
-            writeFooter(out.position());
+            writeFooter(view, out.position());
         }
 
         final var endOfGraphPosition = out.position();
-        writeHeader();
+        writeHeader(view);
         out.seek(endOfGraphPosition);
         out.flush();
+        view.close();
     }
 
     /**
@@ -234,10 +236,10 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * seek to the startOffset and re-write the header.
      * @throws IOException if there is an error writing the header
      */
-    public synchronized void writeHeader() throws IOException {
+    public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
         // graph-level properties
         out.seek(startOffset);
-        super.writeHeader(startOffset);
+        super.writeHeader(view, startOffset);
         out.flush();
     }
 
