@@ -78,7 +78,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph))
         {
             var outputPath = testDirectory.resolve("test_graph_" + graph.getClass().getSimpleName());
-            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size());
+            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
             TestUtil.writeGraph(graph, ravv, outputPath);
             try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
                  var onDiskGraph = OnDiskGraphIndex.load(readerSupplier))
@@ -109,7 +109,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         builder.setEntryPoint(0, builder.getGraph().getIdUpperBound() - 1); // TODO
 
         // check
-        assertEquals(2, original.size());
+        assertEquals(2, original.size(0));
         var originalView = original.getView();
         // 1 -> 2
         assertEquals(1, getNeighborNodes(originalView, 0, 1).size());
@@ -244,7 +244,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testSimpleGraphSeparated() throws Exception {
         for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph)) {
             var outputPath = testDirectory.resolve("test_graph_separated_" + graph.getClass().getSimpleName());
-            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size());
+            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
 
             // Write graph with SEPARATED_VECTORS
             try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
@@ -315,7 +315,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     {
         var graph = new TestUtil.RandomlyConnectedGraphIndex(1_000_000, 32, getRandom());
         var outputPath = testDirectory.resolve("large_graph");
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size());
+        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
         TestUtil.writeGraph(graph, ravv, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());

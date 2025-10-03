@@ -17,17 +17,14 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
 
 import java.io.IOException;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 
 /**
  * Writes a graph index to disk in a format that can be loaded as an OnDiskGraphIndex.
@@ -64,7 +61,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
-                                             GraphIndex graph,
+                                             ImmutableGraphIndex graph,
                                              OrdinalMapper oldToNewOrdinals,
                                              int dimension,
                                              EnumMap<FeatureId, Feature> features)
@@ -74,7 +71,6 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
     @Override
     public synchronized void close() throws IOException {
-        view.close();
         // Note: we don't close the output streams since we don't own them in this writer
     }
 
@@ -89,8 +85,6 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        final var startOffset = out.position();
-        writeHeader(startOffset);
         if (graph instanceof OnHeapGraphIndex) {
             var ohgi = (OnHeapGraphIndex) graph;
             if (ohgi.getDeletedNodes().cardinality() > 0) {
@@ -107,6 +101,11 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
                     ordinalMapper.maxOrdinal(), graph.size(0));
             throw new IllegalStateException(msg);
         }
+
+        var view = graph.getView();
+
+        final var startOffset = out.position();
+        writeHeader(view, startOffset);
 
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -157,20 +156,22 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
             }
         }
 
-        writeSparseLevels(featureStateSuppliers);
+        writeSparseLevels(view, featureStateSuppliers);
 
         writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the footer with all the metadata info about the graph
-        writeFooter(out.position());
+        writeFooter(view, out.position());
         // Note: flushing the data output is the responsibility of the caller we are not going to make assumptions about further uses of the data outputs
+
+        view.close();
     }
 
     /**
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
-        public Builder(GraphIndex graphIndex, IndexWriter out) {
+        public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }
 

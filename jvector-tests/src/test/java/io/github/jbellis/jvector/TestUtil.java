@@ -17,10 +17,9 @@
 package io.github.jbellis.jvector;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
-import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -38,6 +37,7 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.apache.commons.lang3.NotImplementedException;
 
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
@@ -151,10 +151,19 @@ public class TestUtil {
         return IntStream.range(0, count).mapToObj(i -> TestUtil.normalRandomVector(getRandom(), dimension)).collect(Collectors.toList());
     }
 
-    public static void writeGraph(GraphIndex graph, RandomAccessVectorValues ravv, Path outputPath) throws IOException {
+    public static void writeGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, Path outputPath) throws IOException {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, Path outputPath) throws IOException {
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .with(new InlineVectors(ravv.dimension()))
+                .with(new FusedADC(graph.maxDegree(), pqv.getCompressor())).build())
+        {
+            var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+            suppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(graph.getView(), pqv, ordinal));
+            writer.write(suppliers);
     public static void writeFusedGraph(GraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
         var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
                 .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
@@ -179,7 +188,7 @@ public class TestUtil {
         }
     }
 
-    public static Set<Integer> getNeighborNodes(GraphIndex.View g, int level, int node) {
+    public static Set<Integer> getNeighborNodes(ImmutableGraphIndex.View g, int level, int node) {
       Set<Integer> neighbors = new HashSet<>();
       for (var it = g.getNeighborsIterator(level, node); it.hasNext(); ) {
         int n = it.nextInt();
@@ -188,7 +197,7 @@ public class TestUtil {
       return neighbors;
     }
 
-    static List<Integer> sortedNodes(GraphIndex h, int level) {
+    static List<Integer> sortedNodes(ImmutableGraphIndex h, int level) {
           var graphNodes = h.getNodes(level); // TODO
           List<Integer> nodes = new ArrayList<>();
           while (graphNodes.hasNext()) {
@@ -198,15 +207,15 @@ public class TestUtil {
           return nodes;
       }
 
-    public static void assertGraphEquals(GraphIndex g, GraphIndex h) {
+    public static void assertGraphEquals(ImmutableGraphIndex g, ImmutableGraphIndex h) {
         // construct these up front since they call seek which will mess up our test loop
-        String prettyG = GraphIndex.prettyPrint(g);
-        String prettyH = GraphIndex.prettyPrint(h);
+        String prettyG = ImmutableGraphIndex.prettyPrint(g);
+        String prettyH = ImmutableGraphIndex.prettyPrint(h);
         assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
                                    prettyG,
                                    prettyH),
-                     g.size(),
-                     h.size());
+                     g.size(0),
+                     h.size(0));
 
         assertEquals(g.getView().entryNode(), h.getView().entryNode());
         for (int level = 0; level <= g.getMaxLevel(); level++) {
@@ -244,7 +253,7 @@ public class TestUtil {
         }
     }
 
-    public static OnHeapGraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorValues vectors) {
+    public static ImmutableGraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorValues vectors) {
         for (var i = 0; i < vectors.size(); i++) {
             builder.addGraphNode(i, vectors.getVector(i));
         }
@@ -252,7 +261,7 @@ public class TestUtil {
         return builder.getGraph();
     }
 
-    public static class FullyConnectedGraphIndex implements GraphIndex {
+    public static class FullyConnectedGraphIndex implements ImmutableGraphIndex {
         private final int entryNode;
         private final List<Integer> layerSizes;
 
@@ -276,6 +285,21 @@ public class TestUtil {
         }
 
         @Override
+        public List<Integer> maxDegrees() {
+            throw new NotImplementedException();
+        }
+
+        @Override
+        public int getIdUpperBound() {
+            return ImmutableGraphIndex.super.getIdUpperBound();
+        }
+
+        @Override
+        public boolean containsNode(int nodeId) {
+            return ImmutableGraphIndex.super.containsNode(nodeId);
+        }
+
+        @Override
         public NodesIterator getNodes(int level) {
             int n = layerSizes.get(level);
             return new NodesIterator.ArrayNodesIterator(IntStream.range(0, n).toArray(), n);
@@ -289,6 +313,11 @@ public class TestUtil {
         @Override
         public int getDegree(int level) {
             return layerSizes.get(level) - 1;
+        }
+
+        @Override
+        public double getAverageDegree(int level) {
+            throw new NotImplementedException();
         }
 
         @Override
@@ -318,6 +347,7 @@ public class TestUtil {
                 }
             }
 
+            @Deprecated
             @Override
             public int size() {
                 return FullyConnectedGraphIndex.this.size(0);
@@ -335,6 +365,11 @@ public class TestUtil {
 
             @Override
             public void close() { }
+
+            @Override
+            public boolean contains(int level, int node) {
+                return node < layerSizes.get(level);
+            }
         }
 
         @Override
@@ -343,7 +378,7 @@ public class TestUtil {
         }
     }
 
-    public static class RandomlyConnectedGraphIndex implements GraphIndex {
+    public static class RandomlyConnectedGraphIndex implements ImmutableGraphIndex {
         private final List<CommonHeader.LayerInfo> layerInfo;
         private final List<Map<Integer, int[]>> layerAdjacency;
         private final int entryNode;
@@ -411,8 +446,28 @@ public class TestUtil {
         }
 
         @Override
+        public double getAverageDegree(int level) {
+            throw new NotImplementedException();
+        }
+
+        @Override
         public int maxDegree() {
             return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
+        }
+
+        @Override
+        public List<Integer> maxDegrees() {
+            throw new NotImplementedException();
+        }
+
+        @Override
+        public int getIdUpperBound() {
+            return ImmutableGraphIndex.super.getIdUpperBound();
+        }
+
+        @Override
+        public boolean containsNode(int nodeId) {
+            return ImmutableGraphIndex.super.containsNode(nodeId);
         }
 
         @Override
@@ -436,6 +491,8 @@ public class TestUtil {
                 }
             }
 
+            @Deprecated
+            @Override
             public int size() {
                 return layerInfo.get(0).size;
             }
@@ -448,6 +505,11 @@ public class TestUtil {
             @Override
             public Bits liveNodes() {
                 return Bits.ALL;
+            }
+
+            @Override
+            public boolean contains(int level, int node) {
+                return layerAdjacency.get(level).containsKey(node);
             }
 
             @Override

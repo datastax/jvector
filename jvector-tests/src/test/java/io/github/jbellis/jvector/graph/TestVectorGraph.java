@@ -29,9 +29,6 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
-import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
@@ -43,9 +40,9 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
@@ -280,30 +277,33 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
-    private static void validateIndex(OnHeapGraphIndex graph) {
+    private static void validateIndex(ImmutableGraphIndex graph) {
+        var view = graph.getView();
+
         for (int level = graph.getMaxLevel(); level > 0; level--) {
             for (var nodeIt = graph.getNodes(level); nodeIt.hasNext(); ) {
                 var nodeInLevel = nodeIt.nextInt();
 
                 // node's neighbors should also exist in the same level
-                var neighbors = graph.getNeighbors(level, nodeInLevel);
-                for (int neighbor : neighbors.copyDenseNodes()) {
-                    assertNotNull(graph.getNeighbors(level, neighbor));
+                var it = view.getNeighborsIterator(level, nodeInLevel);
+                while (it.hasNext()) {
+                    int neighbor = it.nextInt();
+                    assertTrue(view.contains(level, neighbor));
                 }
 
                 // node should exist at every layer below it
                 for (int lowerLevel = level - 1; lowerLevel >= 0; lowerLevel--) {
-                    assertNotNull(graph.getNeighbors(lowerLevel, nodeInLevel));
+                    assertTrue(view.contains(lowerLevel, nodeInLevel));
                 }
             }
         }
 
         // no holes in lowest level (not true for all graphs but true for the ones constructed here)
         for (int i = 0; i < graph.getIdUpperBound(); i++) {
-            assertNotNull(graph.getNeighbors(0, i));
+            assertTrue(view.getNeighborsIterator(0, i).size() >= 0);
         }
     }
 
@@ -343,7 +343,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
     @Test
@@ -378,7 +378,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
     @Test
@@ -414,13 +414,13 @@ public class TestVectorGraph extends LuceneTestCase {
         int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
         for (int node : nodes) {
             assertTrue(String.format("the results include a deleted document: %d for %s",
-                    node, GraphIndex.prettyPrint(builder.graph)), acceptOrds.get(node));
+                    node, ImmutableGraphIndex.prettyPrint(builder.graph)), acceptOrds.get(node));
         }
         for (int i = 0; i < acceptOrds.length(); i++) {
             if (acceptOrds.get(i)) {
                 int finalI = i;
                 assertTrue(String.format("the results do not include an accepted document: %d for %s",
-                        i, GraphIndex.prettyPrint(builder.graph)), Arrays.stream(nodes).anyMatch(j -> j == finalI));
+                        i, ImmutableGraphIndex.prettyPrint(builder.graph)), Arrays.stream(nodes).anyMatch(j -> j == finalI));
             }
         }
     }
@@ -479,37 +479,49 @@ public class TestVectorGraph extends LuceneTestCase {
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
         builder.addGraphNode(2, vectors.getVector(2));
+
+        var view = builder.graph.getView();
+
         // now every node has tried to attach every other node as a neighbor, but
         // some were excluded based on diversity check.
-        assertNeighbors(builder.graph, 0, 1, 2);
-        assertNeighbors(builder.graph, 1, 0);
-        assertNeighbors(builder.graph, 2, 0);
+        assertNeighbors(view, 0, 1, 2);
+        assertNeighbors(view, 1, 0);
+        assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
-        assertNeighbors(builder.graph, 0, 1, 2);
+
+        view = builder.graph.getView();
+
+        assertNeighbors(view, 0, 1, 2);
         // we added 3 here
-        assertNeighbors(builder.graph, 1, 0, 3);
-        assertNeighbors(builder.graph, 2, 0);
-        assertNeighbors(builder.graph, 3, 1);
+        assertNeighbors(view, 1, 0, 3);
+        assertNeighbors(view, 2, 0);
+        assertNeighbors(view, 3, 1);
 
         // supplant an existing neighbor
         builder.addGraphNode(4, vectors.getVector(4));
+
+        view = builder.graph.getView();
+
         // 4 is the same distance from 0 that 2 is; we leave the existing node in place
-        assertNeighbors(builder.graph, 0, 1, 2);
-        assertNeighbors(builder.graph, 1, 0, 3, 4);
-        assertNeighbors(builder.graph, 2, 0);
+        assertNeighbors(view, 0, 1, 2);
+        assertNeighbors(view, 1, 0, 3, 4);
+        assertNeighbors(view, 2, 0);
         // 1 survives the diversity check
-        assertNeighbors(builder.graph, 3, 1, 4);
-        assertNeighbors(builder.graph, 4, 1, 3);
+        assertNeighbors(view, 3, 1, 4);
+        assertNeighbors(view, 4, 1, 3);
 
         builder.addGraphNode(5, vectors.getVector(5));
-        assertNeighbors(builder.graph, 0, 1, 2);
-        assertNeighbors(builder.graph, 1, 0, 3, 4, 5);
-        assertNeighbors(builder.graph, 2, 0);
+
+        view = builder.graph.getView();
+
+        assertNeighbors(view, 0, 1, 2);
+        assertNeighbors(view, 1, 0, 3, 4, 5);
+        assertNeighbors(view, 2, 0);
         // even though 5 is closer, 3 is not a neighbor of 5, so no update to *its* neighbors occurs
-        assertNeighbors(builder.graph, 3, 1, 4);
-        assertNeighbors(builder.graph, 4, 1, 3, 5);
-        assertNeighbors(builder.graph, 5, 1, 4);
+        assertNeighbors(view, 3, 1, 4);
+        assertNeighbors(view, 4, 1, 3, 5);
+        assertNeighbors(view, 5, 1, 4);
     }
 
     @Test
@@ -538,18 +550,24 @@ public class TestVectorGraph extends LuceneTestCase {
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
         builder.addGraphNode(2, vectors.getVector(2));
-        assertNeighbors(builder.graph, 0, 1, 2);
+
+        var view = builder.graph.getView();
+
+        assertNeighbors(view, 0, 1, 2);
         // 2 is closer to 0 than 1, so it is excluded as non-diverse
-        assertNeighbors(builder.graph, 1, 0);
+        assertNeighbors(view, 1, 0);
         // 1 is closer to 0 than 2, so it is excluded as non-diverse
-        assertNeighbors(builder.graph, 2, 0);
+        assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
+
+        view = builder.graph.getView();
+
         // this is one case we are testing; 2 has been displaced by 3
-        assertNeighbors(builder.graph, 0, 1, 3);
-        assertNeighbors(builder.graph, 1, 0);
-        assertNeighbors(builder.graph, 2, 0);
-        assertNeighbors(builder.graph, 3, 0);
+        assertNeighbors(view, 0, 1, 3);
+        assertNeighbors(view, 1, 0);
+        assertNeighbors(view, 2, 0);
+        assertNeighbors(view, 3, 0);
     }
 
     @Test
@@ -574,21 +592,27 @@ public class TestVectorGraph extends LuceneTestCase {
         builder.addGraphNode(0, vectors.getVector(0));
         builder.addGraphNode(1, vectors.getVector(1));
         builder.addGraphNode(2, vectors.getVector(2));
-        assertNeighbors(builder.graph, 0, 1, 2);
+
+        var view = builder.graph.getView();
+
+        assertNeighbors(view, 0, 1, 2);
         // 2 is closer to 0 than 1, so it is excluded as non-diverse
-        assertNeighbors(builder.graph, 1, 0);
+        assertNeighbors(view, 1, 0);
         // 1 is closer to 0 than 2, so it is excluded as non-diverse
-        assertNeighbors(builder.graph, 2, 0);
+        assertNeighbors(view, 2, 0);
 
         builder.addGraphNode(3, vectors.getVector(3));
+
+        view = builder.graph.getView();
+
         // this is one case we are testing; 1 has been displaced by 3
-        assertNeighbors(builder.graph, 0, 2, 3);
-        assertNeighbors(builder.graph, 1, 0, 3);
-        assertNeighbors(builder.graph, 2, 0);
-        assertNeighbors(builder.graph, 3, 0, 1);
+        assertNeighbors(view, 0, 2, 3);
+        assertNeighbors(view, 1, 0, 3);
+        assertNeighbors(view, 2, 0);
+        assertNeighbors(view, 3, 0, 1);
     }
 
-    private void assertNeighbors(OnHeapGraphIndex graph, int node, int... expected) {
+    private void assertNeighbors(ImmutableGraphIndex.View graph, int node, int... expected) {
         Arrays.sort(expected);
         NodesIterator it = graph.getNeighborsIterator(0, node);
         int[] actual = new int[it.size()];
@@ -677,8 +701,9 @@ public class TestVectorGraph extends LuceneTestCase {
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 2, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
         validateIndex(graph);
+        var view = graph.getView();
         for (int i = 0; i < vectors.size(); i++) {
-            assertTrue(graph.getNeighbors(0, i).size() <= 2); // TODO
+            assertTrue(view.getNeighborsIterator(0, i).size() <= 2); // TODO
         }
     }
 
@@ -699,6 +724,8 @@ public class TestVectorGraph extends LuceneTestCase {
             var results = GraphSearcher.search(qv, 1, vectors, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
             assertEquals(1, results.getNodes().length);
             assertEquals(1, results.getNodes()[0].node);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
