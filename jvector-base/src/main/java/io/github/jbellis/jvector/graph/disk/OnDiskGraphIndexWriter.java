@@ -22,11 +22,6 @@ import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;

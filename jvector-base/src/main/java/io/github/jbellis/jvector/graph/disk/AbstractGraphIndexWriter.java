@@ -19,7 +19,15 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.*;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+
 import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
