@@ -337,5 +337,5 @@ public interface VectorUtilSupport {
    * @param nBits the number of bits per dimension
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
-
+  float pqDiversityEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount);
 }

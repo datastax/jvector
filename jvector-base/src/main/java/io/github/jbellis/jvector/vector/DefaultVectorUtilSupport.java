@@ -584,4 +584,18 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
     return squaredSum;
   }
 
+  @Override
+  public float pqDiversityEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+    float sum = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+      int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+
+      sum += squareDistance(codebooks[m], centroidIndex1 * centroidLength, codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+    }
+    return sum;
+
+  }
+
 }
