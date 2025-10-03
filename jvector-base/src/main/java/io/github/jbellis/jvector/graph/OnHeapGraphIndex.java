@@ -26,6 +26,7 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
@@ -45,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**

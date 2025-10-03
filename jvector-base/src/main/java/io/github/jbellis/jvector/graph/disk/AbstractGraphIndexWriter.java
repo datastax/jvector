@@ -18,8 +18,6 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
@@ -33,6 +31,7 @@ import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;

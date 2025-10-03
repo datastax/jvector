@@ -422,7 +422,7 @@ public class GraphSearcher implements Closeable {
 
                 // score the neighbors of the top candidate and add them to the queue
                 var scoreFunction = scoreProvider.scoreFunction();
-                GraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
                     scoreTracker.track(score);
                     candidates.push(node2, score);
                     visitedCount++;

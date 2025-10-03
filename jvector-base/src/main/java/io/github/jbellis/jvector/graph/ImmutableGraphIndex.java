@@ -35,6 +35,7 @@ import java.util.Objects;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
