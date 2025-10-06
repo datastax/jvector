@@ -55,7 +55,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
-public class TestADCGraphIndex extends RandomizedTest {
+public class TestFusedGraphIndex extends RandomizedTest {
 
     private Path testDirectory;
     private Random random;
@@ -129,7 +129,7 @@ public class TestADCGraphIndex extends RandomizedTest {
 
     // build a random graph, then check that it has at least 90% recall
     public void testRecallOnGraphWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
-        var outputPath = testDirectory.resolve("random_fused_graph");
+        var outputPath = testDirectory.resolve("random_fused_graph" + random.nextInt());
 
         int size = 1_000;
         int dim = 32;
@@ -158,14 +158,14 @@ public class TestADCGraphIndex extends RandomizedTest {
                 SearchResult.NodeScore[] actual;
                 VectorFloat<?> query = randomVector(dim);
 
+                NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
+                for (int j = 0; j < size; j++) {
+                    expected.push(j, similarityFunction.compare(query, vectors.getVector(j)));
+                }
+
                 for (var fused : List.of(true, false)) {
                     SearchScoreProvider ssp = scoreProviderFor(fused, query, similarityFunction, searcher.getView(), pqv);
                     actual = searcher.search(ssp, topK, efSearch, 0.0f, 0.0f, Bits.ALL).getNodes();
-
-                    NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
-                    for (int j = 0; j < size; j++) {
-                        expected.push(j, similarityFunction.compare(query, vectors.getVector(j)));
-                    }
                     var actualNodeIds = Arrays.stream(actual, 0, topK).mapToInt(nodeScore -> nodeScore.node).toArray();
 
                     assertEquals(topK, actualNodeIds.length);
@@ -178,7 +178,6 @@ public class TestADCGraphIndex extends RandomizedTest {
                 assertTrue("overlap=" + overlap, overlap > 0.90);
             }
         }
-        Files.deleteIfExists(outputPath);
     }
 
     @Test
@@ -194,7 +193,7 @@ public class TestADCGraphIndex extends RandomizedTest {
     }
 
     public void testScoresWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
-        var outputPath = testDirectory.resolve("random_fused_graph");
+        var outputPath = testDirectory.resolve("random_fused_graph" + random.nextInt());
 
         int size = 1_000;
         int dim = 32;
@@ -232,6 +231,114 @@ public class TestADCGraphIndex extends RandomizedTest {
                     }
                 }
             }
+        }
+    }
+
+    @Test
+    public void testReorderingRenumbering() throws IOException {
+        testReorderingRenumbering(false);
+        testReorderingRenumbering(true);
+    }
+
+    public void testReorderingRenumbering(boolean addHierarchy) throws IOException {
+        var outputPath = testDirectory.resolve("renumbered_graph" + random.nextInt());
+
+        // graph of 3 vectors
+        int size = 1_000;
+        int dim = 32;
+        MockVectorValues ravv = vectorValues(size, dim);
+
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 32, 10, 1.0f, 1.0f, addHierarchy);
+        var original = TestUtil.buildSequentially(builder, ravv);
+
+        // create renumbering map
+        Map<Integer, Integer> oldToNewMap = new HashMap<>();
+        for (int i = 0; i < ravv.size(); i++) {
+            oldToNewMap.put(i, ravv.size() - 1 - i);
+        }
+
+        var pq = ProductQuantization.compute(ravv, 8, 256, false);
+        var pqv = (PQVectors) pq.encodeAll(ravv);
+
+        // write the graph
+        TestUtil.writeFusedGraph(original, ravv, pqv, FeatureId.INLINE_VECTORS, oldToNewMap, outputPath);
+
+        // check that written graph ordinals match the new ones
+        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
+             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
+             var onDiskView = onDiskGraph.getView())
+        {
+            for (int i = 0; i < ravv.size(); i++) {
+                assertEquals(onDiskView.getVector(i), ravv.getVector(ravv.size() - 1 - i));
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    // build a random graph, then check that it has at least 90% recall
+    public void testRecallOnGraphWithRenumbering() throws IOException {
+        for (var addHierarchy : List.of(true)) {
+            testRecallOnGraphWithRenumbering(addHierarchy, VectorSimilarityFunction.COSINE, FeatureId.INLINE_VECTORS);
+        }
+    }
+
+    // build a random graph, then check that it has at least 90% recall
+    public void testRecallOnGraphWithRenumbering(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
+        var outputPath = testDirectory.resolve("random_fused_graph");
+
+        int size = 1_000;
+        int dim = 32;
+        MockVectorValues vectors = vectorValues(size, dim);
+
+        int topK = 5;
+        int efSearch = 20;
+
+        GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 32, 1.2f, 1.2f, addHierarchy);
+        var tempGraph = builder.build(vectors);
+
+        var pq = ProductQuantization.compute(vectors, 8, 256, false);
+        var pqv = (PQVectors) pq.encodeAll(vectors);
+
+        // create renumbering map
+        Map<Integer, Integer> oldToNewMap = new HashMap<>();
+        for (int i = 0; i < vectors.size(); i++) {
+            oldToNewMap.put(i, vectors.size() - 1 - i);
+        }
+
+        TestUtil.writeFusedGraph(tempGraph, vectors, pqv, featureId, oldToNewMap, outputPath);
+
+        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath);
+             var graph = OnDiskGraphIndex.load(readerSupplier, 0)) {
+            var searcher = new GraphSearcher(graph);
+
+            int totalMatches = 0;
+
+            for (int i = 0; i < 100; i++) {
+                SearchResult.NodeScore[] actual;
+                VectorFloat<?> query = randomVector(dim);
+
+                NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
+                for (int j = 0; j < size; j++) {
+                    expected.push(j, similarityFunction.compare(query, vectors.getVector(j)));
+                }
+                int[] expectedNodeIds = expected.nodesCopy();
+                for (int j = 0; j < expectedNodeIds.length; j++) {
+                    expectedNodeIds[j] = oldToNewMap.get(expectedNodeIds[j]);
+                }
+
+                SearchScoreProvider ssp = scoreProviderFor(true, query, similarityFunction, searcher.getView(), pqv);
+                actual = searcher.search(ssp, topK, efSearch, 0.0f, 0.0f, Bits.ALL).getNodes();
+                var actualNodeIds = Arrays.stream(actual, 0, topK).mapToInt(nodeScore -> nodeScore.node).toArray();
+
+                assertEquals(topK, actualNodeIds.length);
+                totalMatches += computeOverlap(actualNodeIds, expectedNodeIds);
+            }
+
+            double overlap = totalMatches / (double) (100 * topK);
+            assertTrue("overlap=" + overlap, overlap > 0.90);
+
         }
         Files.deleteIfExists(outputPath);
     }
