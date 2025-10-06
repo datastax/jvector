@@ -155,9 +155,20 @@ public class TestUtil {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
+
     public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
+        writeFusedGraph(graph, ravv, pqv, featureId, null, outputPath);
+    }
+
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
+                                       FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
+                                       Path outputPath) throws IOException {
         var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
                 .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
+
+        if (oldToNewOrdinals != null) {
+            builder = builder.withMap(oldToNewOrdinals);
+        }
 
         var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
         suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
