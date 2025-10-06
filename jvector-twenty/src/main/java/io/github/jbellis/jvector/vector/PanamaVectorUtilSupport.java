@@ -1035,21 +1035,28 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return min;
     }
 
-    @Override
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
+        VectorSpecies<Short> shortSpecies;
+        switch (PREFERRED_BIT_SIZE) {
+            case 512 -> shortSpecies = ShortVector.SPECIES_256;
+            case 256 -> shortSpecies = ShortVector.SPECIES_128;
+            case 128 -> shortSpecies = ShortVector.SPECIES_64;
+            default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
+        }
+
         var codebookSize = partials.length() / partialBases.length();
         var codebookCount = partialBases.length();
 
         for (int i = 0; i < codebookCount; i++) {
-            var vectorizedLength = FloatVector.SPECIES_512.loopBound(codebookSize);
+            var vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(codebookSize);
             var codebookBase = partialBases.get(i);
-            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_512, codebookBase);
+            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, codebookBase);
             int j = 0;
-            for (; j < vectorizedLength; j += FloatVector.SPECIES_512.length()) {
-                var partialVector = fromVectorFloat(FloatVector.SPECIES_512, partials, i * codebookSize + j);
+            for (; j < vectorizedLength; j += FloatVector.SPECIES_PREFERRED.length()) {
+                var partialVector = fromVectorFloat(FloatVector.SPECIES_PREFERRED, partials, i * codebookSize + j);
                 var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
-                quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_512)).min(FloatVector.broadcast(FloatVector.SPECIES_512, 65535));
-                var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, ShortVector.SPECIES_256, 0);
+                quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_PREFERRED)).min(FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535));
+                var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, shortSpecies, 0);
                 intoByteSequence(quantizedBytes.reinterpretAsBytes(), quantizedPartials, 2 * (i * codebookSize + j));
             }
             for (; j < codebookSize; j++) {
