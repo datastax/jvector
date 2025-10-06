@@ -56,11 +56,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final List<Feature> inlineFeatures;
 
     AbstractGraphIndexWriter(T out,
-                                     int version,
-                                     ImmutableGraphIndex graph,
-                                     OrdinalMapper oldToNewOrdinals,
-                                     int dimension,
-                                     EnumMap<FeatureId, Feature> features)
+                             int version,
+                             ImmutableGraphIndex graph,
+                             OrdinalMapper oldToNewOrdinals,
+                             int dimension,
+                             EnumMap<FeatureId, Feature> features)
     {
         if (graph.getMaxLevel() > 0 && version < 4) {
             throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
