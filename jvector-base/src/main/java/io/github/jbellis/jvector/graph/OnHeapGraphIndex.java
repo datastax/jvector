@@ -303,6 +303,10 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
     }
 
+    public FrozenView getFrozenView() {
+        return new FrozenView();
+    }
+
     public ThreadSafeGrowableBitSet getDeletedNodes() {
         return deletedNodes;
     }
@@ -661,7 +665,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
                     final NodeArray neighbors = levelNeighborsScoreCache.get(nodeId).copy();
 
                     // Add the node with its neighbors
-                    heapIndex.addNode(level, nodeId, neighbors);
+                    heapIndex.connectNode(level, nodeId, neighbors);
                     heapIndex.markComplete(new NodeAtLevel(level, nodeId));
                 }
             }

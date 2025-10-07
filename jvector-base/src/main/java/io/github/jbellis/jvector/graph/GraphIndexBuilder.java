@@ -957,4 +957,58 @@ public class GraphIndexBuilder implements Closeable {
         graph.updateEntryNode(new NodeAtLevel(0, entryNode));
         graph.setDegrees(List.of(maxDegree));
     }
+
+    /**
+     * Convenience method to build a new graph from an existing one, with the addition of new nodes.
+     * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     *
+     * @param onDiskGraphIndex the on-disk representation of the graph index to be processed and converted.
+     * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
+     * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
+     * @param graphToRavvOrdMap a mapping from the old graph's node ids to the newVectors RAVV node ids
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
+     * @param alpha the weight factor for balancing score computations.
+     * @param addHierarchy whether to add hierarchical structures while building the graph.
+     *
+     * @return the in-memory representation of the graph index.
+     * @throws IOException if an I/O error occurs during the graph loading or conversion process.
+     */
+    public static ImmutableGraphIndex buildAndMergeNewNodes(OnDiskGraphIndex onDiskGraphIndex,
+                                                         NeighborsScoreCache perLevelNeighborsScoreCache,
+                                                         RandomAccessVectorValues newVectors,
+                                                         BuildScoreProvider buildScoreProvider,
+                                                         int startingNodeOffset,
+                                                         int[] graphToRavvOrdMap,
+                                                         int beamWidth,
+                                                         float overflowRatio,
+                                                         float alpha,
+                                                         boolean addHierarchy) throws IOException {
+
+
+
+        try (GraphIndexBuilder builder = new GraphIndexBuilder(buildScoreProvider,
+                onDiskGraphIndex,
+                perLevelNeighborsScoreCache,
+                beamWidth,
+                overflowRatio,
+                alpha,
+                addHierarchy,
+                true,
+                PhysicalCoreExecutor.pool(),
+                ForkJoinPool.commonPool())) {
+
+            var vv = newVectors.threadLocalSupplier();
+
+            // parallel graph construction from the merge documents Ids
+            PhysicalCoreExecutor.pool().submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
+                builder.addGraphNode(ord, vv.get().getVector(graphToRavvOrdMap[ord]));
+            })).join();
+
+            builder.cleanup();
+            return builder.getGraph();
+        }
+    }
 }

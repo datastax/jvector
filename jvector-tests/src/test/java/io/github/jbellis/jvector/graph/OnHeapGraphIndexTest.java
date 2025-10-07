@@ -77,9 +77,9 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private BuildScoreProvider baseBuildScoreProvider;
     private BuildScoreProvider newBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
-    private OnHeapGraphIndex baseGraphIndex;
-    private OnHeapGraphIndex newGraphIndex;
-    private OnHeapGraphIndex allGraphIndex;
+    private ImmutableGraphIndex baseGraphIndex;
+    private ImmutableGraphIndex newGraphIndex;
+    private ImmutableGraphIndex allGraphIndex;
 
     @Before
     public void setup() throws IOException {
@@ -149,7 +149,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
 
         log.info("Writing neighbors score cache to {}", neighborsScoreCacheOutputPath);
-        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache(baseGraphIndex);
+        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache((OnHeapGraphIndex) baseGraphIndex);
         try (SimpleWriter writer = new SimpleWriter(neighborsScoreCacheOutputPath.toAbsolutePath())) {
             neighborsScoreCache.write(writer);
         }
@@ -182,14 +182,14 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     public void testIncrementalInsertionFromOnDiskIndex() throws IOException {
         var outputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
         log.info("Writing graph to {}", outputPath);
-        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache(baseGraphIndex);
+        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache((OnHeapGraphIndex) baseGraphIndex);
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, outputPath);
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier)) {
             TestUtil.assertGraphEquals(baseGraphIndex, onDiskGraph);
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
-            OnHeapGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(onDiskGraph, neighborsScoreCache, allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
+            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(onDiskGraph, neighborsScoreCache, allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
             // Verify that the recall is similar
             float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
@@ -231,7 +231,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         return exactResults.stream().limit(topK).mapToInt(nodeScore -> nodeScore.node).toArray();
     }
 
-    private static float calculateRecall(OnHeapGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k) throws IOException {
+    private static float calculateRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k) throws IOException {
         try (GraphSearcher graphSearcher = new GraphSearcher(graphIndex)){
             SearchScoreProvider ssp = buildScoreProvider.searchProviderFor(queryVector);
             var searchResults = graphSearcher.search(ssp, k, Bits.ALL);
