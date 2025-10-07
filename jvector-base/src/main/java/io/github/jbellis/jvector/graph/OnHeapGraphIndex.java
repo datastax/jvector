@@ -77,6 +77,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     private final CompletionTracker completions;
     private final ThreadSafeGrowableBitSet deletedNodes = new ThreadSafeGrowableBitSet(0);
     private final AtomicInteger maxNodeId = new AtomicInteger(-1);
+    private final int dimension;
 
     // Maximum number of neighbors (edges) per node per layer
     final List<Integer> maxDegrees;
@@ -86,9 +87,10 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private volatile boolean allMutationsCompleted = false;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
+    OnHeapGraphIndex(int dimension, List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
+        this.dimension = dimension;
         setDegrees(maxDegrees);
         entryPoint = new AtomicReference<>();
         this.completions = new CompletionTracker(1024);
@@ -233,6 +235,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public NodesIterator getNodes(int level) {
         return NodesIterator.fromPrimitiveIterator(nodeStream(level).iterator(),
                                                    layers.get(level).size());
+    }
+
+    @Override
+    public int getDimension() {
+        return dimension;
     }
 
     @Override
@@ -639,6 +646,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         OnHeapGraphIndex heapIndex = new OnHeapGraphIndex(
+                immutableGraphIndex.getDimension(),
                 maxDegrees,
                 overflowRatio, // overflow ratio
                 new VamanaDiversityProvider(bsp, alpha) // diversity provider - can be null for basic usage

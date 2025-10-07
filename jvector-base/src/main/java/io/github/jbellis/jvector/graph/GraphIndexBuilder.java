@@ -327,7 +327,7 @@ public class GraphIndexBuilder implements Closeable {
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
 
-        this.graph = new OnHeapGraphIndex(maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
+        this.graph = new OnHeapGraphIndex(dimension, maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
@@ -346,7 +346,7 @@ public class GraphIndexBuilder implements Closeable {
      * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
      *
      * @param buildScoreProvider the provider responsible for calculating build scores.
-     * @param onDiskGraphIndex the on-disk representation of the graph index to be processed and converted.
+     * @param immutableGraphIndex the on-disk representation of the graph index to be processed and converted.
      * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
      *                                    organized by levels and nodes.
      * @param beamWidth the width of the beam used during the graph building process.
@@ -359,10 +359,10 @@ public class GraphIndexBuilder implements Closeable {
      *
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
-    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, OnDiskGraphIndex onDiskGraphIndex, NeighborsScoreCache perLevelNeighborsScoreCache, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) throws IOException {
+    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, ImmutableGraphIndex immutableGraphIndex, NeighborsScoreCache perLevelNeighborsScoreCache, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) throws IOException {
         this.scoreProvider = buildScoreProvider;
         this.neighborOverflow = neighborOverflow;
-        this.dimension = onDiskGraphIndex.getDimension();
+        this.dimension = immutableGraphIndex.getDimension();
         this.alpha = alpha;
         this.addHierarchy = addHierarchy;
         this.refineFinalGraph = refineFinalGraph;
@@ -370,7 +370,7 @@ public class GraphIndexBuilder implements Closeable {
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
 
-        this.graph = OnHeapGraphIndex.convertToHeap(onDiskGraphIndex, perLevelNeighborsScoreCache, buildScoreProvider, neighborOverflow, alpha);
+        this.graph = OnHeapGraphIndex.convertToHeap(immutableGraphIndex, perLevelNeighborsScoreCache, buildScoreProvider, neighborOverflow, alpha);
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
@@ -962,7 +962,7 @@ public class GraphIndexBuilder implements Closeable {
      * Convenience method to build a new graph from an existing one, with the addition of new nodes.
      * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
      *
-     * @param onDiskGraphIndex the on-disk representation of the graph index to be processed and converted.
+     * @param immutableGraphIndex the immutable (usually on-disk) representation of the graph index to be processed and converted.
      * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
      * @param buildScoreProvider the provider responsible for calculating build scores.
@@ -976,7 +976,7 @@ public class GraphIndexBuilder implements Closeable {
      * @return the in-memory representation of the graph index.
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
-    public static ImmutableGraphIndex buildAndMergeNewNodes(OnDiskGraphIndex onDiskGraphIndex,
+    public static ImmutableGraphIndex buildAndMergeNewNodes(ImmutableGraphIndex immutableGraphIndex,
                                                          NeighborsScoreCache perLevelNeighborsScoreCache,
                                                          RandomAccessVectorValues newVectors,
                                                          BuildScoreProvider buildScoreProvider,
@@ -990,7 +990,7 @@ public class GraphIndexBuilder implements Closeable {
 
 
         try (GraphIndexBuilder builder = new GraphIndexBuilder(buildScoreProvider,
-                onDiskGraphIndex,
+                immutableGraphIndex,
                 perLevelNeighborsScoreCache,
                 beamWidth,
                 overflowRatio,

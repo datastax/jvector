@@ -61,6 +61,9 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      */
     NodesIterator getNodes(int level);
 
+    /** Return the dimension of the vectors in the graph */
+    int getDimension();
+
     /**
      * Return a View with which to navigate the graph.  Views are not threadsafe -- that is,
      * only one search at a time should be run per View.
