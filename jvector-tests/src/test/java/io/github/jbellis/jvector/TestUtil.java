@@ -281,6 +281,11 @@ public class TestUtil {
         }
 
         @Override
+        public int getDimension() {
+            throw new NotImplementedException();
+        }
+
+        @Override
         public View getView() {
             return new FullyConnectedGraphIndexView();
         }
@@ -397,6 +402,11 @@ public class TestUtil {
         public NodesIterator getNodes(int level) {
             int sz = layerInfo.get(level).size;
             return new NodesIterator.ArrayNodesIterator(IntStream.range(0, sz).toArray(), sz);
+        }
+
+        @Override
+        public int getDimension() {
+            throw new NotImplementedException();
         }
 
         @Override
