@@ -20,8 +20,6 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.disk.SimpleWriter;
-import io.github.jbellis.jvector.graph.disk.NeighborsScoreCache;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -46,7 +44,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class OnHeapGraphIndexTest extends RandomizedTest  {
@@ -72,13 +69,10 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private RandomAccessVectorValues newVectorsRavv;
     private RandomAccessVectorValues allVectorsRavv;
     private VectorFloat<?> queryVector;
-    private int[] groundTruthBaseVectors;
     private int[] groundTruthAllVectors;
     private BuildScoreProvider baseBuildScoreProvider;
-    private BuildScoreProvider newBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
     private ImmutableGraphIndex baseGraphIndex;
-    private ImmutableGraphIndex newGraphIndex;
     private ImmutableGraphIndex allGraphIndex;
 
     @Before
@@ -104,12 +98,10 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         allVectorsRavv = new ListRandomAccessVectorValues(allVectors, DIMENSION);
 
         queryVector = createRandomVector(DIMENSION);
-        groundTruthBaseVectors = getGroundTruth(baseVectorsRavv, queryVector, TOP_K, VectorSimilarityFunction.EUCLIDEAN);
         groundTruthAllVectors = getGroundTruth(allVectorsRavv, queryVector, TOP_K, VectorSimilarityFunction.EUCLIDEAN);
 
         // score provider using the raw, in-memory vectors
         baseBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, VectorSimilarityFunction.EUCLIDEAN);
-        newBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(newVectorsRavv, VectorSimilarityFunction.EUCLIDEAN);
         allBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(allVectorsRavv, VectorSimilarityFunction.EUCLIDEAN);
         var baseGraphIndexBuilder = new GraphIndexBuilder(baseBuildScoreProvider,
                 baseVectorsRavv.dimension(),
@@ -144,21 +136,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     @Test
     public void testReconstructionOfOnHeapGraphIndex() throws IOException {
         var graphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
-        var neighborsScoreCacheOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + NeighborsScoreCache.class.getSimpleName());
         log.info("Writing graph to {}", graphOutputPath);
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
-
-        log.info("Writing neighbors score cache to {}", neighborsScoreCacheOutputPath);
-        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache((OnHeapGraphIndex) baseGraphIndex);
-        try (SimpleWriter writer = new SimpleWriter(neighborsScoreCacheOutputPath.toAbsolutePath())) {
-            neighborsScoreCache.write(writer);
-        }
-
-        log.info("Reading neighbors score cache from {}", neighborsScoreCacheOutputPath);
-        final NeighborsScoreCache neighborsScoreCacheRead;
-        try (var readerSupplier = new SimpleMappedReader.Supplier(neighborsScoreCacheOutputPath.toAbsolutePath())) {
-            neighborsScoreCacheRead = new NeighborsScoreCache(readerSupplier.get());
-        }
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(graphOutputPath.toAbsolutePath());
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier)) {
@@ -167,7 +146,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 validateVectors(onDiskView, baseVectorsRavv);
             }
 
-            OnHeapGraphIndex reconstructedOnHeapGraphIndex = OnHeapGraphIndex.convertToHeap(onDiskGraph, neighborsScoreCacheRead, baseBuildScoreProvider, NEIGHBOR_OVERFLOW, ALPHA);
+            MutableGraphIndex reconstructedOnHeapGraphIndex = GraphIndexConverter.convertToHeap(onDiskGraph, baseBuildScoreProvider, NEIGHBOR_OVERFLOW, ALPHA);
             TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
             TestUtil.assertGraphEquals(onDiskGraph, reconstructedOnHeapGraphIndex);
 
@@ -182,14 +161,13 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     public void testIncrementalInsertionFromOnDiskIndex() throws IOException {
         var outputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
         log.info("Writing graph to {}", outputPath);
-        final NeighborsScoreCache neighborsScoreCache = new NeighborsScoreCache((OnHeapGraphIndex) baseGraphIndex);
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, outputPath);
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier)) {
             TestUtil.assertGraphEquals(baseGraphIndex, onDiskGraph);
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
-            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(onDiskGraph, neighborsScoreCache, allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
+            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(onDiskGraph, allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
             // Verify that the recall is similar
             float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);

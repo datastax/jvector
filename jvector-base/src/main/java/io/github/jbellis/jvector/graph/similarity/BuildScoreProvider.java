@@ -94,6 +94,7 @@ public interface BuildScoreProvider {
 
     /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
+     * graphToRavvOrdMap maps graph node IDs to ravv ordinals.
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without

@@ -351,7 +351,7 @@ public class ConcurrentNeighborMap {
         }
     }
 
-    public static class NeighborIterator implements NodesIterator {
+    private static class NeighborIterator implements NodesIterator {
         private final NodeArray neighbors;
         private int i;
 
@@ -373,10 +373,6 @@ public class ConcurrentNeighborMap {
         @Override
         public int nextInt() {
             return neighbors.getNode(i++);
-        }
-
-        public NodeArray merge(NodeArray other) {
-            return NodeArray.merge(neighbors, other);
         }
     }
 }
