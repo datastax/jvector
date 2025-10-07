@@ -66,6 +66,7 @@ import java.util.function.IntFunction;
  */
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
+    private boolean useParallelWrites = false;
 
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
@@ -155,6 +156,64 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
 
         writeHeader(view); // sets position to start writing features
 
+        // Write L0 records (either parallel or sequential)
+        if (useParallelWrites) {
+            writeL0RecordsParallel(featureStateSuppliers);
+        } else {
+            writeL0RecordsSequential(view, featureStateSuppliers);
+        }
+
+        // We will use the abstract method because no random access is needed
+        writeSparseLevels(view);
+
+        // We will use the abstract method because no random access is needed
+        writeSeparatedFeatures(featureStateSuppliers);
+
+        // Write the header again with updated offsets
+        if (version >= 5) {
+            writeFooter(view, out.position());
+        }
+
+        final var endOfGraphPosition = out.position();
+        writeHeader(view);
+        out.seek(endOfGraphPosition);
+        out.flush();
+        view.close();
+    }
+
+    /**
+     * Writes L0 records using parallel workers and a write dispatcher.
+     */
+    private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+        long baseOffset = out.position();
+        
+        try (var parallelWriter = new ParallelGraphWriter(
+                out,
+                graph,
+                inlineFeatures,
+                ParallelGraphWriter.Config.defaultConfig())) {
+            
+            parallelWriter.writeL0Records(
+                ordinalMapper,
+                inlineFeatures,
+                featureStateSuppliers,
+                baseOffset
+            );
+            
+            // Update maxOrdinalWritten
+            maxOrdinalWritten = ordinalMapper.maxOrdinal();
+            
+            // Seek to end of L0 region
+            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
+            out.seek(endOffset);
+        }
+    }
+
+    /**
+     * Writes L0 records sequentially (original implementation).
+     */
+    private void writeL0RecordsSequential(ImmutableGraphIndex.View view,
+                                          Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
             var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
@@ -211,23 +270,6 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
                 out.writeInt(-1);
             }
         }
-
-        // We will use the abstract method because no random access is needed
-        writeSparseLevels(view);
-
-        // We will use the abstract method because no random access is needed
-        writeSeparatedFeatures(featureStateSuppliers);
-
-        // Write the header again with updated offsets
-        if (version >= 5) {
-            writeFooter(view, out.position());
-        }
-
-        final var endOfGraphPosition = out.position();
-        writeHeader(view);
-        out.seek(endOfGraphPosition);
-        out.flush();
-        view.close();
     }
 
     /**
@@ -250,10 +292,23 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     }
 
     /**
+     * Enables parallel writes for L0 records. This can significantly improve throughput
+     * for large graphs by parallelizing record building across multiple cores.
+     * <p>
+     * Note: This is currently experimental. The sequential path is the default.
+     *
+     * @param enabled whether to enable parallel writes
+     */
+    public void setParallelWrites(boolean enabled) {
+        this.useParallelWrites = enabled;
+    }
+
+    /**
      * Builder for {@link OnDiskGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
+        private boolean useParallelWrites = false;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
@@ -272,9 +327,19 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
             return this;
         }
 
+        /**
+         * Enable parallel writes for L0 records. Can significantly improve throughput for large graphs.
+         */
+        public Builder withParallelWrites(boolean enabled) {
+            this.useParallelWrites = enabled;
+            return this;
+        }
+
         @Override
         protected OnDiskGraphIndexWriter reallyBuild(int dimension) throws IOException {
-            return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
+            var writer = new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
+            writer.setParallelWrites(useParallelWrites);
+            return writer;
         }
     }
 }

@@ -16,6 +16,9 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -38,4 +41,19 @@ public interface GraphIndexWriter extends Closeable {
      * @param featureStateSuppliers a map of FeatureId to a function that returns a Feature.State
      */
     void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
+
+    static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
+            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
+        switch (type) {
+            case ON_DISK:
+                if (!(out instanceof RandomAccessWriter)) {
+                    throw new IllegalArgumentException("ON_DISK requires a RandomAccessWriter");
+                }
+                return new OnDiskGraphIndexWriter.Builder(graphIndex, (RandomAccessWriter) out);
+            case ON_DISK_SEQUENTIAL:
+                return new OnDiskSequentialGraphIndexWriter.Builder(graphIndex, out);
+            default:
+                throw new IllegalArgumentException("Unknown GraphIndexWriterType: " + type);
+        }
+    }
 }
