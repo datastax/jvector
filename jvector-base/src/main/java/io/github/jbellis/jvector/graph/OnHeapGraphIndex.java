@@ -617,7 +617,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * Converts an OnDiskGraphIndex to an OnHeapGraphIndex by copying all nodes, their levels, and neighbors,
      * along with other configuration details, from disk-based storage to heap-based storage.
      *
-     * @param diskIndex the disk-based index to be converted
+     * @param immutableGraphIndex the disk-based index to be converted
      * @param perLevelNeighborsScoreCache the cache containing pre-computed neighbor scores,
      *                                    organized by levels and nodes.
      * @param bsp The build score provider to be used for
@@ -626,7 +626,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * @return an OnHeapGraphIndex that is equivalent to the provided OnDiskGraphIndex but operates in heap memory
      * @throws IOException if an I/O error occurs during the conversion process
      */
-    public static OnHeapGraphIndex convertToHeap(OnDiskGraphIndex diskIndex,
+    public static OnHeapGraphIndex convertToHeap(ImmutableGraphIndex immutableGraphIndex,
                                                  NeighborsScoreCache perLevelNeighborsScoreCache,
                                                  BuildScoreProvider bsp,
                                                  float overflowRatio,
@@ -634,8 +634,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         // Create a new OnHeapGraphIndex with the appropriate configuration
         List<Integer> maxDegrees = new ArrayList<>();
-        for (int level = 0; level <= diskIndex.getMaxLevel(); level++) {
-            maxDegrees.add(diskIndex.getDegree(level));
+        for (int level = 0; level <= immutableGraphIndex.getMaxLevel(); level++) {
+            maxDegrees.add(immutableGraphIndex.getDegree(level));
         }
 
         OnHeapGraphIndex heapIndex = new OnHeapGraphIndex(
@@ -645,10 +645,10 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         );
 
         // Copy all nodes and their connections from disk to heap
-        try (var view = diskIndex.getView()) {
+        try (var view = immutableGraphIndex.getView()) {
             // Copy nodes level by level
-            for (int level = 0; level <= diskIndex.getMaxLevel(); level++) {
-                final NodesIterator nodesIterator = diskIndex.getNodes(level);
+            for (int level = 0; level <= immutableGraphIndex.getMaxLevel(); level++) {
+                final NodesIterator nodesIterator = immutableGraphIndex.getNodes(level);
                 final Map<Integer, NodeArray> levelNeighborsScoreCache = perLevelNeighborsScoreCache.getNeighborsScoresInLevel(level);
                 if (levelNeighborsScoreCache == null) {
                     throw new IllegalStateException("No neighbors score cache found for level " + level);
