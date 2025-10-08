@@ -16,7 +16,34 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+/**
+ * Enum defining the available types of graph index writers.
+ * <p>
+ * Different writer types offer different tradeoffs between performance,
+ * compatibility, and features.
+ */
 public enum GraphIndexWriterTypes {
+    /**
+     * Standard on-disk writer that uses random access for writing.
+     * Supports random access writes and incremental updates via writeInline.
+     * Requires a RandomAccessWriter.
+     */
     ON_DISK,
-    ON_DISK_SEQUENTIAL
+
+    /**
+     * Sequential on-disk writer optimized for write-once scenarios.
+     * Writes all data sequentially without seeking back, making it suitable
+     * for cloud storage or systems that optimize for sequential I/O.
+     * Writes header as footer. Does not support incremental updates.
+     * Accepts any IndexWriter.
+     */
+    ON_DISK_SEQUENTIAL,
+
+    /**
+     * Parallel on-disk writer that uses asynchronous I/O for improved throughput.
+     * Builds records in parallel across multiple threads and writes them
+     * asynchronously using AsynchronousFileChannel.
+     * Requires a Path to be provided for async file channel access.
+     */
+    ON_DISK_PARALLEL
 }

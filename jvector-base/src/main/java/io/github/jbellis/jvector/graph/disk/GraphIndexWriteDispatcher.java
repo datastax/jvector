@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * This ensures thread-safe access to the underlying writer while allowing
  * parallel record building in worker threads.
  */
-class WriteDispatcher implements AutoCloseable {
+class GraphIndexWriteDispatcher {
     private static final NodeRecordTask.Result POISON_PILL = 
         new NodeRecordTask.Result(-1, -1, ByteBuffer.allocate(0));
     
@@ -47,7 +47,7 @@ class WriteDispatcher implements AutoCloseable {
      * @param writer the underlying writer to write to
      * @param queueCapacity maximum number of records to buffer (for backpressure)
      */
-    public WriteDispatcher(RandomAccessWriter writer, int queueCapacity) {
+    public GraphIndexWriteDispatcher(RandomAccessWriter writer, int queueCapacity) {
         this.writer = writer;
         this.queue = new LinkedBlockingQueue<>(queueCapacity);
         this.dispatcherThread = new Thread(this::run, "WriteDispatcher");
@@ -114,7 +114,6 @@ class WriteDispatcher implements AutoCloseable {
      * 
      * @throws IOException if an IO error occurred
      */
-    @Override
     public void close() throws IOException {
         if (closed) {
             return;

@@ -67,17 +67,55 @@ import java.util.function.IntFunction;
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
     private boolean useParallelWrites = false;
+    private final Path filePath; // Optional: for parallel writes
 
+    /**
+     * Constructs an OnDiskGraphIndexWriter with all parameters including optional file path.
+     *
+     * @param randomAccessWriter the writer to use for output
+     * @param version the format version to write
+     * @param startOffset the starting offset in the file
+     * @param graph the graph to write
+     * @param oldToNewOrdinals mapper for ordinal renumbering
+     * @param dimension the vector dimension
+     * @param features the features to include
+     * @param filePath optional file path for enabling async parallel writes (can be null)
+     */
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
                                    ImmutableGraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
-                                   EnumMap<FeatureId, Feature> features)
+                                   EnumMap<FeatureId, Feature> features,
+                                   Path filePath)
     {
         super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;
+        this.filePath = filePath;
+    }
+
+    /**
+     * Constructs an OnDiskGraphIndexWriter without a file path.
+     * Parallel writes will not be available without a file path.
+     *
+     * @param randomAccessWriter the writer to use for output
+     * @param version the format version to write
+     * @param startOffset the starting offset in the file
+     * @param graph the graph to write
+     * @param oldToNewOrdinals mapper for ordinal renumbering
+     * @param dimension the vector dimension
+     * @param features the features to include
+     */
+    OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
+                           int version,
+                           long startOffset,
+                           ImmutableGraphIndex graph,
+                           OrdinalMapper oldToNewOrdinals,
+                           int dimension,
+                           EnumMap<FeatureId, Feature> features)
+    {
+        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features, null);
     }
 
     /**
@@ -183,26 +221,37 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
 
     /**
      * Writes L0 records using parallel workers and a write dispatcher.
+     * <p>
+     * If a filePath was provided during construction, records will be written
+     * asynchronously using AsynchronousFileChannel for improved throughput.
+     * Otherwise, records are written synchronously via the RandomAccessWriter.
+     * <p>
+     * This method parallelizes record building across multiple threads and
+     * coordinates writes to maintain correctness.
+     *
+     * @param featureStateSuppliers suppliers for feature state data
+     * @throws IOException if an I/O error occurs
      */
     private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         long baseOffset = out.position();
-        
+
         try (var parallelWriter = new ParallelGraphWriter(
                 out,
                 graph,
                 inlineFeatures,
-                ParallelGraphWriter.Config.defaultConfig())) {
-            
+                ParallelGraphWriter.Config.defaultConfig(),
+                filePath)) {
+
             parallelWriter.writeL0Records(
                 ordinalMapper,
                 inlineFeatures,
                 featureStateSuppliers,
                 baseOffset
             );
-            
+
             // Update maxOrdinalWritten
             maxOrdinalWritten = ordinalMapper.maxOrdinal();
-            
+
             // Seek to end of L0 region
             long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
             out.seek(endOffset);
@@ -285,6 +334,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         out.flush();
     }
 
+    //TODO: How do the parallel writes work with the footer?
     /** CRC32 checksum of bytes written since the starting offset */
     public synchronized long checksum() throws IOException {
         long endOffset = out.position();
@@ -309,9 +359,20 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
         private boolean useParallelWrites = false;
+        /**
+         * The current implementation of this Builder allows for a RandomAccessWriter to be passed to the constructor in
+         * order to allow the backing of any IndexWriter and not tying to a particular implementation. However in this
+         * case the class we are in is literally named "OnDiskGraphIndexWriter" and is built to store the graph index
+         * on a file on disk. As RandomAccessWriter does not allow for the extraction of the backing Path there is no way
+         * to use async i/o to write the file without modifying the way the OnDiskGraphIndexWriter.Builder is constructed.
+         * Hence the addition here of a Path variable. In the future it would be an optimization to deprecate the constructor
+         * that uses a RandomAccessWriter and only allow the one that takes a Path. For now this allows for backwards compatibility.
+         */
+        private Path filePath = null;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
+            this.filePath = outPath;
         }
 
         public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
@@ -336,8 +397,8 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         }
 
         @Override
-        protected OnDiskGraphIndexWriter reallyBuild(int dimension) throws IOException {
-            var writer = new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
+        protected OnDiskGraphIndexWriter reallyBuild(int dimension) {
+            var writer = new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath);
             writer.setParallelWrites(useParallelWrites);
             return writer;
         }
