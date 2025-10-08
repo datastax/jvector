@@ -68,9 +68,13 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     private final long startOffset;
     private boolean useParallelWrites = false;
     private final Path filePath; // Optional: for parallel writes
+    private final int parallelWorkerThreads;
+    private final int parallelDispatcherQueueCapacity;
+    private final boolean parallelUseDirectBuffers;
 
     /**
-     * Constructs an OnDiskGraphIndexWriter with all parameters including optional file path.
+     * Constructs an OnDiskGraphIndexWriter with all parameters including optional file path
+     * and parallel write configuration.
      *
      * @param randomAccessWriter the writer to use for output
      * @param version the format version to write
@@ -80,6 +84,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * @param dimension the vector dimension
      * @param features the features to include
      * @param filePath optional file path for enabling async parallel writes (can be null)
+     * @param parallelWorkerThreads number of worker threads for parallel writes (0 = use available processors)
+     * @param parallelDispatcherQueueCapacity max records to buffer before blocking
+     * @param parallelUseDirectBuffers whether to use direct ByteBuffers for parallel writes
      */
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
@@ -88,16 +95,23 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features,
-                                   Path filePath)
+                                   Path filePath,
+                                   int parallelWorkerThreads,
+                                   int parallelDispatcherQueueCapacity,
+                                   boolean parallelUseDirectBuffers)
     {
         super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;
         this.filePath = filePath;
+        this.parallelWorkerThreads = parallelWorkerThreads;
+        this.parallelDispatcherQueueCapacity = parallelDispatcherQueueCapacity;
+        this.parallelUseDirectBuffers = parallelUseDirectBuffers;
     }
 
     /**
      * Constructs an OnDiskGraphIndexWriter without a file path.
      * Parallel writes will not be available without a file path.
+     * Uses default parallel write configuration.
      *
      * @param randomAccessWriter the writer to use for output
      * @param version the format version to write
@@ -115,7 +129,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
                            int dimension,
                            EnumMap<FeatureId, Feature> features)
     {
-        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features, null);
+        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features, null, 0, 1024, false);
     }
 
     /**
@@ -235,11 +249,17 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         long baseOffset = out.position();
 
+        var config = new ParallelGraphWriter.Config(
+            parallelWorkerThreads,
+            parallelDispatcherQueueCapacity,
+            parallelUseDirectBuffers
+        );
+
         try (var parallelWriter = new ParallelGraphWriter(
                 out,
                 graph,
                 inlineFeatures,
-                ParallelGraphWriter.Config.defaultConfig(),
+                config,
                 filePath)) {
 
             parallelWriter.writeL0Records(
@@ -369,6 +389,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
          * that uses a RandomAccessWriter and only allow the one that takes a Path. For now this allows for backwards compatibility.
          */
         private Path filePath = null;
+        private int parallelWorkerThreads = 0;
+        private int parallelDispatcherQueueCapacity = 1024;
+        private boolean parallelUseDirectBuffers = false;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
@@ -396,9 +419,48 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
             return this;
         }
 
+        /**
+         * Set the number of worker threads for parallel writes.
+         *
+         * @param workerThreads number of worker threads (0 = use available processors)
+         * @return this builder
+         */
+        public Builder withParallelWorkerThreads(int workerThreads) {
+            this.parallelWorkerThreads = workerThreads;
+            return this;
+        }
+
+        /**
+         * Set the dispatcher queue capacity for parallel writes.
+         * This controls the maximum number of records that can be buffered before blocking,
+         * providing backpressure to prevent excessive memory usage.
+         *
+         * @param queueCapacity max records to buffer before blocking
+         * @return this builder
+         */
+        public Builder withParallelDispatcherQueueCapacity(int queueCapacity) {
+            this.parallelDispatcherQueueCapacity = queueCapacity;
+            return this;
+        }
+
+        /**
+         * Set whether to use direct ByteBuffers for parallel writes.
+         * Direct buffers can provide better performance for large records but use off-heap memory.
+         *
+         * @param useDirectBuffers whether to use direct ByteBuffers
+         * @return this builder
+         */
+        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
+            this.parallelUseDirectBuffers = useDirectBuffers;
+            return this;
+        }
+
         @Override
         protected OnDiskGraphIndexWriter reallyBuild(int dimension) {
-            var writer = new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath);
+            var writer = new OnDiskGraphIndexWriter(
+                out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath,
+                parallelWorkerThreads, parallelDispatcherQueueCapacity, parallelUseDirectBuffers
+            );
             writer.setParallelWrites(useParallelWrites);
             return writer;
         }
