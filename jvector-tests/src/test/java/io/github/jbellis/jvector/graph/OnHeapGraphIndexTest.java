@@ -20,7 +20,9 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
@@ -136,8 +138,21 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     @Test
     public void testReconstructionOfOnHeapGraphIndex() throws IOException {
         var graphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
+        var heapGraphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName() + "_onHeap");
+
         log.info("Writing graph to {}", graphOutputPath);
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
+
+        log.info("Writing on-heap graph to {}", heapGraphOutputPath);
+        try (SimpleWriter writer = new SimpleWriter(heapGraphOutputPath.toAbsolutePath())) {
+            ((OnHeapGraphIndex) baseGraphIndex).save(writer);
+        }
+
+        log.info("Reading on-heap graph from {}", heapGraphOutputPath);
+        MutableGraphIndex reconstructedOnHeapGraphIndex;
+        try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
+            reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(baseBuildScoreProvider, ALPHA));
+        }
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(graphOutputPath.toAbsolutePath());
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier)) {
@@ -146,10 +161,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 validateVectors(onDiskView, baseVectorsRavv);
             }
 
-            MutableGraphIndex reconstructedOnHeapGraphIndex = GraphIndexConverter.convertToHeap(onDiskGraph, baseBuildScoreProvider, NEIGHBOR_OVERFLOW, ALPHA);
             TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
             TestUtil.assertGraphEquals(onDiskGraph, reconstructedOnHeapGraphIndex);
-
         }
     }
 
@@ -160,14 +173,21 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     @Test
     public void testIncrementalInsertionFromOnDiskIndex() throws IOException {
         var outputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
+        var heapGraphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName() + "_onHeap");
+
         log.info("Writing graph to {}", outputPath);
         TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, outputPath);
-        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
-             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier)) {
-            TestUtil.assertGraphEquals(baseGraphIndex, onDiskGraph);
+
+        log.info("Writing on-heap graph to {}", heapGraphOutputPath);
+        try (SimpleWriter writer = new SimpleWriter(heapGraphOutputPath.toAbsolutePath())) {
+            ((OnHeapGraphIndex) baseGraphIndex).save(writer);
+        }
+
+        log.info("Reading on-heap graph from {}", heapGraphOutputPath);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
-            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(onDiskGraph, allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
+            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
             // Verify that the recall is similar
             float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);

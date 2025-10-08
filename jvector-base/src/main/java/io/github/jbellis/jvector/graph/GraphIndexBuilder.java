@@ -355,7 +355,7 @@ public class GraphIndexBuilder implements Closeable {
      *
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
-    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) throws IOException {
+    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -509,7 +509,7 @@ public class GraphIndexBuilder implements Closeable {
             });
         }).join();
 
-        graph.allMutationsCompleted();
+        graph.setAllMutationsCompleted();
     }
 
     private void improveConnections(int node) {
@@ -878,6 +878,9 @@ public class GraphIndexBuilder implements Closeable {
             loadV3(in, size);
         } else {
             version = in.readInt();
+            if (version != 4) {
+                throw new IOException("Unsupported version: " + version);
+            }
             loadV4(in);
         }
     }
@@ -967,7 +970,7 @@ public class GraphIndexBuilder implements Closeable {
      * Convenience method to build a new graph from an existing one, with the addition of new nodes.
      * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
      *
-     * @param immutableGraphIndex the immutable (usually on-disk) representation of the graph index to be processed and converted.
+     * @param in a reader from which to read the on-heap graph.
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
      * @param buildScoreProvider the provider responsible for calculating build scores.
      * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
@@ -980,7 +983,7 @@ public class GraphIndexBuilder implements Closeable {
      * @return the in-memory representation of the graph index.
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
-    public static ImmutableGraphIndex buildAndMergeNewNodes(ImmutableGraphIndex immutableGraphIndex,
+    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
@@ -990,7 +993,10 @@ public class GraphIndexBuilder implements Closeable {
                                                             float alpha,
                                                             boolean addHierarchy) throws IOException {
 
-        try (var graph = GraphIndexConverter.convertToHeap(immutableGraphIndex, buildScoreProvider, overflowRatio, alpha)) {
+        var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
+
+        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, overflowRatio, diversityProvider);) {
+
             GraphIndexBuilder builder = new GraphIndexBuilder(
                     buildScoreProvider,
                     newVectors.dimension(),
