@@ -23,14 +23,21 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.quantization.NVQuantization;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.IntFunction;
+
+import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
 /**
  * Example demonstrating how to use parallel writes with OnDiskGraphIndexWriter.
@@ -54,27 +61,47 @@ import java.util.function.IntFunction;
 public class ParallelWriteExample {
     
     /**
-     * Example: Benchmark comparison between sequential and parallel writes.
+     * Benchmark comparison between sequential and parallel writes using NVQ + FUSED_ADC features.
+     * This matches the configuration used in Grid.buildOnDisk for realistic performance testing.
      */
     public static void benchmarkComparison(ImmutableGraphIndex graph,
                                           Path sequentialPath,
                                           Path parallelPath,
-                                          RandomAccessVectorValues floatVectors) throws IOException {
+                                          RandomAccessVectorValues floatVectors,
+                                          PQVectors pqVectors) throws IOException {
 
-        var inlineVectors = new InlineVectors(floatVectors.dimension());
-        Map<FeatureId, IntFunction<Feature.State>> suppliers =
-            Feature.singleStateFactory(
-                FeatureId.INLINE_VECTORS,
-                ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal))
-            );
+        int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
+        var nvq = NVQuantization.compute(floatVectors, nSubVectors);
+        var pq = pqVectors.getCompressor();
+
+        // Create features: NVQ + FUSED_ADC
+        var nvqFeature = new NVQ(nvq);
+        var fusedAdcFeature = new FusedADC(graph.maxDegree(), pq);
+
+        // Build suppliers for inline features (NVQ only - FUSED_ADC needs neighbors)
+        Map<FeatureId, IntFunction<Feature.State>> inlineSuppliers = new EnumMap<>(FeatureId.class);
+        inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+
+        // FUSED_ADC supplier needs graph view, provided at write time
+        var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
 
         // Sequential write
+        System.out.printf("Writing with NVQ + FUSED_ADC features...%n");
         long sequentialStart = System.nanoTime();
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, sequentialPath)
                 .withParallelWrites(false)
-                .with(inlineVectors)
+                .with(nvqFeature)
+                .with(fusedAdcFeature)
+                .withMapper(identityMapper)
                 .build()) {
-            writer.write(suppliers);
+
+            var view = graph.getView();
+            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+            writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
+            writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
+
+            writer.write(writeSuppliers);
+            view.close();
         }
         long sequentialTime = System.nanoTime() - sequentialStart;
         System.out.printf("Sequential write: %.2f ms%n", sequentialTime / 1_000_000.0);
@@ -83,9 +110,18 @@ public class ParallelWriteExample {
         long parallelStart = System.nanoTime();
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, parallelPath)
                 .withParallelWrites(true)
-                .with(inlineVectors)
+                .with(nvqFeature)
+                .with(fusedAdcFeature)
+                .withMapper(identityMapper)
                 .build()) {
-            writer.write(suppliers);
+
+            var view = graph.getView();
+            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+            writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
+            writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
+
+            writer.write(writeSuppliers);
+            view.close();
         }
         long parallelTime = System.nanoTime() - parallelStart;
 
@@ -109,20 +145,30 @@ public class ParallelWriteExample {
         DataSet ds = DataSetLoader.loadDataSet(datasetName);
         System.out.printf("Loaded %d vectors of dimension %d%n", ds.baseVectors.size(), ds.getDimension());
 
-        // Build graph parameters
-        int M = 16;  // Max connections per node
-        int efConstruction = 100;  // Size of dynamic candidate list during construction
-        float neighborOverflow = 1.2f;
-        float alpha = 1.2f;  // Diversity pruning parameter
-        boolean addHierarchy = false;  // Don't add HNSW hierarchy for simplicity
-        boolean refineFinalGraph = true;  // Refine graph after construction
+        var floatVectors = ds.getBaseRavv();
 
-        System.out.printf("Building graph (M=%d, efConstruction=%d)...%n", M, efConstruction);
+        // Build PQ compression (matching Grid.buildOnDisk pattern)
+        System.out.println("Computing PQ compression...");
+        int pqM = floatVectors.dimension() / 8; // m = dimension / 8
+        boolean centerData = ds.similarityFunction == io.github.jbellis.jvector.vector.VectorSimilarityFunction.EUCLIDEAN;
+        var pq = ProductQuantization.compute(floatVectors, pqM, 256, centerData, UNWEIGHTED);
+        var pqVectors = (PQVectors) pq.encodeAll(floatVectors);
+        System.out.printf("PQ compression: %d subspaces, 256 clusters%n", pqM);
+
+        // Build graph parameters (matching typical benchmark settings)
+        int M = 32;
+        int efConstruction = 100;
+        float neighborOverflow = 1.2f;
+        float alpha = 1.2f;
+        boolean addHierarchy = false;
+        boolean refineFinalGraph = true;
+
+        System.out.printf("Building graph with PQ-compressed vectors (M=%d, efConstruction=%d)...%n", M, efConstruction);
         long buildStart = System.nanoTime();
 
-        var floatVectors = ds.getBaseRavv();
-        var scoreProvider = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
-        var builder = new GraphIndexBuilder(scoreProvider, floatVectors.dimension(), M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pqVectors);
+        var builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction,
+                neighborOverflow, alpha, addHierarchy, refineFinalGraph);
 
         // Add all vectors to the graph
         for (int i = 0; i < floatVectors.size(); i++) {
@@ -144,7 +190,7 @@ public class ParallelWriteExample {
             System.out.println("\n=== Testing Write Performance ===");
 
             // Run benchmark comparison
-            benchmarkComparison(graph, sequentialPath, parallelPath, floatVectors);
+            benchmarkComparison(graph, sequentialPath, parallelPath, floatVectors, pqVectors);
 
             // Report file sizes
             long seqSize = Files.size(sequentialPath);
