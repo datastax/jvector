@@ -498,6 +498,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * Saves the graph to the given DataOutput for reloading into memory later
      */
     @Experimental
+    @Deprecated
     public void save(DataOutput out) throws IOException {
         if (!allMutationsCompleted()) {
             throw new IllegalStateException("Cannot save a graph with pending mutations. Call cleanup() first");
@@ -539,6 +540,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * Saves the graph to the given DataOutput for reloading into memory later
      */
     @Experimental
+    @Deprecated
     public static OnHeapGraphIndex load(RandomAccessReader in, double overflowRatio, DiversityProvider diversityProvider) throws IOException {
         int magic = in.readInt(); // the magic number
         if (magic != OnHeapGraphIndex.MAGIC) {
