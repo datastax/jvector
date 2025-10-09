@@ -277,7 +277,7 @@ public class Grid {
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
-        indexBuildTimes.put(ds.name, totalTime);
+        indexBuildTimes.put(ds.getName(), totalTime);
 
         // open indexes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
@@ -590,9 +590,10 @@ public class Grid {
                                                         );
                                                         for (Metric metric : metricsList) {
                                                             Map<String, Object> metrics = java.util.Map.of(metric.getHeader(), metric.getValue());
-                                                            results.add(new BenchResult(ds.name, params, metrics));
+                                                            results.add(new BenchResult(ds.getName(), params, metrics));
                                                         }
-                                                       results.add(new BenchResult(ds.name, params, Map.of("Index Build Time", indexBuildTimes.get(ds.name))));
+                                                       results.add(new BenchResult(ds.getName(), params, Map.of("Index " +
+                                                               "Build Time", indexBuildTimes.get(ds.getName()))));
                                                     }
                                                 }
                                             }

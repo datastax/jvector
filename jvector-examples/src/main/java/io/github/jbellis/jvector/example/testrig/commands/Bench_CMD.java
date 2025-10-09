@@ -91,7 +91,8 @@ public class Bench_CMD implements Callable<Integer> {
       System.out.println("Using profile " + _profile);
 
       Catalog catalog = new TestDataSources().addOptionalCatalogs(optionalCatalogs).catalog();
-      DatasetEntry ds = catalog.findExact(_name).orElseThrow();
+      DatasetEntry ds = catalog.
+              findExact(_name).orElseThrow();
       //          VectorTestData.catalogs().catalog().findExact(_name).orElseThrow();
       BenchHarness harness = new BenchHarness(ds, _profile, concurrency);
 

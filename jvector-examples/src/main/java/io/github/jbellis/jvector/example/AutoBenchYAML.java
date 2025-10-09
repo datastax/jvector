@@ -17,26 +17,27 @@
 package io.github.jbellis.jvector.example;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
+import io.github.jbellis.jvector.example.util.*;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
-import io.github.jbellis.jvector.example.util.CheckpointManager;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.yaml.ConstructionParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicator;
+import io.nosqlbench.vectordata.discovery.TestDataSources;
+import io.nosqlbench.vectordata.discovery.TestDataView;
+import io.nosqlbench.vectordata.downloader.Catalog;
+import io.nosqlbench.vectordata.downloader.DatasetEntry;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -122,6 +123,13 @@ public class AutoBenchYAML {
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
+        Catalog testDataCatalog = new TestDataSources().configure()
+                .addOptionalCatalogs("~/.config/vectordata/catalogs.yaml")
+                .catalog();
+
+        DataSetSource datasetSource = DataSetSource.DEFAULT
+                .and(loadStreamingDataSource(testDataCatalog));
+
         // Process datasets from regex patterns
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
@@ -133,8 +141,9 @@ public class AutoBenchYAML {
 
                 logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
+                    DataSet ds = datasetSource.apply(datasetName)
+                            .orElseThrow(() -> new RuntimeException("Unknown dataset: " + datasetName));;
+                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {
@@ -212,4 +221,22 @@ public class AutoBenchYAML {
         }
     }
 
+    @NotNull
+    public static DataSetSource loadStreamingDataSource(Catalog catalog) {
+        return name -> {
+            Optional<DatasetEntry> dsentryOption = catalog.matchOne(name);
+            if (dsentryOption.isEmpty()) { return Optional.empty(); }
+            DatasetEntry dsentry = dsentryOption.orElseThrow(() -> new RuntimeException("Unknown dataset: " + name));
+            TestDataView tdv = dsentry.select().profile(name);
+            System.out.println("prebuffering dataset (assumed performance oriented testing)");
+            CompletableFuture<Void> statusFuture = tdv.getBaseVectors().orElseThrow().prebuffer();
+            if (statusFuture instanceof ProgressIndicator<?>) {
+                ((ProgressIndicator<?>)statusFuture).monitorProgress(1000);
+            }
+
+            TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
+            System.out.println("Loaded " + tdw.getName() + " from streaming source, with base vectors prebuffered");
+            return Optional.of(tdw);
+        };
+    }
 }

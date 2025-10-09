@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.example.util.DataSetSource;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.nosqlbench.vectordata.discovery.TestDataSources;
+import io.nosqlbench.vectordata.downloader.Catalog;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -46,7 +48,12 @@ public class BenchYAML {
         var pattern = Pattern.compile(regex);
 
         var datasetCollection = DatasetCollection.load();
-        DataSetSource datasetSource = DataSetLoader.DEFAULT;
+        Catalog testDataCatalog = new TestDataSources().configure()
+                .addOptionalCatalogs("~/.config/vectordata/catalogs.yaml")
+                .catalog();
+        DataSetSource datasetSource = DataSetSource.DEFAULT
+                .and(AutoBenchYAML.loadStreamingDataSource(testDataCatalog));
+
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         List<MultiConfig> allConfigs = new ArrayList<>();
@@ -56,6 +63,7 @@ public class BenchYAML {
 
             for (var datasetName : datasetNames) {
                 String finalDatasetName = datasetName;
+
                 DataSet ds = datasetSource.apply(datasetName)
                     .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown dataset: " + finalDatasetName));
@@ -79,35 +87,19 @@ public class BenchYAML {
             }
         }
 
-        // TODO: Reconcile these flows
-//        for (var datasetName : datasetNames) {
-//            String finalDatasetName = datasetName;
-//            DataSet ds = datasetSource.apply(datasetName)
-//                    .orElseThrow(() -> new IllegalArgumentException(
-//                            "Unknown dataset: " + finalDatasetName));
-//            // DataSet ds = DataSetLoader.loadDataSet(datasetName);
+        // Execute tests for all the mapped datasets and configs
 
+        for (var config : allConfigs) {
+        final String datasetName = config.dataset;
 
-            for (var config : allConfigs) {
-            String datasetName = config.dataset;
+            DataSet ds = datasetSource.apply(datasetName)
+                .orElseThrow(() -> new IllegalArgumentException(
+                    "Unknown dataset: " + datasetName));
 
-                DataSet ds = datasetSource.apply(datasetName)
-                    .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown dataset: " + datasetName));
-                // DataSet ds = DataSetLoader.loadDataSet(datasetName);
-            DataSet ds = DataSetLoader.loadDataSet(datasetName);
-
-                // TODO: Reconcile these flows
-
-//                if (datasetName.endsWith(".hdf5")) {
-//                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
-//                }
-//                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-
-                Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+                config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
         }
     }
 }

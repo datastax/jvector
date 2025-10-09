@@ -23,15 +23,13 @@ import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -49,7 +47,7 @@ import java.util.concurrent.TimeUnit;
 @Measurement(iterations = 3)
 @Threads(1)
 public class PQDistanceCalculationBenchmark {
-    private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationBenchmark.class);
+    private static final Logger log = LogManager.getLogger(PQDistanceCalculationBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
 
