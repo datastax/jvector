@@ -26,3 +26,4 @@ scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/*.yml
 local/*
+*/target/*
