@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
@@ -983,6 +984,7 @@ public class GraphIndexBuilder implements Closeable {
      * @return the in-memory representation of the graph index.
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
+    @Experimental
     public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
