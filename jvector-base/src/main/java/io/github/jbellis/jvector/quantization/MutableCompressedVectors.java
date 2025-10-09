@@ -16,6 +16,11 @@
 
 package io.github.jbellis.jvector.quantization;
 
+/**
+ * Interface for mutable compressed vector storage that allows adding and modifying vectors.
+ *
+ * @param <T> the type of vectors to compress
+ */
 public interface MutableCompressedVectors<T> extends CompressedVectors {
     /**
      * Encode the given vector and set it at the given ordinal. Done without unnecessary copying.

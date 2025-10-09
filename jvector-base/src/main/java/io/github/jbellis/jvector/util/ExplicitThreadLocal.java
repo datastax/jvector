@@ -36,8 +36,16 @@ import java.util.function.Supplier;
  * ExplicitThreadLocal also implements AutoCloseable to cleanup non-GC'd resources.
  * <p>
  * ExplicitThreadLocal is a drop-in replacement for ThreadLocal, and is used in the same way.
+ *
+ * @param <U> the type of thread-local values stored in this instance
  */
 public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
+    /**
+     * Constructs an ExplicitThreadLocal.
+     */
+    protected ExplicitThreadLocal() {
+    }
+
     // thread id -> instance
     private final ConcurrentHashMap<Long, U> map = new ConcurrentHashMap<>();
 
@@ -46,10 +54,22 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
     // it just once here as a field instead.
     private final Function<Long, U> initialSupplier = k -> initialValue();
 
+    /**
+     * Returns the current thread's copy of this thread-local variable.
+     * If this is the first call by the current thread, initializes the value by calling {@link #initialValue()}.
+     *
+     * @return the current thread's value of this thread-local
+     */
     public U get() {
         return map.computeIfAbsent(Thread.currentThread().getId(), initialSupplier);
     }
 
+    /**
+     * Returns the initial value for this thread-local variable.
+     * This method will be invoked the first time a thread accesses the variable with {@link #get()}.
+     *
+     * @return the initial value for this thread-local
+     */
     protected abstract U initialValue();
 
     /**
@@ -67,6 +87,13 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
         map.clear();
     }
 
+    /**
+     * Creates an explicit thread local variable with the given initial value supplier.
+     *
+     * @param <U> the type of the thread local's value
+     * @param initialValue the supplier to be used to determine the initial value
+     * @return a new ExplicitThreadLocal instance
+     */
     public static <U> ExplicitThreadLocal<U> withInitial(Supplier<U> initialValue) {
         return new ExplicitThreadLocal<>() {
             @Override

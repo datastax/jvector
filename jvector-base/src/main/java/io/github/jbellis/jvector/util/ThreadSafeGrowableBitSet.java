@@ -32,10 +32,18 @@ public class ThreadSafeGrowableBitSet extends BitSet {
   private final java.util.BitSet bitSet;
   private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
+  /**
+   * Creates a new ThreadSafeGrowableBitSet wrapping an existing BitSet.
+   * @param bitSet the BitSet to wrap
+   */
   public ThreadSafeGrowableBitSet(java.util.BitSet bitSet) {
     this.bitSet = bitSet;
   }
 
+  /**
+   * Creates a new ThreadSafeGrowableBitSet with the specified initial capacity.
+   * @param initialBits the initial number of bits
+   */
   public ThreadSafeGrowableBitSet(int initialBits) {
     this.bitSet = new java.util.BitSet(initialBits);
   }
@@ -167,6 +175,10 @@ public class ThreadSafeGrowableBitSet extends BitSet {
     throw new UnsupportedOperationException();
   }
 
+  /**
+   * Creates a copy of this ThreadSafeGrowableBitSet.
+   * @return a new ThreadSafeGrowableBitSet with the same bits set
+   */
   public ThreadSafeGrowableBitSet copy() {
     lock.readLock().lock();
     try {

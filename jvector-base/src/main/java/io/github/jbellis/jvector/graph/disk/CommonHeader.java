@@ -61,10 +61,19 @@ public class CommonHeader {
 
     private static final int V4_MAX_LAYERS = 32;
 
+    /** The graph index format version */
     public final int version;
+
+    /** The vector dimension */
     public final int dimension;
+
+    /** The entry node id for graph traversal */
     public final int entryNode;
+
+    /** Information about each layer in the graph */
     public final List<LayerInfo> layerInfo;
+
+    /** The upper bound of node IDs (maximum node ID + 1) */
     public final int idUpperBound;
 
     CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
@@ -162,16 +171,36 @@ public class CommonHeader {
         return size * Integer.BYTES;
     }
 
+    /**
+     * Information about a single layer in a multi-layer graph.
+     */
     @VisibleForTesting
     public static class LayerInfo {
+        /** The number of nodes in this layer */
         public final int size;
+
+        /** The maximum degree (number of neighbors) for nodes in this layer */
         public final int degree;
 
+        /**
+         * Constructs layer information with the given size and degree.
+         *
+         * @param size the number of nodes in this layer
+         * @param degree the maximum degree for nodes in this layer
+         */
         public LayerInfo(int size, int degree) {
             this.size = size;
             this.degree = degree;
         }
 
+        /**
+         * Creates a list of LayerInfo from a graph, extracting size and degree information
+         * for each layer.
+         *
+         * @param graph the graph to extract layer information from
+         * @param mapper the ordinal mapper (currently unused but kept for API compatibility)
+         * @return a list of LayerInfo objects, one per layer
+         */
         public static List<LayerInfo> fromGraph(ImmutableGraphIndex graph, OrdinalMapper mapper) {
             return IntStream.rangeClosed(0, graph.getMaxLevel())
                     .mapToObj(i -> new LayerInfo(graph.size(i), graph.getDegree(i)))

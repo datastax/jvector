@@ -30,6 +30,8 @@ import java.util.stream.IntStream;
  * <p>
  * "Dense-ish" means that space is allocated for all keys from 0 to the highest key, but
  * it is valid to have gaps in the keys.  The value associated with "gap" keys is null.
+ *
+ * @param <T> the type of values stored in this map
  */
 public class DenseIntMap<T> implements IntMap<T> {
     // locking strategy:
@@ -40,6 +42,11 @@ public class DenseIntMap<T> implements IntMap<T> {
     private volatile AtomicReferenceArray<T> objects;
     private final AtomicInteger size;
 
+    /**
+     * Constructs a new DenseIntMap with the specified initial capacity.
+     *
+     * @param initialCapacity the initial capacity of the map
+     */
     public DenseIntMap(int initialCapacity) {
         objects = new AtomicReferenceArray<>(initialCapacity);
         size = new AtomicInteger();

@@ -32,7 +32,9 @@ final public class DefaultVectorizationProvider extends VectorizationProvider {
   private final VectorUtilSupport vectorUtilSupport;
   private final VectorTypeSupport vectorTypes;
 
-
+  /**
+   * Constructs a DefaultVectorizationProvider with scalar implementations.
+   */
   public DefaultVectorizationProvider() {
     vectorUtilSupport = new DefaultVectorUtilSupport();
     vectorTypes = new ArrayVectorProvider();

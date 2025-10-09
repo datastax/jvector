@@ -38,6 +38,11 @@ public class NVQ implements Feature {
     private final NVQScorer scorer;
     private final ThreadLocal<QuantizedVector> reusableQuantizedVector;
 
+    /**
+     * Constructs an NVQ feature with the given NVQuantization compressor.
+     *
+     * @param nvq the NVQuantization instance to use for encoding/decoding
+     */
     public NVQ(NVQuantization nvq) {
         this.nvq = nvq;
         scorer = new NVQScorer(this.nvq);
@@ -54,13 +59,30 @@ public class NVQ implements Feature {
         return nvq.compressorSize();
     }
 
+    /**
+     * Returns the size in bytes of a single NVQ-quantized vector.
+     *
+     * @return the feature size in bytes
+     */
     @Override
     public int featureSize() { return nvq.compressedVectorSize();}
 
+    /**
+     * Returns the dimensionality of the original uncompressed vectors.
+     *
+     * @return the vector dimension
+     */
     public int dimension() {
         return nvq.globalMean.length();
     }
 
+    /**
+     * Loads an NVQ feature from a reader.
+     *
+     * @param header the common header (unused but required by signature)
+     * @param reader the reader to load from
+     * @return the loaded NVQ feature
+     */
     static NVQ load(CommonHeader header, RandomAccessReader reader) {
         try {
             return new NVQ(NVQuantization.load(reader));
@@ -80,14 +102,33 @@ public class NVQ implements Feature {
         state.vector.write(out);
     }
 
+    /**
+     * Represents the state of an NVQ-quantized vector for a single node.
+     */
     public static class State implements Feature.State {
+        /**
+         * The quantized vector.
+         */
         public final QuantizedVector vector;
 
+        /**
+         * Constructs a State with the given quantized vector.
+         *
+         * @param vector the quantized vector
+         */
         public State(QuantizedVector vector) {
             this.vector = vector;
         }
     }
 
+    /**
+     * Creates a reranking score function that loads NVQ vectors from disk and computes exact scores.
+     *
+     * @param queryVector the query vector
+     * @param vsf the vector similarity function to use
+     * @param source the source to read NVQ vectors from
+     * @return an exact score function for reranking
+     */
     public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {

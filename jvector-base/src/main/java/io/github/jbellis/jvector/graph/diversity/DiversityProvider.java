@@ -24,9 +24,18 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 
+/**
+ * Provides diversity selection functionality for graph neighbors.
+ * Implementations determine which neighbors to retain to maintain graph quality.
+ */
 public interface DiversityProvider {
     /**
-     * update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
+     * Updates {@code selected} with the diverse members of {@code neighbors}. The {@code neighbors} array is not modified.
+     *
+     * @param neighbors the candidate neighbors to select from
+     * @param maxDegree the maximum number of neighbors to retain
+     * @param diverseBefore the index before which neighbors are already diverse and don't need re-checking
+     * @param selected a BitSet to update with the indices of selected diverse neighbors
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
     double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected);

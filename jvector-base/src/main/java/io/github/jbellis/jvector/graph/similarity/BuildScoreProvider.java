@@ -29,48 +29,51 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  * Encapsulates comparing node distances for GraphIndexBuilder.
  */
 public interface BuildScoreProvider {
+    /** Vector type support for creating and manipulating vectors. */
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     /**
-     * @return true if the primary score functions used for construction are exact.  This
-     * is modestly redundant, but it saves having to allocate new Search/Diversity provider
+     * Returns true if the primary score functions used for construction are exact.
+     * This is modestly redundant, but it saves having to allocate new Search/Diversity provider
      * objects in some hot construction loops.
+     * @return true if the primary score functions are exact, false if they are approximate
      */
     boolean isExact();
 
     /**
-     * @return the approximate centroid of the known nodes.  We use the closest node
-     * to this centroid as the graph entry point, so this is called when the entry point is deleted
+     * Returns the approximate centroid of the known nodes. The closest node to this centroid
+     * is used as the graph entry point, so this is called when the entry point is deleted
      * or every time the graph size doubles.
      * <p>
      * This is not called on a path that blocks searches or modifications, so it is okay for it to be O(N).
+     * @return the approximate centroid of the known nodes
      */
     VectorFloat<?> approximateCentroid();
 
     /**
-     * Create a search score provider to use *internally* during construction.
+     * Creates a search score provider to use internally during construction.
      * <p>
      * "Internally" means that this may differ from a typical SSP in that it may use
-     * approximate scores *without* reranking.  (In this case, reranking will be done
+     * approximate scores without reranking. (In this case, reranking will be done
      * separately by the ConcurrentNeighborSet diversity code.)
-     * <p>
      * @param vector the query vector to provide similarity scores against
+     * @return a SearchScoreProvider for the given query vector
      */
     SearchScoreProvider searchProviderFor(VectorFloat<?> vector);
 
     /**
-     * Create a search score provider to use *internally* during construction.
+     * Creates a search score provider to use internally during construction.
      * <p>
      * "Internally" means that this may differ from a typical SSP in that it may use
-     * approximate scores *without* reranking.  (In this case, reranking will be done
+     * approximate scores without reranking. (In this case, reranking will be done
      * separately by the ConcurrentNeighborSet diversity code.)
-     * <p>
      * @param node1 the graph node to provide similarity scores against
+     * @return a SearchScoreProvider for the given node
      */
     SearchScoreProvider searchProviderFor(int node1);
 
     /**
-     * Create a score provider to use internally during construction.
+     * Creates a score provider to use internally during construction.
      * <p>
      * The difference between the diversity provider and the search provider is
      * that the diversity provider is only expected to be used a few dozen times per node,
@@ -78,11 +81,16 @@ public interface BuildScoreProvider {
      * <p>
      * When scoring is approximate, the scores from the search and diversity provider
      * must be consistent, i.e. mixing different types of CompressedVectors will cause problems.
+     * @param node1 the graph node to provide diversity scores against
+     * @return a SearchScoreProvider for diversity computation
      */
     SearchScoreProvider diversityProviderFor(int node1);
 
     /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
+     * @param ravv the RandomAccessVectorValues providing access to vectors
+     * @param similarityFunction the similarity function to use for scoring
+     * @return a BuildScoreProvider that performs exact score comparisons
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
@@ -138,7 +146,11 @@ public interface BuildScoreProvider {
      * with reranking performed using RandomAccessVectorValues (which is intended to be
      * InlineVectorValues for building incrementally, but should technically
      * work with any RAVV implementation).
-     * This class is not thread safe, we should never publish its results to another thread.
+     * <p>
+     * This implementation is not thread safe; results should never be published to another thread.
+     * @param vsf the vector similarity function to use
+     * @param pqv the product quantized vectors
+     * @return a BuildScoreProvider that uses product quantization for approximate scoring
      */
     static BuildScoreProvider pqBuildScoreProvider(VectorSimilarityFunction vsf, PQVectors pqv) {
         int dimension = pqv.getOriginalSize() / Float.BYTES;
@@ -179,6 +191,13 @@ public interface BuildScoreProvider {
         };
     }
 
+    /**
+     * Returns a BSP that performs approximate score comparisons using binary quantization.
+     * Binary quantization compresses vectors to single bits and uses Hamming distance for
+     * similarity computation, providing a fast approximation suitable for cosine similarity.
+     * @param bqv the binary quantized vectors
+     * @return a BuildScoreProvider that uses binary quantization for approximate scoring
+     */
     static BuildScoreProvider bqBuildScoreProvider(BQVectors bqv) {
         return new BuildScoreProvider() {
             @Override

@@ -45,7 +45,11 @@ public class SimpleMappedReader extends ByteBufferReader {
         }
     }
 
-
+    /**
+     * Constructs a SimpleMappedReader wrapping the specified memory-mapped buffer.
+     *
+     * @param mbb the memory-mapped byte buffer to read from
+     */
     SimpleMappedReader(MappedByteBuffer mbb) {
         super(mbb);
     }
@@ -55,10 +59,24 @@ public class SimpleMappedReader extends ByteBufferReader {
         // Individual readers don't close anything
     }
 
+    /**
+     * Supplier that creates SimpleMappedReader instances from a memory-mapped file.
+     * The file is mapped into memory once during construction and shared across all readers.
+     */
     public static class Supplier implements ReaderSupplier {
+        /** The shared memory-mapped buffer for this file. */
         private final MappedByteBuffer buffer;
+        /** Unsafe instance for invoking the buffer cleaner when closing. */
         private static final Unsafe unsafe = getUnsafe();
 
+        /**
+         * Constructs a Supplier that memory-maps the file at the specified path.
+         * The entire file is loaded into memory. Files larger than 2GB are not supported.
+         *
+         * @param path the path to the file to map
+         * @throws IOException if an I/O error occurs
+         * @throws RuntimeException if the file is larger than 2GB
+         */
         public Supplier(Path path) throws IOException {
             try (var raf = new RandomAccessFile(path.toString(), "r")) {
                 if (raf.length() > Integer.MAX_VALUE) {

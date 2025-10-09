@@ -46,12 +46,17 @@ public abstract class VectorizationProvider {
   /**
    * Returns the default instance of the provider matching vectorization possibilities of actual
    * runtime.
+   *
+   * @return the VectorizationProvider instance for the current runtime
    */
   public static VectorizationProvider getInstance() {
     return Objects.requireNonNull(
         Holder.INSTANCE, "call to getInstance() from subclass of VectorizationProvider");
   }
 
+  /**
+   * Protected constructor for subclasses.
+   */
   protected VectorizationProvider() {
 
   }
@@ -59,17 +64,22 @@ public abstract class VectorizationProvider {
   /**
    * Returns a singleton (stateless) {@link VectorUtilSupport} to support SIMD usage in {@link
    * VectorUtil}.
+   *
+   * @return the VectorUtilSupport implementation
    */
   public abstract VectorUtilSupport getVectorUtilSupport();
 
   /**
    * Returns a singleton (stateless) {@link VectorTypeSupport} which works with the corresponding {@link VectorUtilSupport}
-   * implementation
+   * implementation.
+   *
+   * @return the VectorTypeSupport implementation
    */
   public abstract VectorTypeSupport getVectorTypeSupport();
 
   // *** Lookup mechanism: ***
 
+  /** Logger for vectorization provider */
   protected static final Logger LOG = Logger.getLogger(VectorizationProvider.class.getName());
 
   /** The minimal version of Java that has the bugfix for JDK-8301190. */

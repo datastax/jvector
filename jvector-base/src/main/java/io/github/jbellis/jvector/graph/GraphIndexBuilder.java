@@ -90,6 +90,7 @@ public class GraphIndexBuilder implements Closeable {
      *
      * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
      *                         different view over those vectors than the one used to add via addGraphNode.
+     * @param similarityFunction the vector similarity function to use for comparing vectors
      * @param M                – the maximum number of connections a node can have
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
      * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
@@ -123,6 +124,7 @@ public class GraphIndexBuilder implements Closeable {
      *
      * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
      *                         different view over those vectors than the one used to add via addGraphNode.
+     * @param similarityFunction the vector similarity function to use for comparing vectors
      * @param M                – the maximum number of connections a node can have
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
      * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
@@ -159,6 +161,7 @@ public class GraphIndexBuilder implements Closeable {
      * By default, refineFinalGraph = true.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param dimension        the dimensionality of the vectors in the graph
      * @param M                the maximum number of connections a node can have
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
      * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
@@ -185,6 +188,7 @@ public class GraphIndexBuilder implements Closeable {
      * Default executor pools are used.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param dimension        the dimensionality of the vectors in the graph
      * @param M                the maximum number of connections a node can have
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
      * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
@@ -212,6 +216,7 @@ public class GraphIndexBuilder implements Closeable {
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param dimension        the dimensionality of the vectors in the graph
      * @param M                the maximum number of connections a node can have
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
      * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
@@ -245,6 +250,7 @@ public class GraphIndexBuilder implements Closeable {
      * Default executor pools are used.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param dimension        the dimensionality of the vectors in the graph
      * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
      *      *                  are specified than the number of layers, the last entry is used for all remaining layers.
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
@@ -273,6 +279,7 @@ public class GraphIndexBuilder implements Closeable {
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param dimension        the dimensionality of the vectors in the graph
      * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
      *                         are specified than the number of layers, the last entry is used for all remaining layers.
      * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
@@ -338,7 +345,14 @@ public class GraphIndexBuilder implements Closeable {
         this.rng = new Random(0);
     }
 
-    // used by Cassandra when it fine-tunes the PQ codebook
+    /**
+     * Creates a new GraphIndexBuilder by rescoring an existing graph with a different score provider.
+     * Used by Cassandra when it fine-tunes the PQ codebook.
+     *
+     * @param other the existing GraphIndexBuilder to rescore
+     * @param newProvider the new score provider to use for rescoring
+     * @return a new GraphIndexBuilder with the same graph structure but new scores
+     */
     public static GraphIndexBuilder rescore(GraphIndexBuilder other, BuildScoreProvider newProvider) {
         var newBuilder = new GraphIndexBuilder(newProvider,
                 other.dimension,
@@ -384,6 +398,12 @@ public class GraphIndexBuilder implements Closeable {
         return newBuilder;
     }
 
+    /**
+     * Builds a complete graph index from the given vector values.
+     *
+     * @param ravv the random access vector values to build the index from
+     * @return an immutable graph index containing all vectors
+     */
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
@@ -489,6 +509,11 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
+    /**
+     * Returns the current state of the graph being built.
+     *
+     * @return the mutable graph index
+     */
     public ImmutableGraphIndex getGraph() {
         return graph;
     }
@@ -497,11 +522,21 @@ public class GraphIndexBuilder implements Closeable {
      * Number of inserts in progress, across all threads.  Useful as a sanity check
      * when calling non-threadsafe methods like cleanup().  (Do not use it to try to
      * _prevent_ races, only to detect them.)
+     *
+     * @return the number of insertions currently in progress
      */
     public int insertsInProgress() {
         return insertionsInProgress.size();
     }
 
+    /**
+     * Adds a node to the graph by retrieving its vector from the given vector values.
+     *
+     * @param node the node identifier to add
+     * @param ravv the vector values to retrieve the vector from
+     * @return an estimate of the number of extra bytes used by the graph after adding the node
+     * @deprecated Use {@link #addGraphNode(int, VectorFloat)} directly
+     */
     @Deprecated
     public long addGraphNode(int node, RandomAccessVectorValues ravv) {
         return addGraphNode(node, ravv.getVector(node));
@@ -622,11 +657,23 @@ public class GraphIndexBuilder implements Closeable {
         updateNeighbors(level, node, natural, concurrent);
     }
 
+    /**
+     * Sets the entry point of the graph to a specific node at a given level.
+     * This method is visible for testing purposes only.
+     *
+     * @param level the level of the entry point
+     * @param node the node identifier to use as the entry point
+     */
     @VisibleForTesting
     public void setEntryPoint(int level, int node) {
         graph.updateEntryNode(new NodeAtLevel(level, node));
     }
 
+    /**
+     * Marks a node as deleted. The node will be removed from the graph during the next cleanup.
+     *
+     * @param node the node identifier to mark as deleted
+     */
     public void markNodeDeleted(int node) {
         graph.markDeleted(node);
     }
@@ -797,19 +844,42 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
+    /**
+     * A Bits implementation that excludes a single specified index.
+     * Used during graph construction to exclude the node being inserted from neighbor candidates.
+     */
     private static class ExcludingBits implements Bits {
         private final int excluded;
 
+        /**
+         * Creates a new ExcludingBits that excludes the specified index.
+         *
+         * @param excluded the index to exclude
+         */
         public ExcludingBits(int excluded) {
             this.excluded = excluded;
         }
 
+        /**
+         * Returns true if the index is not the excluded index.
+         *
+         * @param index the index to check
+         * @return true if the index is not excluded, false otherwise
+         */
         @Override
         public boolean get(int index) {
             return index != excluded;
         }
     }
 
+    /**
+     * Loads a graph from the given input stream.
+     *
+     * @param in the input stream to read from
+     * @throws IOException if an I/O error occurs
+     * @throws IllegalStateException if the graph is not empty
+     * @deprecated This method is deprecated and will be removed in a future version
+     */
     @Deprecated
     public void load(RandomAccessReader in) throws IOException {
         if (graph.size(0) != 0) {
@@ -829,6 +899,14 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
+    /**
+     * Loads a version 4 format graph from the given input stream.
+     *
+     * @param in the input stream to read from
+     * @throws IOException if an I/O error occurs
+     * @throws IllegalStateException if the graph is not empty
+     * @deprecated This method is deprecated and will be removed in a future version
+     */
     @Deprecated
     private void loadV4(RandomAccessReader in) throws IOException {
         if (graph.size(0) != 0) {
@@ -876,6 +954,15 @@ public class GraphIndexBuilder implements Closeable {
         graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
     }
 
+    /**
+     * Loads a version 3 format graph from the given input stream.
+     *
+     * @param in the input stream to read from
+     * @param size the number of nodes in the graph
+     * @throws IOException if an I/O error occurs
+     * @throws IllegalStateException if the graph is not empty
+     * @deprecated This method is deprecated and will be removed in a future version
+     */
     @Deprecated
     private void loadV3(RandomAccessReader in, int size) throws IOException {
         if (graph.size() != 0) {

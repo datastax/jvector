@@ -55,6 +55,16 @@ import java.util.function.IntFunction;
  */
 public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
 
+    /**
+     * Constructs an OnDiskSequentialGraphIndexWriter with the specified parameters.
+     *
+     * @param out the output writer
+     * @param version the serialization version
+     * @param graph the graph to serialize
+     * @param oldToNewOrdinals mapper for converting between original and on-disk ordinals
+     * @param dimension the dimensionality of vectors in the graph
+     * @param features the features to include in the serialized graph
+     */
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
                                              ImmutableGraphIndex graph,
@@ -71,12 +81,18 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     }
 
     /**
+     * Writes the entire graph index to disk sequentially, including headers, features, and adjacency data.
      * Note: There are several limitations you should be aware of when using:
      * <ul>
-     * <li> This method doesn't persist (e.g. flush) the output streams.  The caller is responsible for doing so.
-     * <li> This method does not support writing to "holes" in the ordinal space.  If your ordinal mapper
+     * <li> This method doesn't persist (e.g. flush) the output streams. The caller is responsible for doing so.
+     * <li> This method does not support writing to "holes" in the ordinal space. If your ordinal mapper
      *      maps a new ordinal to an old ordinal that does not exist in the graph, an exception will be thrown.
      * </ul>
+     *
+     * @param featureStateSuppliers functions that provide feature state for each node ordinal
+     * @throws IOException if an I/O error occurs during writing
+     * @throws IllegalArgumentException if the graph contains deleted nodes or if a feature is not configured
+     * @throws IllegalStateException if the ordinal mapper doesn't cover all nodes, maps to holes, or if nodes/neighbors are invalid
      */
     @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
@@ -167,6 +183,12 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
+        /**
+         * Constructs a Builder for writing a graph index using a sequential writer.
+         *
+         * @param graphIndex the graph to write
+         * @param out the output writer to use
+         */
         public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }

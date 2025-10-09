@@ -27,14 +27,21 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
 
+/**
+ * A collection of vectors compressed using NVQ (Non-uniform Vector Quantization).
+ * This class implements CompressedVectors and provides scoring and serialization capabilities.
+ */
 public class NVQVectors implements CompressedVectors {
     final NVQuantization nvq;
     final NVQScorer scorer;
     final NVQuantization.QuantizedVector[] compressedVectors;
 
     /**
-     * Initialize the NVQVectors with an initial array of vectors.  This array may be
+     * Initializes the NVQVectors with an initial array of vectors. This array may be
      * mutated, but caller is responsible for thread safety issues when doing so.
+     *
+     * @param nvq the NVQuantization compressor used for these vectors
+     * @param compressedVectors the array of quantized vectors
      */
     public NVQVectors(NVQuantization nvq, NVQuantization.QuantizedVector[] compressedVectors) {
         this.nvq = nvq;
@@ -42,11 +49,23 @@ public class NVQVectors implements CompressedVectors {
         this.compressedVectors = compressedVectors;
     }
 
+    /**
+     * Returns the number of compressed vectors in this collection.
+     *
+     * @return the count of compressed vectors
+     */
     @Override
     public int count() {
         return compressedVectors.length;
     }
 
+    /**
+     * Serializes this NVQVectors instance to a DataOutput.
+     *
+     * @param out the DataOutput to write to
+     * @param version the serialization version to use
+     * @throws IOException if an I/O error occurs during writing
+     */
     @Override
     public void write(DataOutput out, int version) throws IOException
     {
@@ -60,6 +79,13 @@ public class NVQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Deserializes an NVQVectors instance from a RandomAccessReader.
+     *
+     * @param in the RandomAccessReader to read from
+     * @return the deserialized NVQVectors instance
+     * @throws IOException if an I/O error occurs during reading or if the vector count is invalid
+     */
     public static NVQVectors load(RandomAccessReader in) throws IOException {
         var nvq = NVQuantization.load(in);
 
@@ -77,6 +103,14 @@ public class NVQVectors implements CompressedVectors {
         return new NVQVectors(nvq, compressedVectors);
     }
 
+    /**
+     * Deserializes an NVQVectors instance from a RandomAccessReader starting at a specific offset.
+     *
+     * @param in the RandomAccessReader to read from
+     * @param offset the byte offset to start reading from
+     * @return the deserialized NVQVectors instance
+     * @throws IOException if an I/O error occurs during reading
+     */
     public static NVQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
         return load(in);
@@ -113,10 +147,21 @@ public class NVQVectors implements CompressedVectors {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Returns the quantized vector at the specified ordinal.
+     *
+     * @param ordinal the index of the vector to retrieve
+     * @return the quantized vector at the specified index
+     */
     public NVQuantization.QuantizedVector get(int ordinal) {
         return compressedVectors[ordinal];
     }
 
+    /**
+     * Returns the NVQuantization compressor used by this collection.
+     *
+     * @return the NVQuantization instance
+     */
     public NVQuantization getNVQuantization() {
         return nvq;
     }

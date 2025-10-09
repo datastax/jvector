@@ -24,6 +24,17 @@
 
 package io.github.jbellis.jvector.util;
 
+/**
+ * An interface for objects that can report their memory usage.
+ * This allows tracking of RAM consumption for data structures and cached objects.
+ */
 public interface Accountable {
+    /**
+     * Returns an estimate of the memory usage of this object in bytes.
+     * The estimate should include the object itself and any referenced objects
+     * that are not shared with other data structures.
+     *
+     * @return the estimated memory usage in bytes
+     */
     long ramBytesUsed();
 }

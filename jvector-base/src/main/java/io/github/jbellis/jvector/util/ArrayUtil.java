@@ -30,6 +30,10 @@ import java.lang.reflect.Array;
  * Methods for manipulating arrays.
  */
 public final class ArrayUtil {
+  /**
+   * The maximum length of an array that can be allocated.
+   * This accounts for the array header size to prevent integer overflow.
+   */
   public static final int MAX_ARRAY_LENGTH =
       Integer.MAX_VALUE - RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
 
@@ -48,8 +52,10 @@ public final class ArrayUtil {
    * specifies the radix to use when parsing the value.
    *
    * @param chars a string representation of an int quantity.
+   * @param offset the starting position in the char array.
+   * @param len the number of characters to parse.
    * @param radix the base to use for conversion.
-   * @return int the value represented by the argument
+   * @return the value represented by the argument
    * @throws NumberFormatException if the argument could not be parsed as an int quantity.
    */
   public static int parseInt(char[] chars, int offset, int len, int radix)
@@ -72,6 +78,21 @@ public final class ArrayUtil {
     return parse(chars, offset, len, radix, negative);
   }
 
+  /**
+   * Internal parsing implementation that converts characters to an integer value.
+   * <p>
+   * This method performs the actual numeric conversion after initial validation has been done.
+   * All arithmetic is performed in negative space to handle the full range of int values including
+   * Integer.MIN_VALUE.
+   *
+   * @param chars the character array containing the numeric representation
+   * @param offset the starting position in the char array
+   * @param len the number of characters to parse
+   * @param radix the base to use for conversion (must be between Character.MIN_RADIX and Character.MAX_RADIX)
+   * @param negative whether the result should be negative
+   * @return the parsed integer value
+   * @throws NumberFormatException if the characters could not be parsed as an int quantity
+   */
   private static int parse(char[] chars, int offset, int len, int radix, boolean negative)
       throws NumberFormatException {
     int max = Integer.MIN_VALUE / radix;
@@ -118,6 +139,7 @@ public final class ArrayUtil {
    * @param minTargetSize Minimum required value to be returned.
    * @param bytesPerElement Bytes used by each element of the array. See constants in {@link
    *     RamUsageEstimator}.
+   * @return the calculated array size that is at least minTargetSize, optimized for memory alignment.
    */
   public static int oversize(int minTargetSize, int bytesPerElement) {
 
@@ -202,7 +224,12 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param <T> the component type of the array
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static <T> T[] growExact(T[] array, int newLength) {
     Class<? extends Object[]> type = array.getClass();
@@ -217,7 +244,12 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param <T> the component type of the array
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static <T> T[] grow(T[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -228,7 +260,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static short[] growExact(short[] array, int newLength) {
     short[] copy = new short[newLength];
@@ -238,7 +274,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static short[] grow(short[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -248,7 +288,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static float[] growExact(float[] array, int newLength) {
     float[] copy = new float[newLength];
@@ -258,7 +302,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static float[] grow(float[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -270,7 +318,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static double[] growExact(double[] array, int newLength) {
     double[] copy = new double[newLength];
@@ -280,7 +332,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static double[] grow(double[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -290,7 +346,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static int[] growExact(int[] array, int newLength) {
     int[] copy = new int[newLength];
@@ -300,7 +360,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static int[] grow(int[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -309,13 +373,22 @@ public final class ArrayUtil {
     } else return array;
   }
 
-  /** Returns a larger array, generally over-allocating exponentially */
+  /**
+   * Returns a larger array, generally over-allocating exponentially.
+   *
+   * @param array the original array to grow
+   * @return a new array larger than the original
+   */
   public static int[] grow(int[] array) {
     return grow(array, 1 + array.length);
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static long[] growExact(long[] array, int newLength) {
     long[] copy = new long[newLength];
@@ -325,7 +398,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static long[] grow(long[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -335,7 +412,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static byte[] growExact(byte[] array, int newLength) {
     byte[] copy = new byte[newLength];
@@ -345,7 +426,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static byte[] grow(byte[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -355,7 +440,11 @@ public final class ArrayUtil {
   }
 
   /**
-   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating
+   * Returns a new array whose size is exact the specified {@code newLength} without over-allocating.
+   *
+   * @param array the original array to grow
+   * @param newLength the exact size of the new array
+   * @return a new array with the specified length containing the original array's elements
    */
   public static char[] growExact(char[] array, int newLength) {
     char[] copy = new char[newLength];
@@ -365,7 +454,11 @@ public final class ArrayUtil {
 
   /**
    * Returns an array whose size is at least {@code minSize}, generally over-allocating
-   * exponentially
+   * exponentially.
+   *
+   * @param array the original array to grow
+   * @param minSize the minimum required size
+   * @return the original array if it is already large enough, otherwise a new larger array
    */
   public static char[] grow(char[] array, int minSize) {
     assert minSize >= 0 : "size must be positive (got " + minSize + "): likely integer overflow?";
@@ -380,6 +473,7 @@ public final class ArrayUtil {
    * @param array the input array
    * @param from the initial index of range to be copied (inclusive)
    * @param to the final index of range to be copied (exclusive)
+   * @return a new array containing the specified range from the input array
    */
   public static byte[] copyOfSubArray(byte[] array, int from, int to) {
     final byte[] copy = new byte[to - from];
@@ -393,6 +487,7 @@ public final class ArrayUtil {
    * @param array the input array
    * @param from the initial index of range to be copied (inclusive)
    * @param to the final index of range to be copied (exclusive)
+   * @return a new array containing the specified range from the input array
    */
   public static int[] copyOfSubArray(int[] array, int from, int to) {
     final int[] copy = new int[to - from];
@@ -406,6 +501,7 @@ public final class ArrayUtil {
    * @param array the input array
    * @param from the initial index of range to be copied (inclusive)
    * @param to the final index of range to be copied (exclusive)
+   * @return a new array containing the specified range from the input array
    */
   public static float[] copyOfSubArray(float[] array, int from, int to) {
     final float[] copy = new float[to - from];
@@ -416,9 +512,11 @@ public final class ArrayUtil {
   /**
    * Copies the specified range of the given array into a new sub array.
    *
+   * @param <T> the component type of the array
    * @param array the input array
    * @param from the initial index of range to be copied (inclusive)
    * @param to the final index of range to be copied (exclusive)
+   * @return a new array containing the specified range from the input array
    */
   public static <T> T[] copyOfSubArray(T[] array, int from, int to) {
     final int subLength = to - from;
@@ -438,6 +536,7 @@ public final class ArrayUtil {
    * @param array the input array
    * @param from the initial index of range to be copied (inclusive)
    * @param to the final index of range to be copied (exclusive)
+   * @return a new array containing the specified range from the input array
    */
   public static long[] copyOfSubArray(long[] array, int from, int to) {
     final long[] copy = new long[to - from];

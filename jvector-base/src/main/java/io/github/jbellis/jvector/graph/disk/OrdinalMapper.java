@@ -34,42 +34,73 @@ public interface OrdinalMapper {
     int OMITTED = Integer.MIN_VALUE;
 
     /**
-     * OnDiskGraphIndexWriter will iterate from 0..maxOrdinal(), inclusive.
+     * Returns the maximum ordinal value (inclusive) that OnDiskGraphIndexWriter will iterate over.
+     *
+     * @return the maximum ordinal value
      */
     int maxOrdinal();
 
     /**
-     * Map old ordinals (in the graph as constructed) to new ordinals (written to disk).
+     * Maps old ordinals (in the graph as constructed) to new ordinals (written to disk).
      * Should always return a valid ordinal (between 0 and maxOrdinal).
+     *
+     * @param oldOrdinal the original ordinal in the graph
+     * @return the new ordinal to use when writing to disk
      */
     int oldToNew(int oldOrdinal);
 
     /**
-     * Map new ordinals (written to disk) to old ordinals (in the graph as constructed).
+     * Maps new ordinals (written to disk) to old ordinals (in the graph as constructed).
      * May return OMITTED if there is a "hole" at the new ordinal.
+     *
+     * @param newOrdinal the new ordinal written to disk
+     * @return the original ordinal in the graph, or OMITTED if there is a hole
      */
     int newToOld(int newOrdinal);
 
     /**
      * A mapper that leaves the original ordinals unchanged.
+     * This is the simplest implementation where old and new ordinals are identical.
      */
     class IdentityMapper implements OrdinalMapper {
         private final int maxOrdinal;
 
+        /**
+         * Constructs an IdentityMapper with the specified maximum ordinal.
+         *
+         * @param maxOrdinal the maximum ordinal value (inclusive)
+         */
         public IdentityMapper(int maxOrdinal) {
             this.maxOrdinal = maxOrdinal;
         }
 
+        /**
+         * Returns the maximum ordinal value.
+         *
+         * @return the maximum ordinal
+         */
         @Override
         public int maxOrdinal() {
             return maxOrdinal;
         }
 
+        /**
+         * Maps an old ordinal to a new ordinal. For IdentityMapper, returns the same value.
+         *
+         * @param oldOrdinal the original ordinal
+         * @return the same ordinal unchanged
+         */
         @Override
         public int oldToNew(int oldOrdinal) {
             return oldOrdinal;
         }
 
+        /**
+         * Maps a new ordinal to an old ordinal. For IdentityMapper, returns the same value.
+         *
+         * @param newOrdinal the new ordinal
+         * @return the same ordinal unchanged
+         */
         @Override
         public int newToOld(int newOrdinal) {
             return newOrdinal;
@@ -78,12 +109,19 @@ public interface OrdinalMapper {
 
     /**
      * Converts a Map of old to new ordinals into an OrdinalMapper.
+     * This implementation allows for arbitrary remapping and supports gaps (omitted ordinals).
      */
     class MapMapper implements OrdinalMapper {
         private final int maxOrdinal;
         private final Map<Integer, Integer> oldToNew;
         private final Int2IntHashMap newToOld;
 
+        /**
+         * Constructs a MapMapper from a map of old to new ordinals.
+         * The mapper builds a reverse mapping and determines the maximum new ordinal.
+         *
+         * @param oldToNew a map from original ordinals to new ordinals
+         */
         public MapMapper(Map<Integer, Integer> oldToNew) {
             this.oldToNew = oldToNew;
             this.newToOld = new Int2IntHashMap(oldToNew.size(), 0.65f, OMITTED);
@@ -91,16 +129,34 @@ public interface OrdinalMapper {
             this.maxOrdinal = oldToNew.values().stream().mapToInt(i -> i).max().orElse(-1);
         }
 
+        /**
+         * Returns the maximum new ordinal value.
+         *
+         * @return the maximum ordinal
+         */
         @Override
         public int maxOrdinal() {
             return maxOrdinal;
         }
 
+        /**
+         * Maps an old ordinal to its corresponding new ordinal.
+         *
+         * @param oldOrdinal the original ordinal
+         * @return the new ordinal corresponding to the old ordinal
+         */
         @Override
         public int oldToNew(int oldOrdinal) {
             return oldToNew.get(oldOrdinal);
         }
 
+        /**
+         * Maps a new ordinal back to its original ordinal.
+         * Returns OMITTED if there is no mapping for the new ordinal.
+         *
+         * @param newOrdinal the new ordinal
+         * @return the original ordinal, or OMITTED if there is a gap
+         */
         @Override
         public int newToOld(int newOrdinal) {
             return newToOld.get(newOrdinal);

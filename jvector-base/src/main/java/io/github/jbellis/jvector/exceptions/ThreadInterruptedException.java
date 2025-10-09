@@ -24,7 +24,16 @@
 
 package io.github.jbellis.jvector.exceptions;
 
+/**
+ * Wraps an {@link InterruptedException} as an unchecked exception.
+ * This exception is thrown when a thread is interrupted during an operation
+ * that does not declare {@code InterruptedException} in its signature.
+ */
 public final class ThreadInterruptedException extends RuntimeException {
+  /**
+   * Constructs a new ThreadInterruptedException wrapping the given InterruptedException.
+   * @param ie the InterruptedException that caused this exception
+   */
   public ThreadInterruptedException(InterruptedException ie) {
     super(ie);
   }

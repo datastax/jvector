@@ -24,10 +24,22 @@ import java.util.Arrays;
  * A {@link ByteSequence} implementation that represents a slice of another {@link ByteSequence}.
  */
 public class ArraySliceByteSequence implements ByteSequence<byte[]> {
+    /** The underlying byte sequence from which this slice is taken */
     private final ByteSequence<byte[]> data;
+    /** The offset within the underlying sequence where this slice begins */
     private final int offset;
+    /** The length of this slice in bytes */
     private final int length;
 
+    /**
+     * Creates a new byte sequence slice from an existing byte sequence.
+     *
+     * @param data the underlying byte sequence to slice from
+     * @param offset the starting position within the underlying sequence
+     * @param length the number of bytes in this slice
+     * @throws IllegalArgumentException if offset or length are negative, or if the slice
+     *         extends beyond the bounds of the underlying sequence
+     */
     public ArraySliceByteSequence(ByteSequence<byte[]> data, int offset, int length) {
         if (offset < 0 || length < 0 || offset + length > data.length()) {
             throw new IllegalArgumentException("Invalid offset or length");

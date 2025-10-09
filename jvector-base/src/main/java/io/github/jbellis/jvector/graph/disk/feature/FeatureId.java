@@ -31,12 +31,22 @@ import java.util.function.BiFunction;
  * These are typically mapped to a Feature.
  */
 public enum FeatureId {
+    /** Vectors stored inline with the graph structure */
     INLINE_VECTORS(InlineVectors::load),
+
+    /** Fused asymmetric distance computation for efficient similarity search */
     FUSED_ADC(FusedADC::load),
+
+    /** Vectors compressed using Neighborhood Vector Quantization */
     NVQ_VECTORS(NVQ::load),
+
+    /** Vectors stored separately from the graph structure */
     SEPARATED_VECTORS(SeparatedVectors::load),
+
+    /** NVQ-compressed vectors stored separately from the graph structure */
     SEPARATED_NVQ(SeparatedNVQ::load);
 
+    /** A set containing all available feature IDs */
     public static final Set<FeatureId> ALL = Collections.unmodifiableSet(EnumSet.allOf(FeatureId.class));
 
     private final BiFunction<CommonHeader, RandomAccessReader, Feature> loader;
@@ -45,10 +55,23 @@ public enum FeatureId {
         this.loader = loader;
     }
 
+    /**
+     * Loads the Feature implementation associated with this FeatureId from disk.
+     *
+     * @param header the common header containing graph metadata
+     * @param reader the reader for accessing the on-disk data
+     * @return the loaded Feature instance
+     */
     public Feature load(CommonHeader header, RandomAccessReader reader) {
         return loader.apply(header, reader);
     }
 
+    /**
+     * Deserializes a set of FeatureIds from a bitfield representation.
+     *
+     * @param bitflags the bitfield where each bit represents the presence of a feature
+     * @return an EnumSet containing the features indicated by the bitfield
+     */
     public static EnumSet<FeatureId> deserialize(int bitflags) {
         EnumSet<FeatureId> set = EnumSet.noneOf(FeatureId.class);
         for (int n = 0; n < values().length; n++) {
@@ -58,6 +81,12 @@ public enum FeatureId {
         return set;
     }
 
+    /**
+     * Serializes a set of FeatureIds into a bitfield representation.
+     *
+     * @param flags the set of features to serialize
+     * @return a bitfield where each bit represents the presence of a feature
+     */
     public static int serialize(EnumSet<FeatureId> flags) {
         int i = 0;
         for (FeatureId flag : flags)

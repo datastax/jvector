@@ -187,69 +187,125 @@ public final class RamUsageEstimator {
       // hash tables need to be oversized to avoid collisions, assume 2x capacity
       (2L * NUM_BYTES_OBJECT_REF) * 2;
 
-  /** Aligns an object size to be the next multiple of {@link #NUM_BYTES_OBJECT_ALIGNMENT}. */
+  /**
+   * Aligns an object size to be the next multiple of {@link #NUM_BYTES_OBJECT_ALIGNMENT}.
+   *
+   * @param size the size to align
+   * @return the aligned size
+   */
   public static long alignObjectSize(long size) {
     size += (long) NUM_BYTES_OBJECT_ALIGNMENT - 1L;
     return size - (size % NUM_BYTES_OBJECT_ALIGNMENT);
   }
 
   /**
-   * Return the shallow size of the provided {@link Integer} object. Ignores the possibility that
-   * this object is part of the VM IntegerCache
+   * Returns the shallow size of the provided {@link Integer} object. Ignores the possibility that
+   * this object is part of the VM IntegerCache.
+   *
+   * @param ignored the Integer object (parameter value is not used)
+   * @return the shallow size in bytes of an Integer object
    */
   public static long sizeOf(Integer ignored) {
     return INTEGER_SIZE;
   }
 
   /**
-   * Return the shallow size of the provided {@link Long} object. Ignores the possibility that this
-   * object is part of the VM LongCache
+   * Returns the shallow size of the provided {@link Long} object. Ignores the possibility that this
+   * object is part of the VM LongCache.
+   *
+   * @param ignored the Long object (parameter value is not used)
+   * @return the shallow size in bytes of a Long object
    */
   public static long sizeOf(Long ignored) {
     return LONG_SIZE;
   }
 
-  /** Returns the size in bytes of the byte[] object. */
+  /**
+   * Returns the size in bytes of the byte[] object.
+   *
+   * @param arr the byte array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(byte[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + arr.length);
   }
 
-  /** Returns the size in bytes of the boolean[] object. */
+  /**
+   * Returns the size in bytes of the boolean[] object.
+   *
+   * @param arr the boolean array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(boolean[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + arr.length);
   }
 
-  /** Returns the size in bytes of the char[] object. */
+  /**
+   * Returns the size in bytes of the char[] object.
+   *
+   * @param arr the char array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(char[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Character.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the short[] object. */
+  /**
+   * Returns the size in bytes of the short[] object.
+   *
+   * @param arr the short array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(short[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Short.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the int[] object. */
+  /**
+   * Returns the size in bytes of the int[] object.
+   *
+   * @param arr the int array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(int[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Integer.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the float[] object. */
+  /**
+   * Returns the size in bytes of the float[] object.
+   *
+   * @param arr the float array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(float[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Float.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the long[] object. */
+  /**
+   * Returns the size in bytes of the long[] object.
+   *
+   * @param arr the long array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(long[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Long.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the double[] object. */
+  /**
+   * Returns the size in bytes of the double[] object.
+   *
+   * @param arr the double array
+   * @return the size in bytes including array header and data
+   */
   public static long sizeOf(double[] arr) {
     return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Double.BYTES * arr.length);
   }
 
-  /** Returns the size in bytes of the String[] object. */
+  /**
+   * Returns the size in bytes of the String[] object including the size of all string elements.
+   *
+   * @param arr the String array
+   * @return the total size in bytes including array header, references, and string contents
+   */
   public static long sizeOf(String[] arr) {
     long size = shallowSizeOf(arr);
     for (String s : arr) {
@@ -261,6 +317,12 @@ public final class RamUsageEstimator {
     return size;
   }
 
+  /**
+   * Returns the RAM bytes used by the given Accountable object.
+   *
+   * @param a the Accountable object
+   * @return the number of bytes used in RAM
+   */
   public static long sizeOf(Accountable a) {
     return a.ramBytesUsed();
   }
@@ -349,7 +411,12 @@ public final class RamUsageEstimator {
     return size;
   }
 
-  /** Returns the size in bytes of the String object. */
+  /**
+   * Returns the size in bytes of the String object including the character array.
+   *
+   * @param s the String object
+   * @return the size in bytes, or 0 if the string is null
+   */
   public static long sizeOf(String s) {
     if (s == null) {
       return 0;
@@ -361,8 +428,13 @@ public final class RamUsageEstimator {
     return alignObjectSize(size);
   }
 
-  /** Returns the shallow size in bytes of the Object[] object. */
-  // Use this method instead of #shallowSizeOf(Object) to avoid costly reflection
+  /**
+   * Returns the shallow size in bytes of the Object[] object.
+   * Use this method instead of {@link #shallowSizeOf(Object)} to avoid costly reflection.
+   *
+   * @param arr the Object array
+   * @return the shallow size in bytes including array header and object references
+   */
   public static long shallowSizeOf(Object[] arr) {
     return alignObjectSize(
         (long) NUM_BYTES_ARRAY_HEADER + (long) NUM_BYTES_OBJECT_REF * arr.length);
@@ -374,6 +446,9 @@ public final class RamUsageEstimator {
    * memory taken by the fields.
    *
    * <p>JVM object alignments are also applied.
+   *
+   * @param obj the object to measure
+   * @return the shallow size in bytes, or 0 if the object is null
    */
   public static long shallowSizeOf(Object obj) {
     if (obj == null) return 0;
@@ -390,8 +465,10 @@ public final class RamUsageEstimator {
    * works with all conventional classes and primitive types, but not with arrays (the size then
    * depends on the number of elements and varies from object to object).
    *
-   * @see #shallowSizeOf(Object)
+   * @param clazz the class to measure
+   * @return the shallow size in bytes of an instance of the given class
    * @throws IllegalArgumentException if {@code clazz} is an array class.
+   * @see #shallowSizeOf(Object)
    */
   public static long shallowSizeOfInstance(Class<?> clazz) {
     if (clazz.isArray())
@@ -442,11 +519,13 @@ public final class RamUsageEstimator {
   }
 
   /**
-   * This method returns the maximum representation size of an object. <code>sizeSoFar</code> is the
-   * object's size measured so far. <code>f</code> is the field being probed.
+   * Returns the maximum representation size of an object accounting for a field being probed.
+   * The returned offset will be the maximum of whatever was measured so far and the field's
+   * offset and representation size (unaligned).
    *
-   * <p>The returned offset will be the maximum of whatever was measured so far and <code>f</code>
-   * field's offset and representation size (unaligned).
+   * @param sizeSoFar the object's size measured so far
+   * @param f the field being probed
+   * @return the updated size including the field's contribution
    */
   public static long adjustForField(long sizeSoFar, final Field f) {
     final Class<?> type = f.getType();
@@ -454,7 +533,13 @@ public final class RamUsageEstimator {
     return sizeSoFar + fsize;
   }
 
-  /** Returns <code>size</code> in human-readable units (GB, MB, KB or bytes). */
+  /**
+   * Returns the size in human-readable units (GB, MB, KB or bytes).
+   *
+   * @param bytes the size in bytes
+   * @param df the DecimalFormat to use for formatting
+   * @return a human-readable string representation of the size
+   */
   public static String humanReadableUnits(long bytes, DecimalFormat df) {
     if (bytes / ONE_GB > 0) {
       return df.format((float) bytes / ONE_GB) + " GB";

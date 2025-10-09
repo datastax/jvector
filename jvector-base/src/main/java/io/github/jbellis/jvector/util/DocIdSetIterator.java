@@ -24,6 +24,19 @@
 
 package io.github.jbellis.jvector.util;
 
+/**
+ * Utility class for document ID iteration.
+ * Provides constants used during iteration over document sets.
+ */
 public class DocIdSetIterator {
+    /**
+     * Sentinel value indicating that there are no more documents to iterate over.
+     */
     public static final int NO_MORE_DOCS = Integer.MAX_VALUE;
+
+    /**
+     * Constructs a DocIdSetIterator.
+     */
+    public DocIdSetIterator() {
+    }
 }

@@ -68,6 +68,7 @@ public class SparseFixedBitSet extends BitSet {
   /**
    * Create a {@link SparseFixedBitSet} that can contain bits between <code>0</code> included and
    * <code>length</code> excluded.
+   * @param length the number of bits this set can hold
    */
   public SparseFixedBitSet(int length) {
     if (length < 1) {

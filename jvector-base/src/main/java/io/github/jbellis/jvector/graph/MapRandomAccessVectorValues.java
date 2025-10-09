@@ -33,6 +33,12 @@ public class MapRandomAccessVectorValues implements RandomAccessVectorValues {
     private final Map<Integer, VectorFloat<?>> map;
     private final int dimension;
 
+    /**
+     * Constructs a MapRandomAccessVectorValues with the given map and dimension.
+     *
+     * @param map the map from node IDs to vectors
+     * @param dimension the dimension of the vectors
+     */
     public MapRandomAccessVectorValues(Map<Integer, VectorFloat<?>> map, int dimension) {
         this.map = map;
         this.dimension = dimension;

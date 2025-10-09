@@ -32,6 +32,11 @@ public class InlineVectors implements Feature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final int dimension;
 
+    /**
+     * Constructs an InlineVectors feature with the specified dimension.
+     *
+     * @param dimension the vector dimension
+     */
     public InlineVectors(int dimension) {
         this.dimension = dimension;
     }
@@ -46,14 +51,31 @@ public class InlineVectors implements Feature {
         return 0;
     }
 
+    /**
+     * Returns the size in bytes of each inline vector.
+     *
+     * @return the feature size in bytes
+     */
     public int featureSize() {
         return dimension * Float.BYTES;
     }
 
+    /**
+     * Returns the dimension of the stored vectors.
+     *
+     * @return the vector dimension
+     */
     public int dimension() {
         return dimension;
     }
 
+    /**
+     * Loads an InlineVectors feature from the reader.
+     *
+     * @param header the common header containing dimension information
+     * @param reader the reader (not used, dimension comes from header)
+     * @return a new InlineVectors instance
+     */
     static InlineVectors load(CommonHeader header, RandomAccessReader reader) {
         return new InlineVectors(header.dimension);
     }
@@ -68,9 +90,18 @@ public class InlineVectors implements Feature {
         vectorTypeSupport.writeFloatVector(out, ((InlineVectors.State) state).vector);
     }
 
+    /**
+     * State holder for an inline vector being written.
+     */
     public static class State implements Feature.State {
+        /** The vector to be written inline. */
         public final VectorFloat<?> vector;
 
+        /**
+         * Constructs a State with the given vector.
+         *
+         * @param vector the vector to store
+         */
         public State(VectorFloat<?> vector) {
             this.vector = vector;
         }

@@ -18,11 +18,15 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+/**
+ * A threadsafe mutable BQVectors implementation that grows dynamically as needed.
+ */
 @SuppressWarnings("unused")
 public class MutableBQVectors extends BQVectors implements MutableCompressedVectors<VectorFloat<?>> {
     private static final int INITIAL_CAPACITY = 1024;
     private static final float GROWTH_FACTOR = 1.5f;
-    
+
+    /** The number of vectors currently stored. */
     protected int vectorCount;
 
     /**
@@ -36,6 +40,11 @@ public class MutableBQVectors extends BQVectors implements MutableCompressedVect
         this.vectorCount = 0;
     }
 
+    /**
+     * Ensures the internal array has capacity to store a vector at the given ordinal.
+     *
+     * @param ordinal the ordinal to ensure capacity for
+     */
     private void ensureCapacity(int ordinal) {
         if (ordinal >= compressedVectors.length) {
             int newCapacity = Math.max(ordinal + 1, (int)(compressedVectors.length * GROWTH_FACTOR));

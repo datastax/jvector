@@ -23,7 +23,15 @@ import org.apache.commons.math3.stat.StatUtils;
 import static io.github.jbellis.jvector.util.NumericUtils.floatToSortableInt;
 import static io.github.jbellis.jvector.util.NumericUtils.sortableIntToFloat;
 
+/**
+ * Interface for tracking similarity scores during graph search to determine when to stop early.
+ * Implementations can track score distributions to predict when continuing the search is unlikely to improve results.
+ */
 public interface ScoreTracker {
+    /**
+     * Factory for creating and reusing ScoreTracker instances.
+     * Maintains instances of each tracker type to avoid repeated allocation.
+     */
     class ScoreTrackerFactory {
         private TwoPhaseTracker twoPhaseTracker;
         private RelaxedMonotonicityTracker relaxedMonotonicityTracker;
@@ -35,6 +43,14 @@ public interface ScoreTracker {
             noOpTracker = null;
         }
 
+        /**
+         * Returns an appropriate ScoreTracker based on the search parameters.
+         *
+         * @param pruneSearch whether to prune the search early
+         * @param rerankK the number of candidates to rerank
+         * @param threshold the minimum score threshold for threshold queries
+         * @return a ScoreTracker instance appropriate for the given parameters
+         */
         public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
             // track scores to predict when we are done with threshold queries
             final ScoreTracker scoreTracker;
@@ -65,13 +81,34 @@ public interface ScoreTracker {
         }
     }
 
+    /** A no-op tracker instance that never triggers early termination. */
     ScoreTracker NO_OP = new NoOpTracker();
 
+    /**
+     * Records a similarity score observed during search.
+     *
+     * @param score the similarity score to track
+     */
     void track(float score);
 
+    /**
+     * Returns whether the search should stop early based on tracked scores.
+     *
+     * @return true if the search should stop, false otherwise
+     */
     boolean shouldStop();
 
+    /**
+     * A no-op tracker that never triggers early termination.
+     */
     class NoOpTracker implements ScoreTracker {
+        /**
+         * Constructs a NoOpTracker.
+         */
+        NoOpTracker() {
+            // Default constructor
+        }
+
         @Override
         public void track(float score) { }
 

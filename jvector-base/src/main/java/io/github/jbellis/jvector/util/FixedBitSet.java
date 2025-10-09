@@ -45,6 +45,10 @@ public final class FixedBitSet extends BitSet {
      * <p><b>NOTE:</b> the returned bitset reuses the underlying {@code long[]} of the given {@code
      * bits} if possible. Also, calling {@link #length()} on the returned bits may return a value
      * greater than {@code numBits}.
+     *
+     * @param bits the existing FixedBitSet to check capacity of
+     * @param numBits the number of bits needed
+     * @return the given bits if large enough, otherwise a new FixedBitSet with sufficient capacity
      */
     public static FixedBitSet ensureCapacity(FixedBitSet bits, int numBits) {
         if (numBits < bits.numBits) {
@@ -61,7 +65,12 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** returns the number of 64 bit words it would take to hold numBits */
+    /**
+     * Returns the number of 64-bit words it would take to hold numBits.
+     *
+     * @param numBits the number of bits
+     * @return the number of long words needed to hold numBits
+     */
     public static int bits2words(int numBits) {
         // I.e.: get the word-offset of the last bit and add one (make sure to use >> so 0
         // returns 0!)
@@ -71,6 +80,10 @@ public final class FixedBitSet extends BitSet {
     /**
      * Returns the popcount or cardinality of the intersection of the two sets. Neither set is
      * modified.
+     *
+     * @param a the first bitset
+     * @param b the second bitset
+     * @return the number of bits set in both sets
      */
     public static long intersectionCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
@@ -82,7 +95,13 @@ public final class FixedBitSet extends BitSet {
         return tot;
     }
 
-    /** Returns the popcount or cardinality of the union of the two sets. Neither set is modified. */
+    /**
+     * Returns the popcount or cardinality of the union of the two sets. Neither set is modified.
+     *
+     * @param a the first bitset
+     * @param b the second bitset
+     * @return the number of bits set in either or both sets
+     */
     public static long unionCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
         long tot = 0;
@@ -102,6 +121,10 @@ public final class FixedBitSet extends BitSet {
     /**
      * Returns the popcount or cardinality of "a and not b" or "intersection(a, not(b))". Neither set
      * is modified.
+     *
+     * @param a the first bitset
+     * @param b the second bitset
+     * @return the number of bits set in a but not in b
      */
     public static long andNotCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
@@ -176,7 +199,11 @@ public final class FixedBitSet extends BitSet {
         return numBits;
     }
 
-    /** Expert. */
+    /**
+     * Returns the backing long[] array for expert use.
+     *
+     * @return the backing long array
+     */
     public long[] getBits() {
         return bits;
     }
@@ -184,6 +211,8 @@ public final class FixedBitSet extends BitSet {
     /**
      * Returns number of set bits. NOTE: this visits every long in the backing bits array, and the
      * result is not internally cached!
+     *
+     * @return the number of bits set to true in this bitset
      */
     @Override
     public int cardinality() {
@@ -257,6 +286,12 @@ public final class FixedBitSet extends BitSet {
         bits[wordNum] &= ~bitmask;
     }
 
+    /**
+     * Gets the bit at the specified index and clears it atomically.
+     *
+     * @param index the bit index
+     * @return the previous value of the bit
+     */
     public boolean getAndClear(int index) {
         assert index >= 0 && index < numBits : "index=" + index + ", numBits=" + numBits;
         int wordNum = index >> 6; // div 64
@@ -312,7 +347,11 @@ public final class FixedBitSet extends BitSet {
         return -1;
     }
 
-    /** this = this OR other */
+    /**
+     * Performs this = this OR other.
+     *
+     * @param other the bitset to OR with this one
+     */
     public void or(FixedBitSet other) {
         or(0, other.bits, other.numWords);
     }
@@ -331,7 +370,11 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** this = this XOR other */
+    /**
+     * Performs this = this XOR other.
+     *
+     * @param other the bitset to XOR with this one
+     */
     public void xor(FixedBitSet other) {
         xor(other.bits, other.numWords);
     }
@@ -345,7 +388,12 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** returns true if the sets have any elements in common */
+    /**
+     * Checks if the sets have any elements in common.
+     *
+     * @param other the bitset to check for intersection with
+     * @return true if the sets have any elements in common
+     */
     public boolean intersects(FixedBitSet other) {
         // Depends on the ghost bits being clear!
         int pos = Math.min(numWords, other.numWords);
@@ -355,7 +403,11 @@ public final class FixedBitSet extends BitSet {
         return false;
     }
 
-    /** this = this AND other */
+    /**
+     * Performs this = this AND other.
+     *
+     * @param other the bitset to AND with this one
+     */
     public void and(FixedBitSet other) {
         and(other.bits, other.numWords);
     }
@@ -371,7 +423,11 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** this = this AND NOT other */
+    /**
+     * Performs this = this AND NOT other.
+     *
+     * @param other the bitset to AND NOT with this one
+     */
     public void andNot(FixedBitSet other) {
         andNot(0, other.bits, other.numWords);
     }
@@ -448,7 +504,11 @@ public final class FixedBitSet extends BitSet {
         bits[endWord] ^= endmask;
     }
 
-    /** Flip the bit at the provided index. */
+    /**
+     * Flips the bit at the provided index.
+     *
+     * @param index the bit index to flip
+     */
     public void flip(int index) {
         assert index >= 0 && index < numBits : "index=" + index + " numBits=" + numBits;
         int wordNum = index >> 6; // div 64

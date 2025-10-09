@@ -31,6 +31,11 @@ public class AtomicFixedBitSet extends BitSet {
 
     private final AtomicLongArray storage;
 
+    /**
+     * Creates an AtomicFixedBitSet with the specified number of bits.
+     * All bits are initially unset (false).
+     * @param numBits the number of bits in the set
+     */
     public AtomicFixedBitSet(int numBits) {
         int numLongs = (numBits + 63) >>> 6;
         storage = new AtomicLongArray(numLongs);
@@ -186,6 +191,10 @@ public class AtomicFixedBitSet extends BitSet {
         return BASE_RAM_BYTES_USED + storageSize;
     }
 
+    /**
+     * Creates a copy of this AtomicFixedBitSet.
+     * @return a new AtomicFixedBitSet with the same bit values
+     */
     public AtomicFixedBitSet copy() {
         AtomicFixedBitSet copy = new AtomicFixedBitSet(length());
         for (int i = 0; i < storage.length(); i++) {

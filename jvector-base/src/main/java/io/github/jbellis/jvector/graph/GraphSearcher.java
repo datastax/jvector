@@ -69,14 +69,18 @@ public class GraphSearcher implements Closeable {
     private int expandedCountBaseLayer;
 
     /**
-     * Creates a new graph searcher from the given GraphIndex
+     * Creates a new graph searcher from the given GraphIndex.
+     *
+     * @param graph the graph index to search
      */
     public GraphSearcher(ImmutableGraphIndex graph) {
         this(graph.getView());
     }
 
     /**
-     * Creates a new graph searcher from the given GraphIndex.View
+     * Creates a new graph searcher from the given GraphIndex.View.
+     *
+     * @param view the view of the graph index to search
      */
     protected GraphSearcher(ImmutableGraphIndex.View view) {
         this.view = view;
@@ -90,14 +94,29 @@ public class GraphSearcher implements Closeable {
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
+    /**
+     * Returns the number of nodes visited during the most recent search.
+     *
+     * @return the count of visited nodes
+     */
     protected int getVisitedCount() {
         return visitedCount;
     }
 
+    /**
+     * Returns the number of nodes expanded during the most recent search.
+     *
+     * @return the count of expanded nodes
+     */
     protected int getExpandedCount() {
         return expandedCount;
     }
 
+    /**
+     * Returns the number of nodes expanded in the base layer during the most recent search.
+     *
+     * @return the count of expanded nodes in the base layer
+     */
     protected int getExpandedCountBaseLayer() {
         return expandedCountBaseLayer;
     }
@@ -112,6 +131,11 @@ public class GraphSearcher implements Closeable {
         cachingReranker = new CachingReranker(scoreProvider);
     }
 
+    /**
+     * Returns the current view of the graph being searched.
+     *
+     * @return the graph index view
+     */
     public ImmutableGraphIndex.View getView() {
         return view;
     }
@@ -128,6 +152,14 @@ public class GraphSearcher implements Closeable {
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
+     *
+     * @param queryVector the query vector to search for
+     * @param topK the number of nearest neighbors to return
+     * @param vectors the vector values to search
+     * @param similarityFunction the similarity function to use
+     * @param graph the graph index to search
+     * @param acceptOrds a Bits instance indicating which nodes are acceptable results
+     * @return a SearchResult containing the topK results and search statistics
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
@@ -141,6 +173,15 @@ public class GraphSearcher implements Closeable {
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
+     *
+     * @param queryVector the query vector to search for
+     * @param topK the number of nearest neighbors to return
+     * @param rerankK the number of candidates to rerank before returning topK results
+     * @param vectors the vector values to search
+     * @param similarityFunction the similarity function to use
+     * @param graph the graph index to search
+     * @param acceptOrds a Bits instance indicating which nodes are acceptable results
+     * @return a SearchResult containing the topK results and search statistics
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
@@ -165,26 +206,46 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * Call GraphSearcher constructor instead
+     * Call GraphSearcher constructor instead.
+     *
+     * @deprecated Use {@link GraphSearcher#GraphSearcher(ImmutableGraphIndex.View)} directly
      */
     @Deprecated
     public static class Builder {
         private final ImmutableGraphIndex.View view;
 
+        /**
+         * Creates a new Builder for constructing a GraphSearcher.
+         *
+         * @param view the view of the graph index to search
+         */
         public Builder(ImmutableGraphIndex.View view) {
             this.view = view;
         }
 
+        /**
+         * Configures the builder for concurrent updates. This method is deprecated and has no effect.
+         *
+         * @return this builder instance
+         * @deprecated This method has no effect and will be removed
+         */
         public Builder withConcurrentUpdates() {
             return this;
         }
 
+        /**
+         * Builds and returns a new GraphSearcher instance.
+         *
+         * @return a new GraphSearcher
+         */
         public GraphSearcher build() {
             return new GraphSearcher(view);
         }
     }
 
     /**
+     * Performs a comprehensive search of the graph with full control over reranking and thresholding.
+     *
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
@@ -269,6 +330,8 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
+     * Performs a search of the graph with threshold-based filtering.
+     *
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
@@ -291,6 +354,8 @@ public class GraphSearcher implements Closeable {
 
 
     /**
+     * Performs a basic search of the graph for the top K nearest neighbors.
+     *
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
@@ -307,6 +372,10 @@ public class GraphSearcher implements Closeable {
         return search(scoreProvider, topK, 0.0f, acceptOrds);
     }
 
+    /**
+     * Updates entry points for the next layer by pushing current candidates back onto the queue.
+     * This allows reusing computed similarities and potentially connecting to more distant clusters.
+     */
     void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
@@ -316,6 +385,13 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
+    /**
+     * Initializes the internal state for a new search operation.
+     *
+     * @param scoreProvider provides functions to compute similarity scores
+     * @param entry the entry point node and level to start the search
+     * @param rawAcceptOrds a Bits instance indicating which nodes are acceptable results
+     */
     void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
@@ -462,6 +538,14 @@ public class GraphSearcher implements Closeable {
         searchOneLayer(scoreProvider, rerankK, threshold, 0, acceptOrds);
     }
 
+    /**
+     * Performs reranking of the approximate search results to produce the final topK results.
+     *
+     * @param topK the number of final results to return
+     * @param rerankK the number of approximate results to consider for reranking
+     * @param rerankFloor the minimum approximate score threshold for reranking
+     * @return a SearchResult containing the topK results after reranking
+     */
     SearchResult reranking(int topK, int rerankK, float rerankFloor) {
         // rerank results
         assert approximateResults.size() <= rerankK;
@@ -500,6 +584,15 @@ public class GraphSearcher implements Closeable {
         return new SearchResult(nodes, visitedCount, expandedCount, expandedCountBaseLayer, reranked, worstApproximateInTopK);
     }
 
+    /**
+     * Resumes a previous search to find additional results.
+     *
+     * @param topK the number of final results to return
+     * @param rerankK the number of approximate results to consider for reranking
+     * @param threshold the minimum similarity threshold for accepting results
+     * @param rerankFloor the minimum approximate score threshold for reranking
+     * @return a SearchResult containing the additional topK results
+     */
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
@@ -531,6 +624,10 @@ public class GraphSearcher implements Closeable {
      * `search`, but `resume` may be called as many times as desired once the search is initialized.
      * <p>
      * SearchResult.visitedCount resets with each call to `search` or `resume`.
+     *
+     * @param additionalK the number of additional results to find
+     * @param rerankK the number of approximate results to consider for reranking
+     * @return a SearchResult containing the additional results and search statistics
      */
     @Experimental
     public SearchResult resume(int additionalK, int rerankK) {
@@ -545,6 +642,10 @@ public class GraphSearcher implements Closeable {
         view.close();
     }
 
+    /**
+     * A caching wrapper for exact score functions that memoizes computed similarities.
+     * This cache persists across resume() calls to avoid recomputing the same scores.
+     */
     private static class CachingReranker implements ScoreFunction.ExactScoreFunction {
         // this cache never gets cleared out (until a new search reinitializes it),
         // but we expect resume() to be called at most a few times so it's fine
@@ -552,12 +653,23 @@ public class GraphSearcher implements Closeable {
         private final SearchScoreProvider scoreProvider;
         private int rerankCalls;
 
+        /**
+         * Creates a new CachingReranker that wraps the reranker from the given score provider.
+         *
+         * @param scoreProvider the score provider whose reranker will be cached
+         */
         public CachingReranker(SearchScoreProvider scoreProvider) {
             this.scoreProvider = scoreProvider;
             cachedScores = new Int2ObjectHashMap<>();
             rerankCalls = 0;
         }
 
+        /**
+         * Returns the exact similarity to the given node, using the cached value if available.
+         *
+         * @param node2 the node to compute similarity to
+         * @return the exact similarity score
+         */
         @Override
         public float similarityTo(int node2) {
             if (cachedScores.containsKey(node2)) {
@@ -569,6 +681,11 @@ public class GraphSearcher implements Closeable {
             return score;
         }
 
+        /**
+         * Returns the number of times the underlying reranker was called (cache misses).
+         *
+         * @return the count of rerank calls
+         */
         public int getRerankCalls() {
             return rerankCalls;
         }

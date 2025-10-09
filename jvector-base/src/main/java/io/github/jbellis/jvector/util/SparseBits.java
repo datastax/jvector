@@ -20,23 +20,41 @@ import org.agrona.collections.IntHashSet;
 
 /**
  * Implements the membership parts of an updatable BitSet (but not prev/next bits)
+ * using a sparse hash set for efficient storage when few bits are set.
  */
 public class SparseBits implements Bits {
     private final IntHashSet set = new IntHashSet();
+
+    /**
+     * Creates a new SparseBits instance with an empty set.
+     */
+    public SparseBits() {
+    }
 
     @Override
     public boolean get(int index) {
         return set.contains(index);
     }
 
+    /**
+     * Sets the bit at the specified index.
+     * @param index the index of the bit to set
+     */
     public void set(int index) {
         set.add(index);
     }
 
+    /**
+     * Clears all bits in this set.
+     */
     public void clear() {
         set.clear();
     }
 
+    /**
+     * Returns the number of bits set to true.
+     * @return the number of bits set
+     */
     public int cardinality() {
         return set.size();
     }

@@ -40,6 +40,9 @@ import static java.lang.Math.min;
  * or unbounded operations, depending on the implementation subclasses, and either maxheap or minheap behavior.
  */
 public class NodeQueue {
+    /**
+     * Ordering for the heap: MIN_HEAP keeps smallest values at the top, MAX_HEAP keeps largest values at the top.
+     */
     public enum Order {
         /** Smallest values at the top of the heap */
         MIN_HEAP {
@@ -64,12 +67,20 @@ public class NodeQueue {
     private final AbstractLongHeap heap;
     private final Order order;
 
+    /**
+     * Constructs a NodeQueue with the specified heap and ordering.
+     *
+     * @param heap the underlying heap to store encoded node/score pairs
+     * @param order the heap ordering (MIN_HEAP or MAX_HEAP)
+     */
     public NodeQueue(AbstractLongHeap heap, Order order) {
         this.heap = heap;
         this.order = order;
     }
 
     /**
+     * Returns the number of elements in the heap.
+     *
      * @return the number of elements in the heap
      */
     public int size() {
@@ -128,20 +139,40 @@ public class NodeQueue {
                 (((long) NumericUtils.floatToSortableInt(score)) << 32) | (0xFFFFFFFFL & ~node));
     }
 
+    /**
+     * Decodes the score from the encoded heap value.
+     *
+     * @param heapValue the encoded long value from the heap
+     * @return the decoded score
+     */
     private float decodeScore(long heapValue) {
         return NumericUtils.sortableIntToFloat((int) (order.apply(heapValue) >> 32));
     }
 
+    /**
+     * Decodes the node ID from the encoded heap value.
+     *
+     * @param heapValue the encoded long value from the heap
+     * @return the decoded node ID
+     */
     private int decodeNodeId(long heapValue) {
         return (int) ~(order.apply(heapValue));
     }
 
-    /** Removes the top element and returns its node id. */
+    /**
+     * Removes the top element and returns its node id.
+     *
+     * @return the node ID of the top element
+     */
     public int pop() {
         return decodeNodeId(heap.pop());
     }
 
-    /** Returns a copy of the internal nodes array. Not sorted by score! */
+    /**
+     * Returns a copy of the internal nodes array. Not sorted by score!
+     *
+     * @return an array of node IDs in heap order (not score order)
+     */
     public int[] nodesCopy() {
         int size = size();
         int[] nodes = new int[size];
@@ -152,10 +183,17 @@ public class NodeQueue {
     }
 
     /**
-     * Rerank results and return the worst approximate score that made it into the topK.
-     * The topK results will be placed into `reranked`, and the remainder into `unused`.
+     * Reranks results and returns the worst approximate score that made it into the topK.
+     * The topK results will be placed into {@code reranked}, and the remainder into {@code unused}.
      * <p>
-     * Only the best result or results whose approximate score is at least `rerankFloor` will be reranked.
+     * Only the best result or results whose approximate score is at least {@code rerankFloor} will be reranked.
+     *
+     * @param topK the number of top results to rerank
+     * @param reranker the exact score function to use for reranking
+     * @param rerankFloor the minimum approximate score threshold for reranking
+     * @param reranked the queue to receive the reranked top results
+     * @param unused the collection to receive nodes that were not included in the top results
+     * @return the worst approximate score among the topK results
      */
     public float rerank(int topK, ScoreFunction.ExactScoreFunction reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
         // Rescore the nodes whose approximate score meets the floor.  Nodes that do not will be marked as -1
@@ -229,7 +267,11 @@ public class NodeQueue {
         return worstApproximateInTopK;
     }
 
-    /** Returns the top element's node id. */
+    /**
+     * Returns the top element's node id.
+     *
+     * @return the node ID of the top element
+     */
     public int topNode() {
         return decodeNodeId(heap.top());
     }
@@ -237,17 +279,25 @@ public class NodeQueue {
     /**
      * Returns the top element's node score. For the min heap this is the minimum score. For the max
      * heap this is the maximum score.
+     *
+     * @return the score of the top element
      */
     public float topScore() {
         return decodeScore(heap.top());
     }
 
+    /**
+     * Removes all elements from this queue.
+     */
     public void clear() {
         heap.clear();
     }
 
     /**
-     * Set the max size of the underlying heap.  Only valid when NodeQueue was created with BoundedLongHeap.
+     * Sets the maximum size of the underlying heap.  Only valid when NodeQueue was created with BoundedLongHeap.
+     *
+     * @param maxSize the new maximum size for the heap
+     * @throws ClassCastException if the underlying heap is not a BoundedLongHeap
      */
     public void setMaxSize(int maxSize) {
         ((BoundedLongHeap) heap).setMaxSize(maxSize);
@@ -258,6 +308,12 @@ public class NodeQueue {
         return "Nodes[" + heap.size() + "]";
     }
 
+    /**
+     * Applies the given consumer to each node/score pair in this queue.
+     * The order of iteration is not guaranteed to be sorted by score.
+     *
+     * @param consumer the consumer to apply to each node/score pair
+     */
     public void foreach(NodeConsumer consumer) {
         for (int i = 0; i < heap.size(); i++) {
             long heapValue = heap.get(i + 1);
@@ -265,27 +321,51 @@ public class NodeQueue {
         }
     }
 
+    /**
+     * A consumer that accepts node ID and score pairs.
+     */
     @FunctionalInterface
     public interface NodeConsumer {
+        /**
+         * Accepts a node ID and its associated score.
+         *
+         * @param node the node ID
+         * @param score the score associated with the node
+         */
         void accept(int node, float score);
     }
 
-    /** Iterator over node and score pairs. */
+    /**
+     * Iterator over node and score pairs.
+     */
     public interface NodeScoreIterator {
-        /** @return true if there are more elements */
+        /**
+         * Checks if there are more elements to iterate over.
+         *
+         * @return true if there are more elements, false otherwise
+         */
         boolean hasNext();
 
-        /** @return the next node id and advance the iterator */
+        /**
+         * Returns the next node ID and advances the iterator.
+         *
+         * @return the next node ID
+         */
         int pop();
 
-        /** @return the next node score */
+        /**
+         * Returns the score of the next node without advancing the iterator.
+         *
+         * @return the next node score
+         */
         float topScore();
     }
 
     /**
      * Copies the other NodeQueue to this one. If its order (MIN_HEAP or MAX_HEAP) is the same as this,
-     * it is copied verbatim. If it differs, every lement is re-inserted into this.
-     * @param other the other node queue.
+     * it is copied verbatim. If it differs, every element is re-inserted into this.
+     *
+     * @param other the other node queue to copy from
      */
     public void copyFrom(NodeQueue other) {
         if (this.order == other.order) {
@@ -304,6 +384,12 @@ public class NodeQueue {
         private final NodeScoreIterator it;
         private final NodeQueue queue;
 
+        /**
+         * Constructs a converter that wraps the given iterator.
+         *
+         * @param it the node score iterator to wrap
+         * @param queue the node queue used for encoding
+         */
         public NodeScoreIteratorConverter(NodeScoreIterator it, NodeQueue queue) {
             this.it = it;
             this.queue = queue;

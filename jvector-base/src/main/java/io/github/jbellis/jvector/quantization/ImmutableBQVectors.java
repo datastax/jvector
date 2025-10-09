@@ -16,12 +16,27 @@
 
 package io.github.jbellis.jvector.quantization;
 
+/**
+ * An immutable collection of binary quantized vectors.
+ * This class provides read-only access to a fixed set of compressed vectors.
+ */
 public class ImmutableBQVectors extends BQVectors {
+    /**
+     * Creates a new ImmutableBQVectors instance with the given quantization and compressed vectors.
+     *
+     * @param bq the binary quantization configuration
+     * @param compressedVectors the array of compressed vector data
+     */
     public ImmutableBQVectors(BinaryQuantization bq, long[][] compressedVectors) {
         super(bq);
         this.compressedVectors = compressedVectors;
     }
 
+    /**
+     * Returns the number of vectors in this collection.
+     *
+     * @return the count of compressed vectors
+     */
     @Override
     public int count() {
         return compressedVectors.length;

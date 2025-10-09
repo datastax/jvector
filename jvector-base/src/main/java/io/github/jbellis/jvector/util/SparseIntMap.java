@@ -21,9 +21,18 @@ import io.github.jbellis.jvector.graph.NodesIterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
+/**
+ * A thread-safe sparse map from integer keys to values, backed by a ConcurrentHashMap.
+ * This implementation is suitable for sparse key spaces where only a small fraction
+ * of possible keys are actually used.
+ * @param <T> the type of values stored in this map
+ */
 public class SparseIntMap<T> implements IntMap<T> {
     private final ConcurrentHashMap<Integer, T> map;
 
+    /**
+     * Creates a new empty SparseIntMap.
+     */
     public SparseIntMap() {
         this.map = new ConcurrentHashMap<>();
     }
@@ -62,6 +71,10 @@ public class SparseIntMap<T> implements IntMap<T> {
         return map.containsKey(key);
     }
 
+    /**
+     * Returns a stream of all keys in this map.
+     * @return an IntStream of keys
+     */
     public IntStream keysStream() {
         return map.keySet().stream().mapToInt(key -> key);
     }
