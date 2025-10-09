@@ -499,7 +499,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      */
     @Experimental
     public void save(DataOutput out) throws IOException {
-        if (allMutationsCompleted()) {
+        if (!allMutationsCompleted()) {
             throw new IllegalStateException("Cannot save a graph with pending mutations. Call cleanup() first");
         }
 

@@ -893,15 +893,18 @@ public class GraphIndexBuilder implements Closeable {
         }
 
         int layerCount = in.readInt();
-        int entryNode = in.readInt();
         var layerDegrees = new ArrayList<Integer>(layerCount);
+        for (int level = 0; level < layerCount; level++) {
+            layerDegrees.add(in.readInt());
+        }
+
+        int entryNode = in.readInt();
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 
         // Read layer info
         for (int level = 0; level < layerCount; level++) {
             int layerSize = in.readInt();
-            layerDegrees.add(in.readInt());
             for (int i = 0; i < layerSize; i++) {
                 int nodeId = in.readInt();
                 int nNeighbors = in.readInt();
@@ -917,6 +920,7 @@ public class GraphIndexBuilder implements Closeable {
                 var ca = new NodeArray(nNeighbors);
                 for (int j = 0; j < nNeighbors; j++) {
                     int neighbor = in.readInt();
+                    float score = in.readFloat();
                     ca.addInOrder(neighbor, sf.similarityTo(neighbor));
                 }
                 graph.connectNode(level, nodeId, ca);
