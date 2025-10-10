@@ -66,7 +66,7 @@ import java.util.function.IntFunction;
  */
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
-    private boolean useParallelWrites = false;
+    private volatile boolean useParallelWrites = false;
     private final Path filePath; // Optional: for parallel writes
     private final int parallelWorkerThreads;
     private final int parallelDispatcherQueueCapacity;

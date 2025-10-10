@@ -18,11 +18,15 @@ package io.github.jbellis.jvector.disk;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * An IndexWriter implementation backed by a ByteBuffer for in-memory record building.
  * This allows existing Feature.writeInline() implementations to write to memory buffers
  * that can later be bulk-written to disk.
+ * <p>
+ * Byte order is set to BIG_ENDIAN to match Java's DataOutput specification and ensure
+ * cross-platform compatibility.
  * <p>
  * Not thread-safe. Each thread should use its own instance.
  */
@@ -33,24 +37,32 @@ public class ByteBufferIndexWriter implements IndexWriter {
     /**
      * Creates a writer that writes to the given buffer starting at its current position.
      * The buffer's position will be advanced as data is written.
+     * The buffer's byte order is set to BIG_ENDIAN to match DataOutput behavior.
      */
     public ByteBufferIndexWriter(ByteBuffer buffer) {
         this.buffer = buffer;
+        this.buffer.order(ByteOrder.BIG_ENDIAN);
         this.initialPosition = buffer.position();
     }
 
     /**
      * Creates a writer with a new heap ByteBuffer of the given capacity.
+     * The buffer uses BIG_ENDIAN byte order.
      */
     public static ByteBufferIndexWriter allocate(int capacity) {
-        return new ByteBufferIndexWriter(ByteBuffer.allocate(capacity));
+        ByteBuffer buffer = ByteBuffer.allocate(capacity);
+        buffer.order(ByteOrder.BIG_ENDIAN);
+        return new ByteBufferIndexWriter(buffer);
     }
 
     /**
      * Creates a writer with a new direct ByteBuffer of the given capacity.
+     * The buffer uses BIG_ENDIAN byte order.
      */
     public static ByteBufferIndexWriter allocateDirect(int capacity) {
-        return new ByteBufferIndexWriter(ByteBuffer.allocateDirect(capacity));
+        ByteBuffer buffer = ByteBuffer.allocateDirect(capacity);
+        buffer.order(ByteOrder.BIG_ENDIAN);
+        return new ByteBufferIndexWriter(buffer);
     }
 
     /**

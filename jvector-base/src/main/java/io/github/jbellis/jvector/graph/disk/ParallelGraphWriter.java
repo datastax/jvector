@@ -57,7 +57,7 @@ class ParallelGraphWriter implements AutoCloseable {
     private final GraphIndexWriteDispatcher dispatcher;
     private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
     private final ThreadLocal<ByteBuffer> bufferPerThread;
-    private final List<ImmutableGraphIndex.View> allViews = new ArrayList<>();
+    private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath; // Optional: for async writes
 
@@ -124,20 +124,22 @@ class ParallelGraphWriter implements AutoCloseable {
             + graph.getDegree(0) * Integer.BYTES; // neighbors + padding
 
         // Thread-local views for safe neighbor iteration
+        // CopyOnWriteArrayList handles concurrent additions safely
         this.viewPerThread = ThreadLocal.withInitial(() -> {
             var view = graph.getView();
-            synchronized (allViews) {
-                allViews.add(view);
-            }
+            allViews.add(view);
             return view;
         });
 
         // Thread-local buffers to avoid allocation overhead
+        // Use BIG_ENDIAN to match Java DataOutput specification
         final int bufferSize = recordSize;
         final boolean useDirect = config.useDirectBuffers;
-        this.bufferPerThread = ThreadLocal.withInitial(() ->
-            useDirect ? ByteBuffer.allocateDirect(bufferSize) : ByteBuffer.allocate(bufferSize)
-        );
+        this.bufferPerThread = ThreadLocal.withInitial(() -> {
+            ByteBuffer buffer = useDirect ? ByteBuffer.allocateDirect(bufferSize) : ByteBuffer.allocate(bufferSize);
+            buffer.order(java.nio.ByteOrder.BIG_ENDIAN);
+            return buffer;
+        });
     }
 
     /**
@@ -244,18 +246,20 @@ class ParallelGraphWriter implements AutoCloseable {
     private void writeRecordsAsync(List<Future<NodeRecordTask.Result>> futures) throws IOException {
         var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
         int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), 32);
-        ExecutorService fileWritePool = new ThreadPoolExecutor(
-                numThreads, numThreads,
-                0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(),
-                r -> {
-                    var t = new Thread(r, "graphnode-writer");
-                    t.setDaemon(true);
-                    return t;
-                });
+        ExecutorService fileWritePool = null;
 
-        try (var afc = AsynchronousFileChannel.open(filePath, opts, fileWritePool)) {
-            try {
+        try {
+            fileWritePool = new ThreadPoolExecutor(
+                    numThreads, numThreads,
+                    0L, TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<>(),
+                    r -> {
+                        var t = new Thread(r, "graphnode-writer");
+                        t.setDaemon(true);
+                        return t;
+                    });
+
+            try (var afc = AsynchronousFileChannel.open(filePath, opts, fileWritePool)) {
                 for (Future<NodeRecordTask.Result> future : futures) {
                     NodeRecordTask.Result result = future.get();
 
@@ -278,14 +282,16 @@ class ParallelGraphWriter implements AutoCloseable {
                 throw unwrapExecutionException(e);
             }
         } finally {
-            fileWritePool.shutdown();
-            try {
-                if (!fileWritePool.awaitTermination(60, TimeUnit.SECONDS)) {
+            if (fileWritePool != null) {
+                fileWritePool.shutdown();
+                try {
+                    if (!fileWritePool.awaitTermination(60, TimeUnit.SECONDS)) {
+                        fileWritePool.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
                     fileWritePool.shutdownNow();
+                    Thread.currentThread().interrupt();
                 }
-            } catch (InterruptedException e) {
-                fileWritePool.shutdownNow();
-                Thread.currentThread().interrupt();
             }
         }
     }
@@ -333,13 +339,11 @@ class ParallelGraphWriter implements AutoCloseable {
             // Close dispatcher (waits for all writes to complete)
             dispatcher.close();
 
-            // Close all views
-            synchronized (allViews) {
-                for (var view : allViews) {
-                    view.close();
-                }
-                allViews.clear();
+            // Close all views (CopyOnWriteArrayList is safe for concurrent iteration)
+            for (var view : allViews) {
+                view.close();
             }
+            allViews.clear();
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
