@@ -24,6 +24,12 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 
+/**
+ * Provides diversity selection using the Vamana algorithm's diversity heuristic.
+ * The alpha parameter controls the diversity threshold, where higher values
+ * encourage more diverse neighbor selection at the cost of potentially longer
+ * paths in the graph.
+ */
 public class VamanaDiversityProvider implements DiversityProvider {
     /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
     public final float alpha;
@@ -31,7 +37,11 @@ public class VamanaDiversityProvider implements DiversityProvider {
     /** used to compute diversity */
     public final BuildScoreProvider scoreProvider;
 
-    /** Create a new diversity provider */
+    /**
+     * Creates a new Vamana diversity provider.
+     * @param scoreProvider the score provider used to compute diversity
+     * @param alpha the diversity threshold (1.0 is equivalent to HNSW; Vamana uses 1.2 or more)
+     */
     public VamanaDiversityProvider(BuildScoreProvider scoreProvider, float alpha) {
         this.scoreProvider = scoreProvider;
         this.alpha = alpha;

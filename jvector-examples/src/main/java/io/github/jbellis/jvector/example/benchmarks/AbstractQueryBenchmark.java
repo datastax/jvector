@@ -16,4 +16,12 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-public abstract class AbstractQueryBenchmark implements QueryBenchmark {}
+/**
+ * Abstract base class for query benchmarks.
+ */
+public abstract class AbstractQueryBenchmark implements QueryBenchmark {
+    /**
+     * Constructs an AbstractQueryBenchmark.
+     */
+    protected AbstractQueryBenchmark() {}
+}

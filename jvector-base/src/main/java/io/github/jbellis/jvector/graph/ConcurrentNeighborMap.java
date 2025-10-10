@@ -41,10 +41,26 @@ public class ConcurrentNeighborMap {
     /** the maximum number of neighbors a node can have temporarily during construction */
     public final int maxOverflowDegree;
 
+    /**
+     * Constructs a new ConcurrentNeighborMap with default initial capacity.
+     *
+     * @param diversityProvider the provider for diversity calculations
+     * @param maxDegree the maximum number of neighbors desired per node
+     * @param maxOverflowDegree the maximum number of neighbors a node can have temporarily during construction
+     */
     public ConcurrentNeighborMap(DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
         this(new DenseIntMap<>(1024), diversityProvider, maxDegree, maxOverflowDegree);
     }
 
+    /**
+     * Constructs a new ConcurrentNeighborMap with the given neighbors map.
+     *
+     * @param <T> the type parameter (unused, for compatibility)
+     * @param neighbors the neighbors map to use
+     * @param diversityProvider the provider for diversity calculations
+     * @param maxDegree the maximum number of neighbors desired per node
+     * @param maxOverflowDegree the maximum number of neighbors a node can have temporarily during construction
+     */
     public <T> ConcurrentNeighborMap(IntMap<Neighbors> neighbors, DiversityProvider diversityProvider, int maxDegree, int maxOverflowDegree) {
         assert maxDegree <= maxOverflowDegree : String.format("maxDegree %d exceeds maxOverflowDegree %d", maxDegree, maxOverflowDegree);
         this.neighbors = neighbors;
@@ -53,6 +69,15 @@ public class ConcurrentNeighborMap {
         this.maxOverflowDegree = maxOverflowDegree;
     }
 
+    /**
+     * Inserts an edge from one node to another with the given score and overflow factor.
+     * This method is thread-safe and uses compare-and-swap to update the neighbor set.
+     *
+     * @param fromId the source node id
+     * @param toId the target node id
+     * @param score the similarity score for this edge
+     * @param overflow the factor by which to allow exceeding maxDegree temporarily
+     */
     public void insertEdge(int fromId, int toId, float score, float overflow) {
         while (true) {
             var old = neighbors.get(fromId);
@@ -63,6 +88,14 @@ public class ConcurrentNeighborMap {
         }
     }
 
+    /**
+     * Inserts an edge without enforcing diversity constraints. This should only be called
+     * during cleanup operations after initial graph construction.
+     *
+     * @param fromId the source node id
+     * @param toId the target node id
+     * @param score the similarity score for this edge
+     */
     public void insertEdgeNotDiverse(int fromId, int toId, float score) {
         while (true) {
             var old = neighbors.get(fromId);
@@ -74,6 +107,10 @@ public class ConcurrentNeighborMap {
     }
 
     /**
+     * Enforces the maximum degree constraint on a node by pruning to maxDegree neighbors
+     * using diversity selection.
+     *
+     * @param nodeId the node id to enforce degree on
      * @return the fraction of short edges, i.e., neighbors within alpha=1.0
      */
     public double enforceDegree(int nodeId) {
@@ -91,6 +128,15 @@ public class ConcurrentNeighborMap {
         }
     }
 
+    /**
+     * Replaces deleted neighbors with new candidates from the provided NodeArray.
+     * Filters out deleted nodes and merges remaining neighbors with candidates, selecting
+     * diverse neighbors up to maxDegree.
+     *
+     * @param nodeId the node id whose neighbors to update
+     * @param toDelete a BitSet indicating which nodes have been deleted
+     * @param candidates candidate nodes to consider as replacement neighbors
+     */
     public void replaceDeletedNeighbors(int nodeId, BitSet toDelete, NodeArray candidates) {
         while (true) {
             var old = neighbors.get(nodeId);
@@ -101,6 +147,14 @@ public class ConcurrentNeighborMap {
         }
     }
 
+    /**
+     * Inserts diverse neighbors for a node from the provided candidates. Merges the candidates
+     * with existing neighbors and selects up to maxDegree diverse neighbors.
+     *
+     * @param nodeId the node id to update
+     * @param candidates candidate nodes to consider as neighbors
+     * @return the updated Neighbors object
+     */
     public Neighbors insertDiverse(int nodeId, NodeArray candidates) {
         while (true) {
             var old = neighbors.get(nodeId);
@@ -112,10 +166,21 @@ public class ConcurrentNeighborMap {
         }
     }
 
+    /**
+     * Returns the Neighbors object for the given node.
+     *
+     * @param node the node id to retrieve neighbors for
+     * @return the Neighbors object, or null if the node does not exist
+     */
     public Neighbors get(int node) {
         return neighbors.get(node);
     }
 
+    /**
+     * Returns the number of nodes in this neighbor map.
+     *
+     * @return the number of nodes
+     */
     public int size() {
         return neighbors.size();
     }
@@ -130,18 +195,40 @@ public class ConcurrentNeighborMap {
         }
     }
 
+    /**
+     * Adds a new node with no initial neighbors to this map.
+     *
+     * @param nodeId the node id to add
+     */
     public void addNode(int nodeId) {
         addNode(nodeId, new NodeArray(0));
     }
 
+    /**
+     * Removes a node from this map and returns its neighbors.
+     *
+     * @param node the node id to remove
+     * @return the Neighbors object that was removed, or null if the node did not exist
+     */
     public Neighbors remove(int node) {
         return neighbors.remove(node);
     }
 
+    /**
+     * Checks if a node exists in this map.
+     *
+     * @param nodeId the node id to check
+     * @return true if the node exists, false otherwise
+     */
     public boolean contains(int nodeId) {
         return neighbors.containsKey(nodeId);
     }
 
+    /**
+     * Iterates over all nodes and their neighbors in this map.
+     *
+     * @param consumer the consumer to apply to each node id and its Neighbors
+     */
     public void forEach(DenseIntMap.IntBiConsumer<Neighbors> consumer) {
         neighbors.forEach(consumer);
     }
@@ -152,8 +239,12 @@ public class ConcurrentNeighborMap {
     }
 
     /**
-     * Add a link from every node in the NodeArray to the target toId.
-     * If overflow is > 1.0, allow the number of neighbors to exceed maxConnections temporarily.
+     * Adds a link from every node in the NodeArray to the target node.
+     * If overflow is greater than 1.0, allows the number of neighbors to exceed maxDegree temporarily.
+     *
+     * @param nodes the nodes to backlink from
+     * @param toId the target node id to link to
+     * @param overflow the factor by which to allow exceeding maxDegree temporarily
      */
     public void backlink(NodeArray nodes, int toId, float overflow) {
         for (int i = 0; i < nodes.size(); i++) {
@@ -192,6 +283,11 @@ public class ConcurrentNeighborMap {
             this.diverseBefore = size();
         }
 
+        /**
+         * Returns an iterator over the neighbor node ids.
+         *
+         * @return a NodesIterator for iterating over neighbors
+         */
         public NodesIterator iterator() {
             return new NeighborIterator(this);
         }
@@ -322,6 +418,12 @@ public class ConcurrentNeighborMap {
             return next;
         }
 
+        /**
+         * Estimates the RAM bytes used by a Neighbors object with the given capacity.
+         *
+         * @param count the capacity of the neighbors array
+         * @return the estimated RAM usage in bytes
+         */
         public static long ramBytesUsed(int count) {
             return NodeArray.ramBytesUsed(count) // includes our object header
                     + Integer.BYTES // nodeId

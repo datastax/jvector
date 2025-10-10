@@ -18,7 +18,25 @@ package io.github.jbellis.jvector.util;
 
 import java.io.IOException;
 
+/**
+ * Utility methods for exception handling.
+ */
 public class ExceptionUtils {
+    /**
+     * Private constructor to prevent instantiation.
+     */
+    private ExceptionUtils() {
+    }
+
+    /**
+     * Rethrows the given throwable as an IOException or RuntimeException.
+     * If the throwable is already an IOException, it is thrown directly.
+     * If it's a RuntimeException or Error, it is also thrown directly.
+     * Otherwise, it is wrapped in a RuntimeException.
+     *
+     * @param t the throwable to rethrow
+     * @throws IOException if t is an IOException
+     */
     public static void throwIoException(Throwable t) throws IOException {
         if (t instanceof RuntimeException) {
             throw (RuntimeException) t;

@@ -25,12 +25,24 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 
+/**
+ * Memory-mapped implementation of RandomAccessReader that provides efficient
+ * random access to data stored in a file. Uses memory mapping for fast I/O operations.
+ */
 @SuppressWarnings("unused")
 public class MMapReader implements RandomAccessReader {
+    /** The memory-mapped buffer for reading data. */
     private final MMapBuffer buffer;
+    /** The current read position in the buffer. */
     private long position;
+    /** Reusable scratch buffer for bulk read operations. */
     private byte[] scratch = new byte[0];
 
+    /**
+     * Constructs a MMapReader wrapping the specified memory-mapped buffer.
+     *
+     * @param buffer the memory-mapped buffer to read from
+     */
     MMapReader(MMapBuffer buffer) {
         this.buffer = buffer;
     }
@@ -146,9 +158,20 @@ public class MMapReader implements RandomAccessReader {
         // don't close buffer, let the Supplier handle that
     }
 
+    /**
+     * Supplier that creates MMapReader instances from a memory-mapped file.
+     * The file is mapped into memory once during construction and shared across all readers.
+     */
     public static class Supplier implements ReaderSupplier {
+        /** The shared memory-mapped buffer for this file. */
         private final MMapBuffer buffer;
 
+        /**
+         * Constructs a Supplier that memory-maps the file at the specified path.
+         *
+         * @param path the path to the file to map
+         * @throws IOException if an I/O error occurs during mapping
+         */
         public Supplier(Path path) throws IOException {
             buffer = new MMapBuffer(path, FileChannel.MapMode.READ_ONLY, ByteOrder.BIG_ENDIAN);
         }

@@ -30,10 +30,23 @@ public class Matrix {
 
     VectorFloat<?>[] data;
 
+    /**
+     * Constructs a zero-initialized matrix with the specified dimensions.
+     *
+     * @param m the number of rows
+     * @param n the number of columns
+     */
     public Matrix(int m, int n) {
         this(m, n, true);
     }
 
+    /**
+     * Constructs a matrix with the specified dimensions.
+     *
+     * @param m the number of rows
+     * @param n the number of columns
+     * @param allocateZeroed if true, allocate and zero-initialize the matrix; if false, leave rows unallocated
+     */
     public Matrix(int m, int n, boolean allocateZeroed) {
         data = new VectorFloat[m];
         if (allocateZeroed) {
@@ -43,14 +56,34 @@ public class Matrix {
         }
     }
 
+    /**
+     * Returns the value at the specified position in the matrix.
+     *
+     * @param i the row index
+     * @param j the column index
+     * @return the value at position (i, j)
+     */
     public float get(int i, int j) {
         return data[i].get(j);
     }
 
+    /**
+     * Sets the value at the specified position in the matrix.
+     *
+     * @param i the row index
+     * @param j the column index
+     * @param value the value to set
+     */
     public void set(int i, int j, float value) {
         data[i].set(j, value);
     }
 
+    /**
+     * Checks if this matrix has the same dimensions as another matrix.
+     *
+     * @param other the matrix to compare with
+     * @return true if both matrices have the same number of rows and columns
+     */
     public boolean isIsomorphicWith(Matrix other) {
         return data.length == other.data.length && data[0].length() == other.data[0].length();
     }
@@ -122,10 +155,23 @@ public class Matrix {
         return inverse;
     }
 
+    /**
+     * Adds a delta value to the element at the specified position.
+     *
+     * @param i the row index
+     * @param j the column index
+     * @param delta the value to add
+     */
     public void addTo(int i, int j, float delta) {
         data[i].set(j, data[i].get(j) + delta);
     }
 
+    /**
+     * Adds another matrix to this matrix in place.
+     *
+     * @param other the matrix to add
+     * @throws IllegalArgumentException if the matrices have different dimensions
+     */
     public void addInPlace(Matrix other) {
         if (!this.isIsomorphicWith(other)) {
             throw new IllegalArgumentException("matrix dimensions differ for " + this + "!=" + other);
@@ -136,6 +182,13 @@ public class Matrix {
         }
     }
 
+    /**
+     * Multiplies this matrix by a vector.
+     *
+     * @param v the vector to multiply by
+     * @return the resulting vector
+     * @throws IllegalArgumentException if the matrix or vector is empty
+     */
     public VectorFloat<?> multiply(VectorFloat<?> v) {
         if (data.length == 0) {
             throw new IllegalArgumentException("Cannot multiply empty matrix");
@@ -151,6 +204,13 @@ public class Matrix {
         return result;
     }
 
+    /**
+     * Computes the outer product of two vectors.
+     *
+     * @param a the first vector
+     * @param b the second vector
+     * @return a matrix representing the outer product of a and b
+     */
     public static Matrix outerProduct(VectorFloat<?> a, VectorFloat<?> b) {
         var result = new Matrix(a.length(), b.length(), false);
 
@@ -163,6 +223,11 @@ public class Matrix {
         return result;
     }
 
+    /**
+     * Scales all elements of this matrix by the given multiplier.
+     *
+     * @param multiplier the scaling factor
+     */
     public void scale(float multiplier) {
         for (var row : data) {
             VectorUtil.scale(row, multiplier);
@@ -186,6 +251,12 @@ public class Matrix {
         return true;
     }
 
+    /**
+     * Creates a matrix from a 2D float array.
+     *
+     * @param values the 2D array to convert to a matrix
+     * @return a new Matrix containing the given values
+     */
     public static Matrix from(float[][] values) {
         var result = new Matrix(values.length, values[0].length, false);
         for (int i = 0; i < values.length; i++) {

@@ -34,17 +34,36 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
+/**
+ * Abstract base class for Product Quantization compressed vectors.
+ * Stores vectors compressed using Product Quantization (PQ) in chunks to avoid exceeding array size limits.
+ */
 public abstract class PQVectors implements CompressedVectors {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /** The ProductQuantization used for encoding and decoding. */
     final ProductQuantization pq;
+    /** The compressed data chunks storing encoded vectors. */
     protected ByteSequence<?>[] compressedDataChunks;
+    /** The number of vectors stored per chunk. */
     protected int vectorsPerChunk;
 
+    /**
+     * Constructs a PQVectors with the given ProductQuantization.
+     *
+     * @param pq the ProductQuantization to use for encoding and decoding vectors
+     */
     protected PQVectors(ProductQuantization pq) {
         this.pq = pq;
     }
 
+    /**
+     * Loads PQVectors from the given reader.
+     *
+     * @param in the reader to load from
+     * @return the loaded ImmutablePQVectors
+     * @throws IOException if an I/O error occurs
+     */
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);
@@ -68,6 +87,14 @@ public abstract class PQVectors implements CompressedVectors {
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
 
+    /**
+     * Loads PQVectors from the given reader at the specified offset.
+     *
+     * @param in the reader to load from
+     * @param offset the offset to seek to before loading
+     * @return the loaded PQVectors
+     * @throws IOException if an I/O error occurs
+     */
     public static PQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
         return load(in);
@@ -130,7 +157,9 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     /**
-     * @return the number of chunks that have actually been allocated ({@code <= compressedDataChunks.length})
+     * Returns the number of chunks that have actually been allocated.
+     *
+     * @return the number of chunks ({@code <= compressedDataChunks.length})
      */
     protected abstract int validChunkCount();
 

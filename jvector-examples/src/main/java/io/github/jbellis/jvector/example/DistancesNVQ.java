@@ -28,8 +28,21 @@ import java.util.*;
 
 import static java.lang.Math.abs;
 
-// this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
+/**
+ * Tests NVQ encodings with various datasets.
+ * This class uses explicit typing instead of var for easier reading when excerpted for instructional use.
+ */
 public class DistancesNVQ {
+    private DistancesNVQ() {
+    }
+
+    /**
+     * Tests NVQ encodings for the given dataset.
+     * @param filenameBase the base vectors file
+     * @param filenameQueries the query vectors file
+     * @param vsf the similarity function
+     * @throws IOException if an error occurs
+     */
     public static void testNVQEncodings(String filenameBase, String filenameQueries, VectorSimilarityFunction vsf) throws IOException {
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -111,6 +124,10 @@ public class DistancesNVQ {
         System.out.println("--");
     }
 
+    /**
+     * Runs NVQ test on SIFT dataset.
+     * @throws IOException if an error occurs
+     */
     public static void runSIFT() throws IOException {
         System.out.println("Running siftsmall");
 
@@ -119,6 +136,10 @@ public class DistancesNVQ {
         testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
     }
 
+    /**
+     * Runs NVQ test on ADA dataset.
+     * @throws IOException if an error occurs
+     */
     public static void runADA() throws IOException {
         System.out.println("Running ada_002");
 
@@ -127,6 +148,10 @@ public class DistancesNVQ {
         testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
     }
 
+    /**
+     * Runs NVQ test on Colbert dataset.
+     * @throws IOException if an error occurs
+     */
     public static void runColbert() throws IOException {
         System.out.println("Running colbertv2");
 
@@ -135,6 +160,10 @@ public class DistancesNVQ {
         testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
     }
 
+    /**
+     * Runs NVQ test on OpenAI 3072 dataset.
+     * @throws IOException if an error occurs
+     */
     public static void runOpenai3072() throws IOException {
         System.out.println("Running text-embedding-3-large_3072");
 
@@ -143,6 +172,11 @@ public class DistancesNVQ {
         testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
     }
 
+    /**
+     * Main entry point.
+     * @param args command line arguments
+     * @throws IOException if an error occurs
+     */
     public static void main(String[] args) throws IOException {
         runSIFT();
         runADA();

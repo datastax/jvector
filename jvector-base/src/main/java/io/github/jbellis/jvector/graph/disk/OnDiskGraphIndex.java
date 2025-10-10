@@ -58,14 +58,14 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
 
 /**
  * A class representing a graph index stored on disk. The base graph contains only graph structure.
- * <p> * The base graph
-
+ * <p>
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
 public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
+    /** The current serialization version for on-disk graph indices. */
     public static final int CURRENT_VERSION = 5;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -83,6 +83,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     /** For layers > 0, store adjacency fully in memory. */
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
 
+    /**
+     * Constructs an OnDiskGraphIndex from a reader supplier, header, and neighbors offset.
+     * This constructor is package-private and used internally by the load methods.
+     *
+     * @param readerSupplier supplies readers for accessing the graph data
+     * @param header the parsed header containing graph metadata and features
+     * @param neighborsOffset the file offset where layer 0 adjacency data begins
+     */
     OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
         this.readerSupplier = readerSupplier;
@@ -106,6 +114,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         inMemoryNeighbors = new AtomicReference<>(null);
     }
 
+    /**
+     * Returns the in-memory representation of higher-layer adjacency data (layers 1+).
+     * Loads the data on first access and caches it for subsequent calls.
+     *
+     * @param in the reader to use for loading data if not already cached
+     * @return a list of maps from node ID to neighbor arrays, one per layer (with null at index 0)
+     * @throws IOException if an I/O error occurs during loading
+     */
     private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
         return inMemoryNeighbors.updateAndGet(current -> {
             if (current != null) {
@@ -119,6 +135,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         });
     }
 
+    /**
+     * Loads the higher-layer (1+) adjacency data into memory from disk.
+     * Layer 0 is not loaded since it remains on disk for efficient random access.
+     *
+     * @param in the reader to use for loading the layer data
+     * @return a list of maps from node ID to neighbor arrays, one per layer (with null at index 0)
+     * @throws IOException if an I/O error occurs during loading
+     */
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
@@ -153,11 +177,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /**
-     * Load an index from the given reader supplier where header and graph are located on the same file,
-     * where the index starts at `offset`.
+     * Loads an index from the given reader supplier where header and graph are located on the same file,
+     * where the index starts at the specified offset.
      *
-     * @param readerSupplier the reader supplier to use to read the graph and index.
-     * @param offset the offset in bytes from the start of the file where the index starts.
+     * @param readerSupplier the reader supplier to use to read the graph and index
+     * @param offset the offset in bytes from the start of the file where the index starts
+     * @return the loaded OnDiskGraphIndex instance
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset) {
         try (var reader = readerSupplier.get()) {
@@ -180,20 +205,23 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /**
-     * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
+     * Loads an index from the given reader supplier where header and graph are located on the same file at offset 0.
      *
-     * @param readerSupplier the reader supplier to use to read the graph index.
+     * @param readerSupplier the reader supplier to use to read the graph index
+     * @return the loaded OnDiskGraphIndex instance
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier) {
         return load(readerSupplier, 0);
     }
 
     /**
-     * Load an index from the given reader supplier where we will use the footer of the file to find the header.
-     * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
-     * @param readerSupplier the reader supplier to use to read the graph index.
-     *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
-     * @return the loaded index.
+     * Loads an index from the given reader supplier using the footer of the file to locate the header.
+     * This method assumes the reader supplier vends slices that contain only the graph index data.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph index
+     * @param neighborsOffset the offset where layer 0 adjacency data begins
+     * @return the loaded OnDiskGraphIndex instance
+     * @throws RuntimeException if the footer is invalid or an I/O error occurs
      */
     private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
         try (var in = readerSupplier.get()) {
@@ -223,10 +251,20 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
+    /**
+     * Returns the set of feature IDs present in this index.
+     *
+     * @return a set of feature IDs
+     */
     public Set<FeatureId> getFeatureSet() {
         return features.keySet();
     }
 
+    /**
+     * Returns the dimensionality of vectors stored in this index.
+     *
+     * @return the vector dimension
+     */
     public int getDimension() {
         return dimension;
     }
@@ -297,12 +335,23 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
+    /**
+     * Returns the approximate memory usage in bytes of this index.
+     * This includes overhead for index structures but not the full graph data on disk.
+     *
+     * @return the memory usage in bytes
+     */
     @Override
     public long ramBytesUsed() {
         return Long.BYTES + 6 * Integer.BYTES + RamUsageEstimator.NUM_BYTES_OBJECT_REF
                 + (long) 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF * FeatureId.values().length;
     }
 
+    /**
+     * Closes this index. Note that the caller is responsible for closing the ReaderSupplier.
+     *
+     * @throws IOException if an I/O error occurs
+     */
     public void close() throws IOException {
         // caller is responsible for closing ReaderSupplier
     }
@@ -313,11 +362,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 features.keySet().stream().map(Enum::name).collect(Collectors.joining(",")));
     }
 
+    /**
+     * Returns the maximum level (highest layer number) in this graph.
+     *
+     * @return the maximum level
+     */
     @Override
     public int getMaxLevel() {
         return entryNode.level;
     }
 
+    /**
+     * Returns the maximum degree across all layers in this graph.
+     *
+     * @return the maximum degree
+     */
     @Override
     public int maxDegree() {
         return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
@@ -345,10 +404,22 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return (double) sum / it.size();
     }
 
+    /**
+     * A view for accessing graph data with a dedicated reader.
+     * This class implements multiple interfaces to provide vector access, scoring, and feature reading.
+     * Each view maintains its own reader for thread-safe access to the graph data.
+     */
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
+        /** The reader for accessing graph data from disk. */
         protected final RandomAccessReader reader;
+        /** Reusable array for reading neighbor lists from disk. */
         private final int[] neighbors;
 
+        /**
+         * Constructs a View with the given reader.
+         *
+         * @param reader the reader to use for accessing graph data
+         */
         public View(RandomAccessReader reader) {
             this.reader = reader;
             this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
@@ -370,6 +441,13 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             throw new UnsupportedOperationException(); // need to copy reader
         }
 
+        /**
+         * Computes the file offset for accessing a specific feature of a given node.
+         *
+         * @param node the node ID
+         * @param featureId the feature to access
+         * @return the file offset in bytes
+         */
         private long offsetFor(int node, FeatureId featureId) {
             Feature feature = features.get(featureId);
 
@@ -385,6 +463,13 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             return baseNodeOffsetFor(node) + skipInNode;
         }
 
+        /**
+         * Computes the file offset for accessing the neighbors of a node at layer 0.
+         *
+         * @param level must be 0 (higher layers are in memory)
+         * @param node the node ID
+         * @return the file offset in bytes
+         */
         private long neighborsOffsetFor(int level, int node) {
             assert level == 0; // higher layers are in memory
 
@@ -393,6 +478,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             return baseNodeOffsetFor(node) + skipInline;
         }
 
+        /**
+         * Computes the base file offset for a node's data block at layer 0.
+         *
+         * @param node the node ID
+         * @return the file offset in bytes
+         */
         private long baseNodeOffsetFor(int node) {
             int degree = layerInfo.get(0).degree;
 
@@ -438,6 +529,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             }
         }
 
+        /**
+         * Returns an iterator over the neighbors of a node at the specified level.
+         * For layer 0, neighbors are read from disk. For higher layers, they are read from memory.
+         *
+         * @param level the layer number
+         * @param node the node ID
+         * @return an iterator over the node's neighbors
+         */
         public NodesIterator getNeighborsIterator(int level, int node) {
             try {
                 if (level == 0) {
@@ -460,22 +559,46 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             }
         }
 
+        /**
+         * Returns the number of nodes at layer 0.
+         *
+         * @return the size of layer 0
+         */
         @Override
         public int size() {
             // For vector operations we only care about layer 0
             return OnDiskGraphIndex.this.size(0);
         }
 
+        /**
+         * Returns the entry node for graph traversal.
+         *
+         * @return the entry node with its level
+         */
         @Override
         public NodeAtLevel entryNode() {
             return entryNode;
         }
 
+        /**
+         * Returns the upper bound on node IDs in this graph.
+         *
+         * @return the ID upper bound
+         */
         @Override
         public int getIdUpperBound() {
             return idUpperBound;
         }
 
+        /**
+         * Checks whether a node exists at the specified level.
+         * For layer 0, checks if the node ID is within bounds.
+         * For higher layers, checks the in-memory layer data.
+         *
+         * @param level the layer number
+         * @param node the node ID
+         * @return true if the node exists at the specified level
+         */
         @Override
         public boolean contains(int level, int node) {
             try {
@@ -491,11 +614,22 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             }
         }
 
+        /**
+         * Returns a Bits instance indicating which nodes are live (not deleted).
+         * For on-disk graphs, all nodes are considered live.
+         *
+         * @return Bits.ALL indicating all nodes are live
+         */
         @Override
         public Bits liveNodes() {
             return Bits.ALL;
         }
 
+        /**
+         * Closes this view and its associated reader.
+         *
+         * @throws IOException if an I/O error occurs
+         */
         @Override
         public void close() throws IOException {
             reader.close();
@@ -522,12 +656,27 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
-    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
+    /**
+     * Convenience function for writing a vanilla DiskANN-style index with no extra Features.
+     *
+     * @param graph the graph to write
+     * @param vectors the vectors to include in the index
+     * @param path the output file path
+     * @throws IOException if an I/O error occurs during writing
+     */
     public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
-    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
+    /**
+     * Convenience function for writing a vanilla DiskANN-style index with no extra Features.
+     *
+     * @param graph the graph to write
+     * @param vectors the vectors to include in the index
+     * @param oldToNewOrdinals mapping from original ordinals to sequential ordinals
+     * @param path the output file path
+     * @throws IOException if an I/O error occurs during writing
+     */
     public static void write(ImmutableGraphIndex graph,
                              RandomAccessVectorValues vectors,
                              Map<Integer, Integer> oldToNewOrdinals,

@@ -21,6 +21,11 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import java.io.DataOutput;
 import java.io.IOException;
 
+/**
+ * Provides support for creating, reading, and writing vector types.
+ * Implementations of this interface handle the low-level details of vector storage
+ * and I/O operations for both float vectors and byte sequences.
+ */
 public interface VectorTypeSupport {
     /**
      * Create a vector from the given data.
@@ -42,7 +47,7 @@ public interface VectorTypeSupport {
      * @param r the reader to read the vector from.
      * @param size the size of the vector to read.
      * @return the vector.
-     * @throws IOException
+     * @throws IOException if an I/O error occurs
      */
     VectorFloat<?> readFloatVector(RandomAccessReader r, int size) throws IOException;
 
@@ -52,7 +57,7 @@ public interface VectorTypeSupport {
      * @param size the size of the vector to read.
      * @param vector the vector to store the read data in.
      * @param offset the offset in the vector to store the read data at.
-     * @throws IOException
+     * @throws IOException if an I/O error occurs
      */
     void readFloatVector(RandomAccessReader r, int size, VectorFloat<?> vector, int offset) throws IOException;
 
@@ -60,7 +65,7 @@ public interface VectorTypeSupport {
      * Write the given vector to the given DataOutput.
      * @param out the output to write the vector to.
      * @param vector the vector to write.
-     * @throws IOException
+     * @throws IOException if an I/O error occurs
      */
     void writeFloatVector(DataOutput out, VectorFloat<?> vector) throws IOException;
 
@@ -79,9 +84,28 @@ public interface VectorTypeSupport {
      */
     ByteSequence<?> createByteSequence(int length);
 
+    /**
+     * Read a byte sequence from the given RandomAccessReader.
+     * @param r the reader to read the sequence from
+     * @param size the size of the sequence to read
+     * @return the byte sequence
+     * @throws IOException if an I/O error occurs
+     */
     ByteSequence<?> readByteSequence(RandomAccessReader r, int size) throws IOException;
 
+    /**
+     * Read a byte sequence from the given RandomAccessReader and store it in the given sequence.
+     * @param r the reader to read the sequence from
+     * @param sequence the sequence to store the read data in
+     * @throws IOException if an I/O error occurs
+     */
     void readByteSequence(RandomAccessReader r, ByteSequence<?> sequence) throws IOException;
 
+    /**
+     * Write the given byte sequence to the given DataOutput.
+     * @param out the output to write the sequence to
+     * @param sequence the sequence to write
+     * @throws IOException if an I/O error occurs
+     */
     void writeByteSequence(DataOutput out, ByteSequence<?> sequence) throws IOException;
 }

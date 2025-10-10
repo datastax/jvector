@@ -145,10 +145,66 @@ public class MemorySegmentReader implements RandomAccessReader {
         // Individual readers don't close the shared memory
     }
 
+    /**
+     * Factory for creating multiple {@link MemorySegmentReader} instances that share the same
+     * memory-mapped file.
+     * <p>
+     * This supplier implementation allows multiple readers to be created for concurrent access
+     * to the same underlying memory-mapped file, which is particularly useful for multi-threaded
+     * vector search operations. All readers share a single memory-mapped region, reducing memory
+     * overhead and improving cache efficiency.
+     * <p>
+     * The supplier manages the lifecycle of the shared {@link Arena} and {@link MemorySegment},
+     * ensuring that the memory mapping remains valid while any reader might be using it. When
+     * {@link #close()} is called, the arena is closed and all associated memory mappings are
+     * released.
+     * <p>
+     * <strong>Performance optimizations:</strong>
+     * <ul>
+     * <li>Uses {@code posix_madvise} with {@code MADV_RANDOM} advice to optimize for random
+     *     access patterns typical of vector similarity searches</li>
+     * <li>Creates a shared arena that allows the memory segment to be accessed from multiple
+     *     threads safely</li>
+     * <li>Avoids the 2GB file size limitation of {@code ByteBuffer}-based implementations</li>
+     * </ul>
+     *
+     * @see MemorySegmentReader
+     * @see Arena#ofShared()
+     */
     public static class Supplier implements ReaderSupplier {
         private final Arena arena;
         private final MemorySegment memory;
 
+        /**
+         * Creates a new supplier that memory-maps the specified file for random access.
+         * <p>
+         * This constructor performs the following operations:
+         * <ol>
+         * <li>Creates a shared {@link Arena} for managing the memory segment lifecycle</li>
+         * <li>Opens the file as a {@link FileChannel} in read-only mode</li>
+         * <li>Memory-maps the entire file using {@link FileChannel#map(MapMode, long, long, Arena)}</li>
+         * <li>Applies {@code MADV_RANDOM} advice via {@code posix_madvise} to hint that the
+         *     file will be accessed in random order, which is typical for vector similarity
+         *     search workloads. This advice tells the OS not to perform aggressive read-ahead.</li>
+         * </ol>
+         * The {@code posix_madvise} call is performed using the Foreign Function &amp; Memory API
+         * to directly invoke the native function. If {@code posix_madvise} is not available
+         * (e.g., on non-POSIX systems), a warning is logged but construction proceeds normally.
+         * <p>
+         * <strong>Thread safety:</strong> The created supplier is thread-safe and can be used
+         * to create readers from multiple threads. Each call to {@link #get()} returns a new
+         * reader instance, but all readers share the same underlying memory mapping.
+         * <p>
+         * <strong>Resource management:</strong> The caller is responsible for calling
+         * {@link #close()} when done with the supplier. Failing to close the supplier will
+         * prevent the memory mapping from being released, potentially causing resource leaks.
+         *
+         * @param path the path to the file to be memory-mapped; must be readable and should
+         *             contain vector data in the expected format
+         * @throws IOException if an I/O error occurs opening the file, mapping the memory,
+         *                     or if {@code posix_madvise} returns a non-zero error code
+         * @throws RuntimeException if an unexpected error occurs during native method invocation
+         */
         public Supplier(Path path) throws IOException {
             this.arena = Arena.ofShared();
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {

@@ -35,6 +35,7 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
     private static final int INITIAL_CHUNKS = 10;
     private static final float GROWTH_FACTOR = 1.5f;
 
+    /** The number of vectors currently stored. */
     protected AtomicInteger vectorCount;
 
     /**

@@ -33,28 +33,52 @@ import java.util.Arrays;
  */
 public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScoreFunction {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+    /** The product quantization configuration */
     protected final ProductQuantization pq;
+    /** The query vector */
     protected final VectorFloat<?> query;
+    /** The exact score function for fallback computations */
     protected final ExactScoreFunction esf;
+    /** Quantized partial sums for efficient similarity computation */
     protected final ByteSequence<?> partialQuantizedSums;
-    // connected to the Graph View by caller
+    /** Provides access to packed neighbors for bulk operations */
     protected final FusedADC.PackedNeighbors neighbors;
-    // caller passes this to us for re-use across calls
+    /** Reusable vector to store bulk similarity results */
     protected final VectorFloat<?> results;
-    // decoder state
+    /** Partial sums computed from codebooks */
     protected final VectorFloat<?> partialSums;
+    /** Best possible distances for each subspace */
     protected final VectorFloat<?> partialBestDistances;
+    /** Number of invocations before switching to quantized similarity mode */
     protected final int invocationThreshold;
+    /** Current number of invocations */
     protected int invocations = 0;
+    /** Best distance seen so far */
     protected float bestDistance;
+    /** Worst distance seen so far */
     protected float worstDistance;
+    /** Delta value for quantization */
     protected float delta;
+    /** Whether quantized similarity mode is enabled */
     protected boolean supportsQuantizedSimilarity = false;
+    /** The vector similarity function being used */
     protected final VectorSimilarityFunction vsf;
 
-    // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
-    // The main difference is that since our graph structure rapidly converges towards the best results,
-    // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
+    /**
+     * Creates a new FusedADCPQDecoder for efficient approximate similarity computations.
+     * <p>
+     * Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD".
+     * The main difference is that since our graph structure rapidly converges towards the best results,
+     * we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
+     *
+     * @param pq the product quantization to use for decoding
+     * @param query the query vector
+     * @param invocationThreshold the number of invocations before switching to quantized similarity mode
+     * @param neighbors provides access to packed neighbors for bulk operations
+     * @param results reusable vector to store bulk similarity results
+     * @param esf the exact score function for fallback computations
+     * @param vsf the vector similarity function to use
+     */
     protected FusedADCPQDecoder(ProductQuantization pq, VectorFloat<?> query, int invocationThreshold, FusedADC.PackedNeighbors neighbors, VectorFloat<?> results, ExactScoreFunction esf, VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.query = query;
@@ -133,11 +157,34 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         return esf.similarityTo(node2);
     }
 
+    /**
+     * Converts a distance value to a similarity score based on the similarity function.
+     *
+     * @param distance the distance value to convert
+     * @return the similarity score
+     */
     protected abstract float distanceToScore(float distance);
 
+    /**
+     * Updates the worst distance observed so far during search.
+     *
+     * @param distance the new distance value to consider
+     */
     protected abstract void updateWorstDistance(float distance);
 
+    /**
+     * Decoder specialized for dot product similarity function.
+     */
     static class DotProductDecoder extends FusedADCPQDecoder {
+        /**
+         * Creates a new DotProductDecoder.
+         *
+         * @param neighbors provides access to packed neighbors for bulk operations
+         * @param pq the product quantization to use for decoding
+         * @param query the query vector
+         * @param results reusable vector to store bulk similarity results
+         * @param esf the exact score function for fallback computations
+         */
         public DotProductDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
@@ -154,7 +201,19 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         }
     }
 
+    /**
+     * Decoder specialized for Euclidean distance similarity function.
+     */
     static class EuclideanDecoder extends FusedADCPQDecoder {
+        /**
+         * Creates a new EuclideanDecoder.
+         *
+         * @param neighbors provides access to packed neighbors for bulk operations
+         * @param pq the product quantization to use for decoding
+         * @param query the query vector
+         * @param results reusable vector to store bulk similarity results
+         * @param esf the exact score function for fallback computations
+         */
         public EuclideanDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.EUCLIDEAN);
             worstDistance = 0; // initialize at best value, update as we search
@@ -172,9 +231,13 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
     }
 
 
-    // CosineDecoder differs from DotProductDecoder/EuclideanDecoder because there are two different tables of quantized fragments to sum: query to codebook entry dot products,
-    // and codebook entry to codebook entry dot products. The latter can be calculated once per ProductQuantization, but for lookups to go at the appropriate speed, they must
-    // also be quantized. We use a similar quantization to partial sums, but we know exactly the worst/best bounds, so overflow does not matter.
+    /**
+     * Decoder specialized for cosine similarity function.
+     * <p>
+     * CosineDecoder differs from DotProductDecoder/EuclideanDecoder because there are two different tables of quantized fragments to sum: query to codebook entry dot products,
+     * and codebook entry to codebook entry dot products. The latter can be calculated once per ProductQuantization, but for lookups to go at the appropriate speed, they must
+     * also be quantized. We use a similar quantization to partial sums, but we know exactly the worst/best bounds, so overflow does not matter.
+     */
     static class CosineDecoder extends FusedADCPQDecoder {
         private final float queryMagnitudeSquared;
         private final VectorFloat<?> partialSquaredMagnitudes;
@@ -186,6 +249,15 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         private float minSquaredMagnitude;
         private float squaredMagnitudeDelta;
 
+        /**
+         * Creates a new CosineDecoder.
+         *
+         * @param neighbors provides access to packed neighbors for bulk operations
+         * @param pq the product quantization to use for decoding
+         * @param query the query vector
+         * @param results reusable vector to store bulk similarity results
+         * @param esf the exact score function for fallback computations
+         */
         protected CosineDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query, VectorFloat<?> results, ExactScoreFunction esf) {
             super(pq, query, neighbors.maxDegree(), neighbors, results, esf, VectorSimilarityFunction.COSINE);
             worstDistance = Float.MAX_VALUE; // initialize at best value, update as we search
@@ -301,6 +373,18 @@ public abstract class FusedADCPQDecoder implements ScoreFunction.ApproximateScor
         };
     }
 
+    /**
+     * Factory method that creates the appropriate decoder based on the similarity function.
+     *
+     * @param neighbors provides access to packed neighbors for bulk operations
+     * @param pq the product quantization to use for decoding
+     * @param query the query vector
+     * @param results reusable vector to store bulk similarity results
+     * @param similarityFunction the vector similarity function to use
+     * @param esf the exact score function for fallback computations
+     * @return a new decoder instance appropriate for the similarity function
+     * @throws IllegalArgumentException if the similarity function is not supported
+     */
     public static FusedADCPQDecoder newDecoder(FusedADC.PackedNeighbors neighbors, ProductQuantization pq, VectorFloat<?> query,
                                                VectorFloat<?> results, VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
         switch (similarityFunction) {

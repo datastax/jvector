@@ -44,6 +44,8 @@ public final class NumericUtils {
    * reduced, but the value can easily used as an int. The sort order (including {@link Float#NaN})
    * is defined by {@link Float#compareTo}; {@code NaN} is greater than positive infinity.
    *
+   * @param value the float value to convert
+   * @return the sortable int representation
    * @see #sortableIntToFloat
    */
   public static int floatToSortableInt(float value) {
@@ -53,13 +55,20 @@ public final class NumericUtils {
   /**
    * Converts a sortable <code>int</code> back to a <code>float</code>.
    *
+   * @param encoded the sortable int to convert
+   * @return the original float value
    * @see #floatToSortableInt
    */
   public static float sortableIntToFloat(int encoded) {
     return Float.intBitsToFloat(sortableFloatBits(encoded));
   }
 
-  /** Converts IEEE 754 representation of a float to sortable order (or back to the original) */
+  /**
+   * Converts IEEE 754 representation of a float to sortable order (or back to the original).
+   *
+   * @param bits the IEEE 754 float bits to convert
+   * @return the converted bits in sortable order
+   */
   public static int sortableFloatBits(int bits) {
     return bits ^ (bits >> 31) & 0x7fffffff;
   }

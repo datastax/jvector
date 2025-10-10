@@ -39,6 +39,16 @@
                     </argLine>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <additionalJOptions>
+                        <additionalJOption>--add-modules=jdk.incubator.vector</additionalJOption>
+                    </additionalJOptions>
+                    <release>22</release>
+                </configuration>
+            </plugin>
 
         </plugins>
 

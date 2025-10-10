@@ -33,6 +33,9 @@ public class BenchmarkTablePrinter {
     private String headerFmt;
     private String rowFmt;
 
+    /**
+     * Constructs a BenchmarkTablePrinter.
+     */
     public BenchmarkTablePrinter() {
         headerFmt = null;
         rowFmt = null;

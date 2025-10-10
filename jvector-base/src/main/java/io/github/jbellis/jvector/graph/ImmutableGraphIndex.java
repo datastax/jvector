@@ -47,7 +47,12 @@ import java.io.IOException;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
-    /** Returns the number of nodes in the graph */
+    /**
+     * Returns the number of nodes in the graph.
+     *
+     * @return the number of nodes in the graph
+     * @deprecated Use {@link #size(int)} with level 0 instead
+     */
     @Deprecated
     default int size() {
         return size(0);
@@ -57,6 +62,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * Get all node ordinals included in the graph. The nodes are NOT guaranteed to be
      * presented in any particular order.
      *
+     * @param level the level of the graph to get nodes from
      * @return an iterator over nodes where {@code nextInt} returns the next node.
      */
     NodesIterator getNodes(int level);
@@ -70,17 +76,31 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * concurrently modified.  Thus, it is good (and encouraged) to re-use Views for
      * on-disk, read-only graphs, but for in-memory graphs, it is better to create a new
      * View per search.
+     *
+     * @return a View for navigating the graph
      */
     View getView();
 
     /**
-     * @return the maximum number of edges per node across any layer
+     * Returns the maximum number of edges per node across any layer.
+     *
+     * @return the maximum degree
      */
     int maxDegree();
 
+    /**
+     * Returns a list of maximum degrees for each layer of the graph.
+     * If fewer entries are specified than the number of layers, the last entry applies to all remaining layers.
+     *
+     * @return a list of maximum degrees per layer
+     */
     List<Integer> maxDegrees();
 
     /**
+     * Returns the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases.
+     * May be different from size() if nodes are being added concurrently, or if nodes have been
+     * deleted (and cleaned up).
+     *
      * @return the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases;
      * May be different from size() if nodes are being added concurrently, or if nodes have been
      * deleted (and cleaned up).
@@ -90,16 +110,26 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     }
 
     /**
+     * Returns true if and only if the graph contains the node with the given ordinal id.
+     *
+     * @param nodeId the node identifier to check
      * @return true iff the graph contains the node with the given ordinal id
      */
     default boolean containsNode(int nodeId) {
         return nodeId >= 0 && nodeId < size();
     }
 
+    /**
+     * Closes this graph index and releases any resources.
+     *
+     * @throws IOException if an I/O error occurs
+     */
     @Override
     void close() throws IOException;
 
     /**
+     * Returns the maximum (coarser) level that contains a vector in the graph.
+     *
      * @return The maximum (coarser) level that contains a vector in the graph.
      */
     int getMaxLevel();
@@ -134,18 +164,26 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         /**
          * Iterator over the neighbors of a given node.  Only the most recently instantiated iterator
          * is guaranteed to be valid.
+         *
+         * @param level the level of the graph
+         * @param node the node whose neighbors to iterate
+         * @return an iterator over the neighbors of the node
          */
         NodesIterator getNeighborsIterator(int level, int node);
 
         /**
          * This method is deprecated as most View usages should not need size.
          * Where they do, they could access the graph.
+         *
          * @return the number of nodes in the graph
+         * @deprecated Use the graph's size() method instead
          */
         @Deprecated
         int size();
 
         /**
+         * Returns the node of the graph to start searches at.
+         *
          * @return the node of the graph to start searches at
          */
         NodeAtLevel entryNode();
@@ -153,10 +191,14 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         /**
          * Return a Bits instance indicating which nodes are live.  The result is undefined for
          * ordinals that do not correspond to nodes in the graph.
+         *
+         * @return a Bits instance indicating which nodes are live
          */
         Bits liveNodes();
 
         /**
+         * Returns the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
+         *
          * @return the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
          */
         default int getIdUpperBound() {
@@ -165,6 +207,10 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
 
         /**
          * Whether the given node is present in the given layer of the graph.
+         *
+         * @param level the level to check
+         * @param node the node to check
+         * @return true if the node is present in the layer, false otherwise
          */
         boolean contains(int level, int node);
     }
@@ -174,10 +220,31 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
      */
     interface ScoringView extends View {
+        /**
+         * Returns an exact score function for reranking results.
+         *
+         * @param queryVector the query vector to compute scores against
+         * @param vsf the vector similarity function to use
+         * @return an exact score function
+         */
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
+
+        /**
+         * Returns an approximate score function for initial candidate scoring.
+         *
+         * @param queryVector the query vector to compute scores against
+         * @param vsf the vector similarity function to use
+         * @return an approximate score function
+         */
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }
 
+    /**
+     * Returns a human-readable string representation of the graph structure showing all nodes and their neighbors.
+     *
+     * @param graph the graph index to format
+     * @return a formatted string representation of the graph
+     */
     static String prettyPrint(ImmutableGraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
@@ -204,11 +271,22 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         return sb.toString();
     }
 
-    // Comparable b/c it gets used in ConcurrentSkipListMap
+    /**
+     * Represents a node at a specific level in the hierarchical graph structure.
+     * Comparable to support use in ConcurrentSkipListMap.
+     */
     final class NodeAtLevel implements Comparable<NodeAtLevel> {
+        /** The level in the hierarchy where this node exists */
         public final int level;
+        /** The node identifier */
         public final int node;
 
+        /**
+         * Creates a new NodeAtLevel instance.
+         *
+         * @param level the level in the hierarchy (must be non-negative)
+         * @param node the node identifier (must be non-negative)
+         */
         public NodeAtLevel(int level, int node) {
             assert level >= 0 : level;
             assert node >= 0 : node;

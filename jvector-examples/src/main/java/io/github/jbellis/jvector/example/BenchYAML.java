@@ -32,6 +32,16 @@ import java.util.stream.Collectors;
  * Tests GraphIndexes against vectors from various datasets
  */
 public class BenchYAML {
+    /**
+     * Constructs a BenchYAML.
+     */
+    public BenchYAML() {}
+
+    /**
+     * Main entry point for the YAML-based benchmark.
+     * @param args the command line arguments
+     * @throws IOException if an I/O error occurs
+     */
     public static void main(String[] args) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.

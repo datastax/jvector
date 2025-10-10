@@ -30,14 +30,30 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
+/**
+ * A dataset containing base vectors, query vectors, and ground truth results.
+ */
 public class DataSet {
+    /** The name of the dataset. */
     public final String name;
+    /** The similarity function for this dataset. */
     public final VectorSimilarityFunction similarityFunction;
+    /** The base vectors in the dataset. */
     public final List<VectorFloat<?>> baseVectors;
+    /** The query vectors for searching. */
     public final List<VectorFloat<?>> queryVectors;
+    /** The ground truth results for queries. */
     public final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
+    /**
+     * Creates a new DataSet.
+     * @param name the name parameter
+     * @param similarityFunction the similarityFunction parameter
+     * @param baseVectors the baseVectors parameter
+     * @param queryVectors the queryVectors parameter
+     * @param groundTruth the groundTruth parameter
+     */
     public DataSet(String name,
                    VectorSimilarityFunction similarityFunction,
                    List<VectorFloat<?>> baseVectors,
@@ -74,6 +90,12 @@ public class DataSet {
     /**
      * Return a dataset containing the given vectors, scrubbed free from zero vectors and normalized to unit length.
      * Note: This only scrubs and normalizes for dot product similarity.
+     * @param pathStr the pathStr parameter
+     * @param vsf the vsf parameter
+     * @param baseVectors the baseVectors parameter
+     * @param queryVectors the queryVectors parameter
+     * @param groundTruth the groundTruth parameter
+     * @return the scrubbed dataset
      */
     public static DataSet getScrubbedDataSet(String pathStr,
                                              VectorSimilarityFunction vsf,
@@ -153,10 +175,18 @@ public class DataSet {
         return (float) Math.sqrt(norm);
     }
 
+    /**
+     * Gets the dimension of the vectors.
+     * @return the dimension
+     */
     public int getDimension() {
         return baseVectors.get(0).length();
     }
 
+    /**
+     * Gets the base vectors as RandomAccessVectorValues.
+     * @return the base vectors
+     */
     public RandomAccessVectorValues getBaseRavv() {
         if (baseRavv == null) {
             baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());

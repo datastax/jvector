@@ -361,6 +361,10 @@ public class IPCService
         System.exit(1);
     }
 
+    /**
+     * Main entry point.
+     * @param args command line arguments
+     */
     public static void main(String[] args) {
         String socketFile = System.getProperty("java.io.tmpdir") + "/jvector.sock";
         if (args.length > 1)

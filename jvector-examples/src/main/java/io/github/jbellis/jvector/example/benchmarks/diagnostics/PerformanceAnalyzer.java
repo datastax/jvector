@@ -31,7 +31,15 @@ public class PerformanceAnalyzer {
     private final AtomicLong totalTime = new AtomicLong(0);
 
     /**
-     * Records the execution time of a single query
+     * Constructs a new PerformanceAnalyzer with empty timing data.
+     */
+    public PerformanceAnalyzer() {
+    }
+
+    /**
+     * Records the execution time of a single query.
+     *
+     * @param nanoTime the query execution time in nanoseconds
      */
     public void recordQueryTime(long nanoTime) {
         queryTimes.offer(nanoTime);
@@ -40,7 +48,10 @@ public class PerformanceAnalyzer {
     }
 
     /**
-     * Analyzes collected timing data and returns performance statistics
+     * Analyzes collected timing data and returns performance statistics.
+     *
+     * @param phase the name of the phase being analyzed
+     * @return the timing analysis results
      */
     public TimingAnalysis analyzeTimings(String phase) {
         List<Long> times = new ArrayList<>(queryTimes);
@@ -77,7 +88,11 @@ public class PerformanceAnalyzer {
     }
 
     /**
-     * Compares performance between runs and identifies significant changes
+     * Compares performance between runs and identifies significant changes.
+     *
+     * @param baseline the baseline timing analysis
+     * @param current the current timing analysis
+     * @return the performance comparison results
      */
     public static PerformanceComparison compareRuns(TimingAnalysis baseline, TimingAnalysis current) {
         double p50Change = calculatePercentageChange(baseline.p50, current.p50);
@@ -100,7 +115,9 @@ public class PerformanceAnalyzer {
     }
 
     /**
-     * Logs timing analysis results
+     * Logs timing analysis results to standard output.
+     *
+     * @param analysis the timing analysis to log
      */
     public void logAnalysis(TimingAnalysis analysis) {
         System.out.printf("[%s] Query Timing Analysis:%n", analysis.phase);
@@ -124,7 +141,9 @@ public class PerformanceAnalyzer {
     }
 
     /**
-     * Logs performance comparison results
+     * Logs performance comparison results to standard output.
+     *
+     * @param comparison the performance comparison to log
      */
     public static void logComparison(PerformanceComparison comparison) {
         System.out.printf("[%s vs %s] Performance Comparison:%n",
@@ -139,17 +158,39 @@ public class PerformanceAnalyzer {
         }
     }
 
-    // Data classes
+    /**
+     * Contains timing analysis statistics for a benchmark phase.
+     */
     public static class TimingAnalysis {
+        /** The name of the phase being analyzed. */
         public final String phase;
+        /** The minimum query time in nanoseconds. */
         public final long min;
+        /** The maximum query time in nanoseconds. */
         public final long max;
+        /** The 50th percentile (median) query time in nanoseconds. */
         public final long p50;
+        /** The 95th percentile query time in nanoseconds. */
         public final long p95;
+        /** The 99th percentile query time in nanoseconds. */
         public final long p99;
+        /** The mean query time in nanoseconds. */
         public final long mean;
+        /** List of outlier query times exceeding 3x the median. */
         public final List<Long> outliers;
 
+        /**
+         * Constructs a TimingAnalysis with the specified statistics.
+         *
+         * @param phase the name of the phase being analyzed
+         * @param min the minimum query time in nanoseconds
+         * @param max the maximum query time in nanoseconds
+         * @param p50 the 50th percentile query time in nanoseconds
+         * @param p95 the 95th percentile query time in nanoseconds
+         * @param p99 the 99th percentile query time in nanoseconds
+         * @param mean the mean query time in nanoseconds
+         * @param outliers list of outlier query times
+         */
         public TimingAnalysis(String phase, long min, long max, long p50, long p95, long p99,
                             long mean, List<Long> outliers) {
             this.phase = phase;
@@ -163,15 +204,36 @@ public class PerformanceAnalyzer {
         }
     }
 
+    /**
+     * Contains performance comparison results between two benchmark runs.
+     */
     public static class PerformanceComparison {
+        /** The name of the baseline phase. */
         public final String baselinePhase;
+        /** The name of the current phase. */
         public final String currentPhase;
+        /** The percentage change in 50th percentile time. */
         public final double p50Change;
+        /** The percentage change in 95th percentile time. */
         public final double p95Change;
+        /** The percentage change in 99th percentile time. */
         public final double p99Change;
+        /** The percentage change in mean time. */
         public final double meanChange;
+        /** Whether a significant performance regression was detected. */
         public final boolean significantRegression;
 
+        /**
+         * Constructs a PerformanceComparison with the specified metrics.
+         *
+         * @param baselinePhase the name of the baseline phase
+         * @param currentPhase the name of the current phase
+         * @param p50Change the percentage change in 50th percentile time
+         * @param p95Change the percentage change in 95th percentile time
+         * @param p99Change the percentage change in 99th percentile time
+         * @param meanChange the percentage change in mean time
+         * @param significantRegression whether a significant regression was detected
+         */
         public PerformanceComparison(String baselinePhase, String currentPhase,
                                    double p50Change, double p95Change, double p99Change,
                                    double meanChange, boolean significantRegression) {

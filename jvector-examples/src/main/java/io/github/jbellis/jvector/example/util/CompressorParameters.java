@@ -21,26 +21,59 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 
+/**
+ * Base class for compressor parameters.
+ */
 public abstract class CompressorParameters {
+    /**
+     * Constructs a CompressorParameters.
+     */
+    public CompressorParameters() {}
+
+    /** No compression constant. */
     public static final CompressorParameters NONE = new NoCompressionParameters();
 
+    /**
+     * Checks if this compressor supports caching.
+     * @return true if caching is supported
+     */
     public boolean supportsCaching() {
         return false;
     }
 
+    /**
+     * Gets the ID string for the specified dataset.
+     * @param ds the dataset
+     * @return the ID string
+     */
     public String idStringFor(DataSet ds) {
         // only required when supportsCaching() is true
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Computes the compressor for the specified dataset.
+     * @param ds the dataset
+     * @return the vector compressor
+     */
     public abstract VectorCompressor<?> computeCompressor(DataSet ds);
 
+    /**
+     * Product quantization parameters.
+     */
     public static class PQParameters extends CompressorParameters {
         private final int m;
         private final int k;
         private final boolean isCentered;
         private final float anisotropicThreshold;
 
+        /**
+         * Constructs PQParameters.
+         * @param m the m parameter
+         * @param k the k parameter
+         * @param isCentered the isCentered parameter
+         * @param anisotropicThreshold the anisotropicThreshold parameter
+         */
         public PQParameters(int m, int k, boolean isCentered, float anisotropicThreshold) {
             this.m = m;
             this.k = k;
@@ -64,16 +97,30 @@ public abstract class CompressorParameters {
         }
     }
 
+    /**
+     * Binary quantization parameters.
+     */
     public static class BQParameters extends CompressorParameters {
+        /**
+         * Constructs BQParameters.
+         */
+        public BQParameters() {}
         @Override
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             return new BinaryQuantization(ds.getDimension());
         }
     }
 
+    /**
+     * NVQ parameters.
+     */
     public static class NVQParameters extends CompressorParameters {
         private final int nSubVectors;
 
+        /**
+         * Constructs NVQParameters.
+         * @param nSubVectors the number of sub-vectors
+         */
         public NVQParameters(int nSubVectors) {
             this.nSubVectors = nSubVectors;
         }

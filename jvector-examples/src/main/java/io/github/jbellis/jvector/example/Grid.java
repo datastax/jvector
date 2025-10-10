@@ -75,9 +75,19 @@ import java.util.function.IntFunction;
 import java.util.stream.IntStream;
 
 /**
- * Tests a grid of configurations against a dataset
+ * Tests a grid of configurations against a dataset.
+ * This class provides utilities for running comprehensive benchmark sweeps across multiple
+ * configuration parameters including graph construction settings, compression strategies,
+ * and search parameters.
  */
 public class Grid {
+
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
+    private Grid() {
+        throw new AssertionError("Grid is a utility class and should not be instantiated");
+    }
 
     private static final String pqCacheDir = "pq_cache";
 
@@ -327,6 +337,10 @@ public class Grid {
         return new BuilderWithSuppliers(builder, suppliers);
     }
 
+    /**
+     * Sets the diagnostic level for benchmarks.
+     * @param diagLevel the diagnostic level
+     */
     public static void setDiagnosticLevel(int diagLevel) {
         diagnostic_level = diagLevel;
     }
@@ -346,10 +360,23 @@ public class Grid {
         }
     }
 
+    /**
+     * Pairs an OnDiskGraphIndexWriter builder with feature state suppliers.
+     * This class associates graph writer configuration with the functions that provide
+     * feature-specific state during graph construction.
+     */
     private static class BuilderWithSuppliers {
+        /** The graph index writer builder. */
         public final OnDiskGraphIndexWriter.Builder builder;
+        /** Map of feature IDs to their state supplier functions. */
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
 
+        /**
+         * Constructs a BuilderWithSuppliers pairing a builder with its state suppliers.
+         *
+         * @param builder the graph index writer builder
+         * @param suppliers map of feature IDs to state supplier functions
+         */
         public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
             this.builder = builder;
             this.suppliers = suppliers;
@@ -533,6 +560,21 @@ public class Grid {
         return benchmarks;
     }
 
+    /**
+     * Runs all configurations and collects benchmark results.
+     * @param ds the dataset
+     * @param mGrid the M parameter grid
+     * @param efConstructionGrid the efConstruction parameter grid
+     * @param neighborOverflowGrid the neighbor overflow parameter grid
+     * @param addHierarchyGrid the add hierarchy parameter grid
+     * @param featureSets the feature sets to test
+     * @param buildCompressors the build compressor functions
+     * @param compressionGrid the compression parameter grid
+     * @param topKGrid the topK parameter grid
+     * @param usePruningGrid the use pruning parameter grid
+     * @return the list of benchmark results
+     * @throws IOException if an error occurs
+     */
     public static List<BenchResult> runAllAndCollectResults(
             DataSet ds,
             List<Integer> mGrid,
@@ -655,6 +697,9 @@ public class Grid {
         });
     }
 
+    /**
+     * A configured system for running benchmarks.
+     */
     public static class ConfiguredSystem implements AutoCloseable {
         DataSet ds;
         ImmutableGraphIndex index;
@@ -672,6 +717,12 @@ public class Grid {
             this.features = features;
         }
 
+        /**
+         * Creates a search score provider for the given query vector and view.
+         * @param queryVector the query vector
+         * @param view the graph index view
+         * @return the search score provider
+         */
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
             // if we're not compressing then just use the exact score function
             if (cv == null) {
@@ -689,10 +740,18 @@ public class Grid {
             return new DefaultSearchScoreProvider(asf, rr);
         }
 
+        /**
+         * Gets the graph searcher for this thread.
+         * @return the graph searcher
+         */
         public GraphSearcher getSearcher() {
             return searchers.get();
         }
 
+        /**
+         * Gets the dataset.
+         * @return the dataset
+         */
         public DataSet getDataSet() {
             return ds;
         }

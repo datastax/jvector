@@ -25,6 +25,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * to make them identifiable for thread leak detection.
  */
 public class FilteredForkJoinPool extends ForkJoinPool {
+
+    /**
+     * Constructs a FilteredForkJoinPool using the default parallelism level.
+     * Use the static factory methods instead of this constructor.
+     */
+    public FilteredForkJoinPool() {
+        super();
+    }
     
     /**
      * Creates a ForkJoinPool with the same parallelism as {@link ForkJoinPool#commonPool()}
@@ -69,6 +77,11 @@ public class FilteredForkJoinPool extends ForkJoinPool {
      * Custom worker thread class that can be easily identified for thread leak detection.
      */
     private static class JVectorForkJoinWorkerThread extends ForkJoinWorkerThread {
+        /**
+         * Creates a new worker thread attached to the given pool.
+         *
+         * @param pool the pool this thread will work in
+         */
         protected JVectorForkJoinWorkerThread(ForkJoinPool pool) {
             super(pool);
         }

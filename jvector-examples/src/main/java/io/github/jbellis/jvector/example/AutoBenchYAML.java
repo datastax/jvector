@@ -52,6 +52,10 @@ import java.util.stream.Collectors;
  * continue from where it left off rather than starting over from the beginning.
  */
 public class AutoBenchYAML {
+    /**
+     * Constructs an AutoBenchYAML.
+     */
+    public AutoBenchYAML() {}
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
 
     /**
@@ -70,6 +74,11 @@ public class AutoBenchYAML {
         return allDatasets;
     }
 
+    /**
+     * Main entry point for the benchmark runner.
+     * @param args the command line arguments
+     * @throws IOException if an I/O error occurs
+     */
     public static void main(String[] args) throws IOException {
         // Check for --output argument (required for this class)
         String outputPath = null;

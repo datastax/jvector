@@ -30,10 +30,22 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.IntStream;
 
+/**
+ * Utility for loading datasets from HDF5 files.
+ */
 public class Hdf5Loader {
+    /** The directory containing HDF5 files. */
     public static final String HDF5_DIR = "hdf5/";
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    private Hdf5Loader() {
+    }
+
+    /**
+     * Loads a dataset from an HDF5 file.
+     * @param filename the file name
+     * @return the loaded dataset
+     */
     public static DataSet load(String filename) {
         // infer the similarity
         VectorSimilarityFunction similarityFunction;

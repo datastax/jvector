@@ -66,11 +66,28 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-// this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
+/**
+ * Demonstration examples showing various ways to build and search graph indexes with JVector.
+ * This class uses explicit typing instead of var for easier reading when excerpted for instructional use.
+ * Each method demonstrates a different approach from simple in-memory indexes to complex
+ * on-disk indexes with compression.
+ */
 public class SiftSmall {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    // hello world
+    /**
+     * Private constructor to prevent instantiation of this example class.
+     */
+    private SiftSmall() {
+        throw new AssertionError("SiftSmall is an example class and should not be instantiated");
+    }
+
+    /**
+     * Demonstrates the simplest case: building an in-memory graph index and performing a search.
+     *
+     * @param baseVectors the vectors to index
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftInMemory(List<VectorFloat<?>> baseVectors) throws IOException {
         // infer the dimensionality from the first vector
         int originalDimension = baseVectors.get(0).length();
@@ -105,7 +122,12 @@ public class SiftSmall {
         }
     }
 
-    // show how to use explicit GraphSearcher objects
+    /**
+     * Shows how to use explicit GraphSearcher objects for more control over search operations.
+     *
+     * @param baseVectors the vectors to index
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftInMemoryWithSearcher(List<VectorFloat<?>> baseVectors) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -126,7 +148,14 @@ public class SiftSmall {
         }
     }
 
-    // call out to testRecall instead of doing manual searches
+    /**
+     * Demonstrates measuring search quality using recall metrics against ground truth results.
+     *
+     * @param baseVectors the vectors to index
+     * @param queryVectors the query vectors to search for
+     * @param groundTruth the ground truth nearest neighbors for each query
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftInMemoryWithRecall(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -140,7 +169,15 @@ public class SiftSmall {
         }
     }
 
-    // write and load index to and from disk
+    /**
+     * Demonstrates writing an index to disk and loading it back for searching.
+     * This shows the basic persistence capabilities of JVector indexes.
+     *
+     * @param baseVectors the vectors to index
+     * @param queryVectors the query vectors to search for
+     * @param groundTruth the ground truth nearest neighbors for each query
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftPersisted(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -164,7 +201,16 @@ public class SiftSmall {
         }
     }
 
-    // diskann-style index with PQ
+    /**
+     * Demonstrates DiskANN-style indexing with Product Quantization (PQ) compression.
+     * Shows how to build an index with uncompressed vectors, then compress and load them
+     * separately for efficient approximate search with reranking.
+     *
+     * @param baseVectors the vectors to index
+     * @param queryVectors the query vectors to search for
+     * @param groundTruth the ground truth nearest neighbors for each query
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftDiskAnn(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -209,6 +255,16 @@ public class SiftSmall {
         }
     }
 
+    /**
+     * Demonstrates DiskANN-style indexing with Learn-To-Modify (LTM) approach.
+     * This builds the graph index incrementally, compressing vectors on-the-fly during
+     * construction and writing them directly to disk.
+     *
+     * @param baseVectors the vectors to index
+     * @param queryVectors the query vectors to search for
+     * @param groundTruth the ground truth nearest neighbors for each query
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftDiskAnnLTM(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -270,6 +326,15 @@ public class SiftSmall {
         }
     }
 
+    /**
+     * Demonstrates DiskANN-style indexing with LTM approach using Neighborhood Vector Quantization (NVQ).
+     * Similar to siftDiskAnnLTM but uses NVQ encoding for even more efficient storage and retrieval.
+     *
+     * @param baseVectors the vectors to index
+     * @param queryVectors the query vectors to search for
+     * @param groundTruth the ground truth nearest neighbors for each query
+     * @throws IOException if an I/O error occurs
+     */
     public static void siftDiskAnnLTMWithNVQ(List<VectorFloat<?>> baseVectors, List<VectorFloat<?>> queryVectors, List<List<Integer>> groundTruth) throws IOException {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
@@ -333,10 +398,13 @@ public class SiftSmall {
         }
     }
 
-    //
-    // Utilities and main() harness
-    //
-
+    /**
+     * Generates a random unit vector with the specified dimension.
+     * The vector is L2-normalized to have unit length.
+     *
+     * @param dim the dimension of the vector to generate
+     * @return a random L2-normalized vector
+     */
     public static VectorFloat<?> randomVector(int dim) {
         Random R = ThreadLocalRandom.current();
         VectorFloat<?> vec = vts.createFloatVector(dim);
@@ -378,6 +446,14 @@ public class SiftSmall {
         System.out.printf("(%s) Recall: %.4f%n", graphType, recall);
     }
 
+    /**
+     * Main entry point demonstrating all the example use cases for building and searching
+     * graph indexes with JVector. Loads the SIFT dataset and runs through various indexing
+     * strategies from simple in-memory to complex on-disk with compression.
+     *
+     * @param args command line arguments (not used)
+     * @throws IOException if an error occurs reading the dataset files
+     */
     public static void main(String[] args) throws IOException {
         var siftPath = "siftsmall";
         var baseVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_base.fvecs", siftPath));

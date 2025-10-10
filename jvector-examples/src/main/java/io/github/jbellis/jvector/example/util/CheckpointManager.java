@@ -122,6 +122,7 @@ public class CheckpointManager {
 
     /**
      * Returns the list of completed BenchResults.
+     * @return the list of completed BenchResults
      */
     public List<io.github.jbellis.jvector.example.BenchResult> getCompletedResults() {
         return new ArrayList<>(completedResults);

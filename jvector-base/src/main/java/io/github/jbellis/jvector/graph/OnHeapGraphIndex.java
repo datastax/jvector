@@ -55,8 +55,8 @@ import java.util.stream.IntStream;
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
 public class OnHeapGraphIndex implements MutableGraphIndex {
-    // Used for saving and loading OnHeapGraphIndex
-    public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
+    /** Magic number used for saving and loading OnHeapGraphIndex (JVECTOR with some imagination). */
+    public static final int MAGIC = 0x75EC4012;
 
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
@@ -76,6 +76,13 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private volatile boolean allMutationsCompleted = false;
 
+    /**
+     * Constructs an OnHeapGraphIndex with the specified parameters.
+     *
+     * @param maxDegrees the maximum degree for each layer
+     * @param overflowRatio the multiplicative ratio for temporary overflow during construction
+     * @param diversityProvider provider for diversity-based neighbor selection
+     */
     OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
@@ -140,10 +147,21 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return layers.get(level).size();
     }
 
+    /**
+     * Adds a node at the specified level to the graph.
+     *
+     * @param nodeLevel the node and level to add
+     */
     public void addNode(NodeAtLevel nodeLevel) {
         addNode(nodeLevel.level, nodeLevel.node);
     }
 
+    /**
+     * Adds a node at the specified level to the graph.
+     *
+     * @param level the layer to add the node to
+     * @param node the node ID to add
+     */
     public void addNode(int level, int node) {
         ensureLayersExist(level);
 
@@ -377,9 +395,16 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * searches. The View provides a limited kind of snapshot isolation: only nodes completely added
      * to the graph at the time the View was created will be visible (but the connections between them
      * are allowed to change, so you could potentially get different top K results from the same query
-     * if concurrent updates are in progress.)
+     * if concurrent updates are in progress).
      */
     public class ConcurrentGraphIndexView extends FrozenView {
+        /**
+         * Constructs a ConcurrentGraphIndexView with snapshot isolation based on the current completion timestamp.
+         */
+        public ConcurrentGraphIndexView() {
+            super();
+        }
+
         // It is tempting, but incorrect, to try to provide "adequate" isolation by
         // (1) keeping a bitset of complete nodes and giving that to the searcher as nodes to
         // accept -- but we need to keep incomplete nodes out of the search path entirely,
@@ -441,7 +466,18 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
     }
 
+    /**
+     * A frozen view of the graph that provides read-only access without snapshot isolation.
+     * This view is used when all mutations have been completed and the graph structure is stable.
+     */
     private class FrozenView implements View {
+        /**
+         * Constructs a FrozenView for this graph.
+         */
+        FrozenView() {
+            // Default constructor
+        }
+
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -488,7 +524,10 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     /**
-     * Saves the graph to the given DataOutput for reloading into memory later
+     * Saves the graph to the given DataOutput for reloading into memory later.
+     *
+     * @param out the DataOutput to write the graph to
+     * @deprecated This method is deprecated and may be removed in a future version
      */
     @Deprecated
     public void save(DataOutput out) {

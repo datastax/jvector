@@ -37,12 +37,19 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
 
     private final int dimension;
 
+    /**
+     * Creates a BinaryQuantization instance for vectors of the specified dimension.
+     * @param dimension the dimension of the vectors to be quantized
+     */
     public BinaryQuantization(int dimension) {
         this.dimension = dimension;
     }
 
     /**
-     * Use BQ constructor instead
+     * Creates a BinaryQuantization instance from the given RandomAccessVectorValues.
+     * @param ravv the RandomAccessVectorValues to create quantization from
+     * @return a BinaryQuantization instance
+     * @deprecated use {@link #BinaryQuantization(int)} constructor instead
      */
     @Deprecated
     public static BinaryQuantization compute(RandomAccessVectorValues ravv) {
@@ -50,7 +57,11 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
     }
 
     /**
-     * Use BQ constructor instead
+     * Creates a BinaryQuantization instance from the given RandomAccessVectorValues.
+     * @param ravv the RandomAccessVectorValues to create quantization from
+     * @param parallelExecutor the ForkJoinPool for parallel execution (unused)
+     * @return a BinaryQuantization instance
+     * @deprecated use {@link #BinaryQuantization(int)} constructor instead
      */
     @Deprecated
     public static BinaryQuantization compute(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
@@ -128,10 +139,20 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
         vts.writeFloatVector(out, vts.createFloatVector(dimension));
     }
 
+    /**
+     * Returns the original dimension of the vectors being quantized.
+     * @return the original dimension
+     */
     public int getOriginalDimension() {
         return dimension;
     }
 
+    /**
+     * Loads a BinaryQuantization instance from the given RandomAccessReader.
+     * @param in the RandomAccessReader to load from
+     * @return a BinaryQuantization instance
+     * @throws IOException if an I/O error occurs
+     */
     public static BinaryQuantization load(RandomAccessReader in) throws IOException {
         int dimension = in.readInt();
         // We used to record the center of the dataset but this actually degrades performance.

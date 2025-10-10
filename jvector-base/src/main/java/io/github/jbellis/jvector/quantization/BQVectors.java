@@ -28,10 +28,24 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
 
+/**
+ * Abstract base class for collections of binary quantized vectors.
+ * <p>
+ * Binary quantization compresses each float vector into a compact bit representation,
+ * where each float is represented by a single bit. Similarity is computed using Hamming
+ * distance, which provides a fast approximation particularly suitable for cosine similarity.
+ */
 public abstract class BQVectors implements CompressedVectors {
+    /** The binary quantization compressor used by this instance. */
     protected final BinaryQuantization bq;
+
+    /** The compressed vector data, stored as arrays of longs. */
     protected long[][] compressedVectors;
 
+    /**
+     * Constructs a BQVectors instance with the given binary quantization compressor.
+     * @param bq the binary quantization compressor
+     */
     protected BQVectors(BinaryQuantization bq) {
         this.bq = bq;
     }
@@ -55,6 +69,13 @@ public abstract class BQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Loads binary quantized vectors from the given RandomAccessReader at the specified offset.
+     * @param in the RandomAccessReader to load from
+     * @param offset the offset position to start reading from
+     * @return a BQVectors instance containing the loaded vectors
+     * @throws IOException if an I/O error occurs or the data format is invalid
+     */
     public static BQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
 
@@ -113,10 +134,22 @@ public abstract class BQVectors implements CompressedVectors {
         };
     }
 
+    /**
+     * Computes the similarity between two binary quantized vectors using Hamming distance.
+     * The similarity is normalized to the range [0, 1], where 1 represents identical vectors.
+     * @param encoded1 the first encoded vector
+     * @param encoded2 the second encoded vector
+     * @return the similarity score between 0 and 1
+     */
     public float similarityBetween(long[] encoded1, long[] encoded2) {
         return 1 - (float) VectorUtil.hammingDistance(encoded1, encoded2) / bq.getOriginalDimension();
     }
 
+    /**
+     * Returns the compressed vector at the specified index.
+     * @param i the index of the vector to retrieve
+     * @return the compressed vector as an array of longs
+     */
     public long[] get(int i) {
         return compressedVectors[i];
     }

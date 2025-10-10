@@ -31,6 +31,23 @@ public class PanamaVectorizationProvider extends VectorizationProvider
     private final VectorUtilSupport vectorUtilSupport;
     private final VectorTypeSupport vectorTypeSupport;
 
+    /**
+     * Constructs a new PanamaVectorizationProvider that utilizes the Panama Vector API
+     * for hardware-accelerated SIMD operations.
+     * <p>
+     * This constructor initializes the vectorization provider with:
+     * <ul>
+     * <li>{@link PanamaVectorUtilSupport} for SIMD-accelerated vector operations including
+     *     dot product, cosine similarity, and Euclidean distance calculations</li>
+     * <li>{@link ArrayVectorProvider} for on-heap array-backed vector storage</li>
+     * </ul>
+     * The constructor also disables out-of-bounds checking for vector access operations via
+     * the system property {@code jdk.incubator.vector.VECTOR_ACCESS_OOB_CHECK} to maximize
+     * performance in production environments.
+     * <p>
+     * The preferred SIMD vector width is logged at construction time and depends on the
+     * underlying hardware capabilities (e.g., AVX2, AVX-512).
+     */
     public PanamaVectorizationProvider() {
         this.vectorUtilSupport = new PanamaVectorUtilSupport();
         LOG.info("Preferred f32 species is " + FloatVector.SPECIES_PREFERRED.vectorBitSize());

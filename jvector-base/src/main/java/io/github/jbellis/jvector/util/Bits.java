@@ -25,10 +25,17 @@
 package io.github.jbellis.jvector.util;
 
 /**
- * Interface for Bitset-like structures.
+ * Interface for Bitset-like structures that provide read-only bit access.
+ * <p>
+ * This interface is used for filtering operations where bits represent the presence
+ * or absence of elements. It provides constant instances for common cases and utility
+ * methods for combining Bits instances.
  */
 public interface Bits {
+    /** A Bits instance where all bits are set. */
     Bits ALL = new MatchAllBits();
+
+    /** A Bits instance where no bits are set. */
     Bits NONE = new MatchNoBits();
 
     /**
@@ -41,7 +48,10 @@ public interface Bits {
     boolean get(int index);
 
     /**
-     * Returns a Bits that is true when `bits` is false, and false when `bits` is true
+     * Returns a Bits instance that is the inverse of the given Bits.
+     * The result is {@code true} when {@code bits} is {@code false}, and vice versa.
+     * @param bits the Bits to invert
+     * @return a Bits instance representing the inverse
      */
     static Bits inverseOf(Bits bits) {
         return new Bits() {
@@ -53,7 +63,11 @@ public interface Bits {
     }
 
     /**
-     * Return a Bits that is set for a given ordinal iff both it is set in both `a` and `b`.
+     * Returns a Bits instance representing the intersection of two Bits instances.
+     * A bit is set in the result if and only if it is set in both {@code a} and {@code b}.
+     * @param a the first Bits instance
+     * @param b the second Bits instance
+     * @return a Bits instance representing the intersection of {@code a} and {@code b}
      */
     static Bits intersectionOf(Bits a, Bits b) {
         if (a instanceof MatchAllBits) {
@@ -78,16 +92,26 @@ public interface Bits {
         };
     }
 
-    /** Bits with all bits set. */
+    /**
+     * A Bits implementation where all bits are set.
+     */
     class MatchAllBits implements Bits {
+        /** Creates a MatchAllBits instance. */
+        public MatchAllBits() {}
+
         @Override
         public boolean get(int index) {
             return true;
         }
     }
 
-    /** Bits with no bits set. */
+    /**
+     * A Bits implementation where no bits are set.
+     */
     class MatchNoBits implements Bits {
+        /** Creates a MatchNoBits instance. */
+        public MatchNoBits() {}
+
         @Override
         public boolean get(int index) {
             return false;

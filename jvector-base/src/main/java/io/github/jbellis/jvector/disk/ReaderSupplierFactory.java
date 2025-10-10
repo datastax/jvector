@@ -22,11 +22,31 @@ import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+/**
+ * Factory for creating ReaderSupplier instances with automatic fallback based on available implementations.
+ * Tries in order: MemorySegmentReader (JDK 20+), MMapReader (requires native library), MappedChunkReader (fallback).
+ */
 public class ReaderSupplierFactory {
     private static final Logger LOG = Logger.getLogger(ReaderSupplierFactory.class.getName());
     private static final String MEMORY_SEGMENT_READER_CLASSNAME = "io.github.jbellis.jvector.disk.MemorySegmentReader$Supplier";
     private static final String MMAP_READER_CLASSNAME = "io.github.jbellis.jvector.example.util.MMapReader$Supplier";
 
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
+    private ReaderSupplierFactory() {
+        throw new AssertionError("ReaderSupplierFactory should not be instantiated");
+    }
+
+    /**
+     * Opens a ReaderSupplier for the given path, using the best available implementation.
+     * Attempts to use MemorySegmentReader first (JDK 20+), then MMapReader (native library),
+     * and finally falls back to MappedChunkReader.
+     *
+     * @param path the path to the file to read
+     * @return a ReaderSupplier for accessing the file
+     * @throws IOException if the file cannot be opened
+     */
     public static ReaderSupplier open(Path path) throws IOException {
         try {
             // prefer MemorySegmentReader (available under JDK 20+)

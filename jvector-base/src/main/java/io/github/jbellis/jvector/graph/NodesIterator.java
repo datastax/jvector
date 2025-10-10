@@ -34,10 +34,19 @@ import java.util.PrimitiveIterator;
  */
 public interface NodesIterator extends PrimitiveIterator.OfInt {
     /**
-     * The number of elements in this iterator *
+     * Returns the number of elements in this iterator.
+     *
+     * @return the size of this iterator
      */
     int size();
 
+    /**
+     * Creates a NodesIterator from a primitive iterator and size.
+     *
+     * @param iterator the primitive iterator to wrap
+     * @param size the number of elements
+     * @return a NodesIterator wrapping the given iterator
+     */
     static NodesIterator fromPrimitiveIterator(PrimitiveIterator.OfInt iterator, int size) {
         return new NodesIterator() {
             @Override
@@ -57,12 +66,20 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
         };
     }
 
+    /**
+     * An iterator over an array of node IDs.
+     */
     class ArrayNodesIterator implements NodesIterator {
         private final int[] nodes;
         private int cur = 0;
         private final int size;
 
-        /** Constructor for iterator based on integer array representing nodes */
+        /**
+         * Constructs an iterator based on an integer array representing nodes.
+         *
+         * @param nodes the array of node IDs
+         * @param size the number of valid elements in the array
+         */
         public ArrayNodesIterator(int[] nodes, int size) {
             assert nodes != null;
             assert size <= nodes.length;
@@ -75,6 +92,11 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
             return size;
         }
 
+        /**
+         * Constructs an iterator for the entire array.
+         *
+         * @param nodes the array of node IDs
+         */
         public ArrayNodesIterator(int[] nodes) {
             this(nodes, nodes.length);
         }
@@ -97,9 +119,18 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
         }
     }
 
+    /**
+     * A singleton empty node iterator.
+     */
     EmptyNodeIterator EMPTY_NODE_ITERATOR = new EmptyNodeIterator();
 
+    /**
+     * An empty node iterator implementation.
+     */
     class EmptyNodeIterator implements NodesIterator {
+        /** Package-private constructor. */
+        EmptyNodeIterator() {
+        }
         @Override
         public int size() {
             return 0;

@@ -24,8 +24,21 @@ import java.util.List;
  * A common interface for all search benchmarks.
  */
 public interface QueryBenchmark {
+    /**
+     * Gets the name of this benchmark.
+     * @return the benchmark name
+     */
     String getBenchmarkName();
 
+    /**
+     * Runs the benchmark.
+     * @param cs the configured system
+     * @param topK the topK parameter
+     * @param rerankK the rerankK parameter
+     * @param usePruning the usePruning parameter
+     * @param queryRuns the queryRuns parameter
+     * @return the list of metrics
+     */
     List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,

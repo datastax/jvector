@@ -31,18 +31,26 @@ import io.github.jbellis.jvector.util.ArrayUtil;
  * NodesUnsorted contains scored node ids in insertion order.
  */
 public class NodesUnsorted {
+    /** The number of nodes currently stored. */
     protected int size;
     float[] score;
     int[] node;
 
+    /**
+     * Constructs a NodesUnsorted with the specified initial capacity.
+     *
+     * @param initialSize the initial capacity for node and score arrays
+     */
     public NodesUnsorted(int initialSize) {
         node = new int[initialSize];
         score = new float[initialSize];
     }
 
     /**
-     * Add a new node to the NodeArray. The new node must be worse than all previously stored
-     * nodes.
+     * Adds a new node to this collection in insertion order (unsorted).
+     *
+     * @param newNode the node ID to add
+     * @param newScore the score of the node
      */
     public void add(int newNode, float newScore) {
         if (size == node.length) {
@@ -53,19 +61,35 @@ public class NodesUnsorted {
         ++size;
     }
 
+    /**
+     * Grows the internal arrays to accommodate more nodes.
+     */
     protected final void growArrays() {
         node = ArrayUtil.grow(node);
         score = ArrayUtil.growExact(score, node.length);
     }
 
+    /**
+     * Returns the number of nodes currently stored.
+     *
+     * @return the size
+     */
     public int size() {
         return size;
     }
 
+    /**
+     * Removes all nodes from this collection.
+     */
     public void clear() {
         size = 0;
     }
 
+    /**
+     * Applies the given consumer to each node/score pair in this collection.
+     *
+     * @param consumer the consumer to apply to each node/score pair
+     */
     public void foreach(NodeConsumer consumer) {
         for (int i = 0; i < size; i++) {
             consumer.accept(node[i], score[i]);

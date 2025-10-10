@@ -23,8 +23,13 @@ import java.nio.ByteBuffer;
  * RandomAccessReader that reads from a ByteBuffer
  */
 public class ByteBufferReader implements RandomAccessReader {
+    /** The underlying ByteBuffer for reading data. */
     protected final ByteBuffer bb;
 
+    /**
+     * Creates a ByteBufferReader that reads from the given ByteBuffer.
+     * @param sourceBB the ByteBuffer to read from
+     */
     public ByteBufferReader(ByteBuffer sourceBB) {
         bb = sourceBB;
     }

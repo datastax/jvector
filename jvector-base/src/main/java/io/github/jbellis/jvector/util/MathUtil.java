@@ -16,8 +16,20 @@
 
 package io.github.jbellis.jvector.util;
 
+/**
+ * Utility methods for mathematical operations.
+ */
 public class MathUtil {
-    // looks silly at first but it really does make code more readable
+    /** Private constructor to prevent instantiation. */
+    private MathUtil() {
+    }
+    /**
+     * Squares the given float value.
+     * While this may look silly at first, it really does make code more readable.
+     *
+     * @param a the value to square
+     * @return the square of a
+     */
     public static float square(float a) {
         return a * a;
     }

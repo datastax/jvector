@@ -31,6 +31,23 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * JMH benchmark for measuring graph index construction performance using the SIFT dataset.
+ * This benchmark evaluates index construction time with a fixed, real-world dataset,
+ * testing various combinations of graph degree (M) and beam width parameters.
+ *
+ * <p>Unlike {@link IndexConstructionWithRandomSetBenchmark}, this benchmark uses the
+ * actual SIFT dataset loaded from disk, providing more realistic performance measurements
+ * that account for real data characteristics.</p>
+ *
+ * <p>Key parameters:</p>
+ * <ul>
+ *   <li>Graph degree (M): 16, 32, or 64 neighbors per node</li>
+ *   <li>Beam width: 10 or 100 for construction search</li>
+ *   <li>Dataset: SIFT small dataset (10,000 vectors, 128 dimensions)</li>
+ *   <li>Similarity function: Euclidean distance</li>
+ * </ul>
+ */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
@@ -40,17 +57,47 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class IndexConstructionWithStaticSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithStaticSetBenchmark.class);
+
+    /** The vector values to be indexed, loaded from the SIFT dataset. */
     private RandomAccessVectorValues ravv;
+
+    /** The base vectors from the SIFT dataset. */
     private List<VectorFloat<?>> baseVectors;
+
+    /** The query vectors from the SIFT dataset (loaded but not used in this benchmark). */
     private List<VectorFloat<?>> queryVectors;
+
+    /** The ground truth nearest neighbors (loaded but not used in this benchmark). */
     private List<List<Integer>> groundTruth;
+
+    /** The score provider used during graph construction. */
     private BuildScoreProvider bsp;
+
+    /** The maximum degree of the graph (number of neighbors per node). */
     @Param({"16", "32", "64"})
-    private int M; // graph degree
+    private int M;
+
+    /** The beam width used during graph construction searches. */
     @Param({"10", "100"})
     private int beamWidth;
+
+    /** The dimensionality of vectors in the dataset. */
     int originalDimension;
 
+    /**
+     * Constructs a new benchmark instance. JMH will instantiate this class
+     * and populate the @Param fields before calling setup methods.
+     */
+    public IndexConstructionWithStaticSetBenchmark() {
+        // JMH-managed lifecycle
+    }
+
+    /**
+     * Initializes the benchmark state by loading the SIFT dataset from disk
+     * and configuring the score provider.
+     *
+     * @throws IOException if an error occurs loading the dataset files
+     */
     @Setup
     public void setup() throws IOException {
         var siftPath = "siftsmall";
@@ -67,6 +114,11 @@ public class IndexConstructionWithStaticSetBenchmark {
         bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
     }
 
+    /**
+     * Cleans up resources after the benchmark completes by clearing all vector collections.
+     *
+     * @throws IOException if an error occurs during teardown
+     */
     @TearDown
     public void tearDown() throws IOException {
         baseVectors.clear();
@@ -74,6 +126,13 @@ public class IndexConstructionWithStaticSetBenchmark {
         groundTruth.clear();
     }
 
+    /**
+     * The main benchmark method that measures the time to build a graph index
+     * from the loaded SIFT dataset using the configured parameters.
+     *
+     * @param blackhole JMH blackhole to prevent dead code elimination
+     * @throws IOException if an error occurs during index construction
+     */
     @Benchmark
     public void buildIndexBenchmark(Blackhole blackhole) throws IOException {
         // score provider using the raw, in-memory vectors

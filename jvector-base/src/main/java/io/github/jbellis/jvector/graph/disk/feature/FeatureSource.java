@@ -21,6 +21,17 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import java.io.Closeable;
 import java.io.IOException;
 
+/**
+ * A source for reading feature data associated with graph nodes.
+ */
 public interface FeatureSource extends Closeable {
+    /**
+     * Returns a reader for accessing the feature data of a specific node.
+     *
+     * @param node the node id to read feature data for
+     * @param featureId the type of feature to read
+     * @return a RandomAccessReader positioned to read the node's feature data
+     * @throws IOException if an I/O error occurs
+     */
     RandomAccessReader featureReaderForNode(int node, FeatureId featureId) throws IOException;
 }

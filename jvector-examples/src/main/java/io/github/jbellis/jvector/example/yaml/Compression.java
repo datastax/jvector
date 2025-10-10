@@ -23,10 +23,24 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import java.util.Map;
 import java.util.function.Function;
 
+/**
+ * Compression configuration for benchmarks.
+ */
 public class Compression {
+    /** The compression type. */
     public String type;
+    /** The compression parameters. */
     public Map<String, String> parameters;
 
+    /**
+     * Constructs a Compression.
+     */
+    public Compression() {}
+
+    /**
+     * Gets the compressor parameters as a function.
+     * @return the compressor parameters function
+     */
     public Function<DataSet, CompressorParameters> getCompressorParameters() {
         switch (type) {
             case "None":

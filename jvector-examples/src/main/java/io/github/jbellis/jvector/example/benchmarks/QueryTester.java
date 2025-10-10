@@ -24,13 +24,16 @@ import java.util.Map;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 
 /**
- * Orchestrates running a set of QueryBenchmark instances
- * and collects their summary results.
+ * Orchestrates running a set of QueryBenchmark instances and collects their summary results.
+ * Provides a simple interface for executing multiple benchmarks sequentially and gathering
+ * their metrics for analysis and comparison.
  */
 public class QueryTester {
     private final List<QueryBenchmark> benchmarks;
 
     /**
+     * Constructs a QueryTester with the specified benchmarks to execute.
+     *
      * @param benchmarks the benchmarks to run, in the order provided
      */
     public QueryTester(List<QueryBenchmark> benchmarks) {
@@ -38,14 +41,14 @@ public class QueryTester {
     }
 
     /**
-     * Run each benchmark once and return a map from each Summary class
-     * to its returned summary instance.
+     * Runs each benchmark once and returns the collected metrics.
      *
      * @param cs          the configured system under test
-     * @param topK        the top‑K parameter for all benchmarks
-     * @param rerankK     the rerank‑K parameter
+     * @param topK        the top-K parameter for all benchmarks
+     * @param rerankK     the rerank-K parameter
      * @param usePruning  whether to enable pruning
      * @param queryRuns   number of runs for each benchmark
+     * @return a list of metrics from all benchmarks
      */
     public List<Metric> run(
             ConfiguredSystem cs,

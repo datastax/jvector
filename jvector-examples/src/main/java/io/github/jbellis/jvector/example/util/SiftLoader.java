@@ -31,9 +31,28 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
+/**
+ * Utility class for loading SIFT dataset files in fvec and ivec formats.
+ * These formats are commonly used in vector similarity search benchmarks.
+ */
 public class SiftLoader {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
+    private SiftLoader() {
+        throw new AssertionError("SiftLoader is a utility class and should not be instantiated");
+    }
+
+    /**
+     * Reads float vectors from an fvec file.
+     * The fvec format stores vectors as: [dimension:int][value1:float]...[valueN:float].
+     *
+     * @param filePath the path to the fvec file
+     * @return a list of float vectors
+     * @throws IOException if an I/O error occurs
+     */
     public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
@@ -53,6 +72,14 @@ public class SiftLoader {
         return vectors;
     }
 
+    /**
+     * Reads integer vectors from an ivec file.
+     * The ivec format stores vectors as: [dimension:int][value1:int]...[valueN:int].
+     * Typically used for ground truth neighbor lists.
+     *
+     * @param filename the path to the ivec file
+     * @return a list of integer vectors (each vector is a list of integers)
+     */
     public static List<List<Integer>> readIvecs(String filename) {
         var groundTruthTopK = new ArrayList<List<Integer>>();
 

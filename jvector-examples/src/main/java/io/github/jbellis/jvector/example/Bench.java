@@ -39,6 +39,16 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * Tests GraphIndexes against vectors from various datasets
  */
 public class Bench {
+    /**
+     * Constructs a Bench.
+     */
+    public Bench() {}
+
+    /**
+     * Main entry point for the benchmark.
+     * @param args the command line arguments
+     * @throws IOException if an I/O error occurs
+     */
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 

@@ -28,6 +28,8 @@ package io.github.jbellis.jvector.util;
  * Base implementation for a bit set.
  */
 public abstract class BitSet implements Bits, Accountable {
+  /** Creates a BitSet instance. */
+  public BitSet() {}
   /**
    * Clear all the bits of the set.
    *
@@ -38,16 +40,29 @@ public abstract class BitSet implements Bits, Accountable {
     clear(0, length());
   }
 
-  /** The number of bits in the set. */
+  /**
+   * Returns the number of bits in the set.
+   * @return the number of bits in the set
+   */
   public abstract int length();
 
-  /** Set the bit at <code>i</code>. */
+  /**
+   * Sets the bit at the specified index.
+   * @param i the index of the bit to set
+   */
   public abstract void set(int i);
 
-  /** Set the bit at <code>i</code>, returning <code>true</code> if it was previously set. */
+  /**
+   * Sets the bit at the specified index and returns its previous value.
+   * @param i the index of the bit to set
+   * @return {@code true} if the bit was previously set, {@code false} otherwise
+   */
   public abstract boolean getAndSet(int i);
 
-  /** Clear the bit at <code>i</code>. */
+  /**
+   * Clears the bit at the specified index.
+   * @param i the index of the bit to clear
+   */
   public abstract void clear(int i);
 
   /**
@@ -58,25 +73,33 @@ public abstract class BitSet implements Bits, Accountable {
    */
   public abstract void clear(int startIndex, int endIndex);
 
-  /** Return the number of bits that are set. NOTE: this method is likely to run in linear time */
+  /**
+   * Returns the number of bits that are set.
+   * <p>
+   * NOTE: this method is likely to run in linear time.
+   * @return the number of bits that are set
+   */
   public abstract int cardinality();
 
   /**
-   * Return an approximation of the cardinality of this set. Some implementations may trade accuracy
+   * Returns an approximation of the cardinality of this set. Some implementations may trade accuracy
    * for speed if they have the ability to estimate the cardinality of the set without iterating
    * over all the data. The default implementation returns {@link #cardinality()}.
+   * @return an approximation of the number of bits that are set
    */
   public abstract int approximateCardinality();
 
   /**
-   * Returns the index of the last set bit before or on the index specified. -1 is returned if there
-   * are no more set bits.
+   * Returns the index of the last set bit before or on the index specified.
+   * @param index the index to start searching backwards from (inclusive)
+   * @return the index of the previous set bit, or -1 if there are no more set bits
    */
   public abstract int prevSetBit(int index);
 
   /**
-   * Returns the index of the first set bit starting at the index specified. {@link
-   * DocIdSetIterator#NO_MORE_DOCS} is returned if there are no more set bits.
+   * Returns the index of the first set bit starting at the index specified.
+   * @param index the index to start searching from (inclusive)
+   * @return the index of the next set bit, or {@link DocIdSetIterator#NO_MORE_DOCS} if there are no more set bits
    */
   public abstract int nextSetBit(int index);
 

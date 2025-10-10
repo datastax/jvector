@@ -26,22 +26,25 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     private final ScoreFunction.ExactScoreFunction reranker;
 
     /**
-     * @param scoreFunction the primary, fast scoring function
-     * <p>
+     * Constructs a DefaultSearchScoreProvider with only a primary scoring function.
      * No reranking is performed.
+     *
+     * @param scoreFunction the primary, fast scoring function
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction) {
         this(scoreFunction, null);
     }
 
     /**
-     * @param scoreFunction the primary, fast scoring function
-     * @param reranker optional reranking function
-     * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction.  However,
+     * Constructs a DefaultSearchScoreProvider with a primary scoring function and optional reranking.
+     * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction. However,
      * it is allowed, and sometimes useful, to only perform approximate scoring without reranking.
-     * <p>
-     * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
-     * or `ScoringView.rerankerFor`.
+     *
+     * Most often it will be convenient to get the reranker either using {@code RandomAccessVectorValues.rerankerFor}
+     * or {@code ScoringView.rerankerFor}.
+     *
+     * @param scoreFunction the primary, fast scoring function
+     * @param reranker optional reranking function (may be null)
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
         assert scoreFunction != null;
@@ -64,9 +67,14 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     }
 
     /**
-     * A SearchScoreProvider for a single-pass search based on exact similarity.
+     * Creates a SearchScoreProvider for a single-pass search based on exact similarity.
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
+     *
+     * @param v the query vector
+     * @param vsf the vector similarity function to use
+     * @param ravv the random access vector values to search
+     * @return a DefaultSearchScoreProvider configured for exact search
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here

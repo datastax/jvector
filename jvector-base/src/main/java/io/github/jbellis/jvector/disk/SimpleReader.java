@@ -26,9 +26,20 @@ import java.nio.file.Path;
 // TODO what are the low-hanging optimization options here?
 // The requirement that we need to read from a file that is potentially changing in length
 // limits our options.
+/**
+ * Simple implementation of RandomAccessReader using RandomAccessFile.
+ * Suitable for files that may be changing in length during access.
+ */
 public class SimpleReader implements RandomAccessReader {
+    /** The underlying random access file. */
     RandomAccessFile raf;
 
+    /**
+     * Constructs a SimpleReader for the file at the specified path.
+     *
+     * @param path the path to the file to read
+     * @throws FileNotFoundException if the file does not exist
+     */
     public SimpleReader(Path path) throws FileNotFoundException {
         raf = new RandomAccessFile(path.toFile(), "r");
     }
@@ -105,9 +116,19 @@ public class SimpleReader implements RandomAccessReader {
         return raf.length();
     }
 
+    /**
+     * Supplier that creates SimpleReader instances for a given file path.
+     * Each call to {@link #get()} creates a new SimpleReader with its own file handle.
+     */
     public static class Supplier implements ReaderSupplier {
+        /** The path to the file to read. */
         private final Path path;
 
+        /**
+         * Constructs a Supplier for the file at the specified path.
+         *
+         * @param path the path to the file to read
+         */
         public Supplier(Path path) {
             this.path = path;
         }

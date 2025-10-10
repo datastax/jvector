@@ -36,10 +36,31 @@ public class Metric {
         this.value = value;
     }
 
+    /**
+     * Gets the header.
+     * @return the header
+     */
     public String getHeader()   { return header; }
+
+    /**
+     * Gets the format specification.
+     * @return the format specification
+     */
     public String getFmtSpec()  { return fmtSpec; }
+
+    /**
+     * Gets the value.
+     * @return the value
+     */
     public double getValue() { return value; }
 
+    /**
+     * Creates a new Metric.
+     * @param header the header
+     * @param fmtSpec the format specification
+     * @param value the value
+     * @return the Metric
+     */
     public static Metric of(String header, String fmtSpec, double value) {
         return new Metric(header, fmtSpec, value);
     }

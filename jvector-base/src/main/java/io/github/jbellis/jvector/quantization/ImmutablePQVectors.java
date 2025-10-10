@@ -25,6 +25,9 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * An immutable implementation of PQVectors with precomputed codebook partial sums for efficient diversity scoring.
+ */
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
     private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;

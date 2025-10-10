@@ -25,11 +25,24 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
+/**
+ * A separated feature implementation for full-resolution float vectors.
+ * Stores vector data separately from the graph structure, with only offset information in the header.
+ */
 public class SeparatedVectors implements SeparatedFeature {
+    /** Vectorization support for reading and writing vectors efficiently. */
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    /** The dimensionality of the vectors stored by this feature. */
     private final int dimension;
+    /** The file offset where the separated vector data begins. */
     private long offset;
 
+    /**
+     * Constructs a SeparatedVectors feature with the specified dimension and offset.
+     *
+     * @param dimension the dimensionality of the vectors
+     * @param offset the file offset where the vector data begins
+     */
     public SeparatedVectors(int dimension, long offset) {
         this.dimension = dimension;
         this.offset = offset;
@@ -80,6 +93,15 @@ public class SeparatedVectors implements SeparatedFeature {
 
     // Using InlineVectors.State
 
+    /**
+     * Loads a SeparatedVectors feature from the specified reader.
+     * The dimension is taken from the common header.
+     *
+     * @param header the common header containing dimension information
+     * @param reader the reader to load from
+     * @return the loaded SeparatedVectors instance
+     * @throws UncheckedIOException if an I/O error occurs during loading
+     */
     static SeparatedVectors load(CommonHeader header, RandomAccessReader reader) {
         try {
             long offset = reader.readLong();
@@ -89,6 +111,11 @@ public class SeparatedVectors implements SeparatedFeature {
         }
     }
 
+    /**
+     * Returns the dimensionality of the vectors stored by this feature.
+     *
+     * @return the vector dimension
+     */
     public int dimension() {
         return dimension;
     }

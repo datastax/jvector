@@ -20,16 +20,30 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+/**
+ * Provides scoring functions for comparing NVQ-quantized vectors with query vectors.
+ * Supports dot product, Euclidean, and cosine similarity functions.
+ */
 public class NVQScorer {
     final NVQuantization nvq;
 
     /**
-     * Initialize the NVQScorer with an instance of NVQuantization.
+     * Constructs an NVQScorer with the given NVQuantization instance.
+     *
+     * @param nvq the NVQuantization instance to use for scoring
      */
     public NVQScorer(NVQuantization nvq) {
         this.nvq = nvq;
     }
 
+    /**
+     * Creates a score function for comparing the query vector against NVQ-quantized vectors.
+     *
+     * @param query the query vector
+     * @param similarityFunction the similarity function to use
+     * @return a score function for the given query and similarity function
+     * @throws IllegalArgumentException if the similarity function is not supported
+     */
     public NVQScoreFunction scoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
@@ -43,6 +57,13 @@ public class NVQScorer {
         }
     }
 
+    /**
+     * Creates a dot product score function for the given query vector.
+     *
+     * @param query the query vector
+     * @return a dot product score function
+     * @throws IllegalArgumentException if the bits per dimension is not supported
+     */
     private NVQScoreFunction dotProductScoreFunctionFor(VectorFloat<?> query) {
         /* Each sub-vector of query vector (full resolution) will be compared to NVQ quantized sub-vectors that were
          * first de-meaned by subtracting the global mean.
@@ -72,6 +93,14 @@ public class NVQScorer {
         }
     }
 
+    /**
+     * Creates a Euclidean distance score function for the given query vector.
+     * The score is converted to a similarity using 1 / (1 + distance).
+     *
+     * @param query the query vector
+     * @return a Euclidean similarity score function
+     * @throws IllegalArgumentException if the bits per dimension is not supported
+     */
     private NVQScoreFunction euclideanScoreFunctionFor(VectorFloat<?> query) {
         /* Each sub-vector of query vector (full resolution) will be compared to NVQ quantized sub-vectors that were
          * first de-meaned by subtracting the global mean.
@@ -103,6 +132,13 @@ public class NVQScorer {
         }
     }
 
+    /**
+     * Creates a cosine similarity score function for the given query vector.
+     *
+     * @param query the query vector
+     * @return a cosine similarity score function
+     * @throws IllegalArgumentException if the bits per dimension is not supported
+     */
     private NVQScoreFunction cosineScoreFunctionFor(VectorFloat<?> query) {
         float queryNorm = (float) Math.sqrt(VectorUtil.dotProduct(query, query));
         var querySubVectors = this.nvq.getSubVectors(query);
@@ -136,9 +172,15 @@ public class NVQScorer {
         }
     }
 
+    /**
+     * A functional interface for computing similarity between a query and an NVQ-quantized vector.
+     */
     public interface NVQScoreFunction {
         /**
-         * @return the similarity to another vector
+         * Computes the similarity score to another quantized vector.
+         *
+         * @param vector2 the quantized vector to compare against
+         * @return the similarity score
          */
         float similarityTo(NVQuantization.QuantizedVector vector2);
     }

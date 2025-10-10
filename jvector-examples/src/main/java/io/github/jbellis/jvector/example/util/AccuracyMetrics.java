@@ -28,6 +28,10 @@ import java.util.stream.IntStream;
  */
 public class AccuracyMetrics {
     /**
+     * Constructs an AccuracyMetrics.
+     */
+    public AccuracyMetrics() {}
+    /**
      * Compute kGT-recall@kRetrieved, which is the fraction of
      * the kGT ground-truth nearest neighbors that are in the kRetrieved
      * first search results (with kGT ≤ kRetrieved)

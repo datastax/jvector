@@ -29,12 +29,26 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
+/**
+ * A separated feature implementation for Neural Vector Quantization (NVQ) compressed vectors.
+ * Stores quantized vector data separately from the graph structure for efficient storage and access.
+ */
 public class SeparatedNVQ implements SeparatedFeature {
+    /** The NVQ quantization scheme used for compressing vectors. */
     private final NVQuantization nvq;
+    /** Scorer for computing similarities between quantized vectors. */
     private final NVQScorer scorer;
+    /** Thread-local storage for reusable quantized vector instances to avoid repeated allocation. */
     private final ThreadLocal<NVQuantization.QuantizedVector> reusableQuantizedVector;
+    /** The file offset where the separated NVQ data begins. */
     private long offset;
 
+    /**
+     * Constructs a SeparatedNVQ feature with the specified quantization and offset.
+     *
+     * @param nvq the NVQ quantization scheme
+     * @param offset the file offset where the NVQ data begins
+     */
     public SeparatedNVQ(NVQuantization nvq, long offset) {
         this.nvq = nvq;
         this.offset = offset;
@@ -86,6 +100,14 @@ public class SeparatedNVQ implements SeparatedFeature {
 
     // Using NVQ.State
 
+    /**
+     * Loads a SeparatedNVQ feature from the specified reader.
+     *
+     * @param header the common header (unused but kept for API consistency)
+     * @param reader the reader to load from
+     * @return the loaded SeparatedNVQ instance
+     * @throws UncheckedIOException if an I/O error occurs during loading
+     */
     static SeparatedNVQ load(CommonHeader header, RandomAccessReader reader) {
         try {
             var nvq = NVQuantization.load(reader);
@@ -96,10 +118,25 @@ public class SeparatedNVQ implements SeparatedFeature {
         }
     }
 
+    /**
+     * Returns the dimensionality of the vectors stored by this feature.
+     *
+     * @return the vector dimension
+     */
     public int dimension() {
         return nvq.globalMean.length();
     }
 
+    /**
+     * Creates an exact score function for reranking using the quantized vectors.
+     * The returned function reads quantized vectors from the feature source and computes
+     * exact similarities to the query vector.
+     *
+     * @param queryVector the query vector to compare against
+     * @param vsf the vector similarity function to use for scoring
+     * @param source the feature source for reading node data
+     * @return an exact score function for reranking
+     */
     ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                 VectorSimilarityFunction vsf,
                                                 FeatureSource source) {

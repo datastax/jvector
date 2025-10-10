@@ -23,13 +23,29 @@ import java.util.Objects;
  * Container class for results of an ANN search, along with associated metrics about the behavior of the search.
  */
 public final class SearchResult {
+    /** The closest neighbors discovered by the search, sorted best-first. */
     private final NodeScore[] nodes;
+    /** The total number of graph nodes visited while performing the search. */
     private final int visitedCount;
+    /** The total number of graph nodes expanded while performing the search. */
     private final int expandedCount;
+    /** The number of graph nodes expanded while performing the search in the base layer. */
     private final int expandedCountL0;
+    /** The number of nodes that were reranked during the search. */
     private final int rerankedCount;
+    /** The worst approximate score of the top K nodes in the search result. */
     private final float worstApproximateScoreInTopK;
 
+    /**
+     * Constructs a SearchResult with the specified search results and metrics.
+     *
+     * @param nodes the closest neighbors discovered by the search, sorted best-first
+     * @param visitedCount the total number of graph nodes visited while performing the search
+     * @param expandedCount the total number of graph nodes expanded while performing the search
+     * @param expandedCountL0 the number of graph nodes expanded in the base layer
+     * @param rerankedCount the number of nodes that were reranked during the search
+     * @param worstApproximateScoreInTopK the worst approximate score in the top K results, or Float.POSITIVE_INFINITY if no reranking occurred
+     */
     public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int rerankedCount, float worstApproximateScoreInTopK) {
         this.nodes = nodes;
         this.visitedCount = visitedCount;
@@ -40,6 +56,8 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the closest neighbors discovered by the search.
+     *
      * @return the closest neighbors discovered by the search, sorted best-first
      */
     public NodeScore[] getNodes() {
@@ -47,6 +65,8 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the total number of graph nodes visited during the search.
+     *
      * @return the total number of graph nodes visited while performing the search
      */
     public int getVisitedCount() {
@@ -54,6 +74,8 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the total number of graph nodes expanded during the search.
+     *
      * @return the total number of graph nodes expanded while performing the search
      */
     public int getExpandedCount() {
@@ -61,6 +83,8 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the number of graph nodes expanded in the base layer during the search.
+     *
      * @return the number of graph nodes expanded while performing the search in the base layer
      */
     public int getExpandedCountBaseLayer() {
@@ -68,6 +92,8 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the number of nodes that were reranked during the search.
+     *
      * @return the number of nodes that were reranked during the search
      */
     public int getRerankedCount() {
@@ -75,6 +101,9 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the worst approximate score of the top K nodes in the search result.
+     * Useful for passing to rerankFloor during search across multiple indexes.
+     *
      * @return the worst approximate score of the top K nodes in the search result.  Useful
      * for passing to rerankFloor during search across multiple indexes.  Will be
      * Float.POSITIVE_INFINITY if no reranking was performed or no results were found.
@@ -83,10 +112,21 @@ public final class SearchResult {
         return worstApproximateScoreInTopK;
     }
 
+    /**
+     * Represents a node and its associated similarity score in a search result.
+     */
     public static final class NodeScore implements Comparable<NodeScore> {
+        /** The node identifier. */
         public final int node;
+        /** The similarity score for this node. */
         public final float score;
 
+        /**
+         * Constructs a NodeScore with the specified node ID and score.
+         *
+         * @param node the node identifier
+         * @param score the similarity score for this node
+         */
         public NodeScore(int node, float score) {
             this.node = node;
             this.score = score;

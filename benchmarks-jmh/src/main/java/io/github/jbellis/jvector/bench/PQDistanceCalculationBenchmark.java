@@ -50,28 +50,76 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class PQDistanceCalculationBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationBenchmark.class);
+
+    /**
+     * Creates a new benchmark instance.
+     * <p>
+     * This constructor is invoked by JMH and should not be called directly.
+     */
+    public PQDistanceCalculationBenchmark() {
+    }
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
 
+    /** The base vectors used for distance calculations. */
     private List<VectorFloat<?>> vectors;
+
+    /** Product-quantized versions of the base vectors, or null if M=0. */
     private PQVectors pqVectors;
+
+    /** Query vectors used to test distance calculations. */
     private List<VectorFloat<?>> queryVectors;
+
+    /** The Product Quantization model, or null if M=0. */
     private ProductQuantization pq;
+
+    /** Score provider configured for either full precision or PQ-based scoring. */
     private BuildScoreProvider buildScoreProvider;
-    
+
+    /**
+     * The dimensionality of the vectors.
+     * <p>
+     * Default value: 1536 (typical for modern embedding models).
+     */
     @Param({"1536"})
     private int dimension;
-    
+
+    /**
+     * The number of base vectors to create for the dataset.
+     * <p>
+     * Default value: 10000
+     */
     @Param({"10000"})
     private int vectorCount;
-    
+
+    /**
+     * The number of query vectors to test against the dataset.
+     * <p>
+     * Default value: 100
+     */
     @Param({"100"})
     private int queryCount;
-    
+
+    /**
+     * The number of subspaces for Product Quantization.
+     * <p>
+     * When M=0, uses full precision vectors without quantization.
+     * When M&gt;0, splits each vector into M subspaces for compression.
+     * Values: 0 (no PQ), 16, 64, 192
+     */
     @Param({"0", "16", "64", "192"})
-    private int M; // Number of subspaces for PQ
+    private int M;
     
 
+    /**
+     * Sets up the benchmark by creating random vectors and configuring score providers.
+     * <p>
+     * This method creates the specified number of base vectors and query vectors with random
+     * values. If M&gt;0, it also computes Product Quantization and creates PQ-encoded vectors.
+     * The appropriate score provider is then configured based on whether PQ is used.
+     *
+     * @throws IOException if there is an error during setup
+     */
     @Setup
     public void setup() throws IOException {
         log.info("Creating dataset with dimension: {}, vector count: {}, query count: {}", dimension, vectorCount, queryCount);
@@ -100,6 +148,16 @@ public class PQDistanceCalculationBenchmark {
         log.info("Created dataset with dimension: {}, vector count: {}, query count: {}", dimension, vectorCount, queryCount);
     }
 
+    /**
+     * Benchmarks distance calculation using cached search score providers.
+     * <p>
+     * This benchmark measures the performance of calculating distances between query vectors
+     * and all base vectors using a search score provider that caches precomputed values for
+     * the query vector. This represents the typical search scenario where a query is compared
+     * against many candidates.
+     *
+     * @param blackhole JMH blackhole to prevent dead code elimination
+     */
     @Benchmark
     public void cachedDistanceCalculation(Blackhole blackhole) {
         float totalSimilarity = 0;
@@ -115,6 +173,16 @@ public class PQDistanceCalculationBenchmark {
         blackhole.consume(totalSimilarity);
     }
 
+    /**
+     * Benchmarks distance calculation for diversity scoring.
+     * <p>
+     * This benchmark measures the performance of calculating distances between base vectors
+     * using diversity score providers. This represents the scenario where vectors in the
+     * dataset are compared against each other to assess diversity, such as during graph
+     * construction or result reranking.
+     *
+     * @param blackhole JMH blackhole to prevent dead code elimination
+     */
     @Benchmark
     public void diversityCalculation(Blackhole blackhole) {
         float totalSimilarity = 0;
@@ -130,6 +198,15 @@ public class PQDistanceCalculationBenchmark {
         blackhole.consume(totalSimilarity);
     }
 
+    /**
+     * Creates a random vector with the specified dimension.
+     * <p>
+     * Each component of the vector is assigned a random floating-point value
+     * between 0.0 (inclusive) and 1.0 (exclusive).
+     *
+     * @param dimension the number of dimensions for the vector
+     * @return a new random vector
+     */
     private VectorFloat<?> createRandomVector(int dimension) {
         VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
         for (int i = 0; i < dimension; i++) {

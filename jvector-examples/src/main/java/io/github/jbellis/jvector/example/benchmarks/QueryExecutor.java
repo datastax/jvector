@@ -21,7 +21,18 @@ import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+/**
+ * Utility class for executing queries against a configured system.
+ * Provides methods to execute single queries with various parameters.
+ */
 public class QueryExecutor {
+
+    /**
+     * Private constructor to prevent instantiation of this utility class.
+     */
+    private QueryExecutor() {
+        throw new AssertionError("QueryExecutor is a utility class and should not be instantiated");
+    }
     /**
      * Executes the query at index i using the given parameters.
      *
@@ -40,7 +51,17 @@ public class QueryExecutor {
         return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
     }
 
-    // Overload to allow single query injection (e.g., for warm-up with random vectors)
+    /**
+     * Executes a query using a provided query vector instead of retrieving it from the dataset.
+     * This overload allows single query injection for operations like warm-up with random vectors.
+     *
+     * @param cs           the configured system
+     * @param topK         the number of top results to return
+     * @param rerankK      the number of candidates for reranking
+     * @param usePruning   whether to use pruning during search
+     * @param queryVector  the query vector to search with
+     * @return the SearchResult for the given query vector
+     */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector
     ) {
         var searcher = cs.getSearcher();

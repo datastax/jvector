@@ -38,6 +38,26 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Benchmark for measuring graph search recall with and without Product Quantization on random vectors.
+ * <p>
+ * This benchmark evaluates the quality and performance of approximate nearest neighbor (ANN) search
+ * using a hierarchical navigable small world (HNSW) graph index. It measures recall by comparing
+ * search results against exact nearest neighbors computed via brute force. The benchmark tests both
+ * full-precision vectors and Product Quantized (PQ) vectors to understand the accuracy-speed trade-off.
+ * <p>
+ * Key metrics tracked via auxiliary counters:
+ * <ul>
+ *   <li>avgRecall: The fraction of true nearest neighbors found in the search results</li>
+ *   <li>avgReRankedCount: Number of candidates re-ranked with exact distances</li>
+ *   <li>avgVisitedCount: Number of graph nodes visited during search</li>
+ *   <li>avgExpandedCount: Number of graph nodes expanded (neighbors examined)</li>
+ *   <li>avgExpandedCountBaseLayer: Number of nodes expanded in the base layer</li>
+ * </ul>
+ * <p>
+ * The benchmark builds a graph index once during setup and then performs searches with multiple
+ * query vectors, measuring both search time and recall quality.
+ */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
@@ -47,30 +67,112 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class RecallWithRandomVectorsBenchmark {
     private static final Logger log = LoggerFactory.getLogger(RecallWithRandomVectorsBenchmark.class);
+
+    /**
+     * Creates a new benchmark instance.
+     * <p>
+     * This constructor is invoked by JMH and should not be called directly.
+     */
+    public RecallWithRandomVectorsBenchmark() {
+    }
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    /** Random access wrapper for the base vectors. */
     private RandomAccessVectorValues ravv;
+
+    /** The base vectors in the searchable dataset. */
     private ArrayList<VectorFloat<?>> baseVectors;
+
+    /** Query vectors used to test search recall. */
     private ArrayList<VectorFloat<?>> queryVectors;
+
+    /** Builder used to construct the graph index. */
     private GraphIndexBuilder graphIndexBuilder;
+
+    /** The constructed graph index used for ANN search. */
     private ImmutableGraphIndex graphIndex;
+
+    /** Product-quantized versions of the base vectors, or null if numberOfPQSubspaces=0. */
     private PQVectors pqVectors;
 
-    // Add ground truth storage
+    /** Ground truth nearest neighbors for each query, computed via brute force. */
     private ArrayList<int[]> groundTruth;
 
+    /**
+     * The dimensionality of the vectors.
+     * <p>
+     * Default value: 1536 (typical for modern embedding models).
+     */
     @Param({"1536"})
     int originalDimension;
+
+    /**
+     * The number of base vectors in the dataset.
+     * <p>
+     * Default value: 100000
+     */
     @Param({"100000"})
     int numBaseVectors;
+
+    /**
+     * The number of query vectors to test.
+     * <p>
+     * Default value: 10
+     */
     @Param({"10"})
     int numQueryVectors;
+
+    /**
+     * The number of subspaces for Product Quantization.
+     * <p>
+     * When numberOfPQSubspaces=0, uses full precision vectors without quantization.
+     * When numberOfPQSubspaces&gt;0, applies PQ compression with approximate scoring.
+     * Values: 0 (no PQ), 16, 32, 64, 96, 192
+     */
     @Param({"0", "16", "32", "64", "96", "192"})
     int numberOfPQSubspaces;
-    @Param({/*"10",*/ "50"}) // Add different k values for recall calculation
+
+    /**
+     * The number of nearest neighbors to retrieve (k).
+     * <p>
+     * Default value: 50
+     */
+    @Param({/*"10",*/ "50"})
     int k;
+
+    /**
+     * The over-query factor for PQ searches.
+     * <p>
+     * When using PQ, the search retrieves k * overQueryFactor candidates using approximate
+     * distances, then re-ranks them with exact distances to select the final k results.
+     * Only applies when numberOfPQSubspaces &gt; 0.
+     * <p>
+     * Default value: 5
+     */
     @Param({"5"})
     int overQueryFactor;
 
+    /**
+     * Sets up the benchmark by creating random vectors, building the graph index, and computing ground truth.
+     * <p>
+     * This method performs the following steps:
+     * <ol>
+     *   <li>Generates random base vectors and query vectors</li>
+     *   <li>Optionally computes Product Quantization if numberOfPQSubspaces &gt; 0</li>
+     *   <li>Builds an HNSW graph index for ANN search</li>
+     *   <li>Computes exact nearest neighbors via brute force for recall measurement</li>
+     * </ol>
+     * The graph is configured with:
+     * <ul>
+     *   <li>Degree: 16 (max edges per node)</li>
+     *   <li>Construction depth: 100 (beam width during construction)</li>
+     *   <li>Alpha: 1.2 (degree overflow allowance)</li>
+     *   <li>Diversity alpha: 1.2 (neighbor diversity requirement)</li>
+     *   <li>Hierarchy: enabled</li>
+     * </ul>
+     *
+     * @throws IOException if there is an error during setup
+     */
     @Setup
     public void setup() throws IOException {
         baseVectors = new ArrayList<>(numBaseVectors);
@@ -112,6 +214,15 @@ public class RecallWithRandomVectorsBenchmark {
         calculateGroundTruth();
     }
 
+    /**
+     * Creates a random vector with the specified dimension.
+     * <p>
+     * Each component of the vector is assigned a random floating-point value
+     * between 0.0 (inclusive) and 1.0 (exclusive).
+     *
+     * @param dimension the number of dimensions for the vector
+     * @return a new random vector
+     */
     private VectorFloat<?> createRandomVector(int dimension) {
         VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
         for (int i = 0; i < dimension; i++) {
@@ -120,6 +231,14 @@ public class RecallWithRandomVectorsBenchmark {
         return vector;
     }
 
+    /**
+     * Tears down the benchmark by releasing resources.
+     * <p>
+     * This method clears all vectors and closes the graph index builder to release
+     * any associated resources.
+     *
+     * @throws IOException if there is an error during teardown
+     */
     @TearDown
     public void tearDown() throws IOException {
         baseVectors.clear();
@@ -127,21 +246,68 @@ public class RecallWithRandomVectorsBenchmark {
         graphIndexBuilder.close();
     }
 
+    /**
+     * Auxiliary counters for tracking recall and search statistics across benchmark iterations.
+     * <p>
+     * These counters accumulate metrics from each benchmark iteration and compute running averages.
+     * JMH reports these values as additional benchmark results alongside timing measurements.
+     */
     @AuxCounters(AuxCounters.Type.EVENTS)
     @State(Scope.Thread)
     public static class RecallCounters {
+        /**
+         * Creates a new counter instance.
+         * <p>
+         * This constructor is invoked by JMH and should not be called directly.
+         */
+        public RecallCounters() {
+        }
+
+        /** The average recall across all iterations. */
         public double avgRecall = 0;
+
+        /** The average number of candidates re-ranked per query across all iterations. */
         public double avgReRankedCount = 0;
+
+        /** The average number of graph nodes visited per query across all iterations. */
         public double avgVisitedCount = 0;
+
+        /** The average number of graph nodes expanded per query across all iterations. */
         public double avgExpandedCount = 0;
+
+        /** The average number of base layer nodes expanded per query across all iterations. */
         public double avgExpandedCountBaseLayer = 0;
+
+        /** The number of benchmark iterations completed. */
         private int iterations = 0;
+
+        /** The cumulative recall across all iterations. */
         private double totalRecall = 0;
+
+        /** The cumulative re-ranked count across all iterations. */
         private double totalReRankedCount = 0;
+
+        /** The cumulative visited count across all iterations. */
         private double totalVisitedCount = 0;
+
+        /** The cumulative expanded count across all iterations. */
         private double totalExpandedCount = 0;
+
+        /** The cumulative base layer expanded count across all iterations. */
         private double totalExpandedCountBaseLayer = 0;
 
+        /**
+         * Adds results from a single benchmark iteration and updates running averages.
+         * <p>
+         * This method is called after each benchmark iteration to accumulate statistics
+         * and compute new average values.
+         *
+         * @param avgIterationRecall the average recall for this iteration
+         * @param avgIterationReRankedCount the average re-ranked count for this iteration
+         * @param avgIterationVisitedCount the average visited count for this iteration
+         * @param avgIterationExpandedCount the average expanded count for this iteration
+         * @param avgIterationExpandedCountBaseLayer the average base layer expanded count for this iteration
+         */
         public void addResults(double avgIterationRecall, double avgIterationReRankedCount, double avgIterationVisitedCount, double avgIterationExpandedCount, double avgIterationExpandedCountBaseLayer) {
             log.info("adding results avgIterationRecall: {}, avgIterationReRankedCount: {}, avgIterationVisitedCount: {}, avgIterationExpandedCount: {}, avgIterationExpandedCountBaseLayer: {}", avgIterationRecall, avgIterationReRankedCount, avgIterationVisitedCount, avgIterationExpandedCount, avgIterationExpandedCountBaseLayer);
             totalRecall += avgIterationRecall;
@@ -159,6 +325,29 @@ public class RecallWithRandomVectorsBenchmark {
     }
 
 
+    /**
+     * Benchmarks ANN search with recall measurement on random vectors.
+     * <p>
+     * This benchmark performs graph searches for all query vectors and measures:
+     * <ul>
+     *   <li>Search time (via JMH timing)</li>
+     *   <li>Recall quality (fraction of true nearest neighbors found)</li>
+     *   <li>Search statistics (nodes visited, expanded, re-ranked)</li>
+     * </ul>
+     * <p>
+     * The search behavior depends on the numberOfPQSubspaces parameter:
+     * <ul>
+     *   <li>When numberOfPQSubspaces=0: Uses exact distance calculations throughout</li>
+     *   <li>When numberOfPQSubspaces&gt;0: Uses PQ approximate distances for initial search,
+     *       then re-ranks top candidates with exact distances</li>
+     * </ul>
+     * <p>
+     * Recall is computed by comparing search results against ground truth exact nearest neighbors.
+     *
+     * @param blackhole JMH blackhole to prevent dead code elimination
+     * @param counters auxiliary counters for accumulating recall and search statistics
+     * @throws IOException if there is an error during search
+     */
     @Benchmark
     public void testOnHeapRandomVectorsWithRecall(Blackhole blackhole, RecallCounters counters) throws IOException {
         double totalRecall = 0.0;
@@ -218,6 +407,14 @@ public class RecallWithRandomVectorsBenchmark {
     }
 
 
+    /**
+     * Calculates exact nearest neighbors for all query vectors via brute force.
+     * <p>
+     * This method computes ground truth by performing exhaustive distance calculations
+     * between each query vector and all base vectors. The top-k nearest neighbors for
+     * each query are stored for later recall computation. This is computationally expensive
+     * but provides the true nearest neighbors needed to measure search quality.
+     */
     private void calculateGroundTruth() {
         groundTruth = new ArrayList<>(queryVectors.size());
 
@@ -242,6 +439,18 @@ public class RecallWithRandomVectorsBenchmark {
         }
     }
 
+    /**
+     * Calculates recall by comparing predicted results against ground truth.
+     * <p>
+     * Recall is the fraction of true nearest neighbors that appear in the search results.
+     * This method compares the node IDs from the search results against the ground truth
+     * nearest neighbors and counts how many matches are found.
+     *
+     * @param predicted the set of node IDs returned by the search
+     * @param groundTruth the array of true nearest neighbor node IDs
+     * @param k the number of neighbors to consider
+     * @return the recall value between 0.0 and 1.0
+     */
     private double calculateRecall(Set<Integer> predicted, int[] groundTruth, int k) {
         int hits = 0;
         int actualK = Math.min(k, Math.min(predicted.size(), groundTruth.length));

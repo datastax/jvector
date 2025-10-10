@@ -30,9 +30,16 @@ import java.util.concurrent.ForkJoinPool;
 /**
  * Interface for vector compression.  T is the encoded (compressed) vector type;
  * it will be an array type.
+ *
+ * @param <T> the encoded (compressed) vector type, which will be an array type
  */
 public interface VectorCompressor<T> {
 
+    /**
+     * Encodes all vectors in the RandomAccessVectorValues using the default executor.
+     * @param ravv the vectors to encode
+     * @return the compressed vectors
+     */
     default CompressedVectors encodeAll(RandomAccessVectorValues ravv) {
         return encodeAll(ravv, PhysicalCoreExecutor.pool());
     }
@@ -46,32 +53,64 @@ public interface VectorCompressor<T> {
      */
     CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor);
 
+    /**
+     * Encodes a single vector into the compressed format.
+     *
+     * @param v the vector to encode
+     * @return the encoded (compressed) vector
+     */
     T encode(VectorFloat<?> v);
 
+    /**
+     * Encodes a single vector into the compressed format, storing the result in the provided destination.
+     *
+     * @param v the vector to encode
+     * @param dest the destination array to store the encoded vector
+     */
     void encodeTo(VectorFloat<?> v, T dest);
 
     /**
+     * Writes the compressor configuration to the given output stream.
+     *
      * @param out DataOutput to write to
      * @param version serialization version.  Versions 2 and 3 are supported
+     * @throws IOException if an I/O error occurs during writing
      */
     void write(DataOutput out, int version) throws IOException;
 
-    /** Write with the current serialization version */
+    /**
+     * Writes the compressor configuration to the given output stream using the current serialization version.
+     *
+     * @param out DataOutput to write to
+     * @throws IOException if an I/O error occurs during writing
+     */
     default void write(DataOutput out) throws IOException {
         write(out, OnDiskGraphIndex.CURRENT_VERSION);
     }
 
     /**
+     * Creates a CompressedVectors instance from an array of compressed vectors.
+     *
      * @param compressedVectors must match the type T for this VectorCompressor, but
      *                          it is declared as Object because we want callers to be able to use this
      *                          without committing to a specific type T.
+     * @return a CompressedVectors instance wrapping the given array
+     * @deprecated Use {@link #encodeAll(RandomAccessVectorValues)} instead
      */
     @Deprecated
     CompressedVectors createCompressedVectors(Object[] compressedVectors);
 
-    /** the size of the serialized compressor itself (NOT the size of compressed vectors) */
+    /**
+     * Returns the size of the serialized compressor itself (NOT the size of compressed vectors).
+     *
+     * @return the size in bytes of the compressor configuration when serialized
+     */
     int compressorSize();
 
-    /** the size of a compressed vector */
+    /**
+     * Returns the size of a single compressed vector.
+     *
+     * @return the size in bytes of a compressed vector
+     */
     int compressedVectorSize();
 }

@@ -67,6 +67,18 @@ import java.util.function.IntFunction;
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
 
+    /**
+     * Constructs an OnDiskGraphIndexWriter with the specified parameters.
+     * This constructor is package-private and used by the Builder.
+     *
+     * @param randomAccessWriter the writer to output the graph to
+     * @param version the serialization version to use
+     * @param startOffset the offset in the file where the graph starts
+     * @param graph the graph to serialize
+     * @param oldToNewOrdinals mapper for converting between original and on-disk ordinals
+     * @param dimension the dimensionality of vectors in the graph
+     * @param features the features to include in the serialized graph
+     */
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
@@ -89,22 +101,28 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     }
 
     /**
+     * Returns the underlying RandomAccessWriter for direct access.
      * Caller should synchronize on this OnDiskGraphIndexWriter instance if mixing usage of the
      * output with calls to any of the synchronized methods in this class.
-     * <p>
-     * Provided for callers (like Cassandra) that want to add their own header/footer to the output.
+     * This method is provided for callers (like Cassandra) that want to add their own header/footer to the output.
+     *
+     * @return the underlying RandomAccessWriter
      */
     public RandomAccessWriter getOutput() {
         return out;
     }
 
     /**
-     * Write the inline features of the given ordinal to the output at the correct offset.
-     * Nothing else is written (no headers, no edges).  The output IS NOT flushed.
+     * Writes the inline features of the given ordinal to the output at the correct offset.
+     * Nothing else is written (no headers, no edges). The output IS NOT flushed.
      * <p>
      * Note: the ordinal given is implicitly a "new" ordinal in the sense of the OrdinalMapper,
      * but since no nodes or edges are involved (we just write the given State to the index file),
      * the mapper is not invoked.
+     *
+     * @param ordinal the ordinal to write features for
+     * @param stateMap map of feature IDs to their state objects
+     * @throws IOException if an I/O error occurs during writing
      */
     public synchronized void writeInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException
     {
@@ -128,10 +146,25 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
     }
 
+    /**
+     * Computes the file offset where inline features for a given ordinal should be written.
+     *
+     * @param ordinal the node ordinal
+     * @return the file offset in bytes
+     */
     private long featureOffsetForOrdinal(int ordinal) {
         return super.featureOffsetForOrdinal(startOffset, ordinal);
     }
 
+    /**
+     * Writes the entire graph index to disk, including headers, features, and adjacency data.
+     * This method writes layer 0 data, higher layer data, separated features, and the footer.
+     *
+     * @param featureStateSuppliers functions that provide feature state for each node ordinal
+     * @throws IOException if an I/O error occurs during writing
+     * @throws IllegalArgumentException if the graph contains deleted nodes or if a feature is not configured
+     * @throws IllegalStateException if the ordinal mapper doesn't cover all nodes or if nodes/neighbors are invalid
+     */
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
         if (graph instanceof OnHeapGraphIndex) {
@@ -231,9 +264,11 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     }
 
     /**
-     * Write the index header and completed edge lists to the given output.
-     * Unlike the super method, this method flushes the output and also assumes it's using a RandomAccessWriter that can
-     * seek to the startOffset and re-write the header.
+     * Writes the index header to the output at the start offset.
+     * Unlike the super method, this method flushes the output and uses the RandomAccessWriter's
+     * ability to seek to the startOffset and re-write the header.
+     *
+     * @param view the graph view to write header information from
      * @throws IOException if there is an error writing the header
      */
     public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
@@ -243,7 +278,12 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         out.flush();
     }
 
-    /** CRC32 checksum of bytes written since the starting offset */
+    /**
+     * Computes the CRC32 checksum of bytes written since the starting offset.
+     *
+     * @return the CRC32 checksum
+     * @throws IOException if an I/O error occurs
+     */
     public synchronized long checksum() throws IOException {
         long endOffset = out.position();
         return out.checksum(startOffset, endOffset);
@@ -255,23 +295,46 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
 
+        /**
+         * Constructs a Builder for writing a graph index to a file.
+         *
+         * @param graphIndex the graph to write
+         * @param outPath the output file path
+         * @throws FileNotFoundException if the output file cannot be created
+         */
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
         }
 
+        /**
+         * Constructs a Builder for writing a graph index using a custom writer.
+         *
+         * @param graphIndex the graph to write
+         * @param out the output writer to use
+         */
         public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
             super(graphIndex, out);
         }
 
         /**
-         * Set the starting offset for the graph index in the output file.  This is useful if you want to
-         * append the index to an existing file.
+         * Sets the starting offset for the graph index in the output file.
+         * This is useful when appending the index to an existing file.
+         *
+         * @param startOffset the byte offset where the graph index should start
+         * @return this Builder instance for method chaining
          */
         public Builder withStartOffset(long startOffset) {
             this.startOffset = startOffset;
             return this;
         }
 
+        /**
+         * Creates the OnDiskGraphIndexWriter instance with the configured parameters.
+         *
+         * @param dimension the dimensionality of vectors in the graph
+         * @return a new OnDiskGraphIndexWriter instance
+         * @throws IOException if an I/O error occurs during initialization
+         */
         @Override
         protected OnDiskGraphIndexWriter reallyBuild(int dimension) throws IOException {
             return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
