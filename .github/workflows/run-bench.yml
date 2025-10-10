@@ -129,7 +129,7 @@ jobs:
         env:
           DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
         run: |
-          # Check if jvector-examples directory and AutoBenchYAML class exist
+          # Check if jvector-examples directory exists
           if [ ! -d "jvector-examples" ]; then
             echo "Warning: jvector-examples directory not found in branch ${{ matrix.branch }}. Skipping benchmark."
             exit 0
@@ -176,12 +176,12 @@ jobs:
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results dpr-1M
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.benchframe.BenchFrameCLI autobenchyaml --output ${SAFE_BRANCH}-bench-results dpr-1M
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG}
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.benchframe.BenchFrameCLI autobenchyaml --output ${SAFE_BRANCH}-bench-results${BENCH_SUFFIX:+ }${BENCH_ARG}
           fi
 
           # Move the results to the benchmark_results directory
