@@ -30,6 +30,12 @@ public class NativeVectorizationProvider extends VectorizationProvider {
     private final VectorUtilSupport vectorUtilSupport;
     private final VectorTypeSupport vectorTypeSupport;
 
+    /**
+     * Creates a new NativeVectorizationProvider using native SIMD operations via Panama FFI.
+     * Attempts to load the native jvector library and verifies CPU compatibility with required SIMD instructions.
+     *
+     * @throws UnsupportedOperationException if the native library fails to load or if the CPU lacks required SIMD support
+     */
     public NativeVectorizationProvider() {
         var libraryLoaded = LibraryLoader.loadJvector();
         if (!libraryLoaded) {

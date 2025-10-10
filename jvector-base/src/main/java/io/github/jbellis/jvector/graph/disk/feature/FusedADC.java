@@ -46,6 +46,12 @@ public class FusedADC implements Feature {
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighbors;
     private ByteSequence<?> compressedNeighbors = null;
 
+    /**
+     * Constructs a FusedADC feature with the given parameters.
+     *
+     * @param maxDegree the maximum degree of the graph (must be 32)
+     * @param pq the product quantization scheme to use for encoding neighbors
+     */
     public FusedADC(int maxDegree, ProductQuantization pq) {
         if (maxDegree != 32) {
             throw new IllegalArgumentException("maxDegree must be 32 for FusedADC. This limitation may be removed in future releases");
@@ -83,6 +89,15 @@ public class FusedADC implements Feature {
         }
     }
 
+    /**
+     * Creates an approximate score function for the given query vector using fused PQ decoding.
+     *
+     * @param queryVector the query vector to compute similarities against
+     * @param vsf the vector similarity function to use (DOT_PRODUCT, EUCLIDEAN, or COSINE)
+     * @param view the graph index view providing access to packed neighbors
+     * @param esf exact score function for fallback computations
+     * @return an approximate score function that efficiently scores quantized neighbors
+     */
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         return FusedADCPQDecoder.newDecoder(neighbors, pq, queryVector, reusableResults.get(), vsf, esf);
@@ -117,11 +132,24 @@ public class FusedADC implements Feature {
         vectorTypeSupport.writeByteSequence(out, compressedNeighbors);
     }
 
+    /**
+     * State required for writing fused ADC data for a single node.
+     */
     public static class State implements Feature.State {
+        /** The graph view providing access to node neighbors */
         public final ImmutableGraphIndex.View view;
+        /** The PQ-encoded vectors for all nodes in the graph */
         public final PQVectors pqVectors;
+        /** The ordinal ID of the node being written */
         public final int nodeId;
 
+        /**
+         * Creates state for writing FusedADC data for the specified node.
+         *
+         * @param view the graph view providing access to node neighbors
+         * @param pqVectors the PQ-encoded vectors for all nodes
+         * @param nodeId the ordinal ID of the node being written
+         */
         public State(ImmutableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
             this.view = view;
             this.pqVectors = pqVectors;
@@ -129,13 +157,28 @@ public class FusedADC implements Feature {
         }
     }
 
+    /**
+     * Provides access to PQ-encoded neighbor vectors stored in transposed format on disk.
+     * This enables efficient batch similarity computations using SIMD instructions.
+     */
     public class PackedNeighbors {
         private final OnDiskGraphIndex.View view;
 
+        /**
+         * Creates a PackedNeighbors accessor for the given graph view.
+         *
+         * @param view the on-disk graph index view
+         */
         public PackedNeighbors(OnDiskGraphIndex.View view) {
             this.view = view;
         }
 
+        /**
+         * Retrieves the transposed PQ-encoded neighbors for the specified node from disk.
+         *
+         * @param node the node ordinal ID
+         * @return a byte sequence containing the transposed PQ codes of all neighbors
+         */
         public ByteSequence<?> getPackedNeighbors(int node) {
             try {
                 var reader = view.featureReaderForNode(node, FeatureId.FUSED_ADC);
@@ -147,6 +190,11 @@ public class FusedADC implements Feature {
             }
         }
 
+        /**
+         * Returns the maximum degree configured for this FusedADC instance.
+         *
+         * @return the maximum number of neighbors per node
+         */
         public int maxDegree() {
             return maxDegree;
         }

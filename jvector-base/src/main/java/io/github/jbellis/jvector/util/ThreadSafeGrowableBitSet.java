@@ -29,13 +29,23 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class ThreadSafeGrowableBitSet extends BitSet {
 
+  /** The underlying JDK BitSet that stores the actual bit data */
   private final java.util.BitSet bitSet;
+  /** Lock for coordinating concurrent read and write access */
   private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
+  /**
+   * Creates a thread-safe wrapper around an existing BitSet.
+   * @param bitSet the JDK BitSet to wrap with thread-safe operations
+   */
   public ThreadSafeGrowableBitSet(java.util.BitSet bitSet) {
     this.bitSet = bitSet;
   }
 
+  /**
+   * Creates a new thread-safe growable bit set with the specified initial capacity.
+   * @param initialBits the initial number of bits to allocate
+   */
   public ThreadSafeGrowableBitSet(int initialBits) {
     this.bitSet = new java.util.BitSet(initialBits);
   }
@@ -167,6 +177,10 @@ public class ThreadSafeGrowableBitSet extends BitSet {
     throw new UnsupportedOperationException();
   }
 
+  /**
+   * Creates a copy of this bit set including all currently set bits.
+   * @return a new independent ThreadSafeGrowableBitSet with the same bit values
+   */
   public ThreadSafeGrowableBitSet copy() {
     lock.readLock().lock();
     try {

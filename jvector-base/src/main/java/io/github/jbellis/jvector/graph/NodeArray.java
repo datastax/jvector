@@ -41,18 +41,35 @@ import static java.lang.Math.min;
  * i.e. the most-similar nodes are first.
  */
 public class NodeArray {
+    /**
+     * A shared empty NodeArray instance for use when no nodes are present.
+     */
     public static final NodeArray EMPTY = new NodeArray(0);
 
     private int size;
+    /**
+     * Scores for each node, maintained in descending order (highest scores first).
+     */
     private float[] scores;
+    /**
+     * Node IDs corresponding to the scores at the same index.
+     */
     private int[] nodes;
 
+    /**
+     * Constructs a new NodeArray with the specified initial capacity.
+     * @param initialSize the initial capacity for storing nodes
+     */
     public NodeArray(int initialSize) {
         nodes = new int[initialSize];
         scores = new float[initialSize];
     }
 
-    // this idiosyncratic constructor exists for the benefit of subclass ConcurrentNeighborMap
+    /**
+     * Protected copy constructor that shares the internal arrays with another NodeArray.
+     * This idiosyncratic constructor exists for the benefit of subclass ConcurrentNeighborMap.
+     * @param nodeArray the NodeArray to share arrays with
+     */
     protected NodeArray(NodeArray nodeArray) {
         this.size = nodeArray.size();
         this.nodes = nodeArray.nodes;
@@ -145,6 +162,8 @@ public class NodeArray {
     /**
      * Add a new node to the NodeArray. The new node must be worse than all previously stored
      * nodes.
+     * @param newNode the newNode
+     * @param newScore the newScore
      */
     public void addInOrder(int newNode, float newScore) {
         if (size == nodes.length) {
@@ -175,7 +194,8 @@ public class NodeArray {
     /**
      * Add a new node to the NodeArray into a correct sort position according to its score.
      * Duplicate node + score pairs are ignored.
-     *
+     * @param newNode the newNode
+     * @param newScore the newScore
      * @return the insertion point of the new node, or -1 if it already existed
      */
     public int insertSorted(int newNode, float newScore) {
@@ -230,9 +250,7 @@ public class NodeArray {
     /**
      * Retains only the elements in the current NodeArray whose corresponding index
      * is set in the given BitSet.
-     * <p>
      * This modifies the array in place, preserving the relative order of the elements retained.
-     * <p>
      *
      * @param selected A BitSet where the bit at index i is set if the i-th element should be retained.
      *                 (Thus, the elements of selected represent positions in the NodeArray, NOT node ids.)
@@ -255,10 +273,19 @@ public class NodeArray {
         size = writeIdx;
     }
 
+    /**
+     * Copy node array.
+     * @return the return value
+     */
     public NodeArray copy() {
         return copy(size);
     }
 
+    /**
+     * Copy node array with new size.
+     * @param newSize the newSize
+     * @return the return value
+     */
     public NodeArray copy(int newSize) {
         if (size > newSize) {
             throw new IllegalArgumentException(String.format("Cannot copy %d nodes to a smaller size %d", size, newSize));
@@ -271,23 +298,41 @@ public class NodeArray {
         return copy;
     }
 
+    /**
+     * Grows the internal storage arrays when capacity is exhausted. The nodes array grows
+     * using the default growth strategy, and the scores array is resized to match.
+     */
     protected final void growArrays() {
         nodes = ArrayUtil.grow(nodes);
         scores = ArrayUtil.growExact(scores, nodes.length);
     }
 
+    /**
+     * Returns the number of nodes currently stored in this array.
+     * @return the count of nodes in the array
+     */
     public int size() {
         return size;
     }
 
+    /**
+     * Removes all nodes from the array, resetting the size to zero without releasing memory.
+     */
     public void clear() {
         size = 0;
     }
 
+    /**
+     * Removes the last node from the array by decrementing the size counter.
+     */
     public void removeLast() {
         size--;
     }
 
+    /**
+     * Removes the node at the specified index, shifting all subsequent nodes down by one position.
+     * @param idx the index of the node to remove
+     */
     public void removeIndex(int idx) {
         System.arraycopy(nodes, idx + 1, nodes, idx, size - idx - 1);
         System.arraycopy(scores, idx + 1, scores, idx, size - idx - 1);
@@ -305,6 +350,12 @@ public class NodeArray {
         return sb.toString();
     }
 
+    /**
+     * Performs a binary search to find the rightmost insertion point for a new score in the descending-sorted array.
+     * If multiple elements have the same score, this returns the position after all of them.
+     * @param newScore the score value to find the insertion point for
+     * @return the index where the new score should be inserted to maintain descending order
+     */
     protected final int descSortFindRightMostInsertionPoint(float newScore) {
         int start = 0;
         int end = size - 1;
@@ -316,6 +367,11 @@ public class NodeArray {
         return start;
     }
 
+    /**
+     * Calculates the memory footprint in bytes for a NodeArray of the given size.
+     * @param size the number of nodes in the array
+     * @return the estimated RAM usage in bytes
+     */
     public static long ramBytesUsed(int size) {
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
@@ -354,20 +410,37 @@ public class NodeArray {
     /**
      * Insert a new node, without growing the array.  If the array is full, drop the worst existing node to make room.
      * (Even if the worst existing one is better than newNode!)
+     * @param newNode the newNode
+     * @param newScore the newScore
+     * @return the return value
      */
     protected int insertOrReplaceWorst(int newNode, float newScore) {
         size = min(size, nodes.length - 1);
         return insertSorted(newNode, newScore);
     }
 
+    /**
+     * Returns the score of the node at the specified index position.
+     * @param i the index position (0 to size-1)
+     * @return the score at the given index
+     */
     public float getScore(int i) {
         return scores[i];
     }
 
+    /**
+     * Returns the node ID at the specified index position.
+     * @param i the index position (0 to size-1)
+     * @return the node ID at the given index
+     */
     public int getNode(int i) {
         return nodes[i];
     }
 
+    /**
+     * Returns the total allocated capacity of the internal arrays, which may be larger than the current size.
+     * @return the length of the internal storage arrays
+     */
     protected int getArrayLength() {
         return nodes.length;
     }

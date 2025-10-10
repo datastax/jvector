@@ -28,10 +28,17 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
 
+/** Base class for BQ vector implementations. */
 public abstract class BQVectors implements CompressedVectors {
+    /** The binary quantization. */
     protected final BinaryQuantization bq;
+    /** The compressed vectors. */
     protected long[][] compressedVectors;
 
+    /**
+     * Create a BQVectors with the specified binary quantization.
+     * @param bq the binary quantization
+     */
     protected BQVectors(BinaryQuantization bq) {
         this.bq = bq;
     }
@@ -55,6 +62,13 @@ public abstract class BQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Load BQVectors from the reader.
+     * @param in the reader
+     * @param offset the offset
+     * @return a BQVectors instance
+     * @throws IOException if an error occurs
+     */
     public static BQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
 
@@ -113,10 +127,21 @@ public abstract class BQVectors implements CompressedVectors {
         };
     }
 
+    /**
+     * Compute the similarity between two encoded vectors.
+     * @param encoded1 the first encoded vector
+     * @param encoded2 the second encoded vector
+     * @return the similarity
+     */
     public float similarityBetween(long[] encoded1, long[] encoded2) {
         return 1 - (float) VectorUtil.hammingDistance(encoded1, encoded2) / bq.getOriginalDimension();
     }
 
+    /**
+     * Get the compressed vector at the specified index.
+     * @param i the index
+     * @return the compressed vector
+     */
     public long[] get(int i) {
         return compressedVectors[i];
     }

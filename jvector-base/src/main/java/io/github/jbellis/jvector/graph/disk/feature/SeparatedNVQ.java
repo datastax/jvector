@@ -29,12 +29,25 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
+/**
+ * A feature implementation for storing NVQ (Neighborhood Vector Quantization) compressed vectors
+ * in a separated section of the index file.
+ */
 public class SeparatedNVQ implements SeparatedFeature {
+    /** The NVQ quantization configuration and codebooks */
     private final NVQuantization nvq;
+    /** Scorer for computing similarities using quantized vectors */
     private final NVQScorer scorer;
+    /** Thread-local storage for reusable quantized vector instances to avoid allocations */
     private final ThreadLocal<NVQuantization.QuantizedVector> reusableQuantizedVector;
+    /** The file offset where quantized vector data begins in the separated section */
     private long offset;
 
+    /**
+     * Creates a new SeparatedNVQ feature.
+     * @param nvq the NVQ quantization configuration including codebooks
+     * @param offset the file offset where the separated quantized vector data begins
+     */
     public SeparatedNVQ(NVQuantization nvq, long offset) {
         this.nvq = nvq;
         this.offset = offset;
@@ -96,6 +109,10 @@ public class SeparatedNVQ implements SeparatedFeature {
         }
     }
 
+    /**
+     * Returns the dimensionality of the vectors before quantization.
+     * @return the number of dimensions in the original unquantized vectors
+     */
     public int dimension() {
         return nvq.globalMean.length();
     }

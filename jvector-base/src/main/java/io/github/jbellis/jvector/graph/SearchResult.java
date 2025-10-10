@@ -30,6 +30,15 @@ public final class SearchResult {
     private final int rerankedCount;
     private final float worstApproximateScoreInTopK;
 
+    /**
+     * Creates a new SearchResult containing the results and metrics from an ANN search operation.
+     * @param nodes the top scoring neighbors discovered during the search, sorted best-first
+     * @param visitedCount the total number of graph nodes visited during the search
+     * @param expandedCount the total number of graph nodes expanded (had their neighbors examined)
+     * @param expandedCountL0 the number of nodes expanded in the base layer (layer 0)
+     * @param rerankedCount the number of nodes that were reranked with exact scores
+     * @param worstApproximateScoreInTopK the worst approximate score among the top K results
+     */
     public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int rerankedCount, float worstApproximateScoreInTopK) {
         this.nodes = nodes;
         this.visitedCount = visitedCount;
@@ -40,6 +49,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the closest neighbors discovered by the search.
      * @return the closest neighbors discovered by the search, sorted best-first
      */
     public NodeScore[] getNodes() {
@@ -47,6 +57,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the total number of graph nodes visited during the search operation.
      * @return the total number of graph nodes visited while performing the search
      */
     public int getVisitedCount() {
@@ -54,6 +65,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the total number of graph nodes that had their neighbors examined during search.
      * @return the total number of graph nodes expanded while performing the search
      */
     public int getExpandedCount() {
@@ -61,6 +73,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the number of graph nodes expanded specifically in the base layer.
      * @return the number of graph nodes expanded while performing the search in the base layer
      */
     public int getExpandedCountBaseLayer() {
@@ -68,6 +81,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the count of nodes that were reranked with exact similarity scores.
      * @return the number of nodes that were reranked during the search
      */
     public int getRerankedCount() {
@@ -75,6 +89,7 @@ public final class SearchResult {
     }
 
     /**
+     * Returns the worst approximate score among the top K results, useful for distributed search.
      * @return the worst approximate score of the top K nodes in the search result.  Useful
      * for passing to rerankFloor during search across multiple indexes.  Will be
      * Float.POSITIVE_INFINITY if no reranking was performed or no results were found.
@@ -83,10 +98,20 @@ public final class SearchResult {
         return worstApproximateScoreInTopK;
     }
 
+    /**
+     * Represents a graph node and its similarity score, used to store search results.
+     */
     public static final class NodeScore implements Comparable<NodeScore> {
+        /** The ordinal ID of the graph node */
         public final int node;
+        /** The similarity score for this node */
         public final float score;
 
+        /**
+         * Creates a new NodeScore pairing a node with its similarity score.
+         * @param node the ordinal ID of the graph node
+         * @param score the similarity score for this node
+         */
         public NodeScore(int node, float score) {
             this.node = node;
             this.score = score;

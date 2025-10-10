@@ -19,9 +19,21 @@ package io.github.jbellis.jvector.graph.similarity;
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
 public interface SearchScoreProvider {
 
+    /**
+     * Get score function.
+     * @return the return value
+     */
     ScoreFunction scoreFunction();
 
+    /**
+     * Get reranker.
+     * @return the return value
+     */
     ScoreFunction.ExactScoreFunction reranker();
 
+    /**
+     * Get exact score function.
+     * @return the return value
+     */
     ScoreFunction.ExactScoreFunction exactScoreFunction();
 }

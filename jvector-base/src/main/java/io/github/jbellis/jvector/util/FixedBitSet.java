@@ -45,6 +45,9 @@ public final class FixedBitSet extends BitSet {
      * <p><b>NOTE:</b> the returned bitset reuses the underlying {@code long[]} of the given {@code
      * bits} if possible. Also, calling {@link #length()} on the returned bits may return a value
      * greater than {@code numBits}.
+     * @param bits the bits
+     * @param numBits the numBits
+     * @return the return value
      */
     public static FixedBitSet ensureCapacity(FixedBitSet bits, int numBits) {
         if (numBits < bits.numBits) {
@@ -61,7 +64,11 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** returns the number of 64 bit words it would take to hold numBits */
+    /**
+     * Returns the number of 64 bit words it would take to hold numBits.
+     * @param numBits the numBits
+     * @return the return value
+     */
     public static int bits2words(int numBits) {
         // I.e.: get the word-offset of the last bit and add one (make sure to use >> so 0
         // returns 0!)
@@ -71,6 +78,9 @@ public final class FixedBitSet extends BitSet {
     /**
      * Returns the popcount or cardinality of the intersection of the two sets. Neither set is
      * modified.
+     * @param a the a
+     * @param b the b
+     * @return the return value
      */
     public static long intersectionCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
@@ -82,7 +92,12 @@ public final class FixedBitSet extends BitSet {
         return tot;
     }
 
-    /** Returns the popcount or cardinality of the union of the two sets. Neither set is modified. */
+    /**
+     * Returns the popcount or cardinality of the union of the two sets. Neither set is modified.
+     * @param a the a
+     * @param b the b
+     * @return the return value
+     */
     public static long unionCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
         long tot = 0;
@@ -102,6 +117,9 @@ public final class FixedBitSet extends BitSet {
     /**
      * Returns the popcount or cardinality of "a and not b" or "intersection(a, not(b))". Neither set
      * is modified.
+     * @param a the a
+     * @param b the b
+     * @return the return value
      */
     public static long andNotCount(FixedBitSet a, FixedBitSet b) {
         // Depends on the ghost bits being clear!
@@ -176,7 +194,10 @@ public final class FixedBitSet extends BitSet {
         return numBits;
     }
 
-    /** Expert. */
+    /**
+     * Expert.
+     * @return the return value
+     */
     public long[] getBits() {
         return bits;
     }
@@ -257,6 +278,11 @@ public final class FixedBitSet extends BitSet {
         bits[wordNum] &= ~bitmask;
     }
 
+    /**
+     * Get and clear bit.
+     * @param index the index
+     * @return the return value
+     */
     public boolean getAndClear(int index) {
         assert index >= 0 && index < numBits : "index=" + index + ", numBits=" + numBits;
         int wordNum = index >> 6; // div 64
@@ -312,7 +338,10 @@ public final class FixedBitSet extends BitSet {
         return -1;
     }
 
-    /** this = this OR other */
+    /**
+     * this = this OR other.
+     * @param other the other
+     */
     public void or(FixedBitSet other) {
         or(0, other.bits, other.numWords);
     }
@@ -331,7 +360,10 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** this = this XOR other */
+    /**
+     * this = this XOR other.
+     * @param other the other
+     */
     public void xor(FixedBitSet other) {
         xor(other.bits, other.numWords);
     }
@@ -345,7 +377,11 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** returns true if the sets have any elements in common */
+    /**
+     * Returns true if the sets have any elements in common.
+     * @param other the other
+     * @return the return value
+     */
     public boolean intersects(FixedBitSet other) {
         // Depends on the ghost bits being clear!
         int pos = Math.min(numWords, other.numWords);
@@ -355,7 +391,10 @@ public final class FixedBitSet extends BitSet {
         return false;
     }
 
-    /** this = this AND other */
+    /**
+     * this = this AND other.
+     * @param other the other
+     */
     public void and(FixedBitSet other) {
         and(other.bits, other.numWords);
     }
@@ -371,7 +410,10 @@ public final class FixedBitSet extends BitSet {
         }
     }
 
-    /** this = this AND NOT other */
+    /**
+     * this = this AND NOT other.
+     * @param other the other
+     */
     public void andNot(FixedBitSet other) {
         andNot(0, other.bits, other.numWords);
     }
@@ -448,7 +490,10 @@ public final class FixedBitSet extends BitSet {
         bits[endWord] ^= endmask;
     }
 
-    /** Flip the bit at the provided index. */
+    /**
+     * Flip the bit at the provided index.
+     * @param index the index
+     */
     public void flip(int index) {
         assert index >= 0 && index < numBits : "index=" + index + " numBits=" + numBits;
         int wordNum = index >> 6; // div 64

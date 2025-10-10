@@ -55,7 +55,9 @@ import java.util.stream.IntStream;
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
 public class OnHeapGraphIndex implements MutableGraphIndex {
-    // Used for saving and loading OnHeapGraphIndex
+    /**
+     * Magic number identifying JVector graph index files in serialized format
+     */
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
     // The current entry node for searches
@@ -380,6 +382,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * if concurrent updates are in progress.)
      */
     public class ConcurrentGraphIndexView extends FrozenView {
+        /**
+         * Default constructor creating a view with snapshot isolation based on completion timestamps
+         */
+        public ConcurrentGraphIndexView() {
+        }
         // It is tempting, but incorrect, to try to provide "adequate" isolation by
         // (1) keeping a bitset of complete nodes and giving that to the searcher as nodes to
         // accept -- but we need to keep incomplete nodes out of the search path entirely,
@@ -489,6 +496,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     /**
      * Saves the graph to the given DataOutput for reloading into memory later
+     * @param out the DataOutput to write the serialized graph to
      */
     @Deprecated
     public void save(DataOutput out) {

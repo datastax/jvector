@@ -38,6 +38,10 @@ public class NVQ implements Feature {
     private final NVQScorer scorer;
     private final ThreadLocal<QuantizedVector> reusableQuantizedVector;
 
+    /**
+     * Creates an NVQ feature for storing quantized vectors in the graph index
+     * @param nvq the NVQuantization compressor defining quantization parameters
+     */
     public NVQ(NVQuantization nvq) {
         this.nvq = nvq;
         scorer = new NVQScorer(this.nvq);
@@ -57,6 +61,10 @@ public class NVQ implements Feature {
     @Override
     public int featureSize() { return nvq.compressedVectorSize();}
 
+    /**
+     * Returns the dimensionality of the original unquantized vectors
+     * @return the number of dimensions in the full-resolution vectors
+     */
     public int dimension() {
         return nvq.globalMean.length();
     }
@@ -80,14 +88,31 @@ public class NVQ implements Feature {
         state.vector.write(out);
     }
 
+    /**
+     * State object holding a single quantized vector for serialization
+     */
     public static class State implements Feature.State {
+        /**
+         * The quantized vector to be written to the graph index
+         */
         public final QuantizedVector vector;
 
+        /**
+         * Creates a state holding the specified quantized vector
+         * @param vector the quantized vector data
+         */
         public State(QuantizedVector vector) {
             this.vector = vector;
         }
     }
 
+    /**
+     * Creates a reranking function that scores graph nodes using NVQ-quantized vectors
+     * @param queryVector the unquantized query vector
+     * @param vsf the vector similarity function to use for scoring
+     * @param source provider for accessing feature data from disk
+     * @return an exact score function that reads and scores NVQ vectors
+     */
     public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {

@@ -26,22 +26,20 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     private final ScoreFunction.ExactScoreFunction reranker;
 
     /**
-     * @param scoreFunction the primary, fast scoring function
-     * <p>
      * No reranking is performed.
+     * @param scoreFunction the primary, fast scoring function
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction) {
         this(scoreFunction, null);
     }
 
     /**
-     * @param scoreFunction the primary, fast scoring function
-     * @param reranker optional reranking function
      * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction.  However,
      * it is allowed, and sometimes useful, to only perform approximate scoring without reranking.
-     * <p>
      * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
      * or `ScoringView.rerankerFor`.
+     * @param scoreFunction the primary, fast scoring function
+     * @param reranker optional reranking function
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
         assert scoreFunction != null;
@@ -67,6 +65,10 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * A SearchScoreProvider for a single-pass search based on exact similarity.
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
+     * @param v the v
+     * @param vsf the vsf
+     * @param ravv the ravv
+     * @return the return value
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here

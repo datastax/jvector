@@ -40,7 +40,13 @@ import java.util.stream.IntStream;
  * It divides each vector in subvectors and then quantizes each one individually using a non-uniform quantizer.
  */
 public class NVQuantization implements VectorCompressor<NVQuantization.QuantizedVector>, Accountable {
+    /**
+     * Enumeration defining quantization bit depth per vector dimension
+     */
     public enum BitsPerDimension {
+        /**
+         * Eight bits per dimension quantization
+         */
         EIGHT {
             @Override
             public int getInt() {
@@ -52,6 +58,9 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
                 return vectorTypeSupport.createByteSequence(nDimensions);
             }
         },
+        /**
+         * Four bits per dimension quantization
+         */
         FOUR {
             @Override
             public int getInt() {
@@ -75,19 +84,21 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
         /**
          * Returns the integer 4 for FOUR and 8 for EIGHT
+         * @return the numeric bits per dimension value (4 or 8)
          */
         public abstract int getInt();
 
         /**
          * Creates a ByteSequence of the proper length to store the quantized vector.
          * @param nDimensions the number of dimensions of the original vector
-         * @return the byte sequence
+         * @return a ByteSequence sized appropriately for the quantization scheme
          */
         public abstract ByteSequence<?> createByteSequence(int nDimensions);
 
         /**
          * Loads the BitsPerDimension from a RandomAccessReader.
          * @param in the RandomAccessReader to read from.
+         * @return the BitsPerDimension value read from storage
          * @throws IOException if there is a problem reading from in.
          */
         public static BitsPerDimension load(RandomAccessReader in) throws IOException {
@@ -103,24 +114,34 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    // How many bits to use for each dimension when quantizing the vector:
+    /**
+     * The quantization resolution specifying how many bits to encode each dimension
+     */
     public final BitsPerDimension bitsPerDimension;
 
-    // We subtract the global mean vector to make it robust against center datasets with a large mean:
+    /**
+     * The average vector computed from the dataset, subtracted from vectors before quantization to center the data
+     */
     public final VectorFloat<?> globalMean;
 
-    // The number of dimensions of the original (uncompressed) vectors:
+    /**
+     * The dimensionality of uncompressed input vectors before quantization
+     */
     public final int originalDimension;
 
-    // A matrix that stores the size and starting point of each subvector:
+    /**
+     * Matrix defining subvector boundaries, where each row contains [size, offset] for one subvector partition
+     */
     public final int[][] subvectorSizesAndOffsets;
 
-    // Whether we want to skip the optimization of the NVQ parameters. Here for debug purposes only.
+    /**
+     * Flag controlling whether to optimize NVQ quantization parameters. Set to false to skip optimization for debugging.
+     */
     @VisibleForTesting
     public boolean learn = true;
 
     /**
-     * Class constructor.
+     * Creates an NVQuantization instance with the specified configuration
      * @param subvectorSizesAndOffsets a matrix that stores the size and starting point of each subvector
      * @param globalMean the mean of the database (its average vector)
      */
@@ -141,6 +162,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      *
      * @param ravv the vectors to quantize
      * @param nSubVectors number of subvectors
+     * @return a configured NVQuantization instance ready for encoding vectors
      */
     public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), nSubVectors);
@@ -201,6 +223,8 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
     /**
      * Creates an array of subvectors from a given vector
+     * @param vector the input vector to partition into subvectors
+     * @return array of subvectors extracted according to subvectorSizesAndOffsets
      */
     public VectorFloat<?>[] getSubVectors(VectorFloat<?> vector) {
         VectorFloat<?>[] subvectors = new VectorFloat<?>[subvectorSizesAndOffsets.length];
@@ -350,6 +374,9 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * A NuVeQ vector.
      */
     public static class QuantizedVector {
+        /**
+         * Array of quantized subvectors that together represent the compressed full vector
+         */
         public final QuantizedSubVector[] subVectors;
 
         /**
@@ -357,6 +384,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
          * @param subVectors receives the subvectors to quantize
          * @param bitsPerDimension the number of bits per dimension
          * @param learn whether to use optimization to find the parameters of the nonlinearity
+         * @param dest the destination QuantizedVector to populate with quantized subvectors
          */
         public static void quantizeTo(VectorFloat<?>[] subVectors, BitsPerDimension bitsPerDimension, boolean learn, QuantizedVector dest) {
             for (int i = 0; i < subVectors.length; i++) {
@@ -376,6 +404,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
          * Create an empty instance. Meant to be used as scratch space in conjunction with loadInto
          * @param subvectorSizesAndOffsets the array containing the sizes for the subvectors
          * @param bitsPerDimension the number of bits per dimension
+         * @return an uninitialized QuantizedVector with allocated storage for the specified configuration
          */
         public static QuantizedVector createEmpty(int[][] subvectorSizesAndOffsets, BitsPerDimension bitsPerDimension) {
             var subVectors = new QuantizedSubVector[subvectorSizesAndOffsets.length];
@@ -402,6 +431,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         /**
          * Read the instance from a RandomAccessReader
          * @param in the RandomAccessReader
+         * @return the loaded QuantizedVector with all subvectors reconstructed from disk
          * @throws IOException fails if we cannot read from the RandomAccessReader
          */
         public static QuantizedVector load(RandomAccessReader in) throws IOException {
@@ -417,6 +447,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         /**
          * Read the instance from a RandomAccessReader
          * @param in the RandomAccessReader
+         * @param qvector the preallocated QuantizedVector to populate with data from the reader
          * @throws IOException fails if we cannot read from the RandomAccessReader
          */
         public static void loadInto(RandomAccessReader in, QuantizedVector qvector) throws IOException {
@@ -440,19 +471,36 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * A NuVeQ sub-vector.
      */
     public static class QuantizedSubVector {
-        // The byte sequence that stores the quantized subvector
+        /**
+         * Compressed representation of the quantized subvector stored as byte values
+         */
         public ByteSequence<?> bytes;
 
-        // The number of bits for each dimension of the input uncompressed subvector
+        /**
+         * Quantization resolution determining how many bits encode each dimension
+         */
         public BitsPerDimension bitsPerDimension;
 
-        // The NVQ parameters
+        /**
+         * NVQ parameter controlling the rate of growth in the nonlinear quantization function
+         */
         public float growthRate;
+        /**
+         * NVQ parameter specifying the midpoint of the nonlinear quantization curve
+         */
         public float midpoint;
+        /**
+         * Maximum component value in the original unquantized subvector, used for dequantization bounds
+         */
         public float maxValue;
+        /**
+         * Minimum component value in the original unquantized subvector, used for dequantization bounds
+         */
         public float minValue;
 
-        // The number of dimensions of the input uncompressed subvector
+        /**
+         * Number of dimensions in the original unquantized subvector before compression
+         */
         public int originalDimensions;
 
         /**
@@ -568,6 +616,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
          * Create an empty instance. Meant to be used as scratch space in conjunction with loadInto
          * @param bitsPerDimension the number of bits per dimension
          * @param length the number of dimensions
+         * @return an uninitialized QuantizedSubVector with allocated storage for the specified bit depth and length
          */
         public static QuantizedSubVector createEmpty(BitsPerDimension bitsPerDimension, int length) {
             ByteSequence<?> bytes = bitsPerDimension.createByteSequence(length);
@@ -577,6 +626,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         /**
          * Read the instance from a RandomAccessReader
          * @param in the RandomAccessReader
+         * @return the loaded QuantizedSubVector with all quantization parameters and compressed data
          * @throws IOException fails if we cannot read from the RandomAccessReader
          */
         public static QuantizedSubVector load(RandomAccessReader in) throws IOException {
@@ -596,6 +646,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         /**
          * Read the instance from a RandomAccessReader
          * @param in the RandomAccessReader
+         * @param quantizedSubVector the preallocated QuantizedSubVector to populate with data from the reader
          * @throws IOException fails if we cannot read from the RandomAccessReader
          */
         public static void loadInto(RandomAccessReader in, QuantizedSubVector quantizedSubVector) throws IOException {

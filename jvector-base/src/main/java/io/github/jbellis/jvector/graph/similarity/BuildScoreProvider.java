@@ -29,9 +29,11 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  * Encapsulates comparing node distances for GraphIndexBuilder.
  */
 public interface BuildScoreProvider {
+    /** The vector type support. */
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     /**
+     * Determines if the primary score functions used for construction are exact.
      * @return true if the primary score functions used for construction are exact.  This
      * is modestly redundant, but it saves having to allocate new Search/Diversity provider
      * objects in some hot construction loops.
@@ -39,6 +41,7 @@ public interface BuildScoreProvider {
     boolean isExact();
 
     /**
+     * Gets the approximate centroid of the known nodes.
      * @return the approximate centroid of the known nodes.  We use the closest node
      * to this centroid as the graph entry point, so this is called when the entry point is deleted
      * or every time the graph size doubles.
@@ -49,40 +52,47 @@ public interface BuildScoreProvider {
 
     /**
      * Create a search score provider to use *internally* during construction.
-     * <p>
+     *
      * "Internally" means that this may differ from a typical SSP in that it may use
      * approximate scores *without* reranking.  (In this case, reranking will be done
      * separately by the ConcurrentNeighborSet diversity code.)
-     * <p>
+     *
      * @param vector the query vector to provide similarity scores against
+     * @return the search score provider
      */
     SearchScoreProvider searchProviderFor(VectorFloat<?> vector);
 
     /**
      * Create a search score provider to use *internally* during construction.
-     * <p>
+     *
      * "Internally" means that this may differ from a typical SSP in that it may use
      * approximate scores *without* reranking.  (In this case, reranking will be done
      * separately by the ConcurrentNeighborSet diversity code.)
-     * <p>
+     *
      * @param node1 the graph node to provide similarity scores against
+     * @return the search score provider
      */
     SearchScoreProvider searchProviderFor(int node1);
 
     /**
      * Create a score provider to use internally during construction.
-     * <p>
+     *
      * The difference between the diversity provider and the search provider is
      * that the diversity provider is only expected to be used a few dozen times per node,
      * which influences the implementation choices.
-     * <p>
+     *
      * When scoring is approximate, the scores from the search and diversity provider
      * must be consistent, i.e. mixing different types of CompressedVectors will cause problems.
+     * @param node1 the graph node to provide similarity scores against
+     * @return the search score provider
      */
     SearchScoreProvider diversityProviderFor(int node1);
 
     /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
+     * @param ravv the vector values
+     * @param similarityFunction the similarity function
+     * @return the build score provider
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
@@ -139,6 +149,9 @@ public interface BuildScoreProvider {
      * InlineVectorValues for building incrementally, but should technically
      * work with any RAVV implementation).
      * This class is not thread safe, we should never publish its results to another thread.
+     * @param vsf the similarity function
+     * @param pqv the PQ vectors
+     * @return the build score provider
      */
     static BuildScoreProvider pqBuildScoreProvider(VectorSimilarityFunction vsf, PQVectors pqv) {
         int dimension = pqv.getOriginalSize() / Float.BYTES;
@@ -179,6 +192,11 @@ public interface BuildScoreProvider {
         };
     }
 
+    /**
+     * Returns a BSP that performs approximate score comparisons using the given BQVectors.
+     * @param bqv the BQ vectors
+     * @return the build score provider
+     */
     static BuildScoreProvider bqBuildScoreProvider(BQVectors bqv) {
         return new BuildScoreProvider() {
             @Override

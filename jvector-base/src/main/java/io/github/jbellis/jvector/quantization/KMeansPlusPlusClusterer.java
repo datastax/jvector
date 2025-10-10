@@ -38,6 +38,9 @@ import static java.lang.Math.max;
 public class KMeansPlusPlusClusterer {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /**
+     * Special value indicating that clustering should use standard unweighted L2 distance instead of anisotropic distance.
+     */
     public static final float UNWEIGHTED = -1.0f;
 
     // number of centroids to compute
@@ -67,6 +70,12 @@ public class KMeansPlusPlusClusterer {
         this(points, chooseInitialCentroids(points, k), UNWEIGHTED);
     }
 
+    /**
+     * Constructs a KMeansPlusPlusClusterer with anisotropic distance weighting.
+     * @param points the points to cluster (points[n][i] is the ith component of the nth point)
+     * @param k number of clusters
+     * @param anisotropicThreshold the threshold of relevance for anisotropic angular distance shaping (-1.0 &lt; threshold &lt; 1.0)
+     */
     public KMeansPlusPlusClusterer(VectorFloat<?>[] points, int k, float anisotropicThreshold) {
         this(points, chooseInitialCentroids(points, k), anisotropicThreshold);
     }
@@ -124,9 +133,10 @@ public class KMeansPlusPlusClusterer {
     }
 
     /**
-     * Performs clustering on the provided set of points.
-     *
-     * @return a VectorFloat of cluster centroids.
+     * Performs clustering on the provided set of points using both unweighted and anisotropic iterations.
+     * @param unweightedIterations the number of iterations to run using standard unweighted L2 distance
+     * @param anisotropicIterations the number of iterations to run using anisotropic distance weighting
+     * @return a VectorFloat containing all cluster centroids concatenated together
      */
     public VectorFloat<?> cluster(int unweightedIterations, int anisotropicIterations) {
         // Always cluster unweighted first, it is significantly faster
@@ -148,11 +158,20 @@ public class KMeansPlusPlusClusterer {
         return centroids;
     }
 
-    // This is broken out as a separate public method to allow implementing OPQ efficiently
+    /**
+     * Performs a single clustering iteration using unweighted L2 distance. This method is exposed
+     * to allow external algorithms like OPQ to integrate with the clustering process.
+     * @return the number of points that changed cluster assignments during this iteration
+     */
     public int clusterOnceUnweighted() {
         updateCentroidsUnweighted();
         return updateAssignedPointsUnweighted();
     }
+
+    /**
+     * Performs a single clustering iteration using anisotropic distance weighting.
+     * @return the number of points that changed cluster assignments during this iteration
+     */
     public int clusterOnceAnisotropic() {
         updateCentroidsAnisotropic();
         return updateAssignedPointsAnisotropic();
@@ -431,7 +450,10 @@ public class KMeansPlusPlusClusterer {
     }
 
     /**
-     * Computes the centroid of a list of points.
+     * Computes the centroid (mean vector) of a list of points by averaging all vectors element-wise.
+     * @param points the list of vectors to compute the centroid from
+     * @return the centroid vector
+     * @throws IllegalArgumentException if the points list is empty
      */
     public static VectorFloat<?> centroidOf(List<VectorFloat<?>> points) {
         if (points.isEmpty()) {
@@ -444,6 +466,12 @@ public class KMeansPlusPlusClusterer {
         return centroid;
     }
 
+    /**
+     * Returns the current cluster centroids as a single concatenated vector.
+     * For k clusters with dimension d, this returns a vector of length k*d where centroids
+     * for cluster i start at position i*d.
+     * @return the concatenated centroid vector
+     */
     public VectorFloat<?> getCentroids() {
         return centroids;
     }

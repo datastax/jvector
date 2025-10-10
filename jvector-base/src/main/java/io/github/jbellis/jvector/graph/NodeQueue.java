@@ -40,6 +40,9 @@ import static java.lang.Math.min;
  * or unbounded operations, depending on the implementation subclasses, and either maxheap or minheap behavior.
  */
 public class NodeQueue {
+    /**
+     * Enum defining the heap ordering strategy for node scores.
+     */
     public enum Order {
         /** Smallest values at the top of the heap */
         MIN_HEAP {
@@ -64,12 +67,18 @@ public class NodeQueue {
     private final AbstractLongHeap heap;
     private final Order order;
 
+    /**
+     * Constructs a NodeQueue with the specified heap implementation and ordering.
+     * @param heap the underlying heap storage for encoded node-score pairs
+     * @param order the ordering strategy (MIN_HEAP for smallest-first, MAX_HEAP for largest-first)
+     */
     public NodeQueue(AbstractLongHeap heap, Order order) {
         this.heap = heap;
         this.order = order;
     }
 
     /**
+     * Returns the number of nodes currently stored in the queue.
      * @return the number of elements in the heap
      */
     public int size() {
@@ -136,12 +145,20 @@ public class NodeQueue {
         return (int) ~(order.apply(heapValue));
     }
 
-    /** Removes the top element and returns its node id. */
+    /**
+     * Removes and returns the node ID at the top of the heap. For MIN_HEAP, this is the node
+     * with the smallest score; for MAX_HEAP, this is the node with the largest score.
+     * @return the node ID of the removed top element
+     */
     public int pop() {
         return decodeNodeId(heap.pop());
     }
 
-    /** Returns a copy of the internal nodes array. Not sorted by score! */
+    /**
+     * Returns a copy of all node IDs in the queue. The returned array is NOT sorted by score
+     * and the order should not be relied upon.
+     * @return a new array containing all node IDs in the queue
+     */
     public int[] nodesCopy() {
         int size = size();
         int[] nodes = new int[size];
@@ -156,6 +173,12 @@ public class NodeQueue {
      * The topK results will be placed into `reranked`, and the remainder into `unused`.
      * <p>
      * Only the best result or results whose approximate score is at least `rerankFloor` will be reranked.
+     * @param topK the number of top results to rerank and return
+     * @param reranker the exact score function used to recompute scores for candidate nodes
+     * @param rerankFloor the minimum approximate score threshold; only nodes with scores above this value (plus the best node) will be reranked
+     * @param reranked the output queue that will contain the top-K reranked results with exact scores
+     * @param unused the output collection that will contain nodes not selected for the final top-K results
+     * @return the worst approximate score among the nodes that made it into the final top-K results
      */
     public float rerank(int topK, ScoreFunction.ExactScoreFunction reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
         // Rescore the nodes whose approximate score meets the floor.  Nodes that do not will be marked as -1
@@ -229,25 +252,35 @@ public class NodeQueue {
         return worstApproximateInTopK;
     }
 
-    /** Returns the top element's node id. */
+    /**
+     * Returns the node ID at the top of the heap without removing it. For MIN_HEAP, this is the node
+     * with the smallest score; for MAX_HEAP, this is the node with the largest score.
+     * @return the node ID of the top element
+     */
     public int topNode() {
         return decodeNodeId(heap.top());
     }
 
     /**
-     * Returns the top element's node score. For the min heap this is the minimum score. For the max
-     * heap this is the maximum score.
+     * Returns the score of the node at the top of the heap. For MIN_HEAP this is the minimum score;
+     * for MAX_HEAP this is the maximum score.
+     * @return the score of the top element
      */
     public float topScore() {
         return decodeScore(heap.top());
     }
 
+    /**
+     * Removes all elements from the queue, resetting its size to zero.
+     */
     public void clear() {
         heap.clear();
     }
 
     /**
-     * Set the max size of the underlying heap.  Only valid when NodeQueue was created with BoundedLongHeap.
+     * Sets the maximum capacity of the underlying heap. Only valid when NodeQueue was created with BoundedLongHeap.
+     * When the heap reaches this size, subsequent push operations will evict the worst element.
+     * @param maxSize the new maximum number of elements the heap can hold
      */
     public void setMaxSize(int maxSize) {
         ((BoundedLongHeap) heap).setMaxSize(maxSize);
@@ -258,6 +291,11 @@ public class NodeQueue {
         return "Nodes[" + heap.size() + "]";
     }
 
+    /**
+     * Iterates over all node-score pairs in the queue, calling the consumer for each pair.
+     * The iteration order is not guaranteed to be sorted.
+     * @param consumer the function to call for each node-score pair
+     */
     public void foreach(NodeConsumer consumer) {
         for (int i = 0; i < heap.size(); i++) {
             long heapValue = heap.get(i + 1);
@@ -265,20 +303,39 @@ public class NodeQueue {
         }
     }
 
+    /**
+     * Functional interface for consuming node-score pairs during iteration.
+     */
     @FunctionalInterface
     public interface NodeConsumer {
+        /**
+         * Processes a node-score pair.
+         * @param node the node ID
+         * @param score the score associated with this node
+         */
         void accept(int node, float score);
     }
 
-    /** Iterator over node and score pairs. */
+    /**
+     * Iterator over node and score pairs. Provides sequential access to nodes and their associated scores.
+     */
     public interface NodeScoreIterator {
-        /** @return true if there are more elements */
+        /**
+         * Checks if there are more elements to iterate over.
+         * @return true if there are more elements, false otherwise
+         */
         boolean hasNext();
 
-        /** @return the next node id and advance the iterator */
+        /**
+         * Returns the next node ID and advances the iterator position.
+         * @return the next node ID in the iteration
+         */
         int pop();
 
-        /** @return the next node score */
+        /**
+         * Returns the score of the current node without advancing the iterator.
+         * @return the score associated with the node that will be returned by the next pop() call
+         */
         float topScore();
     }
 

@@ -23,7 +23,14 @@ import org.apache.commons.math3.stat.StatUtils;
 import static io.github.jbellis.jvector.util.NumericUtils.floatToSortableInt;
 import static io.github.jbellis.jvector.util.NumericUtils.sortableIntToFloat;
 
+/**
+ * Interface for tracking and analyzing similarity scores during graph search to determine
+ * when search can be terminated early based on score patterns.
+ */
 public interface ScoreTracker {
+    /**
+     * Factory for creating ScoreTracker instances appropriate for different search configurations.
+     */
     class ScoreTrackerFactory {
         private TwoPhaseTracker twoPhaseTracker;
         private RelaxedMonotonicityTracker relaxedMonotonicityTracker;
@@ -35,6 +42,13 @@ public interface ScoreTracker {
             noOpTracker = null;
         }
 
+        /**
+         * Returns an appropriate ScoreTracker based on search parameters.
+         * @param pruneSearch whether to enable pruning based on relaxed monotonicity
+         * @param rerankK the number of top candidates to track for reranking purposes
+         * @param threshold the similarity threshold for two-phase search (0 if not applicable)
+         * @return a ScoreTracker configured for the given search parameters
+         */
         public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
             // track scores to predict when we are done with threshold queries
             final ScoreTracker scoreTracker;
@@ -65,13 +79,28 @@ public interface ScoreTracker {
         }
     }
 
+    /** A singleton no-op tracker that performs no tracking and never signals to stop */
     ScoreTracker NO_OP = new NoOpTracker();
 
+    /**
+     * Records a similarity score encountered during search for statistical analysis.
+     * @param score the similarity score to track
+     */
     void track(float score);
 
+    /**
+     * Determines whether the search should be terminated early based on tracked score patterns.
+     * @return true if search can stop, false if it should continue
+     */
     boolean shouldStop();
 
+    /**
+     * A no-op implementation that performs no tracking and never signals to stop search.
+     */
     class NoOpTracker implements ScoreTracker {
+        /** Package-private constructor */
+        NoOpTracker() {}
+
         @Override
         public void track(float score) { }
 

@@ -24,6 +24,13 @@
 
 package io.github.jbellis.jvector.util;
 
+/**
+ * Interface for objects that can account for their RAM usage.
+ */
 public interface Accountable {
+    /**
+     * Returns the RAM bytes used.
+     * @return the RAM bytes used
+     */
     long ramBytesUsed();
 }

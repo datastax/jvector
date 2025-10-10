@@ -93,6 +93,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * output with calls to any of the synchronized methods in this class.
      * <p>
      * Provided for callers (like Cassandra) that want to add their own header/footer to the output.
+     * @return the underlying RandomAccessWriter for direct manipulation if needed
      */
     public RandomAccessWriter getOutput() {
         return out;
@@ -105,6 +106,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * Note: the ordinal given is implicitly a "new" ordinal in the sense of the OrdinalMapper,
      * but since no nodes or edges are involved (we just write the given State to the index file),
      * the mapper is not invoked.
+     * @param ordinal the node ordinal whose inline features to write
+     * @param stateMap map from feature IDs to their state data to be written
+     * @throws IOException if writing fails
      */
     public synchronized void writeInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException
     {
@@ -234,6 +238,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * Write the index header and completed edge lists to the given output.
      * Unlike the super method, this method flushes the output and also assumes it's using a RandomAccessWriter that can
      * seek to the startOffset and re-write the header.
+     * @param view the graph view to extract header information from
      * @throws IOException if there is an error writing the header
      */
     public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
@@ -243,7 +248,10 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         out.flush();
     }
 
-    /** CRC32 checksum of bytes written since the starting offset */
+    /** CRC32 checksum of bytes written since the starting offset
+     * @return the CRC32 checksum value covering all bytes from startOffset to current position
+     * @throws IOException if reading the data for checksumming fails
+     */
     public synchronized long checksum() throws IOException {
         long endOffset = out.position();
         return out.checksum(startOffset, endOffset);
@@ -253,12 +261,26 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * Builder for {@link OnDiskGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
+        /**
+         * Byte offset in the output file where the graph index begins
+         */
         private long startOffset = 0L;
 
+        /**
+         * Creates a builder for writing a graph index to the specified file path
+         * @param graphIndex the graph structure to serialize
+         * @param outPath the file path where the index will be written
+         * @throws FileNotFoundException if the output path cannot be created
+         */
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
         }
 
+        /**
+         * Creates a builder for writing a graph index using the provided writer
+         * @param graphIndex the graph structure to serialize
+         * @param out the RandomAccessWriter for output
+         */
         public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
             super(graphIndex, out);
         }
@@ -266,6 +288,8 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         /**
          * Set the starting offset for the graph index in the output file.  This is useful if you want to
          * append the index to an existing file.
+         * @param startOffset the byte position where graph writing should begin
+         * @return this builder for method chaining
          */
         public Builder withStartOffset(long startOffset) {
             this.startOffset = startOffset;

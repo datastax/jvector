@@ -19,33 +19,77 @@ package io.github.jbellis.jvector.vector.types;
 import io.github.jbellis.jvector.util.Accountable;
 import java.util.Objects;
 
+/**
+ * A sequence of bytes with offset and length.
+ * @param <T> the T type parameter
+ */
 public interface ByteSequence<T> extends Accountable
 {
     /**
+     * Gets the entire sequence backing storage.
      * @return entire sequence backing storage
      */
     T get();
 
+    /**
+     * Gets the offset.
+     * @return the offset
+     */
     int offset();
 
+    /**
+     * Gets the length.
+     * @return the length
+     */
     int length();
 
+    /**
+     * Gets the byte at the specified index.
+     * @param i the index
+     * @return the byte
+     */
     byte get(int i);
 
+    /**
+     * Sets the byte at the specified index.
+     * @param i the index
+     * @param value the value
+     */
     void set(int i, byte value);
 
     /**
+     * Sets a short value in little-endian format.
      * @param shortIndex index (as if this was a short array) inside the sequence to set the short value
      * @param value short value to set
      */
     void setLittleEndianShort(int shortIndex, short value);
 
+    /**
+     * Zeroes the sequence.
+     */
     void zero();
 
+    /**
+     * Copies from another sequence.
+     * @param src the source sequence
+     * @param srcOffset the source offset
+     * @param destOffset the destination offset
+     * @param length the length
+     */
     void copyFrom(ByteSequence<?> src, int srcOffset, int destOffset, int length);
 
+    /**
+     * Creates a copy of the sequence.
+     * @return the copy
+     */
     ByteSequence<T> copy();
 
+    /**
+     * Creates a slice of the sequence.
+     * @param offset the offset
+     * @param length the length
+     * @return the slice
+     */
     ByteSequence<T>  slice(int offset, int length);
 
     /**
@@ -65,6 +109,7 @@ public interface ByteSequence<T> extends Accountable
     }
 
     /**
+     * Computes a hash code for this ByteSequence.
      * @return a hash code for this ByteSequence
      */
     default int getHashCode() {

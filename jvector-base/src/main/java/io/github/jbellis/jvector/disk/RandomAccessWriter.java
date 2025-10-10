@@ -24,9 +24,25 @@ import java.io.IOException;
  * A DataOutput that adds methods for random access writes
  */
 public interface RandomAccessWriter extends IndexWriter {
+    /**
+     * Seek to a position in the writer.
+     * @param position the position
+     * @throws IOException if an error occurs
+     */
     void seek(long position) throws IOException;
 
+    /**
+     * Flush the writer.
+     * @throws IOException if an error occurs
+     */
     void flush() throws IOException;
 
+    /**
+     * Compute a checksum for the range [startOffset .. endOffset).
+     * @param startOffset the start offset
+     * @param endOffset the end offset
+     * @return the checksum
+     * @throws IOException if an error occurs
+     */
     long checksum(long startOffset, long endOffset) throws IOException;
 }

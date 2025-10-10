@@ -27,14 +27,28 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
 
+/**
+ * Container for NVQ-compressed vectors with scoring capabilities
+ */
 public class NVQVectors implements CompressedVectors {
+    /**
+     * The NVQuantization compressor defining quantization parameters and codebooks
+     */
     final NVQuantization nvq;
+    /**
+     * Scorer instance for computing similarity between quantized vectors
+     */
     final NVQScorer scorer;
+    /**
+     * Array of compressed vectors stored using NVQ encoding
+     */
     final NVQuantization.QuantizedVector[] compressedVectors;
 
     /**
      * Initialize the NVQVectors with an initial array of vectors.  This array may be
      * mutated, but caller is responsible for thread safety issues when doing so.
+     * @param nvq the NVQuantization compressor defining quantization parameters
+     * @param compressedVectors array of quantized vectors to manage
      */
     public NVQVectors(NVQuantization nvq, NVQuantization.QuantizedVector[] compressedVectors) {
         this.nvq = nvq;
@@ -60,6 +74,12 @@ public class NVQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Loads NVQVectors from a RandomAccessReader at the current position
+     * @param in the reader to load from
+     * @return the reconstructed NVQVectors with all quantized vectors
+     * @throws IOException if reading fails
+     */
     public static NVQVectors load(RandomAccessReader in) throws IOException {
         var nvq = NVQuantization.load(in);
 
@@ -77,6 +97,13 @@ public class NVQVectors implements CompressedVectors {
         return new NVQVectors(nvq, compressedVectors);
     }
 
+    /**
+     * Loads NVQVectors from a RandomAccessReader starting at the specified offset
+     * @param in the reader to load from
+     * @param offset the byte position to seek to before reading
+     * @return the reconstructed NVQVectors with all quantized vectors
+     * @throws IOException if reading fails
+     */
     public static NVQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
         return load(in);
@@ -113,10 +140,19 @@ public class NVQVectors implements CompressedVectors {
         throw new UnsupportedOperationException();
     }
 
+    /**
+     * Returns the quantized vector at the specified ordinal
+     * @param ordinal the index of the vector to retrieve
+     * @return the quantized vector at the given position
+     */
     public NVQuantization.QuantizedVector get(int ordinal) {
         return compressedVectors[ordinal];
     }
 
+    /**
+     * Returns the NVQuantization compressor used for encoding these vectors
+     * @return the NVQuantization instance containing codebooks and parameters
+     */
     public NVQuantization getNVQuantization() {
         return nvq;
     }

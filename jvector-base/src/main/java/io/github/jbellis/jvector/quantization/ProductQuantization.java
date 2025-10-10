@@ -56,11 +56,20 @@ import static java.lang.Math.sqrt;
 public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, Accountable {
     private static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
+    /**
+     * Logger for PQ training and encoding operations
+     */
     protected static final Logger LOG = Logger.getLogger(ProductQuantization.class.getName());
 
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    /**
+     * Default number of clusters per subspace matching byte-sized encoding
+     */
     static final int DEFAULT_CLUSTERS = 256; // number of clusters per subspace = one byte's worth
     static final int K_MEANS_ITERATIONS = 6;
+    /**
+     * Maximum number of vectors to use for training codebooks to limit memory usage
+     */
     public static final int MAX_PQ_TRAINING_SET_SIZE = 128000;
 
     final VectorFloat<?>[] codebooks; // array of codebooks, where each codebook is a VectorFloat consisting of k contiguous subvectors each of length M
@@ -76,7 +85,13 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     private final ThreadLocal<ByteSequence<?>> partialQuantizedSums; // for quantized sums during fused ADC
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
     private final AtomicReference<ByteSequence<?>> partialQuantizedSquaredMagnitudes; // for quantized squared magnitude partials during cosine fused ADC
+    /**
+     * Delta value for cosine fused ADC squared magnitude quantization (invariant for a given PQ)
+     */
     protected volatile float squaredMagnitudeDelta = 0; // for cosine fused ADC squared magnitude quantization delta (since this is invariant for a given PQ)
+    /**
+     * Minimum squared magnitude value for cosine fused ADC (invariant for a given PQ)
+     */
     protected volatile float minSquaredMagnitude = 0; // for cosine fused ADC minimum squared magnitude (invariant for a given PQ)
 
     /**
@@ -87,10 +102,29 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * @param globallyCenter whether to center the vectors globally before quantization
      *                       (not recommended when using the quantization for dot product)
      */
+    /**
+     * Initializes the codebooks by clustering the input data using Product Quantization.
+     *
+     * @param ravv the vectors to quantize
+     * @param M number of subspaces
+     * @param clusterCount number of clusters per subspace (typically 256)
+     * @param globallyCenter whether to center the vectors globally before quantization
+     *                       (not recommended when using the quantization for dot product)
+     * @return a configured ProductQuantization instance with trained codebooks
+     */
     public static ProductQuantization compute(RandomAccessVectorValues ravv, int M, int clusterCount, boolean globallyCenter) {
         return compute(ravv, M, clusterCount, globallyCenter, UNWEIGHTED, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
+    /**
+     * Initializes codebooks with anisotropic threshold for prioritizing parallel error
+     * @param ravv the vectors to quantize
+     * @param M number of subspaces
+     * @param clusterCount number of clusters per subspace (typically 256)
+     * @param globallyCenter whether to center vectors globally before quantization
+     * @param anisotropicThreshold threshold for weighting parallel vs orthogonal error
+     * @return a configured ProductQuantization instance with trained codebooks
+     */
     public static ProductQuantization compute(RandomAccessVectorValues ravv, int M, int clusterCount, boolean globallyCenter, float anisotropicThreshold) {
         return compute(ravv, M, clusterCount, globallyCenter, anisotropicThreshold, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
@@ -100,7 +134,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      *
      * @param ravv the vectors to quantize
      * @param M number of subspaces
-     * @param clusterCount number of clusters per subspace
+     * @param clusterCount number of clusters per subspace (typically 256)
+     * @return a configured ProductQuantization instance with trained codebooks
      * @param globallyCenter whether to center the vectors globally before quantization
      *                       (not recommended when using the quantization for dot product)
      * @param anisotropicThreshold the threshold of relevance for anisotropic angular distance shaping, giving
@@ -157,6 +192,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     /**
      * Create a new PQ by fine-tuning this one with the data in `ravv`
+     * @param ravv the vectors to use for refinement
+     * @return a new ProductQuantization with codebooks refined on the provided data
      */
     public ProductQuantization refine(RandomAccessVectorValues ravv) {
         return refine(ravv, 1, UNWEIGHTED, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
@@ -165,8 +202,13 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     /**
      * Create a new PQ by fine-tuning this one with the data in `ravv`
      *
+     * @param ravv the vectors to use for refinement
      * @param lloydsRounds number of Lloyd's iterations to run against
      *                     the new data.  Suggested values are 1 or 2.
+     * @param anisotropicThreshold threshold for anisotropic quantization weighting
+     * @param simdExecutor executor for SIMD-optimized operations
+     * @param parallelExecutor executor for parallel stream operations
+     * @return a new ProductQuantization with codebooks refined on the provided data
      */
     public ProductQuantization refine(RandomAccessVectorValues ravv,
                                       int lloydsRounds,
@@ -358,6 +400,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     /**
+     * Computes residuals for anisotropic quantization weighing parallel error more heavily.
+     * @param vector the vector to compute residuals for
      * @return the parallel-cost residuals for each subspace and cluster
      */
     private Residual[][] computeResiduals(VectorFloat<?> vector) {
@@ -429,6 +473,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     /**
      * Decodes the quantized representation (ByteSequence) to its approximate original vector.
+     * @param encoded the compressed byte sequence to decode
+     * @param target the float vector to populate with decoded values
      */
     public void decode(ByteSequence<?> encoded, VectorFloat<?> target) {
         decodeCentered(encoded, target);
@@ -441,6 +487,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     /**
      * Decodes the quantized representation (ByteSequence) to its approximate original vector, relative to the global centroid.
+     * The decoded vector is centered around zero without adding back the global centroid.
+     * @param encoded the compressed byte sequence to decode
+     * @param target the float vector to populate with centered decoded values
      */
     void decodeCentered(ByteSequence<?> encoded, VectorFloat<?> target) {
         for (int m = 0; m < M; m++) {
@@ -450,6 +499,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     /**
+     * Returns the number of subspaces used in product quantization
      * @return how many bytes we are compressing to
      */
     public int getSubspaceCount() {
@@ -457,6 +507,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     /**
+     * Returns the number of cluster centroids per subspace
      * @return number of clusters per subspace
      */
     public int getClusterCount() {
@@ -499,6 +550,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     /**
      * Extracts the m-th subvector from a single vector.
+     * @param vector the full vector to extract from
+     * @param m the subvector index to extract
+     * @param subvectorSizeAndOffset size and offset information for all subvectors
+     * @return the extracted subvector
      */
     static VectorFloat<?> getSubVector(VectorFloat<?> vector, int m, int[][] subvectorSizeAndOffset) {
         VectorFloat<?> subvector = vectorTypeSupport.createFloatVector(subvectorSizeAndOffset[m][0]);
@@ -594,6 +649,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * Since the dot product is commutative, we only need to store the upper triangle of the matrix.
      * There are M codebooks, and each codebook has k centroids, so the total number of partial sums is M * k * (k+1) / 2.
      *
+     * @param vectorSimilarityFunction the similarity function determining which distances to precompute
      * @return a vector to hold partial sums for a single codebook
      */
     public VectorFloat<?> createCodebookPartialSums(VectorSimilarityFunction vectorSimilarityFunction) {
@@ -636,6 +692,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return size;
     }
 
+    /**
+     * Loads a ProductQuantization instance from disk
+     * @param in the reader to load from
+     * @return the reconstructed ProductQuantization with all codebooks
+     * @throws IOException if reading fails
+     */
     public static ProductQuantization load(RandomAccessReader in) throws IOException {
         int maybeMagic = in.readInt();
         int version;
@@ -705,6 +767,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     /**
+     * Returns the global centroid if available, otherwise computes it from codebook centroids.
      * @return the centroid of the codebooks
      */
     public VectorFloat<?> getOrComputeCentroid() {
@@ -766,6 +829,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
     }
 
+    /**
+     * Returns the dimensionality of the original uncompressed vectors
+     * @return the number of dimensions before quantization
+     */
     public int getOriginalDimension() {
         return originalDimension;
     }

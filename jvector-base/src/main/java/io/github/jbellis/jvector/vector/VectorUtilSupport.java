@@ -35,55 +35,161 @@ import java.util.List;
  */
 public interface VectorUtilSupport {
 
-  /** Calculates the dot product of the given float arrays. */
+  /**
+   * Calculates the dot product of the given float arrays.
+   *
+   * @param a the first vector
+   * @param b the second vector
+   * @return the dot product of the two vectors
+   */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 
-  /** Calculates the dot product of float arrays of differing sizes, or a subset of the data */
+  /**
+   * Calculates the dot product of float arrays of differing sizes, or a subset of the data.
+   *
+   * @param a the first vector
+   * @param aoffset the starting offset in the first vector
+   * @param b the second vector
+   * @param boffset the starting offset in the second vector
+   * @param length the length of the subvectors to compute
+   * @return the dot product of the two subvectors
+   */
   float dotProduct(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length);
 
-  /** Returns the cosine similarity between the two vectors. */
+  /**
+   * Returns the cosine similarity between the two vectors.
+   *
+   * @param v1 the first vector
+   * @param v2 the second vector
+   * @return the cosine similarity between the two vectors
+   */
   float cosine(VectorFloat<?> v1, VectorFloat<?> v2);
 
-  /** Calculates the cosine similarity of VectorFloats of differing sizes, or a subset of the data */
+  /**
+   * Calculates the cosine similarity of VectorFloats of differing sizes, or a subset of the data.
+   *
+   * @param a the first vector
+   * @param aoffset the starting offset in the first vector
+   * @param b the second vector
+   * @param boffset the starting offset in the second vector
+   * @param length the length of the subvectors to compute
+   * @return the cosine similarity between the two subvectors
+   */
   float cosine(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length);
 
-  /** Returns the sum of squared differences of the two vectors. */
+  /**
+   * Returns the sum of squared differences of the two vectors.
+   *
+   * @param a the first vector
+   * @param b the second vector
+   * @return the squared Euclidean distance between the two vectors
+   */
   float squareDistance(VectorFloat<?> a, VectorFloat<?> b);
 
-  /** Calculates the sum of squared differences of float arrays of differing sizes, or a subset of the data */
+  /**
+   * Calculates the sum of squared differences of float arrays of differing sizes, or a subset of the data.
+   *
+   * @param a the first vector
+   * @param aoffset the starting offset in the first vector
+   * @param b the second vector
+   * @param boffset the starting offset in the second vector
+   * @param length the length of the subvectors to compute
+   * @return the squared Euclidean distance between the two subvectors
+   */
   float squareDistance(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length);
 
-  /** returns the sum of the given vectors. */
+  /**
+   * Returns the element-wise sum of the given vectors.
+   *
+   * @param vectors the list of vectors to sum
+   * @return a new vector containing the element-wise sum of all input vectors
+   */
   VectorFloat<?> sum(List<VectorFloat<?>> vectors);
 
-  /** return the sum of the components of the vector */
+  /**
+   * Returns the sum of all components in the vector.
+   *
+   * @param vector the vector to sum
+   * @return the sum of all elements in the vector
+   */
   float sum(VectorFloat<?> vector);
 
-  /** Multiply vector by multiplier, in place (vector will be modified) */
+  /**
+   * Multiplies each element of the vector by the given multiplier in place.
+   *
+   * @param vector the vector to scale (will be modified)
+   * @param multiplier the scaling factor to apply to each element
+   */
   void scale(VectorFloat<?> vector, float multiplier);
 
-  /** Adds v2 into v1, in place (v1 will be modified) */
+  /**
+   * Adds the elements of v2 to the corresponding elements of v1 in place.
+   *
+   * @param v1 the vector to modify (will contain the sum)
+   * @param v2 the vector to add to v1
+   */
   void addInPlace(VectorFloat<?> v1, VectorFloat<?> v2);
 
-  /** Adds value to each element of v1, in place (v1 will be modified) */
+  /**
+   * Adds a scalar value to each element of v1 in place.
+   *
+   * @param v1 the vector to modify (will contain the result)
+   * @param value the scalar value to add to each element
+   */
   void addInPlace(VectorFloat<?> v1, float value);
 
-  /** Subtracts v2 from v1, in place (v1 will be modified) */
+  /**
+   * Subtracts the elements of v2 from the corresponding elements of v1 in place.
+   *
+   * @param v1 the vector to modify (will contain the difference)
+   * @param v2 the vector to subtract from v1
+   */
   void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2);
 
-  /** Subtracts value from each element of v1, in place (v1 will be modified) */
+  /**
+   * Subtracts a scalar value from each element of the vector in place.
+   *
+   * @param vector the vector to modify (will contain the result)
+   * @param value the scalar value to subtract from each element
+   */
   void subInPlace(VectorFloat<?> vector, float value);
 
-  /** @return a - b, element-wise */
+  /**
+   * Subtracts b from a element-wise and returns a new vector.
+   *
+   * @param a the vector to subtract from
+   * @param b the vector to subtract
+   * @return a new vector containing the element-wise difference (a - b)
+   */
   VectorFloat<?> sub(VectorFloat<?> a, VectorFloat<?> b);
 
-  /** Subtracts value from each element of a */
+  /**
+   * Subtracts a scalar value from each element of a and returns a new vector.
+   *
+   * @param a the vector to subtract from
+   * @param value the scalar value to subtract from each element
+   * @return a new vector containing the result
+   */
   VectorFloat<?> sub(VectorFloat<?> a, float value);
 
-  /** @return a - b, element-wise, starting at aOffset and bOffset respectively */
+  /**
+   * Subtracts subvectors element-wise and returns a new vector.
+   *
+   * @param a the first vector
+   * @param aOffset the starting offset in the first vector
+   * @param b the second vector
+   * @param bOffset the starting offset in the second vector
+   * @param length the length of the subvectors
+   * @return a new vector containing the element-wise difference starting at the specified offsets
+   */
   VectorFloat<?> sub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length);
 
-  /** Calculates the minimum value for every corresponding lane values in v1 and v2, in place (v1 will be modified) */
+  /**
+   * Computes the element-wise minimum of two vectors and stores the result in v1.
+   *
+   * @param v1 the first vector (will be modified to contain the minimums)
+   * @param v2 the second vector
+   */
   void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2);
 
   /**
@@ -130,6 +236,13 @@ public interface VectorUtilSupport {
    */
   float assembleAndSumPQ(VectorFloat<?> codebookPartialSums, int subspaceCount, ByteSequence<?> vector1Ordinals, int vector1OrdinalOffset, ByteSequence<?> node2Ordinals, int node2OrdinalOffset, int clusterCount);
 
+  /**
+   * Computes the Hamming distance between two bit vectors represented as long arrays.
+   *
+   * @param v1 the first bit vector
+   * @param v2 the second bit vector
+   * @return the number of bit positions where the two vectors differ
+   */
   int hammingDistance(long[] v1, long[] v2);
 
   // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
@@ -143,6 +256,8 @@ public interface VectorUtilSupport {
    * @param quantizedPartials The quantized precomputed score fragments for each codebook entry. These are stored as a contiguous vector of all
    *                          the fragments for one codebook, followed by all the fragments for the next codebook, and so on. These have been
    *                          quantized by quantizePartialSums.
+   * @param delta the quantization delta used for dequantizing scores
+   * @param minDistance the minimum distance used during quantization
    * @param vsf      The similarity function to use.
    * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
    */
@@ -219,8 +334,33 @@ public interface VectorUtilSupport {
     }
   }
 
+  /**
+   * Calculates partial similarity sums for PQ codebook clusters against a query subvector.
+   *
+   * @param codebook the codebook containing all centroid vectors
+   * @param codebookIndex the index of the codebook to use
+   * @param size the dimensionality of each centroid vector
+   * @param clusterCount the number of clusters in the codebook
+   * @param query the query vector
+   * @param offset the starting offset in the query vector for this subspace
+   * @param vsf the vector similarity function to use
+   * @param partialSums output vector to store the computed partial sums
+   */
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
 
+  /**
+   * Calculates partial similarity sums and best distances for PQ codebook clusters against a query subvector.
+   *
+   * @param codebook the codebook containing all centroid vectors
+   * @param codebookIndex the index of the codebook to use
+   * @param size the dimensionality of each centroid vector
+   * @param clusterCount the number of clusters in the codebook
+   * @param query the query vector
+   * @param offset the starting offset in the query vector for this subspace
+   * @param vsf the vector similarity function to use
+   * @param partialSums output vector to store the computed partial sums
+   * @param partialMins output vector to store the best distances per cluster
+   */
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums, VectorFloat<?> partialMins);
 
   /**
@@ -237,14 +377,49 @@ public interface VectorUtilSupport {
    */
   void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials);
 
+  /**
+   * Calculates the maximum value in the vector.
+   *
+   * @param v the vector to search
+   * @return the maximum value in the vector
+   */
   float max(VectorFloat<?> v);
+
+  /**
+   * Calculates the minimum value in the vector.
+   *
+   * @param v the vector to search
+   * @return the minimum value in the vector
+   */
   float min(VectorFloat<?> v);
 
+  /**
+   * Computes cosine similarity between a PQ-encoded vector and a query using precomputed partial sums and magnitudes.
+   *
+   * @param encoded the PQ-encoded vector (centroid indices)
+   * @param clusterCount the number of clusters per subspace
+   * @param partialSums precomputed dot products between query and codebook centroids
+   * @param aMagnitude precomputed squared magnitudes of codebook centroids
+   * @param bMagnitude the magnitude of the second vector
+   * @return the cosine similarity score
+   */
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
     return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
   }
 
+  /**
+   * Computes cosine similarity between a PQ-encoded vector subset and a query using precomputed partial sums and magnitudes.
+   *
+   * @param encoded the PQ-encoded vector (centroid indices)
+   * @param encodedOffset the starting offset within the encoded sequence
+   * @param encodedLength the length of the encoded sequence to use
+   * @param clusterCount the number of clusters per subspace
+   * @param partialSums precomputed dot products between query and codebook centroids
+   * @param aMagnitude precomputed squared magnitudes of codebook centroids
+   * @param bMagnitude the magnitude of the second vector
+   * @return the cosine similarity score
+   */
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
     float sum = 0.0f;
@@ -326,6 +501,7 @@ public interface VectorUtilSupport {
    * @param minValue The minimum value of the subvector
    * @param maxValue The maximum value of the subvector
    * @param nBits the number of bits per dimension
+   * @return the squared error of quantization
    */
   float nvqLoss(VectorFloat<?> vector, float growthRate, float midpoint, float minValue, float maxValue, int nBits);
 
@@ -335,6 +511,7 @@ public interface VectorUtilSupport {
    * @param minValue The minimum value of the subvector
    * @param maxValue The maximum value of the subvector
    * @param nBits the number of bits per dimension
+   * @return the squared error of quantization
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
 

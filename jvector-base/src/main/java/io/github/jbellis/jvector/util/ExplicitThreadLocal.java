@@ -36,6 +36,7 @@ import java.util.function.Supplier;
  * ExplicitThreadLocal also implements AutoCloseable to cleanup non-GC'd resources.
  * <p>
  * ExplicitThreadLocal is a drop-in replacement for ThreadLocal, and is used in the same way.
+ * @param <U> the U type parameter
  */
 public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
     // thread id -> instance
@@ -46,10 +47,24 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
     // it just once here as a field instead.
     private final Function<Long, U> initialSupplier = k -> initialValue();
 
+    /**
+     * Constructor.
+     */
+    public ExplicitThreadLocal() {
+    }
+
+    /**
+     * Get value.
+     * @return the return value
+     */
     public U get() {
         return map.computeIfAbsent(Thread.currentThread().getId(), initialSupplier);
     }
 
+    /**
+     * Get initial value.
+     * @return the return value
+     */
     protected abstract U initialValue();
 
     /**
@@ -67,6 +82,12 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
         map.clear();
     }
 
+    /**
+     * Create with initial value.
+     * @param initialValue the initialValue
+     * @param <U> the U type parameter
+     * @return the return value
+     */
     public static <U> ExplicitThreadLocal<U> withInitial(Supplier<U> initialValue) {
         return new ExplicitThreadLocal<>() {
             @Override

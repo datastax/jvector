@@ -24,14 +24,21 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 
+/**
+ * Implements the Vamana diversity pruning strategy for building high-quality graph indexes.
+ */
 public class VamanaDiversityProvider implements DiversityProvider {
-    /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
+    /** The diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
     public final float alpha;
 
-    /** used to compute diversity */
+    /** The score provider used to compute similarity between nodes for diversity calculation */
     public final BuildScoreProvider scoreProvider;
 
-    /** Create a new diversity provider */
+    /**
+     * Creates a new diversity provider with the specified parameters.
+     * @param scoreProvider the score provider for computing node similarities during diversity pruning
+     * @param alpha the diversity threshold (1.0 = HNSW behavior, higher values = more diversity)
+     */
     public VamanaDiversityProvider(BuildScoreProvider scoreProvider, float alpha) {
         this.scoreProvider = scoreProvider;
         this.alpha = alpha;

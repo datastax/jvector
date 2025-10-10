@@ -30,6 +30,13 @@ import java.nio.Buffer;
  */
 public class MemorySegmentVectorProvider implements VectorTypeSupport
 {
+    /**
+     * Creates a new MemorySegmentVectorProvider instance.
+     */
+    public MemorySegmentVectorProvider() {
+    }
+
+
     @Override
     public VectorFloat<?> createFloatVector(Object data)
     {

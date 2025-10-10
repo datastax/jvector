@@ -167,6 +167,11 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
+        /**
+         * Creates a builder for sequential graph index writing
+         * @param graphIndex the graph structure to serialize
+         * @param out the IndexWriter for sequential output
+         */
         public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }

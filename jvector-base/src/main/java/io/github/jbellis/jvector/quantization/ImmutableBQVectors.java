@@ -16,7 +16,17 @@
 
 package io.github.jbellis.jvector.quantization;
 
+/**
+ * An immutable collection of binary quantized vectors.
+ * Wraps pre-computed compressed vectors for efficient similarity comparisons.
+ */
 public class ImmutableBQVectors extends BQVectors {
+    /**
+     * Constructs an ImmutableBQVectors instance with pre-compressed vectors.
+     *
+     * @param bq the binary quantization scheme used to compress the vectors
+     * @param compressedVectors array of compressed vector representations (one per vector)
+     */
     public ImmutableBQVectors(BinaryQuantization bq, long[][] compressedVectors) {
         super(bq);
         this.compressedVectors = compressedVectors;

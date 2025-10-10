@@ -18,11 +18,21 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+/**
+ * A mutable implementation of BQVectors that supports dynamic growth as vectors are added.
+ * Storage expands automatically using a configurable growth factor.
+ */
 @SuppressWarnings("unused")
 public class MutableBQVectors extends BQVectors implements MutableCompressedVectors<VectorFloat<?>> {
     private static final int INITIAL_CAPACITY = 1024;
+    /**
+     * Growth factor used when expanding the internal storage arrays.
+     */
     private static final float GROWTH_FACTOR = 1.5f;
-    
+
+    /**
+     * The current number of vectors stored in this collection.
+     */
     protected int vectorCount;
 
     /**

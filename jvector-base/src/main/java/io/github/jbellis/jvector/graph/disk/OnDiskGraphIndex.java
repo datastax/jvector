@@ -66,6 +66,9 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
 public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
+    /**
+     * The current serialization version used for writing graph indexes to disk
+     */
     public static final int CURRENT_VERSION = 5;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -158,6 +161,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      *
      * @param readerSupplier the reader supplier to use to read the graph and index.
      * @param offset the offset in bytes from the start of the file where the index starts.
+     * @return the loaded OnDiskGraphIndex with all layers and features initialized
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset) {
         try (var reader = readerSupplier.get()) {
@@ -183,6 +187,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
      *
      * @param readerSupplier the reader supplier to use to read the graph index.
+     * @return the loaded OnDiskGraphIndex with all layers and features initialized
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier) {
         return load(readerSupplier, 0);
@@ -223,10 +228,18 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
+    /**
+     * Returns the set of feature IDs stored inline or separately in this graph index
+     * @return set of all feature identifiers present in this index
+     */
     public Set<FeatureId> getFeatureSet() {
         return features.keySet();
     }
 
+    /**
+     * Returns the dimensionality of vectors stored in this graph index
+     * @return the number of dimensions in each vector
+     */
     public int getDimension() {
         return dimension;
     }
@@ -345,10 +358,24 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return (double) sum / it.size();
     }
 
+    /**
+     * Thread-safe view providing access to graph structure, vectors, and features from disk.
+     * Each view maintains its own reader and reusable buffers for efficient disk access.
+     */
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
+        /**
+         * Reader for accessing data from the underlying storage
+         */
         protected final RandomAccessReader reader;
+        /**
+         * Reusable array for storing neighbor node IDs during graph traversal
+         */
         private final int[] neighbors;
 
+        /**
+         * Creates a view with the specified reader for disk access
+         * @param reader the RandomAccessReader for reading graph data
+         */
         public View(RandomAccessReader reader) {
             this.reader = reader;
             this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
@@ -522,12 +549,23 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
-    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
+    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features.
+     * @param graph the graph structure to write
+     * @param vectors the full-resolution vectors to inline
+     * @param path the output file path
+     * @throws IOException if there is an error writing to disk
+     */
     public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
-    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
+    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features.
+     * @param graph the graph structure to write
+     * @param vectors the full-resolution vectors to inline
+     * @param oldToNewOrdinals mapping from original node IDs to sequential disk ordinals
+     * @param path the output file path
+     * @throws IOException if there is an error writing to disk
+     */
     public static void write(ImmutableGraphIndex graph,
                              RandomAccessVectorValues vectors,
                              Map<Integer, Integer> oldToNewOrdinals,

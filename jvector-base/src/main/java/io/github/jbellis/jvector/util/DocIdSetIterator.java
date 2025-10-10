@@ -24,6 +24,16 @@
 
 package io.github.jbellis.jvector.util;
 
+/**
+ * Document ID set iterator.
+ */
 public class DocIdSetIterator {
+    /** the NO_MORE_DOCS constant */
     public static final int NO_MORE_DOCS = Integer.MAX_VALUE;
+
+    /**
+     * Constructor.
+     */
+    public DocIdSetIterator() {
+    }
 }
