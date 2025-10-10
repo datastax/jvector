@@ -247,6 +247,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * @throws IOException if an I/O error occurs
      */
     private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+        // Flush writer before async writes to ensure buffered data is on disk
+        // This is critical when using AsynchronousFileChannel in parallel with BufferedRandomAccessWriter
+        out.flush();
         long baseOffset = out.position();
 
         var config = new ParallelGraphWriter.Config(

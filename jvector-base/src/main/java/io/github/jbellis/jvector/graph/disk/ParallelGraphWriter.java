@@ -263,17 +263,9 @@ class ParallelGraphWriter implements AutoCloseable {
                 for (Future<NodeRecordTask.Result> future : futures) {
                     NodeRecordTask.Result result = future.get();
 
-                    // Copy buffer to avoid issues with thread-local buffer reuse
-                    // The result.data buffer is thread-local and may be reused by another task
-                    // before the async write completes, causing corruption
-                    // Note: result.data has position at end of written data, need to copy from 0
-                    ByteBuffer source = result.data.duplicate();
-                    source.flip(); // Sets limit to position, position to 0
-                    ByteBuffer bufferCopy = ByteBuffer.allocate(source.remaining());
-                    bufferCopy.put(source);
-                    bufferCopy.flip();
-
-                    afc.write(bufferCopy, result.fileOffset).get();
+                    // result.data is already a copy made in NodeRecordTask to avoid
+                    // race conditions with thread-local buffer reuse
+                    afc.write(result.data, result.fileOffset).get();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

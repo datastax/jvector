@@ -155,8 +155,14 @@ class NodeRecordTask implements Callable<NodeRecordTask.Result> {
                 String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes",
                               newOrdinal, recordSize, buffer.position()));
         }
-        
+
+        // Copy buffer data before returning to avoid race with thread-local buffer reuse
+        // The buffer is thread-local and will be reused for the next task on this thread
         buffer.flip();
-        return new Result(newOrdinal, fileOffset, buffer);
+        ByteBuffer bufferCopy = ByteBuffer.allocate(buffer.remaining());
+        bufferCopy.put(buffer);
+        bufferCopy.flip();
+
+        return new Result(newOrdinal, fileOffset, bufferCopy);
     }
 }

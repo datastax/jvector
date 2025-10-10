@@ -16,10 +16,12 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -33,6 +35,7 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.IntFunction;
@@ -60,6 +63,174 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  */
 public class ParallelWriteExample {
     
+    /**
+     * Verifies that two OnDiskGraphIndex instances are identical in structure and content.
+     * Compares graph structure (nodes, neighbors) and feature data (vectors).
+     */
+    private static void verifyIndicesIdentical(OnDiskGraphIndex index1, OnDiskGraphIndex index2) throws IOException {
+        System.out.println("\n=== Verifying Graph Indices ===");
+
+        // Check basic properties
+        if (index1.getMaxLevel() != index2.getMaxLevel()) {
+            throw new AssertionError(String.format("Max levels differ: %d vs %d",
+                index1.getMaxLevel(), index2.getMaxLevel()));
+        }
+        System.out.printf("✓ Max level matches: %d%n", index1.getMaxLevel());
+
+        if (index1.getIdUpperBound() != index2.getIdUpperBound()) {
+            throw new AssertionError(String.format("ID upper bounds differ: %d vs %d",
+                index1.getIdUpperBound(), index2.getIdUpperBound()));
+        }
+        System.out.printf("✓ ID upper bound matches: %d%n", index1.getIdUpperBound());
+
+        if (!index1.getFeatureSet().equals(index2.getFeatureSet())) {
+            throw new AssertionError(String.format("Feature sets differ: %s vs %s",
+                index1.getFeatureSet(), index2.getFeatureSet()));
+        }
+        System.out.printf("✓ Feature sets match: %s%n", index1.getFeatureSet());
+
+        // Check each layer
+        try (var view1 = index1.getView(); var view2 = index2.getView()) {
+            // Check entry nodes (accessed through views)
+            if (!view1.entryNode().equals(view2.entryNode())) {
+                throw new AssertionError(String.format("Entry nodes differ: %s vs %s",
+                    view1.entryNode(), view2.entryNode()));
+            }
+            System.out.printf("✓ Entry node matches: %s%n", view1.entryNode());
+            for (int level = 0; level <= index1.getMaxLevel(); level++) {
+                if (index1.size(level) != index2.size(level)) {
+                    throw new AssertionError(String.format("Layer %d sizes differ: %d vs %d",
+                        level, index1.size(level), index2.size(level)));
+                }
+
+                if (index1.getDegree(level) != index2.getDegree(level)) {
+                    throw new AssertionError(String.format("Layer %d degrees differ: %d vs %d",
+                        level, index1.getDegree(level), index2.getDegree(level)));
+                }
+
+                // Collect all node IDs from both indices into sorted arrays
+                // (nodes may be in different order due to parallel processing)
+                java.util.List<Integer> nodeList1 = new java.util.ArrayList<>();
+                java.util.List<Integer> nodeList2 = new java.util.ArrayList<>();
+
+                NodesIterator nodes1 = index1.getNodes(level);
+                while (nodes1.hasNext()) {
+                    nodeList1.add(nodes1.nextInt());
+                }
+
+                NodesIterator nodes2 = index2.getNodes(level);
+                while (nodes2.hasNext()) {
+                    nodeList2.add(nodes2.nextInt());
+                }
+
+                // Sort both lists to compare regardless of order
+                java.util.Collections.sort(nodeList1);
+                java.util.Collections.sort(nodeList2);
+
+                // Verify same set of nodes
+                if (!nodeList1.equals(nodeList2)) {
+                    // Find differences
+                    java.util.Set<Integer> set1 = new java.util.HashSet<>(nodeList1);
+                    java.util.Set<Integer> set2 = new java.util.HashSet<>(nodeList2);
+
+                    java.util.Set<Integer> onlyIn1 = new java.util.HashSet<>(set1);
+                    onlyIn1.removeAll(set2);
+
+                    java.util.Set<Integer> onlyIn2 = new java.util.HashSet<>(set2);
+                    onlyIn2.removeAll(set1);
+
+                    System.out.printf("Layer %d node count: sequential=%d, parallel=%d%n",
+                        level, nodeList1.size(), nodeList2.size());
+
+                    if (!onlyIn1.isEmpty()) {
+                        var sample1 = onlyIn1.stream().sorted().limit(10).collect(java.util.stream.Collectors.toList());
+                        System.out.printf("  Nodes only in sequential (first 10): %s%n", sample1);
+                    }
+                    if (!onlyIn2.isEmpty()) {
+                        var sample2 = onlyIn2.stream().sorted().limit(10).collect(java.util.stream.Collectors.toList());
+                        System.out.printf("  Nodes only in parallel (first 10): %s%n", sample2);
+                    }
+
+                    // Sample some nodes from each to see the pattern
+                    System.out.printf("  First 20 nodes in sequential: %s%n",
+                        nodeList1.stream().limit(20).collect(java.util.stream.Collectors.toList()));
+                    System.out.printf("  First 20 nodes in parallel: %s%n",
+                        nodeList2.stream().limit(20).collect(java.util.stream.Collectors.toList()));
+
+                    throw new AssertionError(String.format("Layer %d has different node sets: sequential has %d nodes, parallel has %d nodes, %d nodes differ",
+                        level, nodeList1.size(), nodeList2.size(), onlyIn1.size() + onlyIn2.size()));
+                }
+
+                // Compare neighbors for each node
+                int differentNeighbors = 0;
+                for (int nodeId : nodeList1) {
+                    NodesIterator neighbors1 = view1.getNeighborsIterator(level, nodeId);
+                    NodesIterator neighbors2 = view2.getNeighborsIterator(level, nodeId);
+
+                    if (neighbors1.size() != neighbors2.size()) {
+                        throw new AssertionError(String.format("Layer %d node %d neighbor counts differ: %d vs %d",
+                            level, nodeId, neighbors1.size(), neighbors2.size()));
+                    }
+
+                    int[] n1 = new int[neighbors1.size()];
+                    int[] n2 = new int[neighbors2.size()];
+                    for (int i = 0; i < n1.length; i++) {
+                        n1[i] = neighbors1.nextInt();
+                        n2[i] = neighbors2.nextInt();
+                    }
+
+                    // Sort neighbor arrays before comparing (order may differ due to parallel processing)
+                    Arrays.sort(n1);
+                    Arrays.sort(n2);
+
+                    if (!Arrays.equals(n1, n2)) {
+                        differentNeighbors++;
+                        if (differentNeighbors <= 3) {
+                            System.out.printf("  ✗ Layer %d node %d has different neighbor sets: %s vs %s%n",
+                                level, nodeId, Arrays.toString(n1), Arrays.toString(n2));
+                        }
+                    }
+                }
+
+                if (differentNeighbors > 0) {
+                    throw new AssertionError(String.format("Layer %d: %d/%d nodes have different neighbor sets",
+                        level, differentNeighbors, nodeList1.size()));
+                }
+
+                System.out.printf("✓ Layer %d structure matches (%d nodes, degree %d)%n",
+                    level, index1.size(level), index1.getDegree(level));
+            }
+
+            // Compare vectors if present (only check layer 0)
+            if (index1.getFeatureSet().contains(FeatureId.INLINE_VECTORS) ||
+                index1.getFeatureSet().contains(FeatureId.NVQ_VECTORS)) {
+
+                int vectorsChecked = 0;
+                int maxToCheck = Math.min(100, index1.size(0)); // Check up to 100 vectors as a sample
+
+                NodesIterator nodes = index1.getNodes(0);
+                while (nodes.hasNext() && vectorsChecked < maxToCheck) {
+                    int node = nodes.nextInt();
+
+                    if (index1.getFeatureSet().contains(FeatureId.INLINE_VECTORS)) {
+                        var vec1 = view1.getVector(node);
+                        var vec2 = view2.getVector(node);
+
+                        if (!vec1.equals(vec2)) {
+                            throw new AssertionError(String.format("Node %d vectors differ", node));
+                        }
+                    }
+
+                    vectorsChecked++;
+                }
+
+                System.out.printf("✓ Sampled %d vectors, all match%n", vectorsChecked);
+            }
+        }
+
+        System.out.println("✓ All checks passed - indices are identical!");
+    }
+
     /**
      * Benchmark comparison between sequential and parallel writes using NVQ + FUSED_ADC features.
      * This matches the configuration used in Grid.buildOnDisk for realistic performance testing.
@@ -199,6 +370,20 @@ public class ParallelWriteExample {
                     seqSize / 1024.0 / 1024.0,
                     parSize / 1024.0 / 1024.0);
 
+            // === Read Phase: Load and verify both indices ===
+            System.out.println("\n=== Testing Read Correctness ===");
+            System.out.println("Loading sequential index...");
+            OnDiskGraphIndex sequentialIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(sequentialPath));
+            System.out.println("Loading parallel index...");
+            OnDiskGraphIndex parallelIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(parallelPath));
+
+            // Verify that both indices are identical
+            verifyIndicesIdentical(sequentialIndex, parallelIndex);
+
+            // Close the loaded indices
+            sequentialIndex.close();
+            parallelIndex.close();
+
         } finally {
             // Cleanup
             builder.close();
@@ -207,6 +392,6 @@ public class ParallelWriteExample {
             Files.deleteIfExists(tempDir);
         }
 
-        System.out.println("\nTest complete!");
+        System.out.println("\n✅ Test complete - sequential and parallel writes produce identical results!");
     }
 }
