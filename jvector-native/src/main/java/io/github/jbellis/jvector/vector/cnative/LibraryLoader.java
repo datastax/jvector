@@ -27,7 +27,7 @@ public class LibraryLoader {
     private LibraryLoader() {}
     public static boolean loadJvector() {
         try {
-            System.loadLibrary("jvector");
+            System.loadLibrary("jvectorSIMD256");
             return true;
         } catch (UnsatisfiedLinkError e) {
             // ignore
@@ -35,7 +35,7 @@ public class LibraryLoader {
         try {
             // reinventing the wheel instead of picking up deps, so we'll just use the classloader to load the library
             // as a resource and then copy it to a tmp directory and load it from there
-            String libName = System.mapLibraryName("jvector");
+            String libName = System.mapLibraryName("jvectorSIMD256");
             File tmpLibFile = File.createTempFile(libName.substring(0, libName.lastIndexOf('.')), libName.substring(libName.lastIndexOf('.')));
             try (var in = LibraryLoader.class.getResourceAsStream("/" + libName);
                  var out = Files.newOutputStream(tmpLibFile.toPath())) {
