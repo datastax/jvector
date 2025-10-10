@@ -184,7 +184,7 @@ public class BenchFrame {
      *     <ul>
      *       <li>Checking if dataset should be skipped (already completed in checkpoint)</li>
      *       <li>Loading the dataset from the configured {@link DataSetSource}</li>
-     *       <li>Loading configuration from the configured {@link BenchFrameConfigSource}</li>
+     *       <li>Loading configuration (either shared config or per-dataset function)</li>
      *       <li>Executing the benchmark</li>
      *       <li>Recording completion in checkpoint if enabled</li>
      *     </ul>

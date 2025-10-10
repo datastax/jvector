@@ -79,7 +79,7 @@ public interface ResultHandler {
 
     /**
      * Creates a no-op result handler that does nothing with results. Console output
-     * is already handled by {@link Grid} during benchmark execution.
+     * is already handled by Grid during benchmark execution.
      * This matches the behavior of the original Bench.java and BenchYAML.java.
      *
      * @return a result handler that performs no additional output

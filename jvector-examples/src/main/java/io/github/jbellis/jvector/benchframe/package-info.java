@@ -16,18 +16,47 @@
 
 /**
  * Unified benchmark framework for JVector graph indexes. This package consolidates the functionality
- * from the legacy benchmark classes (Bench, BenchYAML, AutoBenchYAML, Bench2D) into a modular,
- * composable architecture using the Strategy pattern.
+ * from the legacy benchmark classes (Bench, BenchYAML, AutoBenchYAML) into a modular,
+ * composable architecture using closures and strategy interfaces.
  *
- * <H1>Usage</H1>
- * If you are just wanting to run the bench commands you are used to, then you can do it this way:
- * <UL>
- *     <LI>{@link io.github.jbellis.jvector.benchframe.BenchFrame#likeBench()}.execute(...)</LI>
- *     <LI>{@link io.github.jbellis.jvector.benchframe.BenchFrame#likeBenchYAML()}.execute(...)</LI>
- *     <LI>{@link io.github.jbellis.jvector.benchframe.BenchFrame#likeAutoBenchYAML(java.lang.String, int)}.execute(...)</LI>
- * </UL>
+ * <h2>Quick Start</h2>
  *
- * The rest of the docs here are more for development on the BenchFrame itself.
+ * <h3>Command-Line Interface</h3>
+ * The recommended way to run benchmarks is via the CLI:
+ * <pre>
+ * # Run with hardcoded parameters (original Bench.java)
+ * benchframe bench dataset-name
+ *
+ * # Run with YAML configuration (original BenchYAML.java)
+ * benchframe benchyaml dataset-name
+ *
+ * # Run CI/CD mode with checkpointing (original AutoBenchYAML.java)
+ * benchframe autobenchyaml -o results/output dataset-name
+ *
+ * # List available datasets
+ * benchframe datasets
+ *
+ * # Access full nbvectors functionality
+ * benchframe nbvectors --help
+ * </pre>
+ *
+ * <h3>Programmatic Usage</h3>
+ * For library usage, use the convenience factory methods:
+ * <pre>{@code
+ * // Hardcoded defaults (Bench-style)
+ * BenchFrame.likeBench().execute(args);
+ *
+ * // YAML configuration (BenchYAML-style)
+ * BenchFrame.likeBenchYAML().execute(args);
+ *
+ * // CI/CD with checkpointing (AutoBenchYAML-style)
+ * BenchFrame.likeAutoBenchYAML(outputPath, diagnosticLevel).execute(args);
+ * }</pre>
+ *
+ * <hr/>
+ * <h2>Developer Documentation</h2>
+ *
+ * The sections below provide detailed information for developers working on the BenchFrame itself.
  *
  * <h2>Package Overview</h2>
  * The benchframe package provides a flexible framework for benchmarking JVector's approximate
@@ -47,9 +76,8 @@
  * <h3>Configuration</h3>
  * <ul>
  *   <li>{@link io.github.jbellis.jvector.benchframe.BenchFrameConfig} - Immutable configuration class
- *       encapsulating all benchmark parameters</li>
- *   <li>{@link io.github.jbellis.jvector.benchframe.BenchFrameConfigSource} - Strategy interface for
- *       loading configurations from different sources (hardcoded, YAML, etc.)</li>
+ *       encapsulating all benchmark parameters. Can be used as a single shared config or via a
+ *       Function for per-dataset configuration (e.g., YAML)</li>
  * </ul>
  *
  * <h3>Result Handling</h3>
@@ -68,21 +96,41 @@
  *
  * <h2>Usage Patterns</h2>
  *
- * <h3>Command-Line Usage</h3>
- * The simplest way to use the framework is through the CLI:
+ * <h2>Available CLI Subcommands</h2>
+ * <ul>
+ *   <li><strong>bench</strong> - Run with hardcoded grid parameters (original Bench.java)</li>
+ *   <li><strong>benchyaml</strong> - Run with YAML-based configuration (original BenchYAML.java)</li>
+ *   <li><strong>autobenchyaml</strong> - CI/CD mode with checkpointing and file output (original AutoBenchYAML.java)</li>
+ *   <li><strong>datasets</strong> - List and manage vector datasets (delegates to nbvectors)</li>
+ *   <li><strong>nbvectors</strong> - Access full nbvectors CLI functionality</li>
+ * </ul>
+ *
+ * <h3>CLI Examples</h3>
  * <pre>
- * # Run with hardcoded parameters (Bench-style)
- * java -jar benchframe.jar bench "dataset1|dataset2"
+ * # Run with hardcoded parameters
+ * benchframe bench dataset-name
  *
- * # Run with YAML configuration (BenchYAML-style)
- * java -jar benchframe.jar yaml
+ * # Run with YAML configuration
+ * benchframe benchyaml dataset-name
  *
- * # Run in CI/CD mode with checkpointing (AutoBenchYAML-style)
- * java -jar benchframe.jar auto -o results/benchmark -d 2
+ * # Run CI/CD mode with checkpointing (--output required)
+ * benchframe autobenchyaml -o results/output dataset-name
+ * benchframe autobenchyaml -o results/output -d 2 cap-1M
  *
- * # Run with synthetic 2D data (Bench2D-style)
- * java -jar benchframe.jar 2d -n 1000000 -q 10000
+ * # List available datasets
+ * benchframe datasets
+ * benchframe datasets search cohere
+ *
+ * # Access nbvectors functionality
+ * benchframe nbvectors --help
+ * benchframe nbvectors catalogs list
  * </pre>
+ *
+ * <h3>Environment Variables</h3>
+ * <ul>
+ *   <li><strong>VECTORDATA_CATALOGS</strong> - Comma-separated list of additional catalog YAML files
+ *       to load (e.g., "~/.config/custom/catalogs.yaml,~/work/catalogs.yaml")</li>
+ * </ul>
  *
  * <h3>Programmatic Usage - Factory Methods</h3>
  * Factory methods provide pre-configured instances matching legacy behavior:
@@ -103,25 +151,31 @@
  * <h3>Programmatic Usage - Custom Configuration</h3>
  * The Builder API provides fine-grained control over all aspects:
  * <pre>{@code
+ * // With a single shared config
  * BenchFrame frame = new BenchFrame.Builder()
  *     .withDatasetNames(List.of("dataset1", "dataset2"))
- *     .withConfigurationProvider(BenchFrameConfigSource.fromYAML())
+ *     .withConfig(BenchFrameConfig.createBenchDefaults())
  *     .withDataSetSource(DataSetSource.DEFAULT)
  *     .withResultHandler(ResultHandler.toFiles("results/benchmark"))
  *     .withCheckpointStrategy(CheckpointStrategy.fileBasedCheckpointing("results/checkpoint"))
- *     .collectResults(true)
  *     .withDiagnosticLevel(2)
+ *     .build();
+ *
+ * // With per-dataset config function (like YAML)
+ * BenchFrame frame = new BenchFrame.Builder()
+ *     .withDatasetNames(List.of("dataset1", "dataset2"))
+ *     .withConfigFunction(name -> loadCustomConfig(name))
  *     .build();
  *
  * frame.execute(new String[]{".*"});
  * }</pre>
  *
  * <h2>Extension Points</h2>
- * The framework is designed for extension through its strategy interfaces:
+ * The framework is designed for extension through closures and strategy interfaces:
  *
- * <h3>Custom Configuration Source</h3>
+ * <h3>Custom Configuration Function</h3>
  * <pre>{@code
- * BenchFrameConfigSource customSource = datasetName -> {
+ * Function<String, BenchFrameConfig> customConfigFn = datasetName -> {
  *     // Load from database, REST API, etc.
  *     return new BenchFrameConfig.Builder()
  *         .withDatasetName(datasetName)

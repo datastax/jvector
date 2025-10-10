@@ -55,8 +55,8 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * BenchFrameConfig defaults = BenchFrameConfig.createBenchDefaults();
  * }</pre>
  *
- * @see BenchFrameConfigSource
  * @see MultiConfig
+ * @see BenchFrame
  */
 public class BenchFrameConfig {
     // Dataset identification
