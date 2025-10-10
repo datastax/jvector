@@ -29,8 +29,12 @@ public class SystemMonitor {
     private final List<GarbageCollectorMXBean> gcBeans;
     private final OperatingSystemMXBean osBean;
     private final ThreadMXBean threadBean;
+    /** Platform-specific OS bean for extended metrics. */
     private final com.sun.management.OperatingSystemMXBean sunOsBean;
 
+    /**
+     * Constructs a SystemMonitor that initializes connections to system management beans.
+     */
     public SystemMonitor() {
         this.memoryBean = ManagementFactory.getMemoryMXBean();
         this.gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
@@ -40,7 +44,9 @@ public class SystemMonitor {
     }
 
     /**
-     * Captures current system state snapshot
+     * Captures the current system state snapshot including GC, memory, CPU, and thread statistics.
+     *
+     * @return a snapshot of the current system state
      */
     public SystemSnapshot captureSnapshot() {
         return new SystemSnapshot(
@@ -99,7 +105,11 @@ public class SystemMonitor {
     }
 
     /**
-     * Logs the difference between two snapshots
+     * Logs the difference between two snapshots to standard output.
+     *
+     * @param phase the name of the phase being measured
+     * @param before the snapshot taken before the phase
+     * @param after the snapshot taken after the phase
      */
     public void logDifference(String phase, SystemSnapshot before, SystemSnapshot after) {
         System.out.printf("[%s] System Changes:%n", phase);
@@ -133,7 +143,9 @@ public class SystemMonitor {
     }
 
     /**
-     * Logs detailed GC information
+     * Logs detailed garbage collection information to standard output.
+     *
+     * @param phase the name of the phase to include in the output
      */
     public void logDetailedGCStats(String phase) {
         System.out.printf("[%s] Detailed GC Stats:%n", phase);
@@ -143,14 +155,30 @@ public class SystemMonitor {
         }
     }
 
-    // Inner classes for data structures
+    /**
+     * Contains a complete snapshot of system state at a point in time.
+     */
     public static class SystemSnapshot {
+        /** The timestamp when this snapshot was captured (milliseconds). */
         public final long timestamp;
+        /** Garbage collection statistics. */
         public final GCStats gcStats;
+        /** Memory usage statistics. */
         public final MemoryStats memoryStats;
+        /** CPU usage statistics. */
         public final CPUStats cpuStats;
+        /** Thread statistics. */
         public final ThreadStats threadStats;
 
+        /**
+         * Constructs a SystemSnapshot with the specified metrics.
+         *
+         * @param timestamp the timestamp when captured
+         * @param gcStats garbage collection statistics
+         * @param memoryStats memory usage statistics
+         * @param cpuStats CPU usage statistics
+         * @param threadStats thread statistics
+         */
         public SystemSnapshot(long timestamp, GCStats gcStats, MemoryStats memoryStats,
                             CPUStats cpuStats, ThreadStats threadStats) {
             this.timestamp = timestamp;
@@ -161,17 +189,36 @@ public class SystemMonitor {
         }
     }
 
+    /**
+     * Contains garbage collection statistics.
+     */
     public static class GCStats {
+        /** Total number of garbage collections. */
         public final long totalCollections;
+        /** Total time spent in garbage collection (milliseconds). */
         public final long totalCollectionTime;
+        /** Number of garbage collectors. */
         public final int gcCount;
 
+        /**
+         * Constructs GCStats with the specified metrics.
+         *
+         * @param totalCollections total number of collections
+         * @param totalCollectionTime total time spent in collections (ms)
+         * @param gcCount number of garbage collectors
+         */
         public GCStats(long totalCollections, long totalCollectionTime, int gcCount) {
             this.totalCollections = totalCollections;
             this.totalCollectionTime = totalCollectionTime;
             this.gcCount = gcCount;
         }
 
+        /**
+         * Computes the difference between this and another GCStats.
+         *
+         * @param other the GCStats to subtract from this one
+         * @return a new GCStats representing the difference
+         */
         public GCStats subtract(GCStats other) {
             return new GCStats(
                 this.totalCollections - other.totalCollections,
@@ -181,15 +228,36 @@ public class SystemMonitor {
         }
     }
 
+    /**
+     * Contains memory usage statistics.
+     */
     public static class MemoryStats {
+        /** Heap memory currently used (bytes). */
         public final long heapUsed;
+        /** Maximum heap memory available (bytes). */
         public final long heapMax;
+        /** Heap memory committed by the JVM (bytes). */
         public final long heapCommitted;
+        /** Non-heap memory used (bytes). */
         public final long nonHeapUsed;
+        /** Free memory in the runtime (bytes). */
         public final long freeMemory;
+        /** Total memory in the runtime (bytes). */
         public final long totalMemory;
+        /** Maximum memory the runtime can use (bytes). */
         public final long maxMemory;
 
+        /**
+         * Constructs MemoryStats with the specified metrics.
+         *
+         * @param heapUsed heap memory used (bytes)
+         * @param heapMax maximum heap memory (bytes)
+         * @param heapCommitted heap memory committed (bytes)
+         * @param nonHeapUsed non-heap memory used (bytes)
+         * @param freeMemory free memory (bytes)
+         * @param totalMemory total memory (bytes)
+         * @param maxMemory maximum memory (bytes)
+         */
         public MemoryStats(long heapUsed, long heapMax, long heapCommitted, long nonHeapUsed,
                           long freeMemory, long totalMemory, long maxMemory) {
             this.heapUsed = heapUsed;
@@ -202,13 +270,30 @@ public class SystemMonitor {
         }
     }
 
+    /**
+     * Contains CPU usage statistics.
+     */
     public static class CPUStats {
+        /** System-wide CPU load (0.0 to 1.0). */
         public final double systemCpuLoad;
+        /** Process CPU load (0.0 to 1.0). */
         public final double processCpuLoad;
+        /** System load average. */
         public final double systemLoadAverage;
+        /** Number of available processors. */
         public final int availableProcessors;
+        /** Free physical memory size (bytes). */
         public final long freePhysicalMemory;
 
+        /**
+         * Constructs CPUStats with the specified metrics.
+         *
+         * @param systemCpuLoad system-wide CPU load (0.0-1.0)
+         * @param processCpuLoad process CPU load (0.0-1.0)
+         * @param systemLoadAverage system load average
+         * @param availableProcessors number of available processors
+         * @param freePhysicalMemory free physical memory (bytes)
+         */
         public CPUStats(double systemCpuLoad, double processCpuLoad, double systemLoadAverage,
                        int availableProcessors, long freePhysicalMemory) {
             this.systemCpuLoad = systemCpuLoad;
@@ -219,11 +304,24 @@ public class SystemMonitor {
         }
     }
 
+    /**
+     * Contains thread statistics.
+     */
     public static class ThreadStats {
+        /** Number of active threads. */
         public final int activeThreads;
+        /** Peak number of threads. */
         public final int peakThreads;
+        /** Total number of threads started since JVM start. */
         public final long totalStartedThreads;
 
+        /**
+         * Constructs ThreadStats with the specified metrics.
+         *
+         * @param activeThreads number of active threads
+         * @param peakThreads peak number of threads
+         * @param totalStartedThreads total threads started
+         */
         public ThreadStats(int activeThreads, int peakThreads, long totalStartedThreads) {
             this.activeThreads = activeThreads;
             this.peakThreads = peakThreads;

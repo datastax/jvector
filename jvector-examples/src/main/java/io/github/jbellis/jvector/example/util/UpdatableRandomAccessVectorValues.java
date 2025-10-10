@@ -22,15 +22,37 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * A mutable implementation of {@link RandomAccessVectorValues} that allows vectors to be
+ * added dynamically. This implementation stores vectors in memory using an {@link ArrayList}
+ * and is suitable for scenarios where the vector collection needs to grow over time.
+ *
+ * <p>This class is thread-safe for read operations but not for concurrent modifications.
+ * Multiple threads can safely read vectors using {@link #getVector(int)}, but adding vectors
+ * via {@link #add(VectorFloat)} should be externally synchronized if concurrent access is needed.</p>
+ */
 public class UpdatableRandomAccessVectorValues implements RandomAccessVectorValues {
     private final List<VectorFloat<?>> data;
     private final int dimensions;
 
+    /**
+     * Creates a new updatable vector collection with the specified dimensionality.
+     * Initializes the internal storage with a capacity of 1024 vectors.
+     *
+     * @param dimensions the dimensionality of vectors that will be stored
+     */
     public UpdatableRandomAccessVectorValues(int dimensions) {
         this.data = new ArrayList<>(1024);
         this.dimensions = dimensions;
     }
 
+    /**
+     * Adds a vector to this collection. The vector must have the same dimensionality
+     * as specified in the constructor.
+     *
+     * @param vector the vector to add to this collection
+     * @throws IllegalArgumentException if the vector's dimension does not match the expected dimension
+     */
     public void add(VectorFloat<?> vector) {
         data.add(vector);
     }

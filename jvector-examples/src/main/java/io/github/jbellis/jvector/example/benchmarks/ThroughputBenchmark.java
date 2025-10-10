@@ -51,8 +51,15 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private String formatMaxQps;
     private BenchmarkDiagnostics diagnostics;
 
+    /** Vector type support instance for creating and manipulating vectors during benchmarking. */
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /**
+     * Creates a default throughput benchmark instance with standard settings.
+     * Configures 3 warmup runs, 3 test runs, and displays average QPS.
+     *
+     * @return a new ThroughputBenchmark with default configuration
+     */
     public static ThroughputBenchmark createDefault() {
         return new ThroughputBenchmark(3, 3,
                 true, false, false,
@@ -60,6 +67,14 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 DiagnosticLevel.NONE);
     }
 
+    /**
+     * Creates an empty throughput benchmark with no metrics initially enabled.
+     * Metrics can be configured using the display methods after creation.
+     *
+     * @param numWarmupRuns the number of warmup runs to perform before measurement
+     * @param numTestRuns the number of test runs to perform for measurement
+     * @return a new ThroughputBenchmark with specified run counts and no metrics enabled
+     */
     public static ThroughputBenchmark createEmpty(int numWarmupRuns, int numTestRuns) {
         return new ThroughputBenchmark(numWarmupRuns, numTestRuns,
                 false, false, false,
@@ -82,30 +97,63 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         this.diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
     }
 
+    /**
+     * Enables display of average queries per second (QPS) using the default format.
+     *
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayAvgQps() {
         return displayAvgQps(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of average queries per second (QPS) with a custom format string.
+     *
+     * @param format the format string for displaying the average QPS value (e.g., ".1f")
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayAvgQps(String format) {
         this.computeAvgQps = true;
         this.formatAvgQps = format;
         return this;
     }
 
+    /**
+     * Enables display of median queries per second (QPS) using the default format.
+     *
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayMedianQps() {
         return displayMedianQps(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of median queries per second (QPS) with a custom format string.
+     *
+     * @param format the format string for displaying the median QPS value (e.g., ".1f")
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayMedianQps(String format) {
         this.computeMedianQps = true;
         this.formatMedianQps = format;
         return this;
     }
 
+    /**
+     * Enables display of maximum queries per second (QPS) using the default format.
+     *
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayMaxQps() {
         return displayMaxQps(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of maximum queries per second (QPS) with a custom format string.
+     *
+     * @param format the format string for displaying the maximum QPS value (e.g., ".1f")
+     * @return this benchmark instance for method chaining
+     */
     public ThroughputBenchmark displayMaxQps(String format) {
         this.computeMaxQps = true;
         this.formatMaxQps = format;
@@ -113,7 +161,11 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     }
 
     /**
-     * Configure the diagnostic level for this benchmark
+     * Configures the diagnostic level for this benchmark.
+     * Higher diagnostic levels provide more detailed performance analysis and recommendations.
+     *
+     * @param level the diagnostic level to use during benchmark execution
+     * @return this benchmark instance for method chaining
      */
     public ThroughputBenchmark withDiagnostics(DiagnosticLevel level) {
         this.diagnostics = new BenchmarkDiagnostics(level);
@@ -125,6 +177,19 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         return "ThroughputBenchmark";
     }
 
+    /**
+     * Executes the throughput benchmark against the configured system.
+     * Performs warmup runs followed by measured test runs, collecting QPS statistics
+     * and optional diagnostics.
+     *
+     * @param cs the configured system to benchmark
+     * @param topK the number of top results to return
+     * @param rerankK the number of candidates to rerank
+     * @param usePruning whether to use pruning during search
+     * @param queryRuns the number of query runs (not used in this benchmark)
+     * @return a list of computed metrics including QPS statistics
+     * @throws RuntimeException if no metrics are enabled for display
+     */
     @Override
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,

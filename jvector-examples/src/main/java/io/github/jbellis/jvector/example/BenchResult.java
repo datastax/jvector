@@ -17,12 +17,28 @@ package io.github.jbellis.jvector.example;
 
 import java.util.Map;
 
+/**
+ * Benchmark result data container.
+ */
 public class BenchResult {
+    /** The dataset name. */
     public String dataset;
+    /** The benchmark parameters. */
     public Map<String, Object> parameters;
+    /** The benchmark metrics. */
     public Map<String, Object> metrics;
 
+    /**
+     * Constructs a BenchResult.
+     */
     public BenchResult() {}
+
+    /**
+     * Constructs a BenchResult with the specified values.
+     * @param dataset the dataset name
+     * @param parameters the benchmark parameters
+     * @param metrics the benchmark metrics
+     */
     public BenchResult(String dataset, Map<String, Object> parameters, Map<String, Object> metrics) {
         this.dataset = dataset;
         this.parameters = parameters;

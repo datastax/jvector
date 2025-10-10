@@ -24,14 +24,38 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
 
+/**
+ * Configuration container for benchmark runs, loaded from YAML files.
+ * Includes dataset selection, construction parameters, and search parameters.
+ */
 public class MultiConfig {
+    /** Default directory for YAML configuration files. */
     private static final String defaultDirectory = "./jvector-examples/yaml-configs/";
 
+    /** The version of the configuration format. */
     private int version;
+    /** The name of the dataset to use. */
     public String dataset;
+    /** Parameters for graph construction. */
     public ConstructionParameters construction;
+    /** Parameters for search operations. */
     public SearchParameters search;
 
+    /**
+     * Constructs an empty MultiConfig.
+     */
+    public MultiConfig() {
+    }
+
+    /**
+     * Loads the default configuration for the specified dataset.
+     * If a dataset-specific config file exists, it is used; otherwise the default.yml is loaded
+     * and the dataset name is set.
+     *
+     * @param datasetName the name of the dataset
+     * @return the loaded configuration
+     * @throws FileNotFoundException if neither dataset-specific nor default config is found
+     */
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
         var name = defaultDirectory + datasetName;
         if (!name.endsWith(".yml")) {
@@ -50,11 +74,25 @@ public class MultiConfig {
         return config;
     }
 
+    /**
+     * Loads a configuration from the specified file name.
+     *
+     * @param configName the path to the configuration file
+     * @return the loaded configuration
+     * @throws FileNotFoundException if the configuration file is not found
+     */
     public static MultiConfig getConfig(String configName) throws FileNotFoundException {
         File configFile = new File(configName);
         return getConfig(configFile);
     }
 
+    /**
+     * Loads a configuration from the specified file.
+     *
+     * @param configFile the configuration file to load
+     * @return the loaded configuration
+     * @throws FileNotFoundException if the configuration file is not found
+     */
     public static MultiConfig getConfig(File configFile) throws FileNotFoundException {
         if (!configFile.exists()) {
             throw new FileNotFoundException(configFile.getAbsolutePath());
@@ -64,10 +102,22 @@ public class MultiConfig {
         return yaml.loadAs(inputStream, MultiConfig.class);
     }
 
+    /**
+     * Returns the configuration format version.
+     *
+     * @return the version number
+     */
     public int getVersion() {
         return version;
     }
 
+    /**
+     * Sets the configuration format version.
+     * The version must match the current OnDiskGraphIndex version.
+     *
+     * @param version the version number to set
+     * @throws IllegalArgumentException if the version does not match CURRENT_VERSION
+     */
     public void setVersion(int version) {
         if (version != OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Invalid version: " + version);

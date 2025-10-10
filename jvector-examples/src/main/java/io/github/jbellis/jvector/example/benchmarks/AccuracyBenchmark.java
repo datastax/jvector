@@ -36,10 +36,18 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
     private String formatRecall;
     private String formatMAP;
 
+    /**
+     * Creates an AccuracyBenchmark with default settings.
+     * @return the AccuracyBenchmark
+     */
     public static AccuracyBenchmark createDefault() {
         return new AccuracyBenchmark(true, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
 
+    /**
+     * Creates an empty AccuracyBenchmark with no metrics enabled.
+     * @return the AccuracyBenchmark
+     */
     public static AccuracyBenchmark createEmpty() {
         return new AccuracyBenchmark(false, false, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
@@ -51,20 +59,38 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         this.formatMAP = formatMAP;
     }
 
+    /**
+     * Enables recall display with default format.
+     * @return this AccuracyBenchmark
+     */
     public AccuracyBenchmark displayRecall() {
         return displayRecall(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables recall display with the specified format.
+     * @param format the format string
+     * @return this AccuracyBenchmark
+     */
     public AccuracyBenchmark displayRecall(String format) {
         this.computeRecall = true;
         this.formatRecall = format;
         return this;
     }
 
+    /**
+     * Enables MAP display with default format.
+     * @return this AccuracyBenchmark
+     */
     public AccuracyBenchmark displayMAP() {
         return displayMAP(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables MAP display with the specified format.
+     * @param format the format string
+     * @return this AccuracyBenchmark
+     */
     public AccuracyBenchmark displayMAP(String format) {
         this.computeMAP = true;
         this.formatMAP = format;

@@ -37,10 +37,18 @@ public class CountBenchmark extends AbstractQueryBenchmark {
     private String formatAvgNodesExpanded;
     private String formatAvgNodesExpandedBaseLayer;
 
+    /**
+     * Creates a CountBenchmark with default settings.
+     * @return the CountBenchmark
+     */
     public static CountBenchmark createDefault() {
         return new CountBenchmark(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
 
+    /**
+     * Creates an empty CountBenchmark with no metrics enabled.
+     * @return the CountBenchmark
+     */
     public static CountBenchmark createEmpty() {
         return new CountBenchmark(false, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
@@ -55,30 +63,57 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         this.formatAvgNodesExpandedBaseLayer = formatAvgNodesExpandedBaseLayer;
     }
 
+    /**
+     * Enables display of average nodes visited metric.
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesVisited() {
         return displayAvgNodesVisited(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of average nodes visited metric with custom format.
+     * @param format the format string
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesVisited(String format) {
         this.computeAvgNodesVisited = true;
         this.formatAvgNodesVisited = format;
         return this;
     }
 
+    /**
+     * Enables display of average nodes expanded metric.
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesExpanded() {
         return displayAvgNodesExpanded(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of average nodes expanded metric with custom format.
+     * @param format the format string
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesExpanded(String format) {
         this.computeAvgNodesExpanded = true;
         this.formatAvgNodesExpanded = format;
         return this;
     }
 
+    /**
+     * Enables display of average nodes expanded base layer metric.
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesExpandedBaseLayer() {
         return displayAvgNodesExpandedBaseLayer(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of average nodes expanded base layer metric with custom format.
+     * @param format the format string
+     * @return this CountBenchmark
+     */
     public CountBenchmark displayAvgNodesExpandedBaseLayer(String format) {
         this.computeAvgNodesExpandedBaseLayer = true;
         this.formatAvgNodesExpandedBaseLayer = format;

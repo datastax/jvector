@@ -39,10 +39,18 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
     private static volatile long SINK;
 
+    /**
+     * Creates a LatencyBenchmark with default settings.
+     * @return the LatencyBenchmark
+     */
     public static LatencyBenchmark createDefault() {
         return new LatencyBenchmark(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
 
+    /**
+     * Creates an empty LatencyBenchmark with no metrics enabled.
+     * @return the LatencyBenchmark
+     */
     public static LatencyBenchmark createEmpty() {
         return new LatencyBenchmark(false, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
     }
@@ -57,30 +65,57 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         this.formatP999Latency = formatP999Latency;
     }
 
+    /**
+     * Enables display of average latency metric.
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayAvgLatency() {
         return displayAvgLatency(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of average latency metric with custom format.
+     * @param format the format string
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayAvgLatency(String format) {
         this.computeAvgLatency = true;
         this.formatAvgLatency = format;
         return this;
     }
 
+    /**
+     * Enables display of latency standard deviation metric.
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayLatencySTD() {
         return displayLatencySTD(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of latency standard deviation metric with custom format.
+     * @param format the format string
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayLatencySTD(String format) {
         this.computeLatencySTD = true;
         this.formatLatencySTD = format;
         return this;
     }
 
+    /**
+     * Enables display of P999 latency metric.
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayP999Latency() {
         return displayP999Latency(DEFAULT_FORMAT);
     }
 
+    /**
+     * Enables display of P999 latency metric with custom format.
+     * @param format the format string
+     * @return this LatencyBenchmark
+     */
     public LatencyBenchmark displayP999Latency(String format) {
         this.computeP999Latency = true;
         this.formatP999Latency = format;

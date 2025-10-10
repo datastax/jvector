@@ -25,25 +25,44 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Collection of dataset names loaded from YAML configuration.
+ */
 public class DatasetCollection {
     private static final String defaultFile = "./jvector-examples/yaml-configs/datasets.yml";
 
+    /** Map of dataset categories to dataset names. */
     public final Map<String, List<String>> datasetNames;
 
     private DatasetCollection(Map<String, List<String>> datasetNames) {
         this.datasetNames = datasetNames;
     }
 
+    /**
+     * Loads dataset collection from default file.
+     * @return the dataset collection
+     * @throws IOException if an error occurs
+     */
     public static DatasetCollection load() throws IOException  {
         return load(defaultFile);
     }
 
+    /**
+     * Loads dataset collection from specified file.
+     * @param file the file path
+     * @return the dataset collection
+     * @throws IOException if an error occurs
+     */
     public static DatasetCollection load(String file) throws IOException  {
         InputStream inputStream = new FileInputStream(file);
         Yaml yaml = new Yaml();
         return new DatasetCollection(yaml.load(inputStream));
     }
 
+    /**
+     * Gets all dataset names from all categories.
+     * @return the list of all dataset names
+     */
     public List<String> getAll() {
         List<String> allDatasetNames = new ArrayList<>();
         for (var key : datasetNames.keySet()) {

@@ -29,15 +29,31 @@ import java.io.IOException;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 
+/**
+ * Memory-mapped implementation of RandomAccessVectorValues that provides efficient
+ * random access to vectors stored in a file. Uses memory mapping for fast I/O.
+ */
 public class MMapRandomAccessVectorValues implements RandomAccessVectorValues, Closeable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    /** The dimension of each vector. */
     final int dimension;
+    /** The number of vectors in the file. */
     final int rows;
+    /** The file containing the vectors. */
     final File file;
+    /** Reusable buffer for reading vector values. */
     final float[] valueBuffer;
 
+    /** The memory-mapped file reader. */
     final MMapBuffer fileReader;
 
+    /**
+     * Constructs a MMapRandomAccessVectorValues for the specified file.
+     *
+     * @param f the file containing vectors, which must exist and be readable
+     * @param dimension the dimension of each vector in the file
+     * @throws IOError if an I/O error occurs during initialization
+     */
     public MMapRandomAccessVectorValues(File f, int dimension) {
         assert f != null && f.exists() && f.canRead();
         assert f.length() % ((long) dimension * Float.BYTES) == 0;

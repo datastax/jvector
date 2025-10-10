@@ -38,6 +38,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Utility for downloading datasets from S3 and HTTP sources.
+ */
 public class DownloadHelper {
     private static final String bucketName = "astra-vector";
     private static final String infraBucketName = "jvector-datasets-infratest";
@@ -45,6 +48,9 @@ public class DownloadHelper {
 
     private static final String fvecDir = "fvec";
     private final static Set<String> infraDatasets = Set.of("dpr-1M", "dpr-10M", "cap-1M", "cap-6M", "cohere-english-v3-1M", "cohere-english-v3-10M");
+
+    private DownloadHelper() {
+    }
 
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
@@ -55,6 +61,11 @@ public class DownloadHelper {
                 .credentialsProvider(AnonymousCredentialsProvider.create());
     }
 
+    /**
+     * Downloads fvec dataset files if not already present.
+     * @param name the dataset name
+     * @return the multi-file datasource
+     */
     public static MultiFileDatasource maybeDownloadFvecs(String name) {
         String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
@@ -111,6 +122,10 @@ public class DownloadHelper {
         return mfd;
     }
 
+    /**
+     * Downloads HDF5 dataset file if not already present.
+     * @param datasetName the dataset name
+     */
     public static void maybeDownloadHdf5(String datasetName) {
         Path path = Path.of(Hdf5Loader.HDF5_DIR);
         var localPath = path.resolve(datasetName);

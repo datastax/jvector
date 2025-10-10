@@ -30,6 +30,10 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
     private static volatile long SINK;
     private String format;
 
+    /**
+     * Creates an ExecutionTimeBenchmark with default format.
+     * @return the ExecutionTimeBenchmark
+     */
     public static ExecutionTimeBenchmark createDefault() {
         return new ExecutionTimeBenchmark(DEFAULT_FORMAT);
     }
@@ -38,6 +42,11 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
         this.format = format;
     }
 
+    /**
+     * Sets the output format.
+     * @param format the format string
+     * @return this ExecutionTimeBenchmark
+     */
     public ExecutionTimeBenchmark setFormat(String format) {
         this.format = format;
         return this;

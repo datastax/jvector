@@ -22,16 +22,34 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
-
+/**
+ * Construction parameters for graph index building.
+ */
 public class ConstructionParameters extends CommonParameters {
+    /** List of out-degree values. */
     public List<Integer> outDegree;
+    /** List of efConstruction values. */
     public List<Integer> efConstruction;
+    /** List of neighbor overflow values. */
     public List<Float> neighborOverflow;
+    /** List of add hierarchy flags. */
     public List<Boolean> addHierarchy;
+    /** List of refine final graph flags. */
     public List<Boolean> refineFinalGraph;
+    /** List of reranking strategies. */
     public List<String> reranking;
+    /** Flag to use saved index if exists. */
     public Boolean useSavedIndexIfExists;
 
+    /**
+     * Constructs a ConstructionParameters.
+     */
+    public ConstructionParameters() {}
+
+    /**
+     * Gets the feature sets based on reranking strategies.
+     * @return the list of feature sets
+     */
     public List<EnumSet<FeatureId>> getFeatureSets() {
         return reranking.stream().map(item -> {
             switch (item) {

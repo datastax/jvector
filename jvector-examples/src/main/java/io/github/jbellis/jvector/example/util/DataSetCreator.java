@@ -30,8 +30,14 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+/**
+ * Utility for creating test datasets.
+ */
 public class DataSetCreator {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    private DataSetCreator() {
+    }
 
     /**
      * Creates a 2D grid of vectors, query vectors, and ground truth data for a given grid width.

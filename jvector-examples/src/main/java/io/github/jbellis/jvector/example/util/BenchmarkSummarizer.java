@@ -25,7 +25,11 @@ import java.util.Map;
  * across all configurations.
  */
 public class BenchmarkSummarizer {
-    
+    /**
+     * Constructs a BenchmarkSummarizer.
+     */
+    public BenchmarkSummarizer() {}
+
     /**
      * Summary statistics for benchmark results
      */
@@ -37,10 +41,27 @@ public class BenchmarkSummarizer {
         private final int totalConfigurations;
         private final double qpsStdDev;
 
+        /**
+         * Constructs SummaryStats with the specified values.
+         * @param avgRecall the avgRecall parameter
+         * @param avgQps the avgQps parameter
+         * @param avgLatency the avgLatency parameter
+         * @param indexConstruction the indexConstruction parameter
+         * @param totalConfigurations the totalConfigurations parameter
+         */
         public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations) {
             this(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, 0.0);
         }
 
+        /**
+         * Constructs SummaryStats with the specified values including QPS standard deviation.
+         * @param avgRecall the avgRecall parameter
+         * @param avgQps the avgQps parameter
+         * @param avgLatency the avgLatency parameter
+         * @param indexConstruction the indexConstruction parameter
+         * @param totalConfigurations the totalConfigurations parameter
+         * @param qpsStdDev the qpsStdDev parameter
+         */
         public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev) {
             this.avgRecall = avgRecall;
             this.avgQps = avgQps;
@@ -50,24 +71,48 @@ public class BenchmarkSummarizer {
             this.qpsStdDev = qpsStdDev;
         }
 
+        /**
+         * Gets the average recall.
+         * @return the average recall
+         */
         public double getAvgRecall() {
             return avgRecall;
         }
 
+        /**
+         * Gets the average QPS.
+         * @return the average QPS
+         */
         public double getAvgQps() {
             return avgQps;
         }
 
+        /**
+         * Gets the average latency.
+         * @return the average latency
+         */
         public double getAvgLatency() {
             return avgLatency;
         }
 
+        /**
+         * Gets the index construction time.
+         * @return the index construction time
+         */
         public double getIndexConstruction() { return indexConstruction; }
 
+        /**
+         * Gets the total number of configurations.
+         * @return the total number of configurations
+         */
         public int getTotalConfigurations() {
             return totalConfigurations;
         }
 
+        /**
+         * Gets the QPS standard deviation.
+         * @return the QPS standard deviation
+         */
         public double getQpsStdDev() { return qpsStdDev; }
 
         @Override

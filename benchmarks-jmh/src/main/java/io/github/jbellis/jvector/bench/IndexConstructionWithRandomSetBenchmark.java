@@ -37,7 +37,23 @@ import java.util.concurrent.TimeUnit;
 
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-
+/**
+ * JMH benchmark for measuring graph index construction performance using randomly generated vectors.
+ * This benchmark evaluates the time required to build a graph index with configurable parameters
+ * including vector dimensionality, dataset size, and optional Product Quantization (PQ) compression.
+ *
+ * <p>The benchmark tests various configurations to assess how different factors affect index
+ * construction time, including the impact of using PQ compression during the build process.</p>
+ *
+ * <p>Key parameters:</p>
+ * <ul>
+ *   <li>Vector dimensionality: 768 or 1536 dimensions</li>
+ *   <li>Dataset size: 100,000 vectors</li>
+ *   <li>PQ subspaces: 0 (no compression) or 16 subspaces</li>
+ *   <li>Graph degree (M): 32 neighbors per node</li>
+ *   <li>Beam width: 100 for construction search</li>
+ * </ul>
+ */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
@@ -48,17 +64,45 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 public class IndexConstructionWithRandomSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithRandomSetBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    /** The vector values to be indexed, initialized during setup. */
     private RandomAccessVectorValues ravv;
+
+    /** The score provider used during graph construction, either exact or PQ-based. */
     private BuildScoreProvider buildScoreProvider;
-    private int M = 32; // graph degree
+
+    /** The maximum degree of the graph (number of neighbors per node). */
+    private int M = 32;
+
+    /** The beam width used during graph construction searches. */
     private int beamWidth = 100;
+
+    /** The dimensionality of vectors being indexed. */
     @Param({"768", "1536"})
     private int originalDimension;
+
+    /** The number of vectors in the dataset to be indexed. */
     @Param({/*"10000",*/ "100000"/*, "1000000"*/})
     int numBaseVectors;
+
+    /** The number of PQ subspaces to use, or 0 for no compression. */
     @Param({"0", "16"})
     private int numberOfPQSubspaces;
 
+    /**
+     * Constructs a new benchmark instance. JMH will instantiate this class
+     * and populate the @Param fields before calling setup methods.
+     */
+    public IndexConstructionWithRandomSetBenchmark() {
+        // JMH-managed lifecycle
+    }
+
+    /**
+     * Initializes the benchmark state by generating random vectors and configuring
+     * the appropriate score provider based on whether PQ compression is enabled.
+     *
+     * @throws IOException if an error occurs during setup
+     */
     @Setup(Level.Trial)
     public void setup() throws IOException {
 
@@ -86,11 +130,25 @@ public class IndexConstructionWithRandomSetBenchmark {
 
     }
 
+    /**
+     * Tears down resources after each benchmark invocation.
+     * Currently performs no operations but is included for future resource cleanup needs.
+     *
+     * @throws IOException if an error occurs during teardown
+     */
     @TearDown(Level.Invocation)
     public void tearDown() throws IOException {
 
     }
 
+    /**
+     * The main benchmark method that measures the time to build a graph index.
+     * Constructs a complete graph index from the configured vectors using the
+     * specified parameters and score provider.
+     *
+     * @param blackhole JMH blackhole to prevent dead code elimination
+     * @throws IOException if an error occurs during index construction
+     */
     @Benchmark
     public void buildIndexBenchmark(Blackhole blackhole) throws IOException {
         // score provider using the raw, in-memory vectors
@@ -100,6 +158,13 @@ public class IndexConstructionWithRandomSetBenchmark {
         }
     }
 
+    /**
+     * Creates a random vector with the specified dimensionality.
+     * Each component is randomly generated using {@link Math#random()}.
+     *
+     * @param dimension the number of dimensions in the vector
+     * @return a newly created random vector
+     */
     private VectorFloat<?> createRandomVector(int dimension) {
         VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
         for (int i = 0; i < dimension; i++) {

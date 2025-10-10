@@ -18,7 +18,19 @@ package io.github.jbellis.jvector.example.util;
 
 import java.io.IOException;
 
+/**
+ * Utility for loading datasets from various file formats.
+ */
 public class DataSetLoader {
+    private DataSetLoader() {
+    }
+
+    /**
+     * Loads a dataset from the specified file.
+     * @param fileName the file name
+     * @return the loaded dataset
+     * @throws IOException if an error occurs
+     */
     public static DataSet loadDataSet(String fileName) throws IOException {
         DataSet ds;
         if (fileName.endsWith(".hdf5")) {

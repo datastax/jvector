@@ -30,6 +30,9 @@ public class NativeVectorizationProvider extends VectorizationProvider {
     private final VectorUtilSupport vectorUtilSupport;
     private final VectorTypeSupport vectorTypeSupport;
 
+    /**
+     * Constructs a NativeVectorizationProvider.
+     */
     public NativeVectorizationProvider() {
         var libraryLoaded = LibraryLoader.loadJvector();
         if (!libraryLoaded) {

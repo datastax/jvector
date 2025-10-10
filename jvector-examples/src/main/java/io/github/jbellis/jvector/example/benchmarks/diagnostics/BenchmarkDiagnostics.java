@@ -32,6 +32,10 @@ public class BenchmarkDiagnostics {
     private final List<SystemMonitor.SystemSnapshot> snapshots;
     private final List<PerformanceAnalyzer.TimingAnalysis> timingAnalyses;
 
+    /**
+     * Constructs a BenchmarkDiagnostics with the specified diagnostic level.
+     * @param level the diagnostic level
+     */
     public BenchmarkDiagnostics(DiagnosticLevel level) {
         this.level = level;
         this.systemMonitor = new SystemMonitor();
@@ -42,6 +46,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Creates a BenchmarkDiagnostics instance with BASIC level diagnostics
+     * @return the BenchmarkDiagnostics instance
      */
     public static BenchmarkDiagnostics createBasic() {
         return new BenchmarkDiagnostics(DiagnosticLevel.BASIC);
@@ -49,6 +54,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Creates a BenchmarkDiagnostics instance with DETAILED level diagnostics
+     * @return the BenchmarkDiagnostics instance
      */
     public static BenchmarkDiagnostics createDetailed() {
         return new BenchmarkDiagnostics(DiagnosticLevel.DETAILED);
@@ -56,6 +62,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Creates a BenchmarkDiagnostics instance with VERBOSE level diagnostics
+     * @return the BenchmarkDiagnostics instance
      */
     public static BenchmarkDiagnostics createVerbose() {
         return new BenchmarkDiagnostics(DiagnosticLevel.VERBOSE);
@@ -63,6 +70,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Captures system state before starting a benchmark phase
+     * @param phase the phase name
      */
     public void capturePrePhaseSnapshot(String phase) {
         if (level == DiagnosticLevel.NONE) return;
@@ -78,6 +86,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Captures system state after completing a benchmark phase and logs changes
+     * @param phase the phase name
      */
     public void capturePostPhaseSnapshot(String phase) {
         if (level == DiagnosticLevel.NONE) return;
@@ -98,6 +107,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Records the execution time of a single query (for detailed timing analysis)
+     * @param nanoTime the query time in nanoseconds
      */
     public void recordQueryTime(long nanoTime) {
         if (level == DiagnosticLevel.DETAILED || level == DiagnosticLevel.VERBOSE) {
@@ -107,6 +117,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Analyzes and logs timing data for a phase
+     * @param phase the phase name
      */
     public void analyzePhaseTimings(String phase) {
         if (level == DiagnosticLevel.DETAILED || level == DiagnosticLevel.VERBOSE) {
@@ -119,6 +130,10 @@ public class BenchmarkDiagnostics {
 
     /**
      * Executes a benchmark phase with full diagnostic monitoring
+     * @param <T> the result type
+     * @param phase the phase name
+     * @param benchmarkCode the benchmark code to execute
+     * @return the result from the benchmark code
      */
     public <T> T monitorPhase(String phase, Supplier<T> benchmarkCode) {
         capturePrePhaseSnapshot(phase);
@@ -138,6 +153,10 @@ public class BenchmarkDiagnostics {
 
     /**
      * Executes a benchmark phase with detailed query timing
+     * @param <T> the result type
+     * @param phase the phase name
+     * @param benchmarkCode the benchmark code to execute
+     * @return the result from the benchmark code
      */
     public <T> T monitorPhaseWithQueryTiming(String phase, QueryTimingBenchmark<T> benchmarkCode) {
         capturePrePhaseSnapshot(phase);
@@ -156,6 +175,10 @@ public class BenchmarkDiagnostics {
         return result;
     }
 
+    /**
+     * Logs a message to the console if diagnostics are enabled.
+     * @param s the message to log
+     */
     public void console(String s) {
         if (level != DiagnosticLevel.NONE ) {
             System.out.println(s);
@@ -164,6 +187,8 @@ public class BenchmarkDiagnostics {
 
     /**
      * Compares performance between different phases
+     * @param baselinePhase the baseline phase name
+     * @param currentPhase the current phase name
      */
     public void comparePhases(String baselinePhase, String currentPhase) {
         if (timingAnalyses.size() < 2) return;
@@ -223,6 +248,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Checks if warmup appears to be effective based on performance stabilization
+     * @return true if warmup is effective
      */
     public boolean isWarmupEffective() {
         if (timingAnalyses.size() < 2) return true;
@@ -279,6 +305,9 @@ public class BenchmarkDiagnostics {
 
     /**
      * Compares performance between runs and identifies significant changes
+     * @param baseline the baseline timing analysis
+     * @param current the current timing analysis
+     * @return the performance comparison
      */
     public static PerformanceAnalyzer.PerformanceComparison compareRuns(PerformanceAnalyzer.TimingAnalysis baseline, PerformanceAnalyzer.TimingAnalysis current) {
         double p50Change = calculatePercentageChange(baseline.p50, current.p50);
@@ -295,6 +324,12 @@ public class BenchmarkDiagnostics {
         );
     }
 
+    /**
+     * Calculates the percentage change between baseline and current values.
+     * @param baseline the baseline value
+     * @param current the current value
+     * @return the percentage change
+     */
     public static double calculatePercentageChange(long baseline, long current) {
         if (baseline == 0) return current == 0 ? 0.0 : 100.0;
         return ((double)(current - baseline) / baseline) * 100.0;
@@ -302,6 +337,7 @@ public class BenchmarkDiagnostics {
 
     /**
      * Logs performance comparison results
+     * @param comparison the performance comparison to log
      */
     public static void logComparison(PerformanceAnalyzer.PerformanceComparison comparison) {
         System.out.printf("[%s vs %s] Performance Comparison:%n",
@@ -318,9 +354,15 @@ public class BenchmarkDiagnostics {
 
     /**
      * Functional interface for benchmark code that needs query timing
+     * @param <T> the result type
      */
     @FunctionalInterface
     public interface QueryTimingBenchmark<T> {
+        /**
+         * Executes the benchmark with query timing.
+         * @param recorder the query time recorder
+         * @return the result
+         */
         T execute(QueryTimeRecorder recorder);
     }
 
@@ -329,6 +371,10 @@ public class BenchmarkDiagnostics {
      */
     @FunctionalInterface
     public interface QueryTimeRecorder {
+        /**
+         * Records a query time.
+         * @param nanoTime the query time in nanoseconds
+         */
         void recordTime(long nanoTime);
     }
 }

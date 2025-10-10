@@ -26,10 +26,46 @@ import java.io.IOException;
 import java.nio.Buffer;
 
 /**
- * VectorTypeSupport using MemorySegments.
+ * Implementation of {@link VectorTypeSupport} that uses off-heap memory segments for vector storage.
+ * <p>
+ * This provider leverages Java's Foreign Function &amp; Memory API (introduced in Java 19 and
+ * finalized in Java 22) to store vector data in native memory segments rather than on-heap arrays.
+ * This approach provides several advantages for high-performance vector operations:
+ * <ul>
+ * <li><strong>Reduced GC pressure:</strong> Vector data is stored off-heap, minimizing
+ *     garbage collection overhead for large vector datasets</li>
+ * <li><strong>Direct memory access:</strong> Enables efficient interoperability with native
+ *     SIMD implementations through {@link java.lang.foreign.MemorySegment} pointers</li>
+ * <li><strong>Memory-mapped I/O:</strong> Supports zero-copy access to memory-mapped vector
+ *     files via {@link io.github.jbellis.jvector.disk.MemorySegmentReader}</li>
+ * <li><strong>Deterministic cleanup:</strong> Memory segments are explicitly managed through
+ *     the arena API, providing predictable memory lifecycle</li>
+ * </ul>
+ * This provider is typically used in conjunction with {@link NativeVectorizationProvider} to
+ * enable native SIMD acceleration for vector similarity computations. It can handle both
+ * float vectors ({@link VectorFloat}) and byte sequences ({@link ByteSequence}) backed by
+ * native memory.
+ * <p>
+ * <strong>Thread safety:</strong> This provider is thread-safe for creating new vectors.
+ * However, individual vector instances are not thread-safe unless they are backed by
+ * memory segments from a shared arena.
+ *
+ * @see MemorySegmentVectorFloat
+ * @see MemorySegmentByteSequence
+ * @see VectorTypeSupport
  */
 public class MemorySegmentVectorProvider implements VectorTypeSupport
 {
+    /**
+     * Constructs a new MemorySegmentVectorProvider with default settings.
+     * <p>
+     * This provider creates vectors backed by off-heap memory segments managed by
+     * the Foreign Function &amp; Memory API. The provider itself is stateless and
+     * lightweight - memory management is handled at the individual vector level
+     * through their associated arenas.
+     */
+    public MemorySegmentVectorProvider() {
+    }
     @Override
     public VectorFloat<?> createFloatVector(Object data)
     {

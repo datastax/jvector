@@ -23,9 +23,22 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * Common parameters shared across benchmark configurations.
+ */
 public class CommonParameters {
+    /** List of compression configurations. */
     public List<Compression> compression;
 
+    /**
+     * Constructs a CommonParameters.
+     */
+    public CommonParameters() {}
+
+    /**
+     * Gets the compressor parameters as functions.
+     * @return the list of compressor parameter functions
+     */
     public List<Function<DataSet, CompressorParameters>> getCompressorParameters() {
         return compression.stream().map(Compression::getCompressorParameters).collect(Collectors.toList());
     }

@@ -24,7 +24,20 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.stream.IntStream;
 
+/**
+ * Utility for loading Deep1B dataset files.
+ */
 public class Deep1BLoader {
+    private Deep1BLoader() {
+    }
+
+    /**
+     * Reads vectors from a binary file.
+     * @param filePath the file path
+     * @param count the number of vectors to read
+     * @return the list of vectors
+     * @throws IOException if an error occurs
+     */
     public static List<float[]> readFBin(String filePath, int count) throws IOException {
         var vectors = new float[count][];
 
@@ -66,6 +79,11 @@ public class Deep1BLoader {
         return List.of(vectors);
     }
 
+    /**
+     * Reads ground truth data from a file.
+     * @param filePath the file path
+     * @return the ground truth data
+     */
     public static ArrayList<HashSet<Integer>> readGT(String filePath) {
         var groundTruthTopK = new ArrayList<HashSet<Integer>>();
 

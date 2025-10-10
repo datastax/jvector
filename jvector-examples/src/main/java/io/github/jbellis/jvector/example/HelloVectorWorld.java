@@ -26,6 +26,14 @@ import java.io.IOException;
  * Tests GraphIndexes against vectors from various datasets
  */
 public class HelloVectorWorld {
+    private HelloVectorWorld() {
+    }
+
+    /**
+     * Main entry point.
+     * @param args command line arguments
+     * @throws IOException if an error occurs
+     */
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 

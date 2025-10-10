@@ -25,13 +25,30 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Represents a dataset composed of multiple files: base vectors, query vectors, and ground truth.
+ * Provides access to dataset files and loading functionality.
+ */
 public class MultiFileDatasource {
+    /** The name of the dataset. */
     public final String name;
+    /** Path to the base vectors file. */
     public final Path basePath;
+    /** Path to the query vectors file. */
     public final Path queriesPath;
+    /** Path to the ground truth file. */
     public final Path groundTruthPath;
+    /** Optional hash prefix for dataset paths from environment variable. */
     private final static String DATASET_HASH = System.getenv("DATASET_HASH");
 
+    /**
+     * Constructs a MultiFileDatasource with the specified file paths.
+     *
+     * @param name the name of the dataset
+     * @param basePath the path to the base vectors file
+     * @param queriesPath the path to the query vectors file
+     * @param groundTruthPath the path to the ground truth file
+     */
     public MultiFileDatasource(String name, String basePath, String queriesPath, String groundTruthPath) {
         this.name = name;
         this.basePath = Paths.get(basePath);
@@ -39,14 +56,30 @@ public class MultiFileDatasource {
         this.groundTruthPath = Paths.get(groundTruthPath);
     }
 
+    /**
+     * Returns the parent directory containing the base vectors file.
+     *
+     * @return the directory path
+     */
     public Path directory() {
         return basePath.getParent();
     }
 
+    /**
+     * Returns all paths associated with this dataset.
+     *
+     * @return an iterable of paths (base, queries, ground truth)
+     */
     public Iterable<Path> paths() {
         return List.of(basePath, queriesPath, groundTruthPath);
     }
 
+    /**
+     * Loads the dataset from its constituent files.
+     *
+     * @return the loaded DataSet
+     * @throws IOException if an I/O error occurs during loading
+     */
     public DataSet load() throws IOException {
         var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
         var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
@@ -54,6 +87,10 @@ public class MultiFileDatasource {
         return DataSet.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
     }
 
+    /**
+     * Map of dataset names to their corresponding MultiFileDatasource instances.
+     * Provides convenient access to predefined benchmark datasets.
+     */
     public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{
         put("degen-200k", new MultiFileDatasource("degen-200k",
                                                    "ada-degen/degen_base_vectors.fvec",

@@ -33,6 +33,16 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * Tests GraphIndexes against vectors from a 2D dataset
  */
 public class Bench2D {
+    /**
+     * Constructs a Bench2D.
+     */
+    public Bench2D() {}
+
+    /**
+     * Main entry point for the 2D benchmark.
+     * @param args the command line arguments
+     * @throws IOException if an I/O error occurs
+     */
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 

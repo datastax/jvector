@@ -20,11 +20,59 @@ import java.io.File;
 import java.nio.file.Files;
 
 /**
- * This class is used to load supporting native libraries. First, it tries to load the library from the system path.
- * If that fails, it tries to load the library from the classpath (using the usual copying to a tmp directory route).
+ * Utility class for loading the JVector native library, which provides SIMD-accelerated
+ * vector operations through native code implementations.
+ * <p>
+ * This class implements a fallback loading strategy to maximize compatibility across
+ * different deployment environments:
+ * <ol>
+ * <li>First attempts to load the library from the system library path using
+ *     {@link System#loadLibrary(String)}, which checks standard locations like
+ *     {@code java.library.path}</li>
+ * <li>If that fails, attempts to load the library from the classpath by:
+ *     <ul>
+ *     <li>Extracting the platform-specific library (e.g., {@code libjvector.so},
+ *         {@code libjvector.dylib}, or {@code jvector.dll}) from JAR resources</li>
+ *     <li>Copying it to a temporary directory</li>
+ *     <li>Loading it using {@link System#load(String)} with the absolute path</li>
+ *     </ul>
+ * </li>
+ * </ol>
+ * This dual-strategy approach allows the native library to be bundled within the JAR
+ * for ease of distribution while still supporting system-installed libraries for
+ * production deployments.
+ * <p>
+ * The class uses a private constructor to prevent instantiation, as it only provides
+ * static utility methods.
+ *
+ * @see System#loadLibrary(String)
+ * @see System#load(String)
  */
 public class LibraryLoader {
     private LibraryLoader() {}
+
+    /**
+     * Attempts to load the JVector native library using a fallback strategy.
+     * <p>
+     * The method first tries to load {@code libjvector} from the system library path.
+     * If that fails (typically when the library is not installed system-wide), it attempts
+     * to extract and load the library from the classpath.
+     * <p>
+     * The classpath loading process:
+     * <ol>
+     * <li>Maps the library name to the platform-specific filename using
+     *     {@link System#mapLibraryName(String)}</li>
+     * <li>Creates a temporary file with the appropriate extension</li>
+     * <li>Extracts the library resource from the JAR to the temporary file</li>
+     * <li>Loads the library from the temporary file's absolute path</li>
+     * </ol>
+     * Any errors during the loading process are silently caught, making this method
+     * suitable for optional native library loading where fallback implementations exist.
+     *
+     * @return {@code true} if the library was successfully loaded from either the system
+     *         path or the classpath; {@code false} if both loading strategies failed or
+     *         the library resource could not be found in the classpath
+     */
     public static boolean loadJvector() {
         try {
             System.loadLibrary("jvector");
