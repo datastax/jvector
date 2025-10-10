@@ -32,7 +32,7 @@ __m256i maskSeventhBit;
 __m256i maskEighthBit;
 #endif
 
-#if defined(AVX-512F) && defined(AVX-512CD) && defined( AVX-512BW) && defined(AVX-512DQ) && defined(AVX-512VL)
+#if defined(AVX512F) && defined(AVX512CD) && defined(AVX512BW) && defined(AVX512DQ) && defined(AVX512VL)
 __m512i maskSeventhBit;
 __m512i maskEighthBit;
 #endif
@@ -53,7 +53,7 @@ void initialize_constants() {
         maskEighthBit = _mm256_set1_epi16(0x0080);
         #endif
 
-        #if defined(AVX-512F) && defined(AVX-512CD) && defined( AVX-512BW) && defined(AVX-512DQ) && defined(AVX-512VL)
+        #if defined(AVX512F) && defined(AVX512CD) && defined(AVX512BW) && defined(AVX512DQ) && defined(AVX512VL)
         maskSeventhBit = _mm512_set1_epi16(0x0040);
         maskEighthBit = _mm512_set1_epi16(0x0080);
         #endif
@@ -80,7 +80,7 @@ void initialize_constants() {
 /*********************** 512-wide SIMD functions ************************/
 /************************************************************************/
 
-#if defined(AVX-512F) && defined(AVX-512CD) && defined( AVX-512BW) && defined(AVX-512DQ) && defined(AVX-512VL)
+#if defined(AVX512F) && defined(AVX512CD) && defined(AVX512BW) && defined(AVX512DQ) && defined(AVX512VL)
 
 /* Layout for 512-wide SIMD:
  * The i-th position of quantizedPartials stores 256 quantized partial distances as 16-bit integers, totalling 512 bytes.
