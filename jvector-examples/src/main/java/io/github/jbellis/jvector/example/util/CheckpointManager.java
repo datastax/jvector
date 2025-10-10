@@ -16,6 +16,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.jbellis.jvector.benchframe.BenchResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +36,7 @@ public class CheckpointManager {
     private final String checkpointPath;
     private final ObjectMapper mapper;
     private final Set<String> completedDatasets;
-    private final List<io.github.jbellis.jvector.example.BenchResult> completedResults;
+    private final List<BenchResult> completedResults;
 
     /**
      * Creates a new CheckpointManager for the given output path.
@@ -88,7 +89,7 @@ public class CheckpointManager {
      * @param datasetName The name of the dataset
      * @param resultsForDataset The results for the dataset
      */
-    public void markDatasetCompleted(String datasetName, List<io.github.jbellis.jvector.example.BenchResult> resultsForDataset) {
+    public void markDatasetCompleted(String datasetName, List<BenchResult> resultsForDataset) {
         completedDatasets.add(datasetName);
         if (resultsForDataset != null) {
             completedResults.addAll(resultsForDataset);
@@ -123,7 +124,7 @@ public class CheckpointManager {
     /**
      * Returns the list of completed BenchResults.
      */
-    public List<io.github.jbellis.jvector.example.BenchResult> getCompletedResults() {
+    public List<BenchResult> getCompletedResults() {
         return new ArrayList<>(completedResults);
     }
 
@@ -132,13 +133,13 @@ public class CheckpointManager {
      */
     private static class CheckpointData {
         private List<String> completedDatasets;
-        private List<io.github.jbellis.jvector.example.BenchResult> completedResults;
+        private List<BenchResult> completedResults;
 
         public CheckpointData() {
             // Default constructor for Jackson
         }
 
-        public CheckpointData(List<String> completedDatasets, List<io.github.jbellis.jvector.example.BenchResult> completedResults) {
+        public CheckpointData(List<String> completedDatasets, List<BenchResult> completedResults) {
             this.completedDatasets = completedDatasets;
             this.completedResults = completedResults;
         }
@@ -151,11 +152,11 @@ public class CheckpointManager {
             this.completedDatasets = completedDatasets;
         }
 
-        public List<io.github.jbellis.jvector.example.BenchResult> getCompletedResults() {
+        public List<BenchResult> getCompletedResults() {
             return completedResults;
         }
 
-        public void setCompletedResults(List<io.github.jbellis.jvector.example.BenchResult> completedResults) {
+        public void setCompletedResults(List<BenchResult> completedResults) {
             this.completedResults = completedResults;
         }
     }

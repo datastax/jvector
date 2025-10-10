@@ -15,7 +15,7 @@
  */
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.example.BenchResult;
+import io.github.jbellis.jvector.benchframe.BenchResult;
 
 import java.util.List;
 import java.util.Map;

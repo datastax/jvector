@@ -20,7 +20,8 @@ import java.util.Optional;
 import java.util.function.Function;
 
 public interface DataSetSource extends Function<String, Optional<DataSet>> {
-  public DataSetSource DEFAULT = new DataSetLoader(DataSetLoader.HDF5Loader, DataSetLoader.FVecsDownloader);
+  public DataSetSource DEFAULT = new DataSetLoader(DataSetLoader.HDF5Loader, DataSetLoader.FVecsDownloader,
+          DataSetLoader.vectorDataDownloader);
 
   public default DataSetSource and(DataSetSource... loaders) {
     return new DataSetSource() {

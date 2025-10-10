@@ -42,7 +42,7 @@
                     <archive>
                         <manifest>
                             <addClasspath>true</addClasspath>
-                            <mainClass>io.github.jbellis.jvector.example.testrig.commands.TestRig_CMD</mainClass>
+                            <mainClass>io.github.jbellis.jvector.benchframe.BenchFrameCLI</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>

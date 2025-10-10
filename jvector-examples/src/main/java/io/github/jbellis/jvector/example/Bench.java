@@ -16,116 +16,22 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetSource;
-import io.github.jbellis.jvector.example.yaml.DatasetCollection;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicator;
-import io.nosqlbench.vectordata.discovery.TestDataSources;
-import io.nosqlbench.vectordata.discovery.TestDataView;
-import io.nosqlbench.vectordata.downloader.Catalog;
-import io.nosqlbench.vectordata.downloader.DatasetEntry;
-import io.nosqlbench.vectordata.spec.datasets.types.DatasetView;
-import org.jetbrains.annotations.NotNull;
+import io.github.jbellis.jvector.benchframe.BenchFrame;
 
 import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-
-import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
 /**
- * Tests GraphIndexes against vectors from various datasets
+ * Tests GraphIndexes against vectors from various datasets using hardcoded grid parameters.
+ *
+ * This class has been refactored to use BenchFrame for modularity and DRY principles.
+ * All shared functionality is now in reusable modules.
+ *
+ * @deprecated Use {@link BenchFrame#likeBench()} directly instead. This class will be removed in a future release.
  */
+@Deprecated(forRemoval = true)
 public class Bench {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
-
-        var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
-        var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
-        var topKGrid = Map.of(
-                10, // topK
-                List.of(1.0, 2.0, 5.0, 10.0), // oq
-                100, // topK
-                List.of(1.0, 2.0) // oq
-        ); // rerankK = oq * topK
-        var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
-        var addHierarchyGrid = List.of(true); // List.of(false, true);
-        var refineFinalGraphGrid = List.of(true); // List.of(false, true);
-        var usePruningGrid = List.of(true); // List.of(false, true);
-        List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
-                ds -> new PQParameters(ds.getDimension() / 8,
-                        256,
-                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
-                        UNWEIGHTED),
-                __ -> CompressorParameters.NONE
-        );
-        List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
-                __ -> CompressorParameters.NONE,
-                // ds -> new CompressorParameters.BQParameters(),
-                ds -> new PQParameters(ds.getDimension() / 8,
-                        256,
-                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
-                        UNWEIGHTED)
-        );
-        List<EnumSet<FeatureId>> featureSets = Arrays.asList(
-                EnumSet.of(FeatureId.NVQ_VECTORS),
-//                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
-                EnumSet.of(FeatureId.INLINE_VECTORS)
-        );
-
-        // args is list of regexes, possibly needing to be split by whitespace.
-        // generate a regex that matches any regex in args, or if args is empty/null, match everything
-        var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
-        // compile regex and do substring matching using find
-        var pattern = Pattern.compile(regex);
-
-        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
-    }
-
-    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
-
-        TestDataSources testDataSources = new TestDataSources().configure().addOptionalCatalogs("~/.config/jvector/catalogs.yaml");
-        Catalog testDataCatalog = testDataSources.catalog();
-        DataSetSource dsSource = DataSetSource.DEFAULT.and(loadStreamingDataSource(testDataCatalog));
-
-        var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
-
-        System.out.println("Executing the following datasets: " + datasetNames);
-
-        for (var datasetName : datasetNames) {
-          DataSet ds =
-                  dsSource.apply(datasetName).orElseThrow(() -> new RuntimeException("Unknown dataset: " + datasetName));
-            Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
-        }
-    }
-
-    @NotNull
-    private static DataSetSource loadStreamingDataSource(Catalog catalog) {
-        return name -> {
-            Optional<DatasetEntry> dsentryOption = catalog.matchOne(name);
-            if (dsentryOption.isEmpty()) { return Optional.empty(); }
-            DatasetEntry dsentry = dsentryOption.orElseThrow(() -> new RuntimeException("Unknown dataset: " + name));
-            TestDataView tdv = dsentry.select().profile(name);
-            System.out.println("prebuffering dataset (assumed performance oriented testing)");
-            CompletableFuture<Void> statusFuture = tdv.getBaseVectors().orElseThrow().prebuffer();
-            if (statusFuture instanceof ProgressIndicator<?>) {
-                ((ProgressIndicator<?>)statusFuture).monitorProgress(1000);
-            }
-//            tdv.getQueryVectors().orElseThrow().prebuffer();
-//            tdv.getNeighborIndices().orElseThrow().prebuffer();
-//            tdv.getNeighborDistances().map(DatasetView::prebuffer);
-
-            TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
-            System.out.println("Loaded " + tdw.getName() + " from streaming source.");
-            return Optional.of(tdw);
-        };
+        BenchFrame.likeBench().execute(args);
     }
 }

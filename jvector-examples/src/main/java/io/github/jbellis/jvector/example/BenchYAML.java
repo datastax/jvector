@@ -16,90 +16,22 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
-import io.github.jbellis.jvector.example.util.DataSetSource;
-import io.github.jbellis.jvector.example.yaml.DatasetCollection;
-import io.github.jbellis.jvector.example.yaml.MultiConfig;
-import io.nosqlbench.vectordata.discovery.TestDataSources;
-import io.nosqlbench.vectordata.downloader.Catalog;
+import io.github.jbellis.jvector.benchframe.BenchFrame;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
- * Tests GraphIndexes against vectors from various datasets
+ * Tests GraphIndexes against vectors from various datasets using YAML-based configuration.
+ *
+ * This class has been refactored to use BenchFrame for modularity and DRY principles.
+ * All shared functionality is now in reusable modules.
+ *
+ * @deprecated Use {@link BenchFrame#likeBenchYAML()} directly instead. This class will be removed in a future release.
  */
+@Deprecated(forRemoval = true)
 public class BenchYAML {
     public static void main(String[] args) throws IOException {
-        // args is one of:
-        // - a list of regexes, possibly needing to be split by whitespace.
-        // - a list of YAML files
-
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
-
-        // generate a regex that matches any regex in args, or if args is empty/null, match everything
-        var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
-        // compile regex and do substring matching using find
-        var pattern = Pattern.compile(regex);
-
-        var datasetCollection = DatasetCollection.load();
-        Catalog testDataCatalog = new TestDataSources().configure()
-                .addOptionalCatalogs("~/.config/vectordata/catalogs.yaml")
-                .catalog();
-        DataSetSource datasetSource = DataSetSource.DEFAULT
-                .and(AutoBenchYAML.loadStreamingDataSource(testDataCatalog));
-
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
-
-        List<MultiConfig> allConfigs = new ArrayList<>();
-
-        if (!datasetNames.isEmpty()) {
-            System.out.println("Executing the following datasets: " + datasetNames);
-
-            for (var datasetName : datasetNames) {
-                String finalDatasetName = datasetName;
-
-                DataSet ds = datasetSource.apply(datasetName)
-                    .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown dataset: " + finalDatasetName));
-                // DataSet ds = DataSetLoader.loadDataSet(datasetName);
-
-                if (datasetName.endsWith(".hdf5")) {
-                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
-                }
-                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-                allConfigs.add(config);
-            }
-        }
-
-        // get the list of YAML files from args
-        List<String> configNames = Arrays.stream(args).filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
-
-        if (!configNames.isEmpty()) {
-            for (var configName : configNames) {
-                MultiConfig config = MultiConfig.getDefaultConfig(configName);
-                allConfigs.add(config);
-            }
-        }
-
-        // Execute tests for all the mapped datasets and configs
-
-        for (var config : allConfigs) {
-        final String datasetName = config.dataset;
-
-            DataSet ds = datasetSource.apply(datasetName)
-                .orElseThrow(() -> new IllegalArgumentException(
-                    "Unknown dataset: " + datasetName));
-
-            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
-                config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
-        }
+        BenchFrame.likeBenchYAML().execute(args);
     }
 }

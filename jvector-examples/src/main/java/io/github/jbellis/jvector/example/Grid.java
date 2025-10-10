@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.benchframe.BenchResult;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
 import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
@@ -87,7 +88,7 @@ public class Grid {
 
     private static int diagnostic_level;
 
-    static void runAll(DataSet ds,
+    public static void runAll(DataSet ds,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
