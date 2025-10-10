@@ -48,20 +48,25 @@ CURRENT_GCC_VERSION=$(gcc -dumpversion)
 
 # Check if the current GCC version is greater than or equal to the minimum required version
 if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GCC_VERSION" | sort -V | head -n1)" = "$MIN_GCC_VERSION" ]; then
+    gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
+
     rm -rf ../resources/libjvectorSIMD512.so
     gcc -fPIC -O3 -march=x86-64-v4 -c jvector_simd.c -o jvector_simd.o
-    gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
     gcc -shared -o ../resources/libjvectorSIMD512.so jvector_simd_check.o jvector_simd.o
+    echo "Compilation 512 works."
 
     rm -rf ../resources/libjvectorSIMD256.so
     gcc -fPIC -O3 -march=x86-64-v3 -c jvector_simd.c -o jvector_simd.o
-    gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
     gcc -shared -o ../resources/libjvectorSIMD256.so jvector_simd_check.o jvector_simd.o
+    echo "Compilation 256 works."
 
     rm -rf ../resources/libjvectorSIMD128.so
     gcc -fPIC -O3 -march=x86-64-v2 -c jvector_simd.c -o jvector_simd.o
-    gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
     gcc -shared -o ../resources/libjvectorSIMD128.so jvector_simd_check.o jvector_simd.o
+    echo "Compilation 128 works."
+
+    rm -rf jvector_simd.o
+    rm -rf jvector_simd_check.o
 else
     echo "WARNING: GCC version $CURRENT_GCC_VERSION is too old. Please upgrade to GCC $MIN_GCC_VERSION or newer."
 fi
