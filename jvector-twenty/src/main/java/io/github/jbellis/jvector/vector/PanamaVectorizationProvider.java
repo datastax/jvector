@@ -31,6 +31,9 @@ public class PanamaVectorizationProvider extends VectorizationProvider
     private final VectorUtilSupport vectorUtilSupport;
     private final VectorTypeSupport vectorTypeSupport;
 
+    /**
+     * Constructs a PanamaVectorizationProvider with SIMD-optimized vector operations using the Panama Vector API.
+     */
     public PanamaVectorizationProvider() {
         this.vectorUtilSupport = new PanamaVectorUtilSupport();
         LOG.info("Preferred f32 species is " + FloatVector.SPECIES_PREFERRED.vectorBitSize());

@@ -24,9 +24,16 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 
+/**
+ * Provides diversity filtering for neighbors.
+ */
 public interface DiversityProvider {
     /**
      * update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
+     * @param neighbors the neighbors
+     * @param maxDegree the maxDegree
+     * @param diverseBefore the diverseBefore
+     * @param selected the selected
      * @return the fraction of short edges (neighbors within alpha=1.0)
      */
     double retainDiverse(NodeArray neighbors, int maxDegree, int diverseBefore, BitSet selected);

@@ -27,9 +27,16 @@ import java.nio.file.Path;
  * Primarily, it is a basic sequential writer, unlike {@link BufferedRandomAccessWriter} which is mostly used in production.
  */
 public class SimpleWriter implements IndexWriter {
+    /** The underlying file output stream */
     private final FileOutputStream fos;
+    /** The data output stream wrapping the file stream for typed writes */
     private final DataOutputStream dos;
 
+    /**
+     * Creates a new SimpleWriter for the specified file path.
+     * @param path the path to the file to write
+     * @throws IOException if an I/O error occurs while opening the file
+     */
     public SimpleWriter(Path path) throws IOException {
         fos = new FileOutputStream(path.toFile());
         dos = new DataOutputStream(fos);

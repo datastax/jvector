@@ -28,7 +28,9 @@ package io.github.jbellis.jvector.util;
  * Interface for Bitset-like structures.
  */
 public interface Bits {
+    /** Bits with all bits set. */
     Bits ALL = new MatchAllBits();
+    /** Bits with no bits set. */
     Bits NONE = new MatchNoBits();
 
     /**
@@ -42,6 +44,8 @@ public interface Bits {
 
     /**
      * Returns a Bits that is true when `bits` is false, and false when `bits` is true
+     * @param bits the bits to invert
+     * @return the inverted bits
      */
     static Bits inverseOf(Bits bits) {
         return new Bits() {
@@ -54,6 +58,9 @@ public interface Bits {
 
     /**
      * Return a Bits that is set for a given ordinal iff both it is set in both `a` and `b`.
+     * @param a the first bits
+     * @param b the second bits
+     * @return the intersection of a and b
      */
     static Bits intersectionOf(Bits a, Bits b) {
         if (a instanceof MatchAllBits) {
@@ -80,6 +87,9 @@ public interface Bits {
 
     /** Bits with all bits set. */
     class MatchAllBits implements Bits {
+        /** Creates a MatchAllBits instance. */
+        MatchAllBits() {}
+
         @Override
         public boolean get(int index) {
             return true;
@@ -88,6 +98,9 @@ public interface Bits {
 
     /** Bits with no bits set. */
     class MatchNoBits implements Bits {
+        /** Creates a MatchNoBits instance. */
+        MatchNoBits() {}
+
         @Override
         public boolean get(int index) {
             return false;

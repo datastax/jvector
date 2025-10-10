@@ -61,10 +61,15 @@ public class CommonHeader {
 
     private static final int V4_MAX_LAYERS = 32;
 
+    /** The on-disk format version number used for serialization compatibility */
     public final int version;
+    /** The dimensionality of vectors stored in the graph index */
     public final int dimension;
+    /** The node ID to use as the entry point for graph traversal */
     public final int entryNode;
+    /** Information about each layer in the graph, including size and degree constraints */
     public final List<LayerInfo> layerInfo;
+    /** The upper bound of node IDs in the graph (maximum node ID + 1) */
     public final int idUpperBound;
 
     CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
@@ -162,16 +167,32 @@ public class CommonHeader {
         return size * Integer.BYTES;
     }
 
+    /**
+     * Information about a single layer in a hierarchical graph structure.
+     */
     @VisibleForTesting
     public static class LayerInfo {
+        /** The number of nodes present in this layer */
         public final int size;
+        /** The maximum number of neighbors (edges) allowed per node in this layer */
         public final int degree;
 
+        /**
+         * Creates layer information with the specified size and degree.
+         * @param size the number of nodes in this layer
+         * @param degree the maximum degree for nodes in this layer
+         */
         public LayerInfo(int size, int degree) {
             this.size = size;
             this.degree = degree;
         }
 
+        /**
+         * Extracts layer information from a graph index.
+         * @param graph the graph index to extract layer information from
+         * @param mapper the ordinal mapper (currently unused but retained for API compatibility)
+         * @return a list of LayerInfo objects, one for each layer in the graph
+         */
         public static List<LayerInfo> fromGraph(ImmutableGraphIndex graph, OrdinalMapper mapper) {
             return IntStream.rangeClosed(0, graph.getMaxLevel())
                     .mapToObj(i -> new LayerInfo(graph.size(i), graph.getDegree(i)))

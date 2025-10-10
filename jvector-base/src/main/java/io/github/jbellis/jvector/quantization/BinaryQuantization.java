@@ -37,12 +37,18 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
 
     private final int dimension;
 
+    /**
+     * Create a BinaryQuantization with the specified dimension.
+     * @param dimension the dimension
+     */
     public BinaryQuantization(int dimension) {
         this.dimension = dimension;
     }
 
     /**
      * Use BQ constructor instead
+     * @param ravv the vector values
+     * @return a BinaryQuantization instance
      */
     @Deprecated
     public static BinaryQuantization compute(RandomAccessVectorValues ravv) {
@@ -51,6 +57,9 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
 
     /**
      * Use BQ constructor instead
+     * @param ravv the vector values
+     * @param parallelExecutor the executor
+     * @return a BinaryQuantization instance
      */
     @Deprecated
     public static BinaryQuantization compute(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
@@ -128,10 +137,20 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
         vts.writeFloatVector(out, vts.createFloatVector(dimension));
     }
 
+    /**
+     * Get the original dimension.
+     * @return the original dimension
+     */
     public int getOriginalDimension() {
         return dimension;
     }
 
+    /**
+     * Load a BinaryQuantization from the reader.
+     * @param in the reader
+     * @return a BinaryQuantization instance
+     * @throws IOException if an error occurs
+     */
     public static BinaryQuantization load(RandomAccessReader in) throws IOException {
         int dimension = in.readInt();
         // We used to record the center of the dataset but this actually degrades performance.

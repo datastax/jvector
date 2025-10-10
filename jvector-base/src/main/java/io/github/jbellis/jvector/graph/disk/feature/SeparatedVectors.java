@@ -25,11 +25,22 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
+/**
+ * A feature implementation for storing uncompressed vectors in a separated section of the index file.
+ */
 public class SeparatedVectors implements SeparatedFeature {
+    /** Provides access to vector operations and SIMD implementations */
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    /** The dimensionality of the vectors */
     private final int dimension;
+    /** The file offset where vector data begins in the separated section */
     private long offset;
 
+    /**
+     * Creates a new SeparatedVectors feature.
+     * @param dimension the number of dimensions in each vector
+     * @param offset the file offset where the separated vector data begins
+     */
     public SeparatedVectors(int dimension, long offset) {
         this.dimension = dimension;
         this.offset = offset;
@@ -89,6 +100,10 @@ public class SeparatedVectors implements SeparatedFeature {
         }
     }
 
+    /**
+     * Returns the dimensionality of the vectors stored in this feature.
+     * @return the number of dimensions in each vector
+     */
     public int dimension() {
         return dimension;
     }

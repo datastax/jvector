@@ -55,10 +55,20 @@ public class SimpleMappedReader extends ByteBufferReader {
         // Individual readers don't close anything
     }
 
+    /**
+     * Supplies SimpleMappedReader instances backed by a shared memory-mapped buffer.
+     */
     public static class Supplier implements ReaderSupplier {
+        /** The shared memory-mapped buffer that all readers will use */
         private final MappedByteBuffer buffer;
+        /** Unsafe instance for manual buffer cleanup when closing */
         private static final Unsafe unsafe = getUnsafe();
 
+        /**
+         * Creates a new Supplier that memory-maps the specified file.
+         * @param path the path to the file to memory-map
+         * @throws IOException if an I/O error occurs or the file is larger than 2GB
+         */
         public Supplier(Path path) throws IOException {
             try (var raf = new RandomAccessFile(path.toString(), "r")) {
                 if (raf.length() > Integer.MAX_VALUE) {

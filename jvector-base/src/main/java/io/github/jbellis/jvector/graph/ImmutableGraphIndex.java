@@ -47,7 +47,12 @@ import java.io.IOException;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
-    /** Returns the number of nodes in the graph */
+    /**
+     * Returns the number of nodes in the graph.
+     *
+     * @deprecated Use size(int level) to specify which layer to query
+     * @return the number of nodes in layer 0
+     */
     @Deprecated
     default int size() {
         return size(0);
@@ -57,6 +62,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * Get all node ordinals included in the graph. The nodes are NOT guaranteed to be
      * presented in any particular order.
      *
+     * @param level the layer level to query (0 is the base layer)
      * @return an iterator over nodes where {@code nextInt} returns the next node.
      */
     NodesIterator getNodes(int level);
@@ -70,17 +76,28 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * concurrently modified.  Thus, it is good (and encouraged) to re-use Views for
      * on-disk, read-only graphs, but for in-memory graphs, it is better to create a new
      * View per search.
+     *
+     * @return a view for navigating and searching the graph
      */
     View getView();
 
     /**
+     * Returns the maximum degree across all layers of the graph.
+     *
      * @return the maximum number of edges per node across any layer
      */
     int maxDegree();
 
+    /**
+     * Returns the maximum degree for each layer of the graph.
+     *
+     * @return a list where each element is the maximum degree for that layer
+     */
     List<Integer> maxDegrees();
 
     /**
+     * Returns the upper bound on node IDs in the graph. All valid node IDs are less than this value.
+     *
      * @return the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases;
      * May be different from size() if nodes are being added concurrently, or if nodes have been
      * deleted (and cleaned up).
@@ -90,6 +107,9 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     }
 
     /**
+     * Checks whether the specified node ID exists in the graph.
+     *
+     * @param nodeId the node ordinal ID to check
      * @return true iff the graph contains the node with the given ordinal id
      */
     default boolean containsNode(int nodeId) {
@@ -100,6 +120,8 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     void close() throws IOException;
 
     /**
+     * Returns the highest layer level in the hierarchical graph structure.
+     *
      * @return The maximum (coarser) level that contains a vector in the graph.
      */
     int getMaxLevel();
@@ -134,6 +156,10 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         /**
          * Iterator over the neighbors of a given node.  Only the most recently instantiated iterator
          * is guaranteed to be valid.
+         *
+         * @param level the layer level to query (0 is the base layer)
+         * @param node the node whose neighbors to iterate
+         * @return an iterator over the node's neighbors
          */
         NodesIterator getNeighborsIterator(int level, int node);
 
@@ -146,17 +172,23 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         int size();
 
         /**
+         * Returns the entry point node for beginning graph traversals.
+         *
          * @return the node of the graph to start searches at
          */
         NodeAtLevel entryNode();
 
         /**
-         * Return a Bits instance indicating which nodes are live.  The result is undefined for
-         * ordinals that do not correspond to nodes in the graph.
+         * Returns a bit set indicating which nodes in the graph are live (not deleted).
+         * The result is undefined for ordinals that do not correspond to nodes in the graph.
+         *
+         * @return a Bits instance where set bits indicate live nodes
          */
         Bits liveNodes();
 
         /**
+         * Returns the upper bound on node IDs in this view.
+         *
          * @return the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
          */
         default int getIdUpperBound() {
@@ -164,7 +196,11 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         }
 
         /**
-         * Whether the given node is present in the given layer of the graph.
+         * Checks whether a specific node exists at the given layer in the graph.
+         *
+         * @param level the layer level to check (0 is the base layer)
+         * @param node the node ordinal ID to check
+         * @return true if the node is present in the specified layer
          */
         boolean contains(int level, int node);
     }
@@ -174,10 +210,31 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
      */
     interface ScoringView extends View {
+        /**
+         * Creates an exact score function for reranking search results with full-resolution vectors.
+         *
+         * @param queryVector the query vector to compare against
+         * @param vsf the vector similarity function to use
+         * @return an exact score function for computing high-precision similarities
+         */
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
+
+        /**
+         * Creates an approximate score function using quantized or compressed vectors for faster search.
+         *
+         * @param queryVector the query vector to compare against
+         * @param vsf the vector similarity function to use
+         * @return an approximate score function for efficient similarity estimation
+         */
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }
 
+    /**
+     * Creates a human-readable string representation of the graph structure showing all nodes and edges.
+     *
+     * @param graph the graph to pretty print
+     * @return a formatted string showing the graph's structure layer by layer
+     */
     static String prettyPrint(ImmutableGraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
@@ -204,11 +261,22 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         return sb.toString();
     }
 
-    // Comparable b/c it gets used in ConcurrentSkipListMap
+    /**
+     * Represents a node at a specific layer level in the hierarchical graph.
+     * Comparable for use in concurrent data structures like ConcurrentSkipListMap.
+     */
     final class NodeAtLevel implements Comparable<NodeAtLevel> {
+        /** The layer level this node exists at (higher levels are coarser/sparser) */
         public final int level;
+        /** The ordinal ID of the node */
         public final int node;
 
+        /**
+         * Creates a NodeAtLevel representing a node at a specific layer.
+         *
+         * @param level the layer level (0 is the base layer)
+         * @param node the node ordinal ID
+         */
         public NodeAtLevel(int level, int node) {
             assert level >= 0 : level;
             assert node >= 0 : node;

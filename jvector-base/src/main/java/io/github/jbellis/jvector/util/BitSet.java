@@ -28,6 +28,9 @@ package io.github.jbellis.jvector.util;
  * Base implementation for a bit set.
  */
 public abstract class BitSet implements Bits, Accountable {
+  /** Creates a BitSet. */
+  protected BitSet() {}
+
   /**
    * Clear all the bits of the set.
    *
@@ -38,16 +41,29 @@ public abstract class BitSet implements Bits, Accountable {
     clear(0, length());
   }
 
-  /** The number of bits in the set. */
+  /**
+   * The number of bits in the set.
+   * @return the number of bits
+   */
   public abstract int length();
 
-  /** Set the bit at <code>i</code>. */
+  /**
+   * Set the bit at <code>i</code>.
+   * @param i the bit index
+   */
   public abstract void set(int i);
 
-  /** Set the bit at <code>i</code>, returning <code>true</code> if it was previously set. */
+  /**
+   * Set the bit at <code>i</code>, returning <code>true</code> if it was previously set.
+   * @param i the bit index
+   * @return true if the bit was previously set
+   */
   public abstract boolean getAndSet(int i);
 
-  /** Clear the bit at <code>i</code>. */
+  /**
+   * Clear the bit at <code>i</code>.
+   * @param i the bit index
+   */
   public abstract void clear(int i);
 
   /**
@@ -58,25 +74,33 @@ public abstract class BitSet implements Bits, Accountable {
    */
   public abstract void clear(int startIndex, int endIndex);
 
-  /** Return the number of bits that are set. NOTE: this method is likely to run in linear time */
+  /**
+   * Return the number of bits that are set. NOTE: this method is likely to run in linear time
+   * @return the number of set bits
+   */
   public abstract int cardinality();
 
   /**
    * Return an approximation of the cardinality of this set. Some implementations may trade accuracy
    * for speed if they have the ability to estimate the cardinality of the set without iterating
    * over all the data. The default implementation returns {@link #cardinality()}.
+   * @return the approximate cardinality
    */
   public abstract int approximateCardinality();
 
   /**
    * Returns the index of the last set bit before or on the index specified. -1 is returned if there
    * are no more set bits.
+   * @param index the index
+   * @return the index of the previous set bit
    */
   public abstract int prevSetBit(int index);
 
   /**
    * Returns the index of the first set bit starting at the index specified. {@link
    * DocIdSetIterator#NO_MORE_DOCS} is returned if there are no more set bits.
+   * @param index the index
+   * @return the index of the next set bit
    */
   public abstract int nextSetBit(int index);
 

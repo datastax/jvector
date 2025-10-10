@@ -25,6 +25,13 @@ import java.nio.file.Files;
  */
 public class LibraryLoader {
     private LibraryLoader() {}
+
+    /**
+     * Attempts to load the jvector native library. First tries to load from the system library path.
+     * If that fails, extracts the library from classpath resources to a temporary directory and loads it from there.
+     *
+     * @return true if the library was successfully loaded, false otherwise
+     */
     public static boolean loadJvector() {
         try {
             System.loadLibrary("jvector");

@@ -145,10 +145,20 @@ public class MemorySegmentReader implements RandomAccessReader {
         // Individual readers don't close the shared memory
     }
 
+    /**
+     * Factory for creating MemorySegmentReader instances that share the same memory-mapped file.
+     * This supplier manages the lifecycle of the shared Arena and MemorySegment.
+     */
     public static class Supplier implements ReaderSupplier {
         private final Arena arena;
         private final MemorySegment memory;
 
+        /**
+         * Creates a new Supplier that memory-maps the file at the given path with MADV_RANDOM advice.
+         *
+         * @param path the path to the file to be memory-mapped for reading
+         * @throws IOException if the file cannot be opened or mapped, or if madvise fails
+         */
         public Supplier(Path path) throws IOException {
             this.arena = Arena.ofShared();
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {

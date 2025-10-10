@@ -37,7 +37,9 @@ import java.util.PrimitiveIterator;
  */
 public abstract class AbstractLongHeap {
 
+    /** The heap array. */
     protected long[] heap;
+    /** The current size. */
     protected int size = 0;
 
     /**
@@ -60,6 +62,7 @@ public abstract class AbstractLongHeap {
     /**
      * Adds a value to an LongHeap in log(size) time.
      *
+     * @param element the element parameter
      * @return true if the new value was added. (A fixed-size heap will not add the new value
      * if it is full, and the new value is worse than the existing ones.)
      */
@@ -74,6 +77,11 @@ public abstract class AbstractLongHeap {
      */
     public abstract void pushMany(PrimitiveIterator.OfLong elements, int elementsSize);
 
+    /**
+     * Adds an element to the heap.
+     * @param element the element parameter
+     * @return the top element
+     */
     protected long add(long element) {
         size++;
         if (size == heap.length) {
@@ -123,6 +131,7 @@ public abstract class AbstractLongHeap {
      * Returns the least element of the LongHeap in constant time. It is up to the caller to verify
      * that the heap is not empty; no checking is done, and if no elements have been added, 0 is
      * returned.
+     * @return the top element
      */
     public final long top() {
         return heap[1];
@@ -131,6 +140,7 @@ public abstract class AbstractLongHeap {
     /**
      * Removes and returns the least element of the PriorityQueue in log(size) time.
      *
+     * @return the popped element
      * @throws IllegalStateException if the LongHeap is empty.
      */
     public final long pop() {
@@ -145,7 +155,10 @@ public abstract class AbstractLongHeap {
         }
     }
 
-    /** Returns the number of elements currently stored in the PriorityQueue. */
+    /**
+     * Returns the number of elements currently stored in the PriorityQueue.
+     * @return the size
+     */
     public final int size() {
         return size;
     }
@@ -155,6 +168,10 @@ public abstract class AbstractLongHeap {
         size = 0;
     }
 
+    /**
+     * Moves an element up the heap.
+     * @param origPos the original position
+     */
     protected void upHeap(int origPos) {
         int i = origPos;
         long value = heap[i]; // save bottom value
@@ -167,6 +184,10 @@ public abstract class AbstractLongHeap {
         heap[i] = value; // install saved value
     }
 
+    /**
+     * Moves an element down the heap.
+     * @param i the position
+     */
     protected void downHeap(int i) {
         long value = heap[i]; // save top value
         int j = i << 1; // find smaller child
@@ -189,6 +210,8 @@ public abstract class AbstractLongHeap {
     /**
      * Return the element at the ith location in the heap array. Use for iterating over elements when
      * the order doesn't matter. Note that the valid arguments range from [1, size].
+     * @param i the i parameter
+     * @return the element
      */
     public long get(int i) {
         return heap[i];
@@ -201,6 +224,7 @@ public abstract class AbstractLongHeap {
 
     /**
      * Copies the contents and current size from `other`.  Does NOT copy subclass field like BLH's maxSize
+     * @param other the other parameter
      */
     public void copyFrom(AbstractLongHeap other)
     {

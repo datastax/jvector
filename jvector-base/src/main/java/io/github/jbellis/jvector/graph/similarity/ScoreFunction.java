@@ -29,19 +29,29 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  * can be defined as a simple lambda.
  */
 public interface ScoreFunction {
+    /** Provides access to vector operations and SIMD implementations */
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     /**
+     * Indicates whether this score function returns exact or approximate scores.
+     *
      * @return true if the ScoreFunction returns exact, full-resolution scores
      */
     boolean isExact();
 
     /**
+     * Computes the similarity score between the query and the specified node.
+     *
+     * @param node2 the node ordinal ID to compare against
      * @return the similarity to one other node
      */
     float similarityTo(int node2);
 
     /**
+     * Computes similarity scores to all neighbors of the specified node in a single batch operation.
+     * This is more efficient than calling similarityTo repeatedly when using quantized vectors.
+     *
+     * @param node2 the node whose neighbors should be scored
      * @return the similarity to all of the nodes that `node2` has an edge towards.
      * Used when expanding the neighbors of a search candidate.
      */
@@ -50,18 +60,26 @@ public interface ScoreFunction {
     }
 
     /**
+     * Indicates whether this score function supports batch neighbor scoring via edgeLoadingSimilarityTo.
+     *
      * @return true if `edgeLoadingSimilarityTo` is supported
      */
     default boolean supportsEdgeLoadingSimilarity() {
         return false;
     }
 
+    /**
+     * Marker interface for score functions that compute exact, full-resolution similarity scores.
+     */
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {
             return true;
         }
     }
 
+    /**
+     * Marker interface for score functions that compute approximate, quantized similarity scores.
+     */
     interface ApproximateScoreFunction extends ScoreFunction {
         default boolean isExact() {
             return false;

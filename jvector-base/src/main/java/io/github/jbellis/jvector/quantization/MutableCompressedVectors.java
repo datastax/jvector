@@ -16,6 +16,11 @@
 
 package io.github.jbellis.jvector.quantization;
 
+/**
+ * Interface for compressed vector collections that support modification through encoding and setting
+ * vectors at specific ordinal positions. Implementations must handle dynamic growth as needed.
+ * @param <T> the type of uncompressed vectors that can be encoded and added
+ */
 public interface MutableCompressedVectors<T> extends CompressedVectors {
     /**
      * Encode the given vector and set it at the given ordinal. Done without unnecessary copying.

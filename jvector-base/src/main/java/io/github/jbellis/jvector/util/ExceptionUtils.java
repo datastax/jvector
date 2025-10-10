@@ -18,7 +18,21 @@ package io.github.jbellis.jvector.util;
 
 import java.io.IOException;
 
+/**
+ * Exception utilities.
+ */
 public class ExceptionUtils {
+    /**
+     * Constructor.
+     */
+    public ExceptionUtils() {
+    }
+
+    /**
+     * Throw IO exception.
+     * @param t the t
+     * @throws IOException if an error occurs
+     */
     public static void throwIoException(Throwable t) throws IOException {
         if (t instanceof RuntimeException) {
             throw (RuntimeException) t;

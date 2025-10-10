@@ -20,16 +20,29 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+/**
+ * Scorer for computing similarities between query vectors and NVQ-quantized database vectors
+ */
 public class NVQScorer {
+    /**
+     * The NVQuantization compressor containing codebooks and parameters for scoring
+     */
     final NVQuantization nvq;
 
     /**
      * Initialize the NVQScorer with an instance of NVQuantization.
+     * @param nvq the NVQuantization compressor providing quantization parameters for scoring
      */
     public NVQScorer(NVQuantization nvq) {
         this.nvq = nvq;
     }
 
+    /**
+     * Creates a score function for comparing the query vector against NVQ-quantized vectors
+     * @param query the unquantized query vector
+     * @param similarityFunction the similarity metric to use (DOT_PRODUCT, EUCLIDEAN, or COSINE)
+     * @return a score function optimized for the specified similarity metric
+     */
     public NVQScoreFunction scoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
@@ -136,9 +149,14 @@ public class NVQScorer {
         }
     }
 
+    /**
+     * Functional interface for computing similarity scores between query vectors and quantized database vectors
+     */
     public interface NVQScoreFunction {
         /**
-         * @return the similarity to another vector
+         * Computes the similarity score between the pre-configured query vector and a quantized database vector
+         * @param vector2 the quantized database vector to compare against
+         * @return the similarity score normalized to the range appropriate for the similarity function
          */
         float similarityTo(NVQuantization.QuantizedVector vector2);
     }

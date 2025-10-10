@@ -37,18 +37,21 @@ import java.util.logging.Logger;
  * implementations of KNN search.
  */
 public interface RandomAccessVectorValues {
+    /** Logger for logging warnings and errors from RandomAccessVectorValues implementations */
     Logger LOG = Logger.getLogger(RandomAccessVectorValues.class.getName());
 
     /**
-     * Return the number of vector values.
-     * <p>
-     * All copies of a given RAVV should have the same size.  Typically this is achieved by either
-     * (1) implementing a threadsafe, un-shared RAVV, where `copy` returns `this`, or
-     * (2) implementing a fixed-size RAVV.
+     * Returns the total number of vectors in this collection. All copies of a given RAVV should have
+     * the same size. Typically this is achieved by either (1) implementing a threadsafe, un-shared RAVV,
+     * where `copy` returns `this`, or (2) implementing a fixed-size RAVV.
+     * @return the number of vectors in this collection
      */
     int size();
 
-    /** Return the dimension of the returned vector values */
+    /**
+     * Returns the dimensionality of the vectors in this collection.
+     * @return the number of dimensions in each vector
+     */
     int dimension();
 
     /**
@@ -60,9 +63,16 @@ public interface RandomAccessVectorValues {
      * calls, you should make a copy.
      *
      * @param nodeId a valid ordinal, &ge; 0 and &lt; {@link #size()}.
+     * @return the vector at the given ordinal position
      */
     VectorFloat<?> getVector(int nodeId);
 
+    /**
+     * Deprecated method for retrieving a vector by ordinal. Use getVector instead.
+     * @param targetOrd the ordinal of the vector to retrieve
+     * @return the vector at the specified ordinal
+     * @deprecated Use {@link #getVector(int)} instead
+     */
     @Deprecated
     default VectorFloat<?> vectorValue(int targetOrd) {
         return getVector(targetOrd);
@@ -79,8 +89,10 @@ public interface RandomAccessVectorValues {
     }
 
     /**
-     * @return true iff the vector returned by `getVector` is shared.  A shared vector will
-     * only be valid until the next call to getVector overwrites it.
+     * Indicates whether the vector returned by getVector is reused across calls. If true, the returned
+     * VectorFloat instance is shared and will be overwritten by subsequent getVector calls, so callers
+     * must copy values if they need to retain them.
+     * @return true if the vector is shared and reused, false if each call returns a distinct instance
      */
     boolean isValueShared();
 
@@ -90,11 +102,15 @@ public interface RandomAccessVectorValues {
      * a shared {@link RandomAccessVectorValues#getVector}.
      * <p>
      * Un-shared implementations may simply return `this`.
+     * @return a copy of this RandomAccessVectorValues instance, or this instance itself if not shared
      */
     RandomAccessVectorValues copy();
 
     /**
-     * Returns a supplier of thread-local copies of the RAVV.
+     * Returns a supplier that provides thread-local copies of this RandomAccessVectorValues instance.
+     * For un-shared implementations, this returns a supplier that always returns the same instance.
+     * For shared implementations, this creates thread-local copies to ensure thread safety.
+     * @return a supplier of thread-safe RandomAccessVectorValues instances
      */
     default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
         if (!isValueShared()) {
@@ -109,7 +125,11 @@ public interface RandomAccessVectorValues {
     }
 
     /**
-     * Convenience method to create an ExactScoreFunction for reranking.  The resulting function is NOT thread-safe.
+     * Creates an ExactScoreFunction for computing exact similarity scores during reranking.
+     * The resulting function is NOT thread-safe and should not be shared across threads.
+     * @param queryVector the query vector to compare against
+     * @param vsf the similarity function to use for computing scores
+     * @return a score function that computes exact similarities between the query and graph nodes
      */
     default ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
         return new ScoreFunction.ExactScoreFunction() {

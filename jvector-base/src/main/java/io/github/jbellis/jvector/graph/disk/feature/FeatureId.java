@@ -31,12 +31,18 @@ import java.util.function.BiFunction;
  * These are typically mapped to a Feature.
  */
 public enum FeatureId {
+    /** INLINE_VECTORS feature */
     INLINE_VECTORS(InlineVectors::load),
+    /** FUSED_ADC feature */
     FUSED_ADC(FusedADC::load),
+    /** NVQ_VECTORS feature */
     NVQ_VECTORS(NVQ::load),
+    /** SEPARATED_VECTORS feature */
     SEPARATED_VECTORS(SeparatedVectors::load),
+    /** SEPARATED_NVQ feature */
     SEPARATED_NVQ(SeparatedNVQ::load);
 
+    /** ALL features */
     public static final Set<FeatureId> ALL = Collections.unmodifiableSet(EnumSet.allOf(FeatureId.class));
 
     private final BiFunction<CommonHeader, RandomAccessReader, Feature> loader;
@@ -45,10 +51,21 @@ public enum FeatureId {
         this.loader = loader;
     }
 
+    /**
+     * Load feature.
+     * @param header the header
+     * @param reader the reader
+     * @return the return value
+     */
     public Feature load(CommonHeader header, RandomAccessReader reader) {
         return loader.apply(header, reader);
     }
 
+    /**
+     * Deserialize feature IDs.
+     * @param bitflags the bitflags
+     * @return the return value
+     */
     public static EnumSet<FeatureId> deserialize(int bitflags) {
         EnumSet<FeatureId> set = EnumSet.noneOf(FeatureId.class);
         for (int n = 0; n < values().length; n++) {
@@ -58,6 +75,11 @@ public enum FeatureId {
         return set;
     }
 
+    /**
+     * Serialize feature IDs.
+     * @param flags the flags
+     * @return the return value
+     */
     public static int serialize(EnumSet<FeatureId> flags) {
         int i = 0;
         for (FeatureId flag : flags)

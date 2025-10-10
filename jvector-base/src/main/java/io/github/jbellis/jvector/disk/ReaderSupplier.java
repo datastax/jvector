@@ -19,12 +19,17 @@ package io.github.jbellis.jvector.disk;
 import java.io.IOException;
 
 /**
- * A supplier of RandomAccessReaders.
+ * A supplier of RandomAccessReaders that provides access to the underlying index file.
+ * Implementations are responsible for opening new readers but not for managing their lifecycle
+ * after creation.
  */
 public interface ReaderSupplier extends AutoCloseable {
     /**
-     * @return a new reader.  It is up to the caller to re-use these readers or close them,
-     * the ReaderSupplier is not responsible for caching them.
+     * Creates and returns a new RandomAccessReader for accessing the index file. Each call returns
+     * a distinct reader instance. Callers are responsible for managing the lifecycle of returned
+     * readers, including closing them when done or reusing them as needed.
+     * @return a new reader positioned at the beginning of the file
+     * @throws IOException if an I/O error occurs while opening the reader
      */
     RandomAccessReader get() throws IOException;
 

@@ -31,18 +31,33 @@ import io.github.jbellis.jvector.util.ArrayUtil;
  * NodesUnsorted contains scored node ids in insertion order.
  */
 public class NodesUnsorted {
+    /**
+     * The current number of nodes stored in this collection.
+     */
     protected int size;
+    /**
+     * Array of scores corresponding to each node, stored in insertion order.
+     */
     float[] score;
+    /**
+     * Array of node IDs stored in insertion order.
+     */
     int[] node;
 
+    /**
+     * Constructs a new NodesUnsorted collection with the specified initial capacity.
+     * @param initialSize the initial capacity for storing nodes
+     */
     public NodesUnsorted(int initialSize) {
         node = new int[initialSize];
         score = new float[initialSize];
     }
 
     /**
-     * Add a new node to the NodeArray. The new node must be worse than all previously stored
-     * nodes.
+     * Adds a new node and its score to the collection in insertion order. Unlike NodeArray, this
+     * collection does not maintain any sorting.
+     * @param newNode the node ID to add
+     * @param newScore the score associated with this node
      */
     public void add(int newNode, float newScore) {
         if (size == node.length) {
@@ -53,19 +68,33 @@ public class NodesUnsorted {
         ++size;
     }
 
+    /**
+     * Grows the internal storage arrays when capacity is exhausted, using the default growth strategy.
+     */
     protected final void growArrays() {
         node = ArrayUtil.grow(node);
         score = ArrayUtil.growExact(score, node.length);
     }
 
+    /**
+     * Returns the number of nodes currently stored in this collection.
+     * @return the count of nodes
+     */
     public int size() {
         return size;
     }
 
+    /**
+     * Removes all nodes from the collection, resetting the size to zero without releasing memory.
+     */
     public void clear() {
         size = 0;
     }
 
+    /**
+     * Iterates over all node-score pairs in insertion order, calling the consumer for each pair.
+     * @param consumer the function to call for each node-score pair
+     */
     public void foreach(NodeConsumer consumer) {
         for (int i = 0; i < size; i++) {
             consumer.accept(node[i], score[i]);

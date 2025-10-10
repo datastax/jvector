@@ -28,10 +28,20 @@ public class GrowableBitSet extends BitSet {
 
   private final java.util.BitSet bitSet;
 
+  /**
+   * Constructs a GrowableBitSet wrapping an existing Java BitSet.
+   *
+   * @param bitSet the underlying BitSet to wrap
+   */
   public GrowableBitSet(java.util.BitSet bitSet) {
     this.bitSet = bitSet;
   }
 
+  /**
+   * Constructs a GrowableBitSet with the specified initial capacity.
+   *
+   * @param initialBits the initial number of bits to allocate
+   */
   public GrowableBitSet(int initialBits) {
     this.bitSet = new java.util.BitSet(initialBits);
   }

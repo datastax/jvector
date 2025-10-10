@@ -28,6 +28,12 @@ public class ArraySliceByteSequence implements ByteSequence<byte[]> {
     private final int offset;
     private final int length;
 
+    /**
+     * Constructs an ArraySliceByteSequence.
+     * @param data the data parameter
+     * @param offset the offset parameter
+     * @param length the length parameter
+     */
     public ArraySliceByteSequence(ByteSequence<byte[]> data, int offset, int length) {
         if (offset < 0 || length < 0 || offset + length > data.length()) {
             throw new IllegalArgumentException("Invalid offset or length");

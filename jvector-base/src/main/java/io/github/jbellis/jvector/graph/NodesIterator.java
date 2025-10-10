@@ -34,10 +34,17 @@ import java.util.PrimitiveIterator;
  */
 public interface NodesIterator extends PrimitiveIterator.OfInt {
     /**
-     * The number of elements in this iterator *
+     * Returns the total number of elements that this iterator will produce.
+     * @return the count of elements in this iterator
      */
     int size();
 
+    /**
+     * Creates a NodesIterator from a standard primitive integer iterator with a known size.
+     * @param iterator the source iterator providing node IDs
+     * @param size the total number of elements the iterator will produce
+     * @return a NodesIterator wrapping the provided iterator
+     */
     static NodesIterator fromPrimitiveIterator(PrimitiveIterator.OfInt iterator, int size) {
         return new NodesIterator() {
             @Override
@@ -57,12 +64,19 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
         };
     }
 
+    /**
+     * Implementation of NodesIterator that iterates over a subset of an integer array.
+     */
     class ArrayNodesIterator implements NodesIterator {
         private final int[] nodes;
         private int cur = 0;
         private final int size;
 
-        /** Constructor for iterator based on integer array representing nodes */
+        /**
+         * Constructs an iterator over a portion of the given array.
+         * @param nodes the array containing node IDs
+         * @param size the number of elements to iterate over (must be &lt;= nodes.length)
+         */
         public ArrayNodesIterator(int[] nodes, int size) {
             assert nodes != null;
             assert size <= nodes.length;
@@ -75,6 +89,10 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
             return size;
         }
 
+        /**
+         * Constructs an iterator over the entire array.
+         * @param nodes the array containing node IDs to iterate over
+         */
         public ArrayNodesIterator(int[] nodes) {
             this(nodes, nodes.length);
         }
@@ -97,9 +115,23 @@ public interface NodesIterator extends PrimitiveIterator.OfInt {
         }
     }
 
+    /**
+     * Shared instance of an empty iterator that contains no elements.
+     */
     EmptyNodeIterator EMPTY_NODE_ITERATOR = new EmptyNodeIterator();
 
+    /**
+     * An iterator implementation that contains no elements. Always returns false for hasNext()
+     * and throws NoSuchElementException for nextInt().
+     */
     class EmptyNodeIterator implements NodesIterator {
+        /**
+         * Constructs an empty node iterator with no elements.
+         */
+        public EmptyNodeIterator() {
+        }
+
+
         @Override
         public int size() {
             return 0;

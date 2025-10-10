@@ -19,24 +19,42 @@ package io.github.jbellis.jvector.util;
 import org.agrona.collections.IntHashSet;
 
 /**
- * Implements the membership parts of an updatable BitSet (but not prev/next bits)
+ * Implements the membership parts of an updatable BitSet (but not prev/next bits).
+ * Uses a hash set internally for sparse storage of set bits.
  */
 public class SparseBits implements Bits {
     private final IntHashSet set = new IntHashSet();
+
+    /**
+     * Creates a new empty SparseBits.
+     */
+    public SparseBits() {
+    }
 
     @Override
     public boolean get(int index) {
         return set.contains(index);
     }
 
+    /**
+     * Sets the bit at the specified index to true.
+     * @param index the bit index to set
+     */
     public void set(int index) {
         set.add(index);
     }
 
+    /**
+     * Clears all bits in this bit set, resetting it to empty.
+     */
     public void clear() {
         set.clear();
     }
 
+    /**
+     * Returns the number of bits set to true in this bit set.
+     * @return the count of set bits
+     */
     public int cardinality() {
         return set.size();
     }

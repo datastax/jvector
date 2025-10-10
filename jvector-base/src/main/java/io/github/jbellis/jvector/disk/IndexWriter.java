@@ -20,9 +20,15 @@ import java.io.Closeable;
 import java.io.DataOutput;
 import java.io.IOException;
 
+/**
+ * Interface for writing index data to an output stream with position tracking.
+ * Extends DataOutput to provide standard data writing methods and Closeable for resource management.
+ */
 public interface IndexWriter extends DataOutput, Closeable {
     /**
+     * Gets the current position in the output.
      * @return the current position in the output
+     * @throws IOException if an error occurs
      */
     long position() throws IOException;
 }

@@ -34,17 +34,42 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 
+/**
+ * Abstract base class for storing and managing product-quantized (PQ) vectors. Product quantization
+ * compresses vectors by dividing them into subspaces and quantizing each subspace independently using
+ * learned codebooks. This provides significant compression with configurable accuracy trade-offs.
+ */
 public abstract class PQVectors implements CompressedVectors {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /**
+     * The product quantization compressor that defines codebooks for vector quantization.
+     */
     final ProductQuantization pq;
+    /**
+     * Array of byte sequences, each containing compressed vectors split into chunks to avoid array size limitations.
+     */
     protected ByteSequence<?>[] compressedDataChunks;
+    /**
+     * The number of vectors stored in each fully-filled chunk.
+     */
     protected int vectorsPerChunk;
 
+    /**
+     * Constructs a PQVectors instance with the specified product quantization compressor.
+     * @param pq the product quantization compressor defining the codebooks
+     */
     protected PQVectors(ProductQuantization pq) {
         this.pq = pq;
     }
 
+    /**
+     * Loads PQ-encoded vectors from a RandomAccessReader, reading both the product quantization
+     * metadata and the compressed vector data.
+     * @param in the reader to load from
+     * @return an immutable PQVectors instance containing the loaded data
+     * @throws IOException if an I/O error occurs during reading
+     */
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);
@@ -68,6 +93,13 @@ public abstract class PQVectors implements CompressedVectors {
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
 
+    /**
+     * Loads PQ-encoded vectors from a specific offset in a RandomAccessReader.
+     * @param in the reader to load from
+     * @param offset the byte offset in the file to seek to before reading
+     * @return a PQVectors instance containing the loaded data
+     * @throws IOException if an I/O error occurs during reading or seeking
+     */
     public static PQVectors load(RandomAccessReader in, long offset) throws IOException {
         in.seek(offset);
         return load(in);
@@ -130,6 +162,8 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     /**
+     * Returns the number of chunks that have actually been allocated and contain data.
+     * This may be less than or equal to the length of the compressedDataChunks array.
      * @return the number of chunks that have actually been allocated ({@code <= compressedDataChunks.length})
      */
     protected abstract int validChunkCount();
@@ -184,6 +218,13 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Creates an approximate score function for the given query vector. Unlike precomputedScoreFunctionFor,
+     * this method computes scores on-demand without precomputation, which saves memory but may be slower.
+     * @param q the query vector to compare against
+     * @param similarityFunction the similarity function to use (DOT_PRODUCT, EUCLIDEAN, or COSINE)
+     * @return a score function that computes approximate similarities using PQ-encoded vectors
+     */
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         VectorFloat<?> centeredQuery = pq.globalCentroid == null ? q : VectorUtil.sub(q, pq.globalCentroid);
 

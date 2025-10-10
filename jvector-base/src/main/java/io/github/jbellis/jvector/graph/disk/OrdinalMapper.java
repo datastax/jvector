@@ -35,18 +35,23 @@ public interface OrdinalMapper {
 
     /**
      * OnDiskGraphIndexWriter will iterate from 0..maxOrdinal(), inclusive.
+     * @return the highest ordinal value that will be written to disk
      */
     int maxOrdinal();
 
     /**
      * Map old ordinals (in the graph as constructed) to new ordinals (written to disk).
      * Should always return a valid ordinal (between 0 and maxOrdinal).
+     * @param oldOrdinal the original node ID from the in-memory graph
+     * @return the sequential ordinal to use when writing to disk
      */
     int oldToNew(int oldOrdinal);
 
     /**
      * Map new ordinals (written to disk) to old ordinals (in the graph as constructed).
      * May return OMITTED if there is a "hole" at the new ordinal.
+     * @param newOrdinal the sequential disk ordinal to look up
+     * @return the original node ID from the graph, or OMITTED if no mapping exists
      */
     int newToOld(int newOrdinal);
 
@@ -54,8 +59,15 @@ public interface OrdinalMapper {
      * A mapper that leaves the original ordinals unchanged.
      */
     class IdentityMapper implements OrdinalMapper {
+        /**
+         * The highest ordinal value in the mapping range
+         */
         private final int maxOrdinal;
 
+        /**
+         * Creates an identity mapper that preserves all ordinals up to the specified maximum
+         * @param maxOrdinal the highest ordinal value in the range
+         */
         public IdentityMapper(int maxOrdinal) {
             this.maxOrdinal = maxOrdinal;
         }
@@ -80,10 +92,23 @@ public interface OrdinalMapper {
      * Converts a Map of old to new ordinals into an OrdinalMapper.
      */
     class MapMapper implements OrdinalMapper {
+        /**
+         * The highest ordinal value in the mapping range
+         */
         private final int maxOrdinal;
+        /**
+         * Mapping from original graph node IDs to sequential disk ordinals
+         */
         private final Map<Integer, Integer> oldToNew;
+        /**
+         * Reverse mapping from sequential disk ordinals to original graph node IDs
+         */
         private final Int2IntHashMap newToOld;
 
+        /**
+         * Creates a mapper from a map of old to new ordinal mappings
+         * @param oldToNew mapping from original node IDs to sequential disk ordinals
+         */
         public MapMapper(Map<Integer, Integer> oldToNew) {
             this.oldToNew = oldToNew;
             this.newToOld = new Int2IntHashMap(oldToNew.size(), 0.65f, OMITTED);

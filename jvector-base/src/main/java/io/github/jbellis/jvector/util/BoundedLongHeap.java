@@ -43,11 +43,20 @@ public class BoundedLongHeap extends AbstractLongHeap {
         this(maxSize, maxSize);
     }
 
+    /**
+     * Create an empty Heap with the configured initial size and maximum size.
+     * @param initialSize the initial size
+     * @param maxSize the maximum size
+     */
     public BoundedLongHeap(int initialSize, int maxSize) {
         super(initialSize);
         this.maxSize = maxSize;
     }
 
+    /**
+     * Set the maximum size of the heap.
+     * @param maxSize the maximum size
+     */
     public void setMaxSize(int maxSize) {
         if (size > maxSize) {
             throw new IllegalArgumentException("Cannot set maxSize smaller than current size");

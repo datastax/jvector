@@ -25,28 +25,65 @@ import java.util.function.IntFunction;
  * A feature of an on-disk graph index. Information to use a feature is stored in the header on-disk.
  */
 public interface Feature {
+    /**
+     * Get feature ID.
+     * @return the return value
+     */
     FeatureId id();
 
+    /**
+     * Get header size.
+     * @return the return value
+     */
     int headerSize();
 
+    /**
+     * Get feature size.
+     * @return the return value
+     */
     int featureSize();
 
+    /**
+     * Write header.
+     * @param out the out
+     * @throws IOException if an error occurs
+     */
     void writeHeader(DataOutput out) throws IOException;
 
+    /**
+     * Write inline.
+     * @param out the out
+     * @param state the state
+     * @throws IOException if an error occurs
+     */
     default void writeInline(DataOutput out, State state) throws IOException {
         // default no-op
     }
 
-    // Feature implementations should implement a State as well for use with writeInline/writeSeparately
+    /**
+     * Feature implementations should implement a State as well for use with writeInline/writeSeparately
+     */
     interface State {
     }
 
+    /**
+     * Create single state factory.
+     * @param id the id
+     * @param stateFactory the stateFactory
+     * @return the return value
+     */
     static EnumMap<FeatureId, IntFunction<State>> singleStateFactory(FeatureId id, IntFunction<State> stateFactory) {
         EnumMap<FeatureId, IntFunction<State>> map = new EnumMap<>(FeatureId.class);
         map.put(id, stateFactory);
         return map;
     }
 
+    /**
+     * Create single state.
+     * @param id the id
+     * @param state the state
+     * @return the return value
+     */
     static EnumMap<FeatureId, State> singleState(FeatureId id, State state) {
         EnumMap<FeatureId, State> map = new EnumMap<>(FeatureId.class);
         map.put(id, state);

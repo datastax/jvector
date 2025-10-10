@@ -25,8 +25,16 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * An immutable implementation of PQVectors with optimized similarity computations using precomputed
+ * codebook partial sums for faster scoring.
+ */
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
+    /**
+     * Cache of precomputed codebook partial sums for different similarity functions, enabling
+     * faster score computation.
+     */
     private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;
 
     /**

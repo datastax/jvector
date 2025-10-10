@@ -12,6 +12,10 @@ import java.util.stream.*;
 import static java.lang.foreign.ValueLayout.*;
 import static java.lang.foreign.MemoryLayout.PathElement.*;
 
+/**
+ * Native SIMD operations for high-performance vector computations using hardware acceleration.
+ * This class provides JNI bindings to optimized native code that leverages AVX-512 and other SIMD instructions.
+ */
 public class NativeSimdOps {
 
     NativeSimdOps() {
@@ -58,21 +62,31 @@ public class NativeSimdOps {
     static final SymbolLookup SYMBOL_LOOKUP = SymbolLookup.loaderLookup()
             .or(Linker.nativeLinker().defaultLookup());
 
+    /** C boolean type layout for native interop */
     public static final ValueLayout.OfBoolean C_BOOL = ValueLayout.JAVA_BOOLEAN;
+    /** C char type layout (mapped to Java byte) for native interop */
     public static final ValueLayout.OfByte C_CHAR = ValueLayout.JAVA_BYTE;
+    /** C short type layout for native interop */
     public static final ValueLayout.OfShort C_SHORT = ValueLayout.JAVA_SHORT;
+    /** C int type layout for native interop */
     public static final ValueLayout.OfInt C_INT = ValueLayout.JAVA_INT;
+    /** C long long type layout for native interop */
     public static final ValueLayout.OfLong C_LONG_LONG = ValueLayout.JAVA_LONG;
+    /** C float type layout for native interop */
     public static final ValueLayout.OfFloat C_FLOAT = ValueLayout.JAVA_FLOAT;
+    /** C double type layout for native interop */
     public static final ValueLayout.OfDouble C_DOUBLE = ValueLayout.JAVA_DOUBLE;
+    /** C pointer type layout with byte array target for native interop */
     public static final AddressLayout C_POINTER = ValueLayout.ADDRESS
             .withTargetLayout(MemoryLayout.sequenceLayout(java.lang.Long.MAX_VALUE, JAVA_BYTE));
+    /** C long type layout for native interop */
     public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG;
     private static final int true_ = (int)1L;
     /**
      * {@snippet lang=c :
      * #define true 1
      * }
+     * @return the C boolean true value (1)
      */
     public static int true_() {
         return true_;
@@ -82,6 +96,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * #define false 0
      * }
+     * @return the C boolean false value (0)
      */
     public static int false_() {
         return false_;
@@ -91,6 +106,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * #define __bool_true_false_are_defined 1
      * }
+     * @return the value indicating that boolean true and false are defined (1)
      */
     public static int __bool_true_false_are_defined() {
         return __bool_true_false_are_defined;
@@ -110,6 +126,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * _Bool check_compatibility()
      * }
+     * @return the function descriptor for check_compatibility
      */
     public static FunctionDescriptor check_compatibility$descriptor() {
         return check_compatibility.DESC;
@@ -120,6 +137,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * _Bool check_compatibility()
      * }
+     * @return the method handle for invoking check_compatibility
      */
     public static MethodHandle check_compatibility$handle() {
         return check_compatibility.HANDLE;
@@ -130,15 +148,18 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * _Bool check_compatibility()
      * }
+     * @return the memory address of the check_compatibility native function
      */
     public static MemorySegment check_compatibility$address() {
         return check_compatibility.ADDR;
     }
 
     /**
+     * Checks if the native library is compatible with the current system's CPU features.
      * {@snippet lang=c :
      * _Bool check_compatibility()
      * }
+     * @return true if the native SIMD operations are compatible with this CPU, false otherwise
      */
     public static boolean check_compatibility() {
         var mh$ = check_compatibility.HANDLE;
@@ -173,6 +194,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the function descriptor for dot_product_f32
      */
     public static FunctionDescriptor dot_product_f32$descriptor() {
         return dot_product_f32.DESC;
@@ -183,6 +205,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the method handle for invoking dot_product_f32
      */
     public static MethodHandle dot_product_f32$handle() {
         return dot_product_f32.HANDLE;
@@ -193,15 +216,24 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the memory address of the dot_product_f32 native function
      */
     public static MemorySegment dot_product_f32$address() {
         return dot_product_f32.ADDR;
     }
 
     /**
+     * Computes the dot product of two float32 vectors using SIMD operations.
      * {@snippet lang=c :
      * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @param preferred_size the preferred SIMD vector size in bits (e.g., 128, 256, 512)
+     * @param a memory segment containing the first vector's data
+     * @param aoffset starting offset in the first vector (element index, not byte offset)
+     * @param b memory segment containing the second vector's data
+     * @param boffset starting offset in the second vector (element index, not byte offset)
+     * @param length number of float elements to process in the dot product calculation
+     * @return the computed dot product as a float value
      */
     public static float dot_product_f32(int preferred_size, MemorySegment a, int aoffset, MemorySegment b, int boffset, int length) {
         var mh$ = dot_product_f32.HANDLE;
@@ -236,6 +268,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the function descriptor for euclidean_f32
      */
     public static FunctionDescriptor euclidean_f32$descriptor() {
         return euclidean_f32.DESC;
@@ -246,6 +279,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the method handle for invoking euclidean_f32
      */
     public static MethodHandle euclidean_f32$handle() {
         return euclidean_f32.HANDLE;
@@ -256,15 +290,24 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @return the memory address of the euclidean_f32 native function
      */
     public static MemorySegment euclidean_f32$address() {
         return euclidean_f32.ADDR;
     }
 
     /**
+     * Computes the squared Euclidean distance between two float32 vectors using SIMD operations.
      * {@snippet lang=c :
      * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
      * }
+     * @param preferred_size the preferred SIMD vector size in bits (e.g., 128, 256, 512)
+     * @param a memory segment containing the first vector's data
+     * @param aoffset starting offset in the first vector (element index, not byte offset)
+     * @param b memory segment containing the second vector's data
+     * @param boffset starting offset in the second vector (element index, not byte offset)
+     * @param length number of float elements to process in the distance calculation
+     * @return the computed squared Euclidean distance as a float value
      */
     public static float euclidean_f32(int preferred_size, MemorySegment a, int aoffset, MemorySegment b, int boffset, int length) {
         var mh$ = euclidean_f32.HANDLE;
@@ -298,6 +341,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the function descriptor for bulk_quantized_shuffle_dot_f32_512
      */
     public static FunctionDescriptor bulk_quantized_shuffle_dot_f32_512$descriptor() {
         return bulk_quantized_shuffle_dot_f32_512.DESC;
@@ -308,6 +352,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the method handle for invoking bulk_quantized_shuffle_dot_f32_512
      */
     public static MethodHandle bulk_quantized_shuffle_dot_f32_512$handle() {
         return bulk_quantized_shuffle_dot_f32_512.HANDLE;
@@ -318,15 +363,24 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the memory address of the bulk_quantized_shuffle_dot_f32_512 native function
      */
     public static MemorySegment bulk_quantized_shuffle_dot_f32_512$address() {
         return bulk_quantized_shuffle_dot_f32_512.ADDR;
     }
 
     /**
+     * Performs bulk computation of dot product similarity scores for quantized vectors using AVX-512 shuffle operations.
+     * Dequantizes partial dot products and computes final similarity scores in a vectorized manner.
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @param shuffles memory segment containing shuffle indices for rearranging quantized values
+     * @param codebookCount number of codebooks used in the product quantization scheme
+     * @param quantizedPartials memory segment containing quantized partial dot product values
+     * @param delta quantization scale factor for converting quantized values to float
+     * @param minDistance minimum distance offset used during quantization
+     * @param results output memory segment where computed similarity scores will be written
      */
     public static void bulk_quantized_shuffle_dot_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
         var mh$ = bulk_quantized_shuffle_dot_f32_512.HANDLE;
@@ -360,6 +414,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the function descriptor for bulk_quantized_shuffle_euclidean_f32_512
      */
     public static FunctionDescriptor bulk_quantized_shuffle_euclidean_f32_512$descriptor() {
         return bulk_quantized_shuffle_euclidean_f32_512.DESC;
@@ -370,6 +425,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the method handle for invoking bulk_quantized_shuffle_euclidean_f32_512
      */
     public static MethodHandle bulk_quantized_shuffle_euclidean_f32_512$handle() {
         return bulk_quantized_shuffle_euclidean_f32_512.HANDLE;
@@ -380,15 +436,24 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @return the memory address of the bulk_quantized_shuffle_euclidean_f32_512 native function
      */
     public static MemorySegment bulk_quantized_shuffle_euclidean_f32_512$address() {
         return bulk_quantized_shuffle_euclidean_f32_512.ADDR;
     }
 
     /**
+     * Performs bulk computation of Euclidean distance scores for quantized vectors using AVX-512 shuffle operations.
+     * Dequantizes partial distances and computes final distance scores in a vectorized manner.
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
+     * @param shuffles memory segment containing shuffle indices for rearranging quantized values
+     * @param codebookCount number of codebooks used in the product quantization scheme
+     * @param quantizedPartials memory segment containing quantized partial distance values
+     * @param delta quantization scale factor for converting quantized values to float
+     * @param minDistance minimum distance offset used during quantization
+     * @param results output memory segment where computed distance scores will be written
      */
     public static void bulk_quantized_shuffle_euclidean_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
         var mh$ = bulk_quantized_shuffle_euclidean_f32_512.HANDLE;
@@ -426,6 +491,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
      * }
+     * @return the function descriptor for bulk_quantized_shuffle_cosine_f32_512
      */
     public static FunctionDescriptor bulk_quantized_shuffle_cosine_f32_512$descriptor() {
         return bulk_quantized_shuffle_cosine_f32_512.DESC;
@@ -436,6 +502,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
      * }
+     * @return the method handle for invoking bulk_quantized_shuffle_cosine_f32_512
      */
     public static MethodHandle bulk_quantized_shuffle_cosine_f32_512$handle() {
         return bulk_quantized_shuffle_cosine_f32_512.HANDLE;
@@ -446,15 +513,28 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
      * }
+     * @return the memory address of the bulk_quantized_shuffle_cosine_f32_512 native function
      */
     public static MemorySegment bulk_quantized_shuffle_cosine_f32_512$address() {
         return bulk_quantized_shuffle_cosine_f32_512.ADDR;
     }
 
     /**
+     * Performs bulk computation of cosine similarity scores for quantized vectors using AVX-512 shuffle operations.
+     * Dequantizes both partial dot products and vector magnitudes to compute final cosine similarity scores.
      * {@snippet lang=c :
      * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
      * }
+     * @param shuffles memory segment containing shuffle indices for rearranging quantized values
+     * @param codebookCount number of codebooks used in the product quantization scheme
+     * @param quantizedPartialSums memory segment containing quantized partial dot product sums
+     * @param sumDelta quantization scale factor for converting quantized sums to float
+     * @param minDistance minimum distance offset used during sum quantization
+     * @param quantizedPartialMagnitudes memory segment containing quantized partial vector magnitudes
+     * @param magnitudeDelta quantization scale factor for converting quantized magnitudes to float
+     * @param minMagnitude minimum magnitude offset used during magnitude quantization
+     * @param queryMagnitudeSquared squared magnitude of the query vector for normalization
+     * @param results output memory segment where computed cosine similarity scores will be written
      */
     public static void bulk_quantized_shuffle_cosine_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartialSums, float sumDelta, float minDistance, MemorySegment quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, MemorySegment results) {
         var mh$ = bulk_quantized_shuffle_cosine_f32_512.HANDLE;
@@ -488,6 +568,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
+     * @return the function descriptor for assemble_and_sum_f32_512
      */
     public static FunctionDescriptor assemble_and_sum_f32_512$descriptor() {
         return assemble_and_sum_f32_512.DESC;
@@ -498,6 +579,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
+     * @return the method handle for invoking assemble_and_sum_f32_512
      */
     public static MethodHandle assemble_and_sum_f32_512$handle() {
         return assemble_and_sum_f32_512.HANDLE;
@@ -508,15 +590,24 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
+     * @return the memory address of the assemble_and_sum_f32_512 native function
      */
     public static MemorySegment assemble_and_sum_f32_512$address() {
         return assemble_and_sum_f32_512.ADDR;
     }
 
     /**
+     * Assembles float values from scattered locations in memory using byte offsets and computes their sum using AVX-512 operations.
+     * Useful for gathering partial results indexed by offsets and combining them efficiently.
      * {@snippet lang=c :
      * float assemble_and_sum_f32_512(const float *data, int dataBase, const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength)
      * }
+     * @param data memory segment containing the source float data array
+     * @param dataBase base index into the data array where lookups begin
+     * @param baseOffsets memory segment containing byte offsets for gathering values from data
+     * @param baseOffsetsOffset starting position in the baseOffsets array
+     * @param baseOffsetsLength number of offsets to process from baseOffsets
+     * @return the sum of all assembled float values
      */
     public static float assemble_and_sum_f32_512(MemorySegment data, int dataBase, MemorySegment baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
         var mh$ = assemble_and_sum_f32_512.HANDLE;
@@ -552,6 +643,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
+     * @return the function descriptor for pq_decoded_cosine_similarity_f32_512
      */
     public static FunctionDescriptor pq_decoded_cosine_similarity_f32_512$descriptor() {
         return pq_decoded_cosine_similarity_f32_512.DESC;
@@ -562,6 +654,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
+     * @return the method handle for invoking pq_decoded_cosine_similarity_f32_512
      */
     public static MethodHandle pq_decoded_cosine_similarity_f32_512$handle() {
         return pq_decoded_cosine_similarity_f32_512.HANDLE;
@@ -572,15 +665,26 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
+     * @return the memory address of the pq_decoded_cosine_similarity_f32_512 native function
      */
     public static MemorySegment pq_decoded_cosine_similarity_f32_512$address() {
         return pq_decoded_cosine_similarity_f32_512.ADDR;
     }
 
     /**
+     * Computes cosine similarity between product-quantized vectors using AVX-512 operations.
+     * Gathers partial dot products and magnitudes using offsets, then calculates normalized similarity.
      * {@snippet lang=c :
      * float pq_decoded_cosine_similarity_f32_512(const unsigned char *baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude)
      * }
+     * @param baseOffsets memory segment containing byte offsets for gathering partial results
+     * @param baseOffsetsOffset starting position in the baseOffsets array
+     * @param baseOffsetsLength number of offsets to process
+     * @param clusterCount number of clusters per subspace in the product quantization
+     * @param partialSums memory segment containing precomputed partial dot product sums
+     * @param aMagnitude memory segment containing magnitude values for vector a's subspaces
+     * @param bMagnitude magnitude of vector b for normalization
+     * @return the computed cosine similarity score between the two vectors
      */
     public static float pq_decoded_cosine_similarity_f32_512(MemorySegment baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, MemorySegment partialSums, MemorySegment aMagnitude, float bMagnitude) {
         var mh$ = pq_decoded_cosine_similarity_f32_512.HANDLE;
@@ -615,6 +719,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the function descriptor for calculate_partial_sums_dot_f32_512
      */
     public static FunctionDescriptor calculate_partial_sums_dot_f32_512$descriptor() {
         return calculate_partial_sums_dot_f32_512.DESC;
@@ -625,6 +730,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the method handle for invoking calculate_partial_sums_dot_f32_512
      */
     public static MethodHandle calculate_partial_sums_dot_f32_512$handle() {
         return calculate_partial_sums_dot_f32_512.HANDLE;
@@ -635,15 +741,25 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the memory address of the calculate_partial_sums_dot_f32_512 native function
      */
     public static MemorySegment calculate_partial_sums_dot_f32_512$address() {
         return calculate_partial_sums_dot_f32_512.ADDR;
     }
 
     /**
+     * Calculates partial dot product sums between a query vector and all centroids in a product quantization codebook using AVX-512.
+     * Computes dot products of query subvectors with corresponding codebook cluster centroids for later lookup.
      * {@snippet lang=c :
      * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @param codebook memory segment containing the product quantization codebook centroids
+     * @param codebookBase starting index in the codebook array
+     * @param size dimension of each codebook subvector
+     * @param clusterCount number of clusters (centroids) per codebook subspace
+     * @param query memory segment containing the query vector to compare
+     * @param queryOffset starting offset in the query vector
+     * @param partialSums output memory segment where partial dot product sums will be written
      */
     public static void calculate_partial_sums_dot_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums) {
         var mh$ = calculate_partial_sums_dot_f32_512.HANDLE;
@@ -678,6 +794,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the function descriptor for calculate_partial_sums_euclidean_f32_512
      */
     public static FunctionDescriptor calculate_partial_sums_euclidean_f32_512$descriptor() {
         return calculate_partial_sums_euclidean_f32_512.DESC;
@@ -688,6 +805,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the method handle for invoking calculate_partial_sums_euclidean_f32_512
      */
     public static MethodHandle calculate_partial_sums_euclidean_f32_512$handle() {
         return calculate_partial_sums_euclidean_f32_512.HANDLE;
@@ -698,15 +816,25 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @return the memory address of the calculate_partial_sums_euclidean_f32_512 native function
      */
     public static MemorySegment calculate_partial_sums_euclidean_f32_512$address() {
         return calculate_partial_sums_euclidean_f32_512.ADDR;
     }
 
     /**
+     * Calculates partial squared Euclidean distances between a query vector and all centroids in a product quantization codebook using AVX-512.
+     * Computes squared distances of query subvectors from corresponding codebook cluster centroids for later lookup.
      * {@snippet lang=c :
      * void calculate_partial_sums_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
+     * @param codebook memory segment containing the product quantization codebook centroids
+     * @param codebookBase starting index in the codebook array
+     * @param size dimension of each codebook subvector
+     * @param clusterCount number of clusters (centroids) per codebook subspace
+     * @param query memory segment containing the query vector to compare
+     * @param queryOffset starting offset in the query vector
+     * @param partialSums output memory segment where partial squared distance sums will be written
      */
     public static void calculate_partial_sums_euclidean_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums) {
         var mh$ = calculate_partial_sums_euclidean_f32_512.HANDLE;
@@ -742,6 +870,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the function descriptor for calculate_partial_sums_best_dot_f32_512
      */
     public static FunctionDescriptor calculate_partial_sums_best_dot_f32_512$descriptor() {
         return calculate_partial_sums_best_dot_f32_512.DESC;
@@ -752,6 +881,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the method handle for invoking calculate_partial_sums_best_dot_f32_512
      */
     public static MethodHandle calculate_partial_sums_best_dot_f32_512$handle() {
         return calculate_partial_sums_best_dot_f32_512.HANDLE;
@@ -762,15 +892,26 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the memory address of the calculate_partial_sums_best_dot_f32_512 native function
      */
     public static MemorySegment calculate_partial_sums_best_dot_f32_512$address() {
         return calculate_partial_sums_best_dot_f32_512.ADDR;
     }
 
     /**
+     * Calculates partial dot product sums and tracks the best (highest) distance for each subspace during product quantization.
+     * Useful for computing both approximations and bounds for nearest neighbor search optimization.
      * {@snippet lang=c :
      * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @param codebook memory segment containing the product quantization codebook centroids
+     * @param codebookBase starting index in the codebook array
+     * @param size dimension of each codebook subvector
+     * @param clusterCount number of clusters (centroids) per codebook subspace
+     * @param query memory segment containing the query vector to compare
+     * @param queryOffset starting offset in the query vector
+     * @param partialSums output memory segment where partial dot product sums will be written
+     * @param partialBestDistances output memory segment where the best (highest) dot product for each subspace will be written
      */
     public static void calculate_partial_sums_best_dot_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums, MemorySegment partialBestDistances) {
         var mh$ = calculate_partial_sums_best_dot_f32_512.HANDLE;
@@ -806,6 +947,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the function descriptor for calculate_partial_sums_best_euclidean_f32_512
      */
     public static FunctionDescriptor calculate_partial_sums_best_euclidean_f32_512$descriptor() {
         return calculate_partial_sums_best_euclidean_f32_512.DESC;
@@ -816,6 +958,7 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the method handle for invoking calculate_partial_sums_best_euclidean_f32_512
      */
     public static MethodHandle calculate_partial_sums_best_euclidean_f32_512$handle() {
         return calculate_partial_sums_best_euclidean_f32_512.HANDLE;
@@ -826,15 +969,26 @@ public class NativeSimdOps {
      * {@snippet lang=c :
      * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @return the memory address of the calculate_partial_sums_best_euclidean_f32_512 native function
      */
     public static MemorySegment calculate_partial_sums_best_euclidean_f32_512$address() {
         return calculate_partial_sums_best_euclidean_f32_512.ADDR;
     }
 
     /**
+     * Calculates partial squared Euclidean distances and tracks the best (lowest) distance for each subspace during product quantization.
+     * Useful for computing both approximations and bounds for nearest neighbor search optimization.
      * {@snippet lang=c :
      * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
      * }
+     * @param codebook memory segment containing the product quantization codebook centroids
+     * @param codebookBase starting index in the codebook array
+     * @param size dimension of each codebook subvector
+     * @param clusterCount number of clusters (centroids) per codebook subspace
+     * @param query memory segment containing the query vector to compare
+     * @param queryOffset starting offset in the query vector
+     * @param partialSums output memory segment where partial squared distance sums will be written
+     * @param partialBestDistances output memory segment where the best (lowest) squared distance for each subspace will be written
      */
     public static void calculate_partial_sums_best_euclidean_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums, MemorySegment partialBestDistances) {
         var mh$ = calculate_partial_sums_best_euclidean_f32_512.HANDLE;

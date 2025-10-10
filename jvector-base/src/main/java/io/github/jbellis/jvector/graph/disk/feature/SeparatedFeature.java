@@ -19,9 +19,28 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import java.io.DataOutput;
 import java.io.IOException;
 
+/**
+ * A feature that is written separately from the main graph structure, with an offset
+ * reference stored in the header to locate its data in a separate section of the file.
+ */
 public interface SeparatedFeature extends Feature {
+    /**
+     * Sets the file offset where this feature's data begins in the separated section.
+     * @param offset the byte offset in the file
+     */
     void setOffset(long offset);
+
+    /**
+     * Returns the file offset where this feature's data is stored.
+     * @return the byte offset in the file
+     */
     long getOffset();
 
+    /**
+     * Writes this feature's data to the separated section of the file.
+     * @param out the output stream to write to
+     * @param state the feature state containing the data to write
+     * @throws IOException if an I/O error occurs
+     */
     void writeSeparately(DataOutput out, State state) throws IOException;
 }
