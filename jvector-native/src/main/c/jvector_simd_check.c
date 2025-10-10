@@ -19,19 +19,31 @@
 
 bool check_compatibility(void) {
     unsigned int eax, ebx, ecx, edx;
-    bool avx512f_supported = false, avx512cd_supported = false,
-         avx512bw_supported = false, avx512dq_supported = false,
-         avx512vl_supported = false;
+    bool supported = false;
 
     // Check for AVX-512 Foundation (AVX-512F) and other AVX-512 features:
     // These are indicated by various bits of EBX from leaf 7, sub-leaf 0.
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
-        avx512f_supported = ebx & (1 << 16);     // AVX-512F
-        avx512cd_supported = ebx & (1 << 28);    // AVX-512CD
-        avx512bw_supported = ebx & (1 << 30);    // AVX-512BW
-        avx512dq_supported = ebx & (1 << 17);    // AVX-512DQ
-        avx512vl_supported = ebx & (1 << 31);    // AVX-512VL
+        #if defined(AVX512F) && defined(AVX512CD) && defined(AVX512BW) && defined(AVX512DQ) && defined(AVX512VL)
+
+        bool avx512f_supported = ebx & (1 << 16);     // AVX-512F
+        bool avx512cd_supported = ebx & (1 << 28);    // AVX-512CD
+        bool avx512bw_supported = ebx & (1 << 30);    // AVX-512BW
+        bool avx512dq_supported = ebx & (1 << 17);    // AVX-512DQ
+        bool avx512vl_supported = ebx & (1 << 31);    // AVX-512VL
+
+        supported = avx512f_supported && avx512cd_supported && avx512bw_supported && avx512dq_supported && avx512vl_supported;
+
+        #endif // defined(AVX512F) && defined(AVX512CD) && defined(AVX512BW) && defined(AVX512DQ) && defined(AVX512VL)
+
+        #if defined(AVX2)
+
+        bool avx2_supported = ebx & (1 << 5);     // AV2
+
+        supported = avx2_supported;
+
+        #endif // defined(AVX2)
     }
 
-    return avx512f_supported && avx512cd_supported && avx512bw_supported && avx512dq_supported && avx512vl_supported;
+    return supported;
 }
