@@ -341,7 +341,7 @@ public class ParallelWriteExample {
         var builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction,
                 neighborOverflow, alpha, addHierarchy, refineFinalGraph);
 
-        // Build graph using parallel construction for much better performance
+
         var graph = builder.build(floatVectors);
         long buildTime = System.nanoTime() - buildStart;
         System.out.printf("Graph built in %.2fs%n", buildTime / 1_000_000_000.0);
