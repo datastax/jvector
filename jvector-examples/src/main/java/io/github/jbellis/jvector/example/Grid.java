@@ -300,6 +300,9 @@ public class Grid {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
         var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
+
+        // Enable parallel writes for improved throughput
+        builder.withParallelWrites(true);
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
         for (var featureId : features) {
             switch (featureId) {
