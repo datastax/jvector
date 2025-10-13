@@ -24,6 +24,8 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.util.Accountable;
@@ -37,9 +39,10 @@ import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -367,10 +370,14 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
-    public void allMutationsCompleted() {
+    public void setAllMutationsCompleted() {
         allMutationsCompleted = true;
     }
 
+    @Override
+    public boolean allMutationsCompleted() {
+        return allMutationsCompleted;
+    }
 
     /**
      * A concurrent View of the graph that is safe to search concurrently with updates and with other
@@ -490,44 +497,101 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     /**
      * Saves the graph to the given DataOutput for reloading into memory later
      */
+    @Experimental
     @Deprecated
-    public void save(DataOutput out) {
-        if (deletedNodes.cardinality() > 0) {
-            throw new IllegalStateException("Cannot save a graph that has deleted nodes. Call cleanup() first");
+    public void save(DataOutput out) throws IOException {
+        if (!allMutationsCompleted()) {
+            throw new IllegalStateException("Cannot save a graph with pending mutations. Call cleanup() first");
         }
 
-        try (var view = getView()) {
-            out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
-            out.writeInt(4); // The version
+        out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
+        out.writeInt(4); // The version
 
-            // Write graph-level properties.
-            out.writeInt(layers.size());
-            assert view.entryNode().level == getMaxLevel();
-            out.writeInt(view.entryNode().node);
+        // Write graph-level properties.
+        out.writeInt(layers.size());
+        for (int level = 0; level < layers.size(); level++) {
+            out.writeInt(getDegree(level));
+        }
 
-            for (int level = 0; level < layers.size(); level++) {
-                out.writeInt(size(level));
-                out.writeInt(getDegree(level));
+        var entryNode = entryPoint.get();
+        assert entryNode.level == getMaxLevel();
+        out.writeInt(entryNode.node);
 
-                // Save neighbors from the layer.
-                var baseLayer = layers.get(level);
-                baseLayer.forEach((nodeId, neighbors) -> {
-                    try {
-                        NodesIterator iterator = neighbors.iterator();
-                        out.writeInt(nodeId);
-                        out.writeInt(iterator.size());
-                        for (int n = 0; n < iterator.size(); n++) {
-                            out.writeInt(iterator.nextInt());
-                        }
-                        assert !iterator.hasNext();
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                });
+        for (int level = 0; level < layers.size(); level++) {
+            out.writeInt(size(level));
+
+            // Save neighbors from the layer.
+            var it = nodeStream(level).iterator();
+            while (it.hasNext()) {
+                int nodeId = it.nextInt();
+                var neighbors = layers.get(level).get(nodeId);
+                out.writeInt(nodeId);
+                out.writeInt(neighbors.size());
+
+                for (int n = 0; n < neighbors.size(); n++) {
+                    out.writeInt(neighbors.getNode(n));
+                    out.writeFloat(neighbors.getScore(n));
+                }
             }
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * Saves the graph to the given DataOutput for reloading into memory later
+     */
+    @Experimental
+    @Deprecated
+    public static OnHeapGraphIndex load(RandomAccessReader in, double overflowRatio, DiversityProvider diversityProvider) throws IOException {
+        int magic = in.readInt(); // the magic number
+        if (magic != OnHeapGraphIndex.MAGIC) {
+            throw new IOException("Unsupported magic number: " + magic);
+        }
+
+        int version = in.readInt(); // The version
+        if (version != 4) {
+            throw new IOException("Unsupported version: " + version);
+        }
+
+        // Write graph-level properties.
+        int layerCount = in.readInt();
+        var layerDegrees = new ArrayList<Integer>(layerCount);
+        for (int level = 0; level < layerCount; level++) {
+            layerDegrees.add(in.readInt());
+        }
+
+        int entryNode = in.readInt();
+
+        var graph = new OnHeapGraphIndex(layerDegrees, overflowRatio, diversityProvider);
+
+        Map<Integer, Integer> nodeLevelMap = new HashMap<>();
+
+        for (int level = 0; level < layerCount; level++) {
+            int layerSize = in.readInt();
+
+            for (int i = 0; i < layerSize; i++) {
+                int nodeId = in.readInt();
+                int nNeighbors = in.readInt();
+
+                var ca = new NodeArray(nNeighbors);
+                for (int j = 0; j < nNeighbors; j++) {
+                    int neighbor = in.readInt();
+                    float score = in.readFloat();
+                    ca.addInOrder(neighbor, score);
+                }
+                graph.connectNode(level, nodeId, ca);
+                nodeLevelMap.put(nodeId, level);
+            }
+        }
+
+        for (var k : nodeLevelMap.keySet()) {
+            NodeAtLevel nal = new NodeAtLevel(nodeLevelMap.get(k), k);
+            graph.markComplete(nal);
+        }
+
+        graph.setDegrees(layerDegrees);
+        graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+
+        return graph;
     }
 
     /**

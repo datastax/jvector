@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
@@ -325,6 +326,7 @@ public class GraphIndexBuilder implements Closeable {
         this.parallelExecutor = parallelExecutor;
 
         this.graph = new OnHeapGraphIndex(maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
+
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
@@ -332,6 +334,58 @@ public class GraphIndexBuilder implements Closeable {
         });
 
         // in scratch we store candidates in reverse order: worse candidates are first
+        this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
+        this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
+
+        this.rng = new Random(0);
+    }
+
+    /**
+     * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
+     * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
+     *
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param mutableGraphIndex a mutable graph index.
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param neighborOverflow the factor determining how many additional neighbors are allowed beyond the configured limit.
+     * @param alpha the weight factor for balancing score computations.
+     * @param addHierarchy whether to add hierarchical structures while building the graph.
+     * @param refineFinalGraph whether to perform a refinement step on the final graph structure.
+     * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
+     * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     *
+     * @throws IOException if an I/O error occurs during the graph loading or conversion process.
+     */
+    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+        if (beamWidth <= 0) {
+            throw new IllegalArgumentException("beamWidth must be positive");
+        }
+        if (neighborOverflow < 1.0f) {
+            throw new IllegalArgumentException("neighborOverflow must be >= 1.0");
+        }
+        if (alpha <= 0) {
+            throw new IllegalArgumentException("alpha must be positive");
+        }
+
+        this.scoreProvider = buildScoreProvider;
+        this.neighborOverflow = neighborOverflow;
+        this.dimension = dimension;
+        this.alpha = alpha;
+        this.addHierarchy = addHierarchy;
+        this.refineFinalGraph = refineFinalGraph;
+        this.beamWidth = beamWidth;
+        this.simdExecutor = simdExecutor;
+        this.parallelExecutor = parallelExecutor;
+
+        this.graph = mutableGraphIndex;
+
+        this.searchers = ExplicitThreadLocal.withInitial(() -> {
+            var gs = new GraphSearcher(graph);
+            gs.usePruning(false);
+            return gs;
+        });
+
+        // in scratch, we store candidates in reverse order: worse candidates are first
         this.naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
         this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
 
@@ -450,13 +504,13 @@ public class GraphIndexBuilder implements Closeable {
         // clean up overflowed neighbor lists
         parallelExecutor.submit(() -> {
             IntStream.range(0, graph.getIdUpperBound()).parallel().forEach(id -> {
-                for (int layer = 0; layer <= graph.getMaxLevel(); layer++) {
+                for (int level = 0; level <= graph.getMaxLevel(); level++) {
                     graph.enforceDegree(id);
                 }
             });
         }).join();
 
-        graph.allMutationsCompleted();
+        graph.setAllMutationsCompleted();
     }
 
     private void improveConnections(int node) {
@@ -825,6 +879,9 @@ public class GraphIndexBuilder implements Closeable {
             loadV3(in, size);
         } else {
             version = in.readInt();
+            if (version != 4) {
+                throw new IOException("Unsupported version: " + version);
+            }
             loadV4(in);
         }
     }
@@ -836,15 +893,18 @@ public class GraphIndexBuilder implements Closeable {
         }
 
         int layerCount = in.readInt();
-        int entryNode = in.readInt();
         var layerDegrees = new ArrayList<Integer>(layerCount);
+        for (int level = 0; level < layerCount; level++) {
+            layerDegrees.add(in.readInt());
+        }
+
+        int entryNode = in.readInt();
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 
         // Read layer info
         for (int level = 0; level < layerCount; level++) {
             int layerSize = in.readInt();
-            layerDegrees.add(in.readInt());
             for (int i = 0; i < layerSize; i++) {
                 int nodeId = in.readInt();
                 int nNeighbors = in.readInt();
@@ -860,6 +920,7 @@ public class GraphIndexBuilder implements Closeable {
                 var ca = new NodeArray(nNeighbors);
                 for (int j = 0; j < nNeighbors; j++) {
                     int neighbor = in.readInt();
+                    float score = in.readFloat();
                     ca.addInOrder(neighbor, sf.similarityTo(neighbor));
                 }
                 graph.connectNode(level, nodeId, ca);
@@ -908,5 +969,62 @@ public class GraphIndexBuilder implements Closeable {
 
         graph.updateEntryNode(new NodeAtLevel(0, entryNode));
         graph.setDegrees(List.of(maxDegree));
+    }
+
+    /**
+     * Convenience method to build a new graph from an existing one, with the addition of new nodes.
+     * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     *
+     * @param in a reader from which to read the on-heap graph.
+     * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
+     * @param graphToRavvOrdMap a mapping from the old graph's node ids to the newVectors RAVV node ids
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
+     * @param alpha the weight factor for balancing score computations.
+     * @param addHierarchy whether to add hierarchical structures while building the graph.
+     *
+     * @return the in-memory representation of the graph index.
+     * @throws IOException if an I/O error occurs during the graph loading or conversion process.
+     */
+    @Experimental
+    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                            RandomAccessVectorValues newVectors,
+                                                            BuildScoreProvider buildScoreProvider,
+                                                            int startingNodeOffset,
+                                                            int[] graphToRavvOrdMap,
+                                                            int beamWidth,
+                                                            float overflowRatio,
+                                                            float alpha,
+                                                            boolean addHierarchy) throws IOException {
+
+        var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
+
+        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, overflowRatio, diversityProvider);) {
+
+            GraphIndexBuilder builder = new GraphIndexBuilder(
+                    buildScoreProvider,
+                    newVectors.dimension(),
+                    graph,
+                    beamWidth,
+                    overflowRatio,
+                    alpha,
+                    addHierarchy,
+                    true,
+                    PhysicalCoreExecutor.pool(),
+                    ForkJoinPool.commonPool()
+            );
+
+            var vv = newVectors.threadLocalSupplier();
+
+            // parallel graph construction from the merge documents Ids
+            PhysicalCoreExecutor.pool().submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
+                builder.addGraphNode(ord, vv.get().getVector(graphToRavvOrdMap[ord]));
+            })).join();
+
+            builder.cleanup();
+            return builder.getGraph();
+        }
     }
 }
