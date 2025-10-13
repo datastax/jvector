@@ -12,6 +12,14 @@
     <artifactId>jvector-base</artifactId>
     <name>Base</name>
 
+    <dependencies>
+        <dependency>
+            <groupId>io.github.jbellis</groupId>
+            <artifactId>jvector-apis</artifactId>
+            <version>${revision}</version>
+        </dependency>
+    </dependencies>
+
     <build>
         <plugins>
             <plugin>
