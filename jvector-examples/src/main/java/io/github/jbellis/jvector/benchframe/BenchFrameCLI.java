@@ -240,4 +240,14 @@ public class BenchFrameCLI implements Callable<Integer> {
         }
     }
 
+    /**
+     * Main entry point for command-line execution.
+     *
+     * @param args command-line arguments
+     */
+    public static void main(String[] args) {
+        int exitCode = new CommandLine(new BenchFrameCLI()).execute(args);
+        System.exit(exitCode);
+    }
+
 }
