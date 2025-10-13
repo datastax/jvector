@@ -9,7 +9,7 @@
         <artifactId>jvector-parent</artifactId>
         <version>${revision}</version>
     </parent>
-    <artifactId>jvector-apis</artifactId>
+    <artifactId>internal-apis</artifactId>
     <name>${project.artifactId}</name>
 
     <dependencies>

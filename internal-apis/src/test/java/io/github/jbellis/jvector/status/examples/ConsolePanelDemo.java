@@ -62,7 +62,7 @@ import java.util.concurrent.TimeUnit;
  * <h2>Running the Demo</h2>
  * <p>Execute from the command line with Maven:</p>
  * <pre>
- * mvn test-compile exec:java -pl jvector-apis \
+ * mvn test-compile exec:java -pl internal-apis \
  *   -Dexec.mainClass="io.github.jbellis.jvector.status.examples.ConsolePanelDemo" \
  *   -Dexec.classpathScope=test
  * </pre>

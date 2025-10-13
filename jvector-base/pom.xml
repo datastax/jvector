@@ -15,7 +15,7 @@
     <dependencies>
         <dependency>
             <groupId>io.github.jbellis</groupId>
-            <artifactId>jvector-apis</artifactId>
+            <artifactId>internal-apis</artifactId>
             <version>${revision}</version>
         </dependency>
     </dependencies>

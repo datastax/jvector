@@ -45,7 +45,7 @@
     </properties>
     <modules>
         <module>jvector-base</module>
-        <module>jvector-apis</module>
+        <module>internal-apis</module>
         <module>jvector-twenty</module>
         <module>jvector-native</module>
         <module>jvector-tests</module>
