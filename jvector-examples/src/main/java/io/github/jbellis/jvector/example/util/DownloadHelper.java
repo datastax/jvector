@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 public class DownloadHelper {
@@ -55,11 +56,11 @@ public class DownloadHelper {
                 .credentialsProvider(AnonymousCredentialsProvider.create());
     }
 
-    public static MultiFileDatasource maybeDownloadFvecs(String name) {
+    public static Optional<MultiFileDatasource> maybeDownloadFvecs(String name) {
         String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
         if (mfd == null) {
-            throw new IllegalArgumentException("Unknown dataset: " + name);
+            return Optional.empty();
         }
         // TODO how to detect and recover from incomplete downloads?
 
@@ -68,6 +69,7 @@ public class DownloadHelper {
             Files.createDirectories(Paths.get(fvecDir).resolve(mfd.directory()));
         } catch (IOException e) {
             System.err.println("Failed to create directory: " + e.getMessage());
+            return Optional.empty();
         }
 
         try (S3AsyncClient s3Client = s3AsyncClientBuilder().build()) {
@@ -104,11 +106,11 @@ public class DownloadHelper {
             }
             tm.close();
         } catch (Exception e) {
-            System.out.println("Error downloading data from S3: " + e.getMessage());
-            System.exit(1);
+            System.err.println("Error downloading data from S3: " + e.getMessage());
+            return Optional.empty();
         }
 
-        return mfd;
+        return Optional.of(mfd);
     }
 
     public static void maybeDownloadHdf5(String datasetName) {

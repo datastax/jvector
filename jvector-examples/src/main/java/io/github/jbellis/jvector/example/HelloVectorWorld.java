@@ -31,7 +31,8 @@ public class HelloVectorWorld {
 
         String datasetName = "ada002-100k";
 
-        var mfd = DownloadHelper.maybeDownloadFvecs(datasetName);
+        var mfd = DownloadHelper.maybeDownloadFvecs(datasetName)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown dataset: " + datasetName));
         DataSet ds = mfd.load();
 
         MultiConfig config = MultiConfig.getConfig(datasetName);

@@ -26,11 +26,10 @@ import io.nosqlbench.vectordata.downloader.DatasetEntry;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 
 public class DataSetLoader implements DataSetSource {
 
-  private final Function<String, Optional<DataSet>>[] loaders;
+  private final DataSetSource[] loaders;
 
   public DataSetLoader(DataSetSource... loaders) {
     this.loaders = loaders;
@@ -38,21 +37,41 @@ public class DataSetLoader implements DataSetSource {
 
   @Override
   public Optional<DataSet> apply(String name) {
+    for (DataSetSource loader : loaders) {
+      Optional<DataSet> result = loader.apply(name);
+      if (result.isPresent()) {
+        return result;
+      }
+    }
     return Optional.empty();
+  }
+
+  @Override
+  public String toString() {
+    return "DataSetLoader{loaders=" + loaders.length + "}";
   }
 
   public final static DataSetSource FVecsDownloader = new DataSetSource() {
     @Override
     public Optional<DataSet> apply(String name) {
-      var mfd = DownloadHelper.maybeDownloadFvecs(name);
+      Optional<MultiFileDatasource> mfdOpt = DownloadHelper.maybeDownloadFvecs(name);
+      if (mfdOpt.isEmpty()) {
+        return Optional.empty();
+      }
+
       try {
-        var ds = mfd.load();
+        var ds = mfdOpt.get().load();
         return Optional.of(ds);
       } catch (IOException e) {
         System.err.println("error while trying to load dataset: " + e + ", this error handling "
                            + "path needs to be updated");
         return Optional.empty();
       }
+    }
+
+    @Override
+    public String toString() {
+      return "FVecsDownloader";
     }
   };
 
@@ -65,6 +84,11 @@ public class DataSetLoader implements DataSetSource {
         return Optional.of(Hdf5Loader.load(name));
       }
       return Optional.empty();
+    }
+
+    @Override
+    public String toString() {
+      return "HDF5Loader";
     }
   };
 
@@ -112,6 +136,13 @@ public class DataSetLoader implements DataSetSource {
       TestDataViewWrapper tdw = new TestDataViewWrapper(tdv);
       System.out.println("Loaded " + tdw.getName() + " from streaming source");
       return Optional.of(tdw);
+    }
+
+    @Override
+    public String toString() {
+      String envCatalogs = System.getenv("VECTORDATA_CATALOGS");
+      return "VectorDataDownloader{defaultCatalog=~/.config/vectordata/catalogs.yaml" +
+             (envCatalogs != null ? ", additionalCatalogs=" + envCatalogs : "") + "}";
     }
   };
 
