@@ -31,6 +31,10 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.status.StatusContext;
+import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -341,50 +345,60 @@ public class ParallelWriteExample {
         var builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction,
                 neighborOverflow, alpha, addHierarchy, refineFinalGraph);
 
+        try (StatusContext context = new StatusContext("Graph Build")) {
+            context.addSink(new ConsoleLoggerSink());
+            try (TrackerScope scope = context.createScope("building graph")) {
+                GraphBuildTask buildTask = new GraphBuildTask("Graph Build Task", builder, floatVectors);
+                StatusTracker<GraphBuildTask> tracker = scope.trackTask(buildTask);
 
-        var graph = builder.build(floatVectors);
-        long buildTime = System.nanoTime() - buildStart;
-        System.out.printf("Graph built in %.2fs%n", buildTime / 1_000_000_000.0);
-        System.out.printf("Graph has %d nodes%n", graph.size(0));
+                var graph = buildTask.execute();
+                long buildTime = System.nanoTime() - buildStart;
+                System.out.printf("Graph built in %.2fs%n", buildTime / 1_000_000_000.0);
+                System.out.printf("Graph has %d nodes%n", graph.size(0));
 
-        // Create temporary paths for writing
-        Path tempDir = Files.createTempDirectory("parallel-write-test");
-        Path sequentialPath = tempDir.resolve("graph-sequential");
-        Path parallelPath = tempDir.resolve("graph-parallel");
+                scope.close();
+                context.close();
 
-        try {
-            System.out.println("\n=== Testing Write Performance ===");
+                // Create temporary paths for writing
+                Path tempDir = Files.createTempDirectory("parallel-write-test");
+                Path sequentialPath = tempDir.resolve("graph-sequential");
+                Path parallelPath = tempDir.resolve("graph-parallel");
 
-            // Run benchmark comparison
-            benchmarkComparison(graph, sequentialPath, parallelPath, floatVectors, pqVectors);
+                try {
+                    System.out.println("\n=== Testing Write Performance ===");
 
-            // Report file sizes
-            long seqSize = Files.size(sequentialPath);
-            long parSize = Files.size(parallelPath);
-            System.out.printf("%nFile sizes: Sequential=%.2f MB, Parallel=%.2f MB%n",
-                    seqSize / 1024.0 / 1024.0,
-                    parSize / 1024.0 / 1024.0);
+                    // Run benchmark comparison
+                    benchmarkComparison(graph, sequentialPath, parallelPath, floatVectors, pqVectors);
 
-            // === Read Phase: Load and verify both indices ===
-            System.out.println("\n=== Testing Read Correctness ===");
-            System.out.println("Loading sequential index...");
-            OnDiskGraphIndex sequentialIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(sequentialPath));
-            System.out.println("Loading parallel index...");
-            OnDiskGraphIndex parallelIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(parallelPath));
+                    // Report file sizes
+                    long seqSize = Files.size(sequentialPath);
+                    long parSize = Files.size(parallelPath);
+                    System.out.printf("%nFile sizes: Sequential=%.2f MB, Parallel=%.2f MB%n",
+                            seqSize / 1024.0 / 1024.0,
+                            parSize / 1024.0 / 1024.0);
 
-            // Verify that both indices are identical
-            verifyIndicesIdentical(sequentialIndex, parallelIndex);
+                    // === Read Phase: Load and verify both indices ===
+                    System.out.println("\n=== Testing Read Correctness ===");
+                    System.out.println("Loading sequential index...");
+                    OnDiskGraphIndex sequentialIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(sequentialPath));
+                    System.out.println("Loading parallel index...");
+                    OnDiskGraphIndex parallelIndex = OnDiskGraphIndex.load(ReaderSupplierFactory.open(parallelPath));
 
-            // Close the loaded indices
-            sequentialIndex.close();
-            parallelIndex.close();
+                    // Verify that both indices are identical
+                    verifyIndicesIdentical(sequentialIndex, parallelIndex);
 
-        } finally {
-            // Cleanup
-            builder.close();
-            Files.deleteIfExists(sequentialPath);
-            Files.deleteIfExists(parallelPath);
-            Files.deleteIfExists(tempDir);
+                    // Close the loaded indices
+                    sequentialIndex.close();
+                    parallelIndex.close();
+
+                } finally {
+                    // Cleanup
+                    builder.close();
+                    Files.deleteIfExists(sequentialPath);
+                    Files.deleteIfExists(parallelPath);
+                    Files.deleteIfExists(tempDir);
+                }
+            }
         }
 
         System.out.println("\n✅ Test complete - sequential and parallel writes produce identical results!");
