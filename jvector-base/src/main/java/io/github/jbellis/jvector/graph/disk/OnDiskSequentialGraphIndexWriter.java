@@ -54,10 +54,6 @@ import java.util.function.IntFunction;
  * </ul>
  */
 public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
-    public static final int FOOTER_MAGIC = 0x4a564244; // "EOF magic"
-    public static final int FOOTER_OFFSET_SIZE = Long.BYTES; // The size of the offset in the footer
-    public static final int FOOTER_MAGIC_SIZE = Integer.BYTES; // The size of the magic number in the footer
-    public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE; // The total size of the footer
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
