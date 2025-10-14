@@ -71,12 +71,12 @@ class StatusTrackingIntegrationTest {
         RecordingSink sink = new RecordingSink();
         MetricsStatusSink metrics = new MetricsStatusSink();
 
-        try (StatusContext context = new StatusContext("integration", List.of(sink, metrics))) {
+        try (StatusContext context = new StatusContext("integration", Duration.ofMillis(15), List.of(sink, metrics))) {
             try (TrackerScope scope = context.createScope("TestWorkload")) {
                 WorkTask task1 = new WorkTask();
                 WorkTask task2 = new WorkTask();
-                try (StatusTracker<WorkTask> tracker1 = scope.trackTask(task1, Duration.ofMillis(15));
-                     StatusTracker<WorkTask> tracker2 = scope.trackTask(task2, Duration.ofMillis(15))) {
+                try (StatusTracker<WorkTask> tracker1 = scope.trackTask(task1);
+                     StatusTracker<WorkTask> tracker2 = scope.trackTask(task2)) {
                     task1.advance(0.5);
                     task2.advance(1.0);
                     Thread.sleep(50);

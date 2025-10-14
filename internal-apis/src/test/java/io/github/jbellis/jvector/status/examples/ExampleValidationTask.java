@@ -72,7 +72,7 @@ class ExampleValidationTask implements StatusSource<ExampleValidationTask>, Runn
     }
 
     private StatusTracker<ExampleValidationTask> createTracker() {
-        return parentScope.trackTask(this, ExampleValidationTask::getTaskStatus, Duration.ofMillis(100));
+        return parentScope.trackTask(this, ExampleValidationTask::getTaskStatus);
     }
 
     private void execute(StatusTracker<ExampleValidationTask> tracker) throws InterruptedException {

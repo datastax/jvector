@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.StatusTracker;
 import io.github.jbellis.jvector.status.TrackerScope;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jline.utils.NonBlockingReader;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
@@ -132,6 +134,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
+    private static final Logger logger = LogManager.getLogger(ConsolePanelSink.class);
+
     private Terminal terminal;
     private Display display;
     private final Thread renderThread;
@@ -238,7 +242,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                 terminal.puts(org.jline.utils.InfoCmp.Capability.clear_screen);
                 terminal.flush();
             } catch (Exception e) {
-                System.err.println("[ConsolePanelSink] Could not clear screen: " + e.getMessage());
+                logger.warn("Could not clear screen: {}", e.getMessage());
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize JLine terminal: " + e.getMessage(), e);
@@ -312,7 +316,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             long lastCleanupTime = System.currentTimeMillis();
 
             // Log that render loop has started
-            System.err.println("[ConsolePanelSink] Render loop started with non-blocking input");
+            logger.debug("Render loop started with non-blocking input");
 
             while (!closed.get()) {
                 long now = System.currentTimeMillis();
@@ -353,8 +357,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             }
         } catch (Exception e) {
             if (!closed.get()) {
-                System.err.println("[ConsolePanelSink] Render loop error: " + e.getMessage());
-                e.printStackTrace();
+                logger.error("Render loop error", e);
             }
         } finally {
             // Clean up reader
@@ -365,7 +368,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
                     // Ignore
                 }
             }
-            System.err.println("[ConsolePanelSink] Render loop exited");
+            logger.debug("Render loop exited");
         }
     }
 
@@ -808,6 +811,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     /**
      * Called when a scope is created. Adds it to the display hierarchy.
      */
+    @Override
     public void scopeStarted(TrackerScope scope) {
         if (closed.get()) return;
 
@@ -826,6 +830,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     /**
      * Called when a scope is closed. Marks it as finished but keeps it visible for retention period.
      */
+    @Override
     public void scopeFinished(TrackerScope scope) {
         if (closed.get()) return;
 
@@ -957,12 +962,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             if (size == null || size.getRows() <= 0 || size.getColumns() <= 0) {
                 if (refreshCount == 1) {  // Only log once on first refresh
                     if (size != null) {
-                        System.err.println("[ConsolePanelSink] Terminal size detection failed (got " +
-                            size.getColumns() + "x" + size.getRows() +
-                            "). Using default size 100x40. " +
-                            "This may happen when running in certain IDEs or piped environments.");
+                        logger.info("Terminal size detection failed (got {}x{}). Using default size 100x40. " +
+                            "This may happen when running in certain IDEs or piped environments.",
+                            size.getColumns(), size.getRows());
                     } else {
-                        System.err.println("[ConsolePanelSink] Terminal size is null. Using default size 100x40.");
+                        logger.info("Terminal size is null. Using default size 100x40.");
                     }
                 }
                 size = new Size(100, 40);  // More reasonable default for modern terminals
@@ -1051,11 +1055,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
 
             // Debug: Check what we're about to render
             if (debugThisRefresh) {
-                System.err.println("[ConsolePanelSink] About to update display with " + lines.size() + " lines");
+                logger.debug("About to update display with {} lines", lines.size());
                 if (!lines.isEmpty()) {
                     String firstLine = lines.get(0).toAnsi(terminal);
-                    System.err.println("[ConsolePanelSink] First line content (len=" + firstLine.length() + "): " +
-                        (firstLine.length() > 50 ? firstLine.substring(0, 50) + "..." : firstLine));
+                    logger.debug("First line content (len={}): {}", firstLine.length(),
+                        firstLine.length() > 50 ? firstLine.substring(0, 50) + "..." : firstLine);
                 }
             }
 
@@ -1071,12 +1075,12 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             lastRenderSnapshot = snapshot;
 
             if (debugThisRefresh) {
-                System.err.println("[ConsolePanelSink] Display update completed");
+                logger.debug("Display update completed");
             }
 
         } catch (Exception e) {
             // Log error but continue
-            System.err.println("[ConsolePanelSink] Display update error: " + e.getMessage());
+            logger.error("Display update error: {}", e.getMessage(), e);
         }
     }
 
@@ -2250,9 +2254,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             terminal.flush();
             terminal.close();
         } catch (Exception e) {
-            // Print error details to help debug
-            System.err.println("Error during terminal cleanup: " + e.getMessage());
-            e.printStackTrace(System.err);
+            logger.error("Error during terminal cleanup", e);
             // Force terminal restoration even if normal cleanup failed
             try {
                 System.out.print("\033[0m");      // Reset colors

@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.status.examples;
 
-import io.github.jbellis.jvector.status.LoggerConfig;
+import io.github.jbellis.jvector.status.sinks.ConsolePanelLogIntercept;
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusContext;
 import io.github.jbellis.jvector.status.TrackerScope;
@@ -118,7 +118,7 @@ public class ConsolePanelDemo {
      */
     public static void main(String[] args) throws Exception {
         // Configure logging to capture all log events in LogBuffer
-        LoggerConfig.configure(OutputMode.INTERACTIVE);
+        ConsolePanelLogIntercept.configure(OutputMode.INTERACTIVE);
 
         // Create simulated clock for time control
         SimulatedClock clock = new SimulatedClock();

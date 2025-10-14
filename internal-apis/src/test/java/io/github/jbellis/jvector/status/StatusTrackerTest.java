@@ -62,9 +62,10 @@ public class StatusTrackerTest {
 
     @Test
     public void instrumentedTaskProgressIsReported() {
-        try (StatusContext context = new StatusContext("tracker-test")) {
+        try (StatusContext context = new StatusContext("tracker-test");
+             TrackerScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
-            try (StatusTracker<InstrumentedTask> tracker = context.track(task)) {
+            try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 task.setProgress(0.5);
                 StatusUpdate<InstrumentedTask> update = tracker.getStatus();
                 assertEquals(0.5, update.progress, 1e-6);
@@ -75,13 +76,14 @@ public class StatusTrackerTest {
 
     @Test
     public void functorBasedTrackingUsesCustomFunction() {
-        try (StatusContext context = new StatusContext("functor")) {
+        try (StatusContext context = new StatusContext("functor", Duration.ofMillis(25));
+             TrackerScope scope = context.createScope("test")) {
             List<Double> samples = new ArrayList<>();
             FunctionTask task = new FunctionTask("functor");
-            try (StatusTracker<FunctionTask> tracker = context.track(task, t -> {
+            try (StatusTracker<FunctionTask> tracker = scope.trackTask(task, t -> {
                 samples.add(t.progress);
                 return new StatusUpdate<>(t.progress, t.state);
-            }, Duration.ofMillis(25))) {
+            })) {
                 task.advance(0.25);
                 tracker.getStatus();
                 task.advance(0.5);
@@ -138,9 +140,10 @@ public class StatusTrackerTest {
     @Test
     public void addAndRemoveSinksDynamically() {
         RecordingSink sink = new RecordingSink();
-        try (StatusContext context = new StatusContext("dynamics")) {
+        try (StatusContext context = new StatusContext("dynamics");
+             TrackerScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
-            try (StatusTracker<InstrumentedTask> tracker = context.track(task)) {
+            try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 // Sinks are managed at context level
                 context.addSink(sink);
                 task.setProgress(1.0);
@@ -155,8 +158,9 @@ public class StatusTrackerTest {
     @Test
     public void closingTrackerIdempotent() {
         StatusContext context = new StatusContext("idempotent");
+        TrackerScope scope = context.createScope("test");
         InstrumentedTask task = new InstrumentedTask("task");
-        StatusTracker<InstrumentedTask> tracker = context.track(task);
+        StatusTracker<InstrumentedTask> tracker = scope.trackTask(task);
         tracker.close();
         tracker.close();
         assertEquals(0, context.getActiveTrackerCount());
@@ -190,7 +194,7 @@ public class StatusTrackerTest {
             // Attempting to track a task in scopeB using contextA should fail
             IllegalArgumentException ex = assertThrows(
                     IllegalArgumentException.class,
-                    () -> contextA.trackInScope(scopeB, new InstrumentedTask("task"), StatusSource::getTaskStatus, null));
+                    () -> contextA.trackInScope(scopeB, new InstrumentedTask("task"), StatusSource::getTaskStatus));
 
             assertTrue(ex.getMessage().contains("different StatusContext"));
 
@@ -201,9 +205,10 @@ public class StatusTrackerTest {
 
     @Test
     public void elapsedRunningTimeTracksExecution() throws InterruptedException {
-        try (StatusContext context = new StatusContext("timing")) {
+        try (StatusContext context = new StatusContext("timing");
+             TrackerScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
-            try (StatusTracker<InstrumentedTask> tracker = context.track(task)) {
+            try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 assertNull(tracker.getRunningStartTime());
                 assertEquals(0, tracker.getElapsedRunningTime());
 

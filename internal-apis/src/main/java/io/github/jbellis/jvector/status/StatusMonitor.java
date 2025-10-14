@@ -17,6 +17,8 @@
 package io.github.jbellis.jvector.status;
 
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.Map;
@@ -56,6 +58,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li>Monitor sleeps until next wake time</li>
  * </ol>
  *
+ * <p><strong>Thread Safety:</strong></p>
+ * <ul>
+ *   <li><strong>Single monitor thread:</strong> All polling occurs on one dedicated daemon thread named "StatusMonitor"</li>
+ *   <li><strong>Concurrent registration:</strong> {@link #register} and {@link #unregister} can be called from any thread
+ *       due to {@link ConcurrentHashMap} usage for tracker storage</li>
+ *   <li><strong>Status observation:</strong> Each tracker is polled exclusively from the monitor thread,
+ *       preventing concurrent calls to {@link StatusTracker#refreshAndGetStatus()}</li>
+ *   <li><strong>Shutdown coordination:</strong> Uses {@link AtomicBoolean} for thread-safe shutdown signaling</li>
+ *   <li><strong>Volatile timing:</strong> {@code nextPollMillis} in {@link MonitoredEntry} is volatile for cross-thread visibility</li>
+ * </ul>
+ *
  * <p>This class is package-private and should only be instantiated by {@link StatusContext}.
  *
  * @see StatusContext
@@ -65,6 +78,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class StatusMonitor implements AutoCloseable {
 
+    private static final Logger logger = LogManager.getLogger(StatusMonitor.class);
     private static final long MIN_SLEEP_MILLIS = 10;
 
     private final StatusContext context;
@@ -153,7 +167,7 @@ final class StatusMonitor implements AutoCloseable {
      * @param entry the monitored entry containing the tracker to poll
      * @param <T> the type of object being tracked
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings("unchecked") // Safe: MonitoredEntry<T> always contains StatusTracker<T>
     private <T> void pollTracker(MonitoredEntry<T> entry) {
         StatusTracker<T> tracker = entry.tracker;
         try {
@@ -162,7 +176,7 @@ final class StatusMonitor implements AutoCloseable {
             // Context routes the observed status to sinks
             context.pushStatus(tracker, status);
         } catch (Throwable t) {
-            System.err.println("Error polling status for tracker: " + t.getMessage());
+            logger.warn("Error polling status for tracker: {}", t.getMessage(), t);
         }
     }
 

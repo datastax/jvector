@@ -67,7 +67,8 @@ class ConsolePanelSinkTest {
 
         try (StatusContext context = new StatusContext("panel", Duration.ofMillis(20), List.of(sink))) {
             DemoTask task = new DemoTask("panel-demo");
-            try (StatusTracker<DemoTask> tracker = context.track(task)) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<DemoTask> tracker = scope.trackTask(task)) {
                 task.advance(0.5);
                 Thread.sleep(60);
                 assertEquals(RunState.RUNNING, tracker.getStatus().runstate);

@@ -69,13 +69,14 @@ public class StatusTrackerScopeTest {
 
     @Test
     public void tracksRootTaskInSingleContext() {
-        try (StatusContext context = new StatusContext("root")) {
+        try (StatusContext context = new StatusContext("root");
+             TrackerScope scope = context.createScope("root-scope")) {
             InstrumentedTask task = new InstrumentedTask("root-task");
-            try (StatusTracker<InstrumentedTask> tracker = context.track(task)) {
+            try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 assertEquals("root", context.getName());
                 assertEquals(Duration.ofMillis(100), context.getDefaultPollInterval());
                 assertEquals(1, context.getActiveTrackerCount());
-                assertNull(tracker.getParentScope());
+                assertEquals(scope, tracker.getParentScope());
             }
             assertEquals(0, context.getActiveTrackerCount());
         }
@@ -102,9 +103,10 @@ public class StatusTrackerScopeTest {
 
     @Test
     public void contextOwnsMonitorLifecycle() {
-        try (StatusContext context = new StatusContext("root")) {
+        try (StatusContext context = new StatusContext("root");
+             TrackerScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("monitored");
-            try (StatusTracker<InstrumentedTask> tracker = context.track(task)) {
+            try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 task.start();
                 task.advance(0.5);
                 assertEquals(RunState.RUNNING, tracker.getStatus().runstate);
@@ -118,7 +120,8 @@ public class StatusTrackerScopeTest {
         RecordingSink sink = new RecordingSink();
         try (StatusContext context = new StatusContext("root")) {
             context.addSink(sink);
-            try (StatusTracker<InstrumentedTask> tracker = context.track(new InstrumentedTask("task"))) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<InstrumentedTask> tracker = scope.trackTask(new InstrumentedTask("task"))) {
                 // Sinks are managed by context, verify notifications reach the sink
                 tracker.getStatus();
             }
@@ -127,7 +130,8 @@ public class StatusTrackerScopeTest {
             sink.events.clear();
             context.removeSink(sink);
 
-            try (StatusTracker<InstrumentedTask> tracker = context.track(new InstrumentedTask("task2"))) {
+            try (var scope = context.createScope("test-scope2");
+                 StatusTracker<InstrumentedTask> tracker = scope.trackTask(new InstrumentedTask("task2"))) {
                 tracker.getStatus();
             }
             // After removal, sink should not receive events

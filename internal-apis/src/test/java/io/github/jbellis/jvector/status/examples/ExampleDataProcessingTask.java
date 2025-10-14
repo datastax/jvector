@@ -62,7 +62,7 @@ class ExampleDataProcessingTask implements StatusSource<ExampleDataProcessingTas
     }
 
     private StatusTracker<ExampleDataProcessingTask> createTracker() {
-        return parentScope.trackTask(this, ExampleDataProcessingTask::getTaskStatus, Duration.ofMillis(100));
+        return parentScope.trackTask(this, ExampleDataProcessingTask::getTaskStatus);
     }
 
     private void execute() throws InterruptedException {

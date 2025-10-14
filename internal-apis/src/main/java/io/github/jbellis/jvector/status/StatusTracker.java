@@ -68,6 +68,19 @@ import java.util.function.Function;
  * }
  * }</pre>
  *
+ * <p><strong>Thread Safety:</strong></p>
+ * <ul>
+ *   <li><strong>Status observation:</strong> {@link #refreshAndGetStatus()} is called only by the {@link StatusMonitor}
+ *       thread, ensuring single-threaded access to the status function</li>
+ *   <li><strong>Cached status:</strong> Read via volatile field, safe for concurrent access by multiple threads</li>
+ *   <li><strong>Timing data:</strong> Protected by internal synchronization lock ({@code timingLock}), which is
+ *       guaranteed non-null (final field initialized inline). All timing mutations occur within synchronized blocks,
+ *       preventing race conditions between the monitor thread and close operations</li>
+ *   <li><strong>Public methods:</strong> {@link #getStatus()}, {@link #getTracked()}, {@link #close()} are thread-safe</li>
+ *   <li><strong>Close operation:</strong> Idempotent and safe to call from any thread. Uses {@code timingLock}
+ *       synchronization to safely coordinate with concurrent monitor polling</li>
+ * </ul>
+ *
  * <p>This class should not be instantiated directly. Use {@link StatusContext#track} methods
  * or {@link TrackerScope#trackTask} methods to create trackers.
  *
@@ -79,16 +92,18 @@ import java.util.function.Function;
  * @see StatusUpdate
  * @since 4.0.0
  */
-public class StatusTracker<T> implements AutoCloseable {
+public final class StatusTracker<T> implements AutoCloseable {
 
     private final StatusContext context;
     private final TrackerScope parentScope;
     private final Function<T, StatusUpdate<T>> statusFunction;
-    private final Duration pollInterval;
     private final T tracked;
 
     private volatile boolean closed = false;
     private volatile StatusUpdate<T> lastStatus;
+
+    // Synchronization lock for timing data. Guaranteed non-null (final, initialized inline).
+    // Protects timing fields from concurrent access by the StatusMonitor thread and close() calls.
     private final Object timingLock = new Object();
     private volatile Long runningStartTime;
     private volatile Long firstRunningStartTime;
@@ -97,13 +112,11 @@ public class StatusTracker<T> implements AutoCloseable {
     StatusTracker(StatusContext context,
                   TrackerScope parentScope,
                   T tracked,
-                  Function<T, StatusUpdate<T>> statusFunction,
-                  Duration pollInterval) {
+                  Function<T, StatusUpdate<T>> statusFunction) {
         this.context = Objects.requireNonNull(context, "context");
         this.parentScope = Objects.requireNonNull(parentScope, "parentScope - StatusTrackers must belong to a TrackerScope");
         this.tracked = Objects.requireNonNull(tracked, "tracked");
         this.statusFunction = Objects.requireNonNull(statusFunction, "statusFunction");
-        this.pollInterval = Objects.requireNonNull(pollInterval, "pollInterval");
         // Note: parentScope relationship is managed by TrackerScope.trackTask()
     }
 
@@ -133,14 +146,6 @@ public class StatusTracker<T> implements AutoCloseable {
         return lastStatus;
     }
 
-    /**
-     * Returns the configured poll interval for this tracker.
-     *
-     * @return the duration between status observations
-     */
-    Duration getPollInterval() {
-        return pollInterval;
-    }
 
     /**
      * Returns whether this tracker has been closed.

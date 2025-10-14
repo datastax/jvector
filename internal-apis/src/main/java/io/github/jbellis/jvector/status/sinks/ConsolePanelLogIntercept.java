@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.status;
+package io.github.jbellis.jvector.status.sinks;
 
-import io.github.jbellis.jvector.status.sinks.ConsolePanelSink;
-import io.github.jbellis.jvector.status.sinks.LogBuffer;
-import io.github.jbellis.jvector.status.sinks.OutputMode;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
@@ -66,12 +63,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @see OutputMode
  * @since 4.0.0
  */
-public final class LoggerConfig {
+public final class ConsolePanelLogIntercept {
 
     private static final AtomicBoolean CONFIGURING = new AtomicBoolean(false);
     private static final String APPENDER_NAME = "ConsolePanelLogBuffer";
 
-    private LoggerConfig() {
+    private ConsolePanelLogIntercept() {
     }
 
     /**

@@ -194,7 +194,7 @@ class ExampleComputeTask implements Runnable {
          * @throws InterruptedException if the task is interrupted during execution
          */
         void execute() throws InterruptedException {
-            try (StatusTracker<MainTask> tracker = scope.trackTask(this, MainTask::getTaskStatus, Duration.ofMillis(100))) {
+            try (StatusTracker<MainTask> tracker = scope.trackTask(this, MainTask::getTaskStatus)) {
                 state = RunState.RUNNING;
                 logger.info("Starting compute task: {} ({} iterations)", name, iterations);
                 logger.debug("Task configuration - Iterations: {}, Tracker: {}", iterations, tracker.getClass().getSimpleName());

@@ -16,8 +16,6 @@
 
 package io.github.jbellis.jvector.status.sinks;
 
-import io.github.jbellis.jvector.status.LoggerConfig;
-
 /**
  * Defines output modes for status display and logging configuration. The mode determines
  * how status information is rendered to the console and which terminal features are used.
@@ -41,7 +39,7 @@ import io.github.jbellis.jvector.status.LoggerConfig;
  *   <li>Full terminal capabilities (present → INTERACTIVE)</li>
  * </ul>
  *
- * @see LoggerConfig
+ * @see ConsolePanelLogIntercept
  * @see ConsolePanelSink
  * @since 4.0.0
  */
@@ -119,7 +117,7 @@ public enum OutputMode {
         try {
             return OutputMode.valueOf(value.toUpperCase());
         } catch (IllegalArgumentException e) {
-            System.err.println("Unknown output mode: " + value + ". Using AUTO.");
+            // Caller should handle unknown values if logging is needed
             return AUTO;
         }
     }

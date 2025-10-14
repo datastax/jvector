@@ -64,7 +64,8 @@ class StatusSinkTest {
         StatusSink sink = NoopStatusSink.getInstance();
         try (StatusContext context = new StatusContext("noop", List.of(sink))) {
             TestTask task = new TestTask("noop-task");
-            try (StatusTracker<TestTask> tracker = context.track(task)) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<TestTask> tracker = scope.trackTask(task)) {
                 task.advance(1.0);
                 Thread.sleep(30);
                 assertEquals(RunState.SUCCESS, tracker.getStatus().runstate);
@@ -77,9 +78,10 @@ class StatusSinkTest {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         ConsoleLoggerSink sink = new ConsoleLoggerSink(new PrintStream(buffer), false, true);
 
-        try (StatusContext context = new StatusContext("console", List.of(sink))) {
+        try (StatusContext context = new StatusContext("console", Duration.ofMillis(15), List.of(sink))) {
             TestTask task = new TestTask("console-task");
-            try (StatusTracker<TestTask> tracker = context.track(task, Duration.ofMillis(15))) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<TestTask> tracker = scope.trackTask(task)) {
                 task.advance(0.5);
                 Thread.sleep(40);
                 task.advance(0.5);
@@ -92,9 +94,10 @@ class StatusSinkTest {
     @Test
     void metricsSinkAggregatesStats() throws InterruptedException {
         MetricsStatusSink sink = new MetricsStatusSink();
-        try (StatusContext context = new StatusContext("metrics", List.of(sink))) {
+        try (StatusContext context = new StatusContext("metrics", Duration.ofMillis(10), List.of(sink))) {
             TestTask task = new TestTask("metrics-task");
-            try (StatusTracker<TestTask> tracker = context.track(task, Duration.ofMillis(10))) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<TestTask> tracker = scope.trackTask(task)) {
                 for (int i = 0; i < 3; i++) {
                     task.advance(0.4);
                     Thread.sleep(25);
@@ -126,9 +129,10 @@ class StatusSinkTest {
         };
 
         MetricsStatusSink metrics = new MetricsStatusSink();
-        try (StatusContext context = new StatusContext("multi", List.of(collector, metrics))) {
+        try (StatusContext context = new StatusContext("multi", Duration.ofMillis(10), List.of(collector, metrics))) {
             TestTask task = new TestTask("multi-task");
-            try (StatusTracker<TestTask> tracker = context.track(task, Duration.ofMillis(10))) {
+            try (var scope = context.createScope("test-scope");
+                 StatusTracker<TestTask> tracker = scope.trackTask(task)) {
                 task.advance(1.0);
                 Thread.sleep(30);
                 assertEquals(RunState.SUCCESS, tracker.getStatus().runstate);

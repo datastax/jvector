@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.status.sinks;
 
-import io.github.jbellis.jvector.status.LoggerConfig;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Layout;
@@ -46,7 +45,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * </ul>
  *
  * <h2>Integration Pattern</h2>
- * <p>This appender is installed by {@link LoggerConfig} when
+ * <p>This appender is installed by {@link ConsolePanelLogIntercept} when
  * configuring for interactive mode:</p>
  * <pre>{@code
  * // Automatic installation
@@ -88,7 +87,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * introduce synchronization overhead.</p>
  *
  * @see ConsolePanelSink
- * @see LoggerConfig
+ * @see ConsolePanelLogIntercept
  * @see OutputMode
  * @since 4.0.0
  */

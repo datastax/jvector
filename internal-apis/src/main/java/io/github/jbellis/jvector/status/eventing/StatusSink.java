@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.status.eventing;
 
 import io.github.jbellis.jvector.status.StatusContext;
 import io.github.jbellis.jvector.status.StatusTracker;
+import io.github.jbellis.jvector.status.TrackerScope;
 import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 import io.github.jbellis.jvector.status.sinks.LoggerStatusSink;
 import io.github.jbellis.jvector.status.sinks.MetricsStatusSink;
@@ -213,4 +214,32 @@ public interface StatusSink {
      * @param task the tracker instance that finished monitoring
      */
     void taskFinished(StatusTracker<?> task);
+
+    /**
+     * Called when a scope starts. Scopes provide hierarchical organization
+     * of related tasks without having their own progress or state.
+     * <p>
+     * This method has a default no-op implementation to maintain backward
+     * compatibility with sinks that don't need scope notifications.
+     *
+     * @param scope the scope that started
+     * @since 4.0.0
+     */
+    default void scopeStarted(TrackerScope scope) {
+        // No-op by default - sinks can override to handle scope events
+    }
+
+    /**
+     * Called when a scope finishes. This is called after all tasks and
+     * child scopes within this scope have completed.
+     * <p>
+     * This method has a default no-op implementation to maintain backward
+     * compatibility with sinks that don't need scope notifications.
+     *
+     * @param scope the scope that finished
+     * @since 4.0.0
+     */
+    default void scopeFinished(TrackerScope scope) {
+        // No-op by default - sinks can override to handle scope events
+    }
 }

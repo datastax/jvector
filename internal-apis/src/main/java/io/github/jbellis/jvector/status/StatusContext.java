@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.status;
 import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -46,7 +48,7 @@ import java.util.function.Function;
  *   </li>
  *   <li><strong>{@link StatusTracker}:</strong> Leaf nodes representing actual work
  *       <ul>
- *         <li>Created via {@link TrackerScope#trackTask} or {@link #track}</li>
+ *         <li>Created via {@link TrackerScope#trackTask}</li>
  *         <li>Have progress and state (PENDING, RUNNING, SUCCESS, etc.)</li>
  *         <li>Cannot have children - purely leaf nodes</li>
  *         <li>Report status via {@link StatusSource#getTaskStatus()}</li>
@@ -57,7 +59,7 @@ import java.util.function.Function;
  * <p><strong>Key Responsibilities:</strong></p>
  * <ul>
  *   <li><strong>Scope Creation:</strong> Factory for {@link TrackerScope} via {@link #createScope}</li>
- *   <li><strong>Tracker Creation:</strong> Factory for {@link StatusTracker} via {@code track()} methods</li>
+ *   <li><strong>Tracker Creation:</strong> Delegates to {@link TrackerScope#trackTask} to create {@link StatusTracker}s</li>
  *   <li><strong>Monitor Ownership:</strong> Owns a single {@link StatusMonitor} that polls all trackers</li>
  *   <li><strong>Sink Management:</strong> Maintains a collection of sinks that receive status updates</li>
  *   <li><strong>Status Routing:</strong> Routes status updates from monitor to all registered sinks</li>
@@ -100,6 +102,17 @@ import java.util.function.Function;
  * }
  * }</pre>
  *
+ * <p><strong>Thread Safety:</strong></p>
+ * <ul>
+ *   <li><strong>All public methods are thread-safe</strong> and can be called concurrently from multiple threads</li>
+ *   <li><strong>Scope creation:</strong> Multiple threads can create scopes and child scopes concurrently</li>
+ *   <li><strong>Tracker creation:</strong> Multiple threads can create trackers concurrently</li>
+ *   <li><strong>Sink management:</strong> Sinks can be added/removed while trackers are active</li>
+ *   <li><strong>Sink notifications:</strong> Delivered on the {@link StatusMonitor} background thread, not the caller's thread</li>
+ *   <li><strong>Internal collections:</strong> Uses {@link CopyOnWriteArrayList} for thread-safe iteration during concurrent modifications</li>
+ *   <li><strong>Closed state:</strong> Checked via volatile boolean for visibility across threads</li>
+ * </ul>
+ *
  * <p>This class implements {@link StatusSink} to receive events from the monitor and forward them
  * to registered sinks. It also implements {@link AutoCloseable} to ensure proper cleanup of resources.
  *
@@ -109,7 +122,9 @@ import java.util.function.Function;
  * @see StatusSink
  * @since 4.0.0
  */
-public class StatusContext implements AutoCloseable, StatusSink {
+public final class StatusContext implements AutoCloseable, StatusSink {
+
+    private static final Logger logger = LogManager.getLogger(StatusContext.class);
 
     private final String name;
     private final Duration defaultPollInterval;
@@ -189,132 +204,36 @@ public class StatusContext implements AutoCloseable, StatusSink {
         return scope;
     }
 
-    private void scopeStarted(TrackerScope scope) {
-        notifySinks(sink -> {
-            // Use reflection to avoid circular dependency
-            try {
-                var method = sink.getClass().getMethod("scopeStarted", TrackerScope.class);
-                method.invoke(sink, scope);
-            } catch (NoSuchMethodException e) {
-                // Sink doesn't support scopes - ignore
-            } catch (Exception e) {
-                // Log but don't fail
-            }
-        }, "notifying sink of scope start");
-    }
-
-    /**
-     * Creates a root-level tracker for an object implementing {@link StatusSource}.
-     * Uses the context's default poll interval.
-     *
-     * @param tracked the object to track
-     * @param <U> the type of object being tracked
-     * @return a new tracker registered with this context's monitor
-     * @deprecated StatusTrackers must belong to a TrackerScope. Use {@link TrackerScope#trackTask} instead.
-     *             Create a scope first with {@link #createScope(String)}, then track tasks within it.
-     */
-    @Deprecated
-    public <U extends StatusSource<U>> StatusTracker<U> track(U tracked) {
-        throw new UnsupportedOperationException(
-            "StatusTrackers must belong to a TrackerScope. " +
-            "Use createScope(name).trackTask(tracked) instead.");
-    }
-
-    /**
-     * Creates a root-level tracker for an object implementing {@link StatusSource}
-     * with a custom poll interval.
-     *
-     * @param tracked the object to track
-     * @param pollInterval the interval between status observations
-     * @param <U> the type of object being tracked
-     * @return a new tracker registered with this context's monitor
-     * @deprecated StatusTrackers must belong to a TrackerScope. Use {@link TrackerScope#trackTask} instead.
-     *             Create a scope first with {@link #createScope(String)}, then track tasks within it.
-     */
-    @Deprecated
-    public <U extends StatusSource<U>> StatusTracker<U> track(U tracked, Duration pollInterval) {
-        throw new UnsupportedOperationException(
-            "StatusTrackers must belong to a TrackerScope. " +
-            "Use createScope(name).trackTask(tracked, pollInterval) instead.");
-    }
-
-    /**
-     * Creates a root-level tracker for any object using a custom status function.
-     * Uses the context's default poll interval.
-     *
-     * @param tracked the object to track
-     * @param statusFunction function to extract status from the tracked object
-     * @param <T> the type of object being tracked
-     * @return a new tracker registered with this context's monitor
-     * @deprecated StatusTrackers must belong to a TrackerScope. Use {@link TrackerScope#trackTask} instead.
-     *             Create a scope first with {@link #createScope(String)}, then track tasks within it.
-     */
-    @Deprecated
-    public <T> StatusTracker<T> track(T tracked, Function<T, StatusUpdate<T>> statusFunction) {
-        throw new UnsupportedOperationException(
-            "StatusTrackers must belong to a TrackerScope. " +
-            "Use createScope(name).trackTask(tracked, statusFunction) instead.");
-    }
-
-    /**
-     * Creates a root-level tracker for any object using a custom status function and poll interval.
-     *
-     * @param tracked the object to track
-     * @param statusFunction function to extract status from the tracked object
-     * @param pollInterval the interval between status observations
-     * @param <T> the type of object being tracked
-     * @return a new tracker registered with this context's monitor
-     * @deprecated StatusTrackers must belong to a TrackerScope. Use {@link TrackerScope#trackTask} instead.
-     *             Create a scope first with {@link #createScope(String)}, then track tasks within it.
-     */
-    @Deprecated
-    public <T> StatusTracker<T> track(T tracked,
-                                      Function<T, StatusUpdate<T>> statusFunction,
-                                      Duration pollInterval) {
-        throw new UnsupportedOperationException(
-            "StatusTrackers must belong to a TrackerScope. " +
-            "Use createScope(name).trackTask(tracked, statusFunction, pollInterval) instead.");
+    @Override
+    public void scopeStarted(TrackerScope scope) {
+        notifySinks(sink -> sink.scopeStarted(scope), "notifying sink of scope start");
     }
 
     // Package-private methods for TrackerScope to create tasks
     <U extends StatusSource<U>> StatusTracker<U> trackInScope(TrackerScope scope, U tracked) {
-        return trackInScope(scope, tracked, StatusSource::getTaskStatus, null);
-    }
-
-    <U extends StatusSource<U>> StatusTracker<U> trackInScope(TrackerScope scope, U tracked, Duration pollInterval) {
-        return trackInScope(scope, tracked, StatusSource::getTaskStatus, pollInterval);
+        return trackInScope(scope, tracked, StatusSource::getTaskStatus);
     }
 
     <T> StatusTracker<T> trackInScope(TrackerScope scope,
                                       T tracked,
                                       Function<T, StatusUpdate<T>> statusFunction) {
-        return trackInScope(scope, tracked, statusFunction, null);
-    }
-
-    <T> StatusTracker<T> trackInScope(TrackerScope scope,
-                                      T tracked,
-                                      Function<T, StatusUpdate<T>> statusFunction,
-                                      Duration pollInterval) {
-        return createTracker(scope, tracked, statusFunction, pollInterval);
+        return createTracker(scope, tracked, statusFunction);
     }
 
     private <T> StatusTracker<T> createTracker(TrackerScope scope,
                                                T tracked,
-                                               Function<T, StatusUpdate<T>> statusFunction,
-                                               Duration requestedInterval) {
+                                               Function<T, StatusUpdate<T>> statusFunction) {
         checkNotClosed();
         Objects.requireNonNull(scope, "scope - StatusTrackers must belong to a TrackerScope");
-
-        Duration effectiveInterval = Objects.requireNonNullElse(requestedInterval, defaultPollInterval);
 
         if (scope.getContext() != this) {
             throw new IllegalArgumentException("Scope belongs to a different StatusContext");
         }
 
-        StatusTracker<T> tracker = new StatusTracker<>(this, scope, tracked, statusFunction, effectiveInterval);
+        StatusTracker<T> tracker = new StatusTracker<>(this, scope, tracked, statusFunction);
         StatusUpdate<T> initial = tracker.refreshAndGetStatus();
         activeTrackers.add(tracker);
-        monitor.register(tracker, effectiveInterval, initial);
+        monitor.register(tracker, defaultPollInterval, initial);
         taskStarted(tracker);
         return tracker;
     }
@@ -423,18 +342,9 @@ public class StatusContext implements AutoCloseable, StatusSink {
         scopeFinished(scope);
     }
 
-    private void scopeFinished(TrackerScope scope) {
-        notifySinks(sink -> {
-            // Use reflection to avoid circular dependency
-            try {
-                var method = sink.getClass().getMethod("scopeFinished", TrackerScope.class);
-                method.invoke(sink, scope);
-            } catch (NoSuchMethodException e) {
-                // Sink doesn't support scopes - ignore
-            } catch (Exception e) {
-                // Log but don't fail
-            }
-        }, "notifying sink of scope finish");
+    @Override
+    public void scopeFinished(TrackerScope scope) {
+        notifySinks(sink -> sink.scopeFinished(scope), "notifying sink of scope finish");
     }
 
     private List<StatusSink> snapshotSinks() {
@@ -518,7 +428,7 @@ public class StatusContext implements AutoCloseable, StatusSink {
             try {
                 sinkAction.accept(sink);
             } catch (Exception e) {
-                System.err.println("Error " + errorContext + ": " + e.getMessage());
+                logger.warn("Error {}: {}", errorContext, e.getMessage(), e);
             }
         }
     }
@@ -547,7 +457,7 @@ public class StatusContext implements AutoCloseable, StatusSink {
             try {
                 tracker.close();
             } catch (Exception e) {
-                System.err.println("Error closing tracker: " + e.getMessage());
+                logger.warn("Error closing tracker: {}", e.getMessage(), e);
             }
         }
         activeTrackers.clear();
