@@ -152,7 +152,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy) {
              var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(baseVectorsRavv)) {
-            float recallFromBaseGraphIndexFromShuffledVectors = calculateRecall(baseGraphIndexFromShuffledVectors, bsp, queryVector, groundTruthAllVectors, TOP_K);
+            float recallFromBaseGraphIndexFromShuffledVectors = calculateRecall(baseGraphIndexFromShuffledVectors, bsp, queryVector, groundTruthBaseVectors, TOP_K);
             float recallFromBaseGraphIndex = calculateRecall(baseGraphIndex, baseBuildScoreProvider, queryVector, groundTruthBaseVectors, TOP_K);
             Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.01f);
         }
