@@ -439,12 +439,17 @@ public class GraphIndexBuilder implements Closeable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+        return build(ravv, null);
+    }
+
+    public ImmutableGraphIndex build(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
+                int ravvOrdinal = (graphToRavvOrdMap != null) ? graphToRavvOrdMap[node] : node;
+                addGraphNode(node, vv.get().getVector(ravvOrdinal));
             });
         }).join();
 

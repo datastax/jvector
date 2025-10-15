@@ -247,11 +247,8 @@ public class RecallWithRandomVectorsBenchmark {
         int actualK = Math.min(k, Math.min(predicted.size(), groundTruth.length));
 
         for (int i = 0; i < actualK; i++) {
-            for (int j = 0; j < actualK; j++) {
-                if (predicted.contains(groundTruth[j])) {
-                    hits++;
-                    break;
-                }
+            if (predicted.contains(groundTruth[i])) {
+                hits++;
             }
         }
 
