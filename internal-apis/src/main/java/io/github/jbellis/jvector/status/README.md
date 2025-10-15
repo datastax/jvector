@@ -15,7 +15,7 @@
 -->
 # Status API
 
-**📚 For complete user guide with examples:** See [User Guide](../../../test/java/io/github/jbellis/jvector/status/userguide/README.md)
+**📚 For complete user guide with examples:** See [User Guide](../../../test/java/io/github/jbellis/jvector/status/userguide/README.md) section in the tests package. It includes incremental examples and working code.
 
 This internal API was added to solve a few problems around a common theme:
 
