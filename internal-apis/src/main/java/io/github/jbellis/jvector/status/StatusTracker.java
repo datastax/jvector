@@ -31,7 +31,7 @@ import java.util.function.Function;
 /**
  * Represents a leaf node in the task tracking hierarchy managed by a {@link StatusContext}.
  * Trackers are responsible for observing actual work units and reporting their progress and state.
- * Unlike {@link TrackerScope}, trackers have progress/state and cannot have children.
+ * Unlike {@link StatusScope}, trackers have progress/state and cannot have children.
  *
  * <p><strong>Key Responsibilities:</strong></p>
  * <ul>
@@ -41,7 +41,7 @@ import java.util.function.Function;
  *       without requiring re-observation of the tracked object</li>
  *   <li><strong>Timing:</strong> Tracks task execution timing including start time, running duration,
  *       and accumulated running time across multiple RUNNING states</li>
- *   <li><strong>Scope Membership:</strong> Optionally belongs to a {@link TrackerScope} for
+ *   <li><strong>Scope Membership:</strong> Optionally belongs to a {@link StatusScope} for
  *       organizational hierarchy</li>
  * </ul>
  *
@@ -57,7 +57,7 @@ import java.util.function.Function;
  * <p><strong>Usage Pattern:</strong></p>
  * <pre>{@code
  * try (StatusContext context = new StatusContext("operation");
- *      TrackerScope scope = context.createScope("DataProcessing")) {
+ *      StatusScope scope = context.createScope("DataProcessing")) {
  *
  *     // Create trackers as leaf nodes
  *     StatusTracker<LoadTask> loader = scope.trackTask(new LoadTask());
@@ -82,10 +82,10 @@ import java.util.function.Function;
  * </ul>
  *
  * <p>This class should not be instantiated directly. Use {@link StatusContext#track} methods
- * or {@link TrackerScope#trackTask} methods to create trackers.
+ * or {@link StatusScope#trackTask} methods to create trackers.
  *
  * @param <T> the type of object being tracked
- * @see TrackerScope
+ * @see StatusScope
  * @see StatusContext
  * @see StatusMonitor
  * @see StatusSink
@@ -95,9 +95,10 @@ import java.util.function.Function;
 public final class StatusTracker<T> implements AutoCloseable {
 
     private final StatusContext context;
-    private final TrackerScope parentScope;
+    private final StatusScope parentScope;
     private final Function<T, StatusUpdate<T>> statusFunction;
     private final T tracked;
+    private final boolean ownsScope;
 
     private volatile boolean closed = false;
     private volatile StatusUpdate<T> lastStatus;
@@ -109,15 +110,98 @@ public final class StatusTracker<T> implements AutoCloseable {
     private volatile Long firstRunningStartTime;
     private volatile long accumulatedRunTimeMillis;
 
+    /**
+     * Creates a standalone tracker with its own default StatusScope and StatusContext.
+     * This is the simplest way to track a task when you don't need to configure
+     * the context or organize multiple tasks.
+     *
+     * <p>Example usage:
+     * <pre>{@code
+     * try (StatusTracker<MyTask> tracker = new StatusTracker<>(new MyTask())) {
+     *     // Add a sink to see progress
+     *     tracker.getContext().addSink(new ConsoleLoggerSink());
+     *
+     *     // Execute the task
+     *     tracker.getTracked().execute();
+     * }
+     * }</pre>
+     *
+     * @param tracked the task implementing StatusSource to track
+     */
+    public StatusTracker(T tracked) {
+        this(tracked, null);
+    }
+
+    /**
+     * Creates a standalone tracker with a custom status function, using its own
+     * default StatusScope and StatusContext.
+     *
+     * @param tracked the object to track
+     * @param statusFunction function to extract status from the tracked object (null to use StatusSource interface)
+     */
+    @SuppressWarnings("unchecked")
+    public StatusTracker(T tracked, Function<T, StatusUpdate<T>> statusFunction) {
+        this.tracked = Objects.requireNonNull(tracked, "tracked");
+
+        // Determine status function
+        if (statusFunction == null) {
+            if (!(tracked instanceof StatusSource)) {
+                throw new IllegalArgumentException("Task must implement StatusSource or provide a statusFunction");
+            }
+            StatusSource<?> source = (StatusSource<?>) tracked;
+            this.statusFunction = t -> (StatusUpdate<T>) source.getTaskStatus();
+        } else {
+            this.statusFunction = statusFunction;
+        }
+
+        // Create our own scope (which creates its own context)
+        String taskName = extractTaskNameFromObject(tracked);
+        this.parentScope = new StatusScope("tracker-" + taskName);
+        this.context = parentScope.getContext();
+        this.ownsScope = true;
+
+        // Register ourselves with the scope
+        parentScope.addChildTask(this);
+
+        // Register with monitor
+        StatusUpdate<T> initial = refreshAndGetStatus();
+        context.registerTracker(this, initial);
+    }
+
     StatusTracker(StatusContext context,
-                  TrackerScope parentScope,
+                  StatusScope parentScope,
                   T tracked,
                   Function<T, StatusUpdate<T>> statusFunction) {
         this.context = Objects.requireNonNull(context, "context");
-        this.parentScope = Objects.requireNonNull(parentScope, "parentScope - StatusTrackers must belong to a TrackerScope");
         this.tracked = Objects.requireNonNull(tracked, "tracked");
         this.statusFunction = Objects.requireNonNull(statusFunction, "statusFunction");
-        // Note: parentScope relationship is managed by TrackerScope.trackTask()
+
+        // If no parent scope provided, create a default one
+        if (parentScope == null) {
+            String taskName = extractTaskNameFromObject(tracked);
+            this.parentScope = context.createScope("auto-scope-" + taskName);
+            this.ownsScope = true;
+        } else {
+            this.parentScope = parentScope;
+            this.ownsScope = false;
+        }
+        // Note: parentScope relationship is managed by StatusScope.trackTask() or auto-created above
+    }
+
+    /**
+     * Helper method to extract task name from an object (non-static version for constructor use).
+     */
+    private static String extractTaskNameFromObject(Object tracked) {
+        try {
+            Method getNameMethod = tracked.getClass().getMethod("getName");
+            Object name = getNameMethod.invoke(tracked);
+            if (name instanceof String) {
+                return (String) name;
+            }
+        } catch (Exception ignored) {
+            // Fall back to toString
+        }
+        return tracked.toString();
     }
 
     /**
@@ -181,11 +265,24 @@ public final class StatusTracker<T> implements AutoCloseable {
     }
 
     /**
+     * Returns the scope that contains this tracker. For trackers created with an explicit scope,
+     * returns that scope. For trackers created without a scope, returns the automatically
+     * created scope.
+     *
+     * @return the scope containing this tracker
+     */
+    public StatusScope getScope() {
+        return parentScope;
+    }
+
+    /**
      * Returns the parent scope if this tracker belongs to a scope, or null otherwise.
+     * @deprecated Use {@link #getScope()} instead
      *
      * @return the parent scope, or null if this tracker doesn't belong to a scope
      */
-    public TrackerScope getParentScope() {
+    @Deprecated
+    public StatusScope getParentScope() {
         return parentScope;
     }
 
@@ -200,6 +297,7 @@ public final class StatusTracker<T> implements AutoCloseable {
      *   <li>Running time is finalized for timing calculations</li>
      *   <li>The tracker is removed from its parent scope (if any)</li>
      *   <li>{@link StatusContext#onTrackerClosed} is invoked to complete cleanup and notify sinks</li>
+     *   <li>If the tracker owns its scope (auto-created), the scope is also closed</li>
      * </ul>
      */
     @Override
@@ -214,6 +312,11 @@ public final class StatusTracker<T> implements AutoCloseable {
 
         finalizeRunningTime(System.currentTimeMillis());
         context.onTrackerClosed(this);
+
+        // If we own the scope (it was auto-created), close it as well
+        if (ownsScope && parentScope != null) {
+            parentScope.close();
+        }
     }
 
     /**
@@ -327,5 +430,32 @@ public final class StatusTracker<T> implements AutoCloseable {
             // Fall back to toString
         }
         return tracked.toString();
+    }
+
+    /**
+     * Returns a one-line summary of the tracker's current state.
+     * Format: "TaskName [progress%] state (elapsed time)"
+     *
+     * <p>Example output:
+     * <ul>
+     *   <li>"DataLoader [45.2%] RUNNING (1234ms)"</li>
+     *   <li>"DataProcessor [100.0%] SUCCESS (2567ms)"</li>
+     *   <li>"ValidationTask [0.0%] PENDING (0ms)"</li>
+     * </ul>
+     *
+     * @return a formatted string summarizing the tracker's status
+     */
+    @Override
+    public String toString() {
+        StatusUpdate<T> status = getStatus();
+        String taskName = extractTaskName(this);
+        double progressPercent = status.progress * 100.0;
+        long elapsed = getElapsedRunningTime();
+
+        return String.format("%s [%.1f%%] %s (%dms)",
+                taskName,
+                progressPercent,
+                status.runstate,
+                elapsed);
     }
 }

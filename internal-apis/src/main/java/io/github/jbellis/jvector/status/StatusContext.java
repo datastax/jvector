@@ -38,17 +38,17 @@ import java.util.function.Function;
  * <p><strong>Architectural Model:</strong></p>
  * <p>The API enforces a clear separation between organizational structure and work execution:</p>
  * <ul>
- *   <li><strong>{@link TrackerScope}:</strong> Organizational containers with no progress/state
+ *   <li><strong>{@link StatusScope}:</strong> Organizational containers with no progress/state
  *       <ul>
  *         <li>Created via {@link #createScope(String)}</li>
  *         <li>Can contain child scopes (nested organization)</li>
  *         <li>Can contain task trackers (actual work)</li>
- *         <li>Completion checked via {@link TrackerScope#isComplete()}</li>
+ *         <li>Completion checked via {@link StatusScope#isComplete()}</li>
  *       </ul>
  *   </li>
  *   <li><strong>{@link StatusTracker}:</strong> Leaf nodes representing actual work
  *       <ul>
- *         <li>Created via {@link TrackerScope#trackTask}</li>
+ *         <li>Created via {@link StatusScope#trackTask}</li>
  *         <li>Have progress and state (PENDING, RUNNING, SUCCESS, etc.)</li>
  *         <li>Cannot have children - purely leaf nodes</li>
  *         <li>Report status via {@link StatusSource#getTaskStatus()}</li>
@@ -58,8 +58,8 @@ import java.util.function.Function;
  *
  * <p><strong>Key Responsibilities:</strong></p>
  * <ul>
- *   <li><strong>Scope Creation:</strong> Factory for {@link TrackerScope} via {@link #createScope}</li>
- *   <li><strong>Tracker Creation:</strong> Delegates to {@link TrackerScope#trackTask} to create {@link StatusTracker}s</li>
+ *   <li><strong>Scope Creation:</strong> Factory for {@link StatusScope} via {@link #createScope}</li>
+ *   <li><strong>Tracker Creation:</strong> Delegates to {@link StatusScope#trackTask} to create {@link StatusTracker}s</li>
  *   <li><strong>Monitor Ownership:</strong> Owns a single {@link StatusMonitor} that polls all trackers</li>
  *   <li><strong>Sink Management:</strong> Maintains a collection of sinks that receive status updates</li>
  *   <li><strong>Status Routing:</strong> Routes status updates from monitor to all registered sinks</li>
@@ -85,8 +85,8 @@ import java.util.function.Function;
  *     context.addSink(new MetricsStatusSink());
  *
  *     // Create organizational scope
- *     try (TrackerScope ingestionScope = context.createScope("Ingestion");
- *          TrackerScope processingScope = context.createScope("Processing")) {
+ *     try (StatusScope ingestionScope = context.createScope("Ingestion");
+ *          StatusScope processingScope = context.createScope("Processing")) {
  *
  *         // Add actual work as leaf tasks
  *         StatusTracker<LoadTask> loader = ingestionScope.trackTask(new LoadTask());
@@ -116,7 +116,7 @@ import java.util.function.Function;
  * <p>This class implements {@link StatusSink} to receive events from the monitor and forward them
  * to registered sinks. It also implements {@link AutoCloseable} to ensure proper cleanup of resources.
  *
- * @see TrackerScope
+ * @see StatusScope
  * @see StatusTracker
  * @see StatusMonitor
  * @see StatusSink
@@ -130,7 +130,7 @@ public final class StatusContext implements AutoCloseable, StatusSink {
     private final Duration defaultPollInterval;
     private final CopyOnWriteArrayList<StatusSink> sinks;
     private final CopyOnWriteArrayList<StatusTracker<?>> activeTrackers;
-    private final CopyOnWriteArrayList<TrackerScope> activeScopes;
+    private final CopyOnWriteArrayList<StatusScope> activeScopes;
     private final StatusMonitor monitor;
     private volatile boolean closed = false;
 
@@ -141,7 +141,7 @@ public final class StatusContext implements AutoCloseable, StatusSink {
      * @param name the name of this context for identification purposes
      */
     public StatusContext(String name) {
-        this(name, Duration.ofMillis(100), List.of());
+        this(name, Duration.ofMillis(1000), List.of());
     }
 
     /**
@@ -169,12 +169,25 @@ public final class StatusContext implements AutoCloseable, StatusSink {
      * Creates a new context with full configuration.
      *
      * @param name the name of this context for identification purposes
-     * @param defaultPollInterval the default interval between status observations
+     * @param defaultPollInterval the default interval between status observations (minimum 100ms enforced)
      * @param sinks initial collection of sinks to register
      */
     public StatusContext(String name, Duration defaultPollInterval, List<StatusSink> sinks) {
         this.name = Objects.requireNonNull(name, "name");
-        this.defaultPollInterval = Objects.requireNonNullElse(defaultPollInterval, Duration.ofMillis(100));
+
+        // Enforce minimum poll interval of 100ms
+        Duration requestedInterval = Objects.requireNonNullElse(defaultPollInterval, Duration.ofMillis(100));
+        if (requestedInterval.toMillis() < 100) {
+            logger.warn("Poll interval of {}ms is below minimum 100ms. Using 100ms instead. " +
+                       "Faster polling significantly increases CPU usage with minimal benefit. " +
+                       "The monitoring thread wakes up on this interval to poll all tasks. " +
+                       "For context '{}', requested {}ms, using 100ms.",
+                    requestedInterval.toMillis(), name, requestedInterval.toMillis());
+            this.defaultPollInterval = Duration.ofMillis(100);
+        } else {
+            this.defaultPollInterval = requestedInterval;
+        }
+
         this.sinks = new CopyOnWriteArrayList<>(Objects.requireNonNullElse(sinks, List.of()));
         this.activeTrackers = new CopyOnWriteArrayList<>();
         this.activeScopes = new CopyOnWriteArrayList<>();
@@ -186,47 +199,96 @@ public final class StatusContext implements AutoCloseable, StatusSink {
      * Scopes provide hierarchical organization without having their own progress or state.
      *
      * @param name the name of the scope
-     * @return a new TrackerScope registered with this context
+     * @return a new StatusScope registered with this context
      */
-    public TrackerScope createScope(String name) {
+    public StatusScope createScope(String name) {
         checkNotClosed();
-        TrackerScope scope = new TrackerScope(this, null, name);
+        StatusScope scope = new StatusScope(this, null, name);
         activeScopes.add(scope);
         scopeStarted(scope);
         return scope;
     }
 
-    TrackerScope createChildScope(TrackerScope parent, String name) {
+    StatusScope createChildScope(StatusScope parent, String name) {
         checkNotClosed();
-        TrackerScope scope = new TrackerScope(this, parent, name);
+        StatusScope scope = new StatusScope(this, parent, name);
         activeScopes.add(scope);
         scopeStarted(scope);
         return scope;
+    }
+
+    /**
+     * Registers an existing scope with this context. This is used internally
+     * by StatusScope's default constructor to register itself.
+     *
+     * @param scope the scope to register
+     */
+    void registerScope(StatusScope scope) {
+        activeScopes.add(scope);
+        scopeStarted(scope);
+    }
+
+    /**
+     * Registers an existing tracker with this context. This is used internally
+     * by StatusTracker's public constructor to register itself.
+     *
+     * @param tracker the tracker to register
+     * @param initialStatus the initial status of the tracker
+     */
+    <T> void registerTracker(StatusTracker<T> tracker, StatusUpdate<T> initialStatus) {
+        activeTrackers.add(tracker);
+        monitor.register(tracker, defaultPollInterval, initialStatus);
+        taskStarted(tracker);
     }
 
     @Override
-    public void scopeStarted(TrackerScope scope) {
+    public void scopeStarted(StatusScope scope) {
         notifySinks(sink -> sink.scopeStarted(scope), "notifying sink of scope start");
     }
 
-    // Package-private methods for TrackerScope to create tasks
-    <U extends StatusSource<U>> StatusTracker<U> trackInScope(TrackerScope scope, U tracked) {
+    /**
+     * Creates a tracker for a task implementing {@link StatusSource} without requiring
+     * an explicit scope. A scope will be automatically created for the tracker.
+     *
+     * @param tracked the object to track
+     * @param <U> the type of object being tracked
+     * @return a new StatusTracker with an auto-created scope
+     */
+    public <U extends StatusSource<U>> StatusTracker<U> track(U tracked) {
+        return track(tracked, StatusSource::getTaskStatus);
+    }
+
+    /**
+     * Creates a tracker with a custom status function without requiring an explicit scope.
+     * A scope will be automatically created for the tracker.
+     *
+     * @param tracked the object to track
+     * @param statusFunction function to extract status from the tracked object
+     * @param <T> the type of object being tracked
+     * @return a new StatusTracker with an auto-created scope
+     */
+    public <T> StatusTracker<T> track(T tracked, Function<T, StatusUpdate<T>> statusFunction) {
+        return createTracker(null, tracked, statusFunction);
+    }
+
+    // Package-private methods for StatusScope to create tasks
+    <U extends StatusSource<U>> StatusTracker<U> trackInScope(StatusScope scope, U tracked) {
         return trackInScope(scope, tracked, StatusSource::getTaskStatus);
     }
 
-    <T> StatusTracker<T> trackInScope(TrackerScope scope,
+    <T> StatusTracker<T> trackInScope(StatusScope scope,
                                       T tracked,
                                       Function<T, StatusUpdate<T>> statusFunction) {
         return createTracker(scope, tracked, statusFunction);
     }
 
-    private <T> StatusTracker<T> createTracker(TrackerScope scope,
+    private <T> StatusTracker<T> createTracker(StatusScope scope,
                                                T tracked,
                                                Function<T, StatusUpdate<T>> statusFunction) {
         checkNotClosed();
-        Objects.requireNonNull(scope, "scope - StatusTrackers must belong to a TrackerScope");
+        // scope can be null - StatusTracker will create one automatically if needed
 
-        if (scope.getContext() != this) {
+        if (scope != null && scope.getContext() != this) {
             throw new IllegalArgumentException("Scope belongs to a different StatusContext");
         }
 
@@ -325,7 +387,7 @@ public final class StatusContext implements AutoCloseable, StatusSink {
         taskFinished(tracker);
 
         // Remove from parent scope if it has one
-        TrackerScope parentScope = tracker.getParentScope();
+        StatusScope parentScope = tracker.getParentScope();
         if (parentScope != null) {
             parentScope.removeChildTask(tracker);
         }
@@ -337,13 +399,13 @@ public final class StatusContext implements AutoCloseable, StatusSink {
      *
      * @param scope the scope that was closed
      */
-    void onScopeClosed(TrackerScope scope) {
+    void onScopeClosed(StatusScope scope) {
         activeScopes.remove(scope);
         scopeFinished(scope);
     }
 
     @Override
-    public void scopeFinished(TrackerScope scope) {
+    public void scopeFinished(StatusScope scope) {
         notifySinks(sink -> sink.scopeFinished(scope), "notifying sink of scope finish");
     }
 

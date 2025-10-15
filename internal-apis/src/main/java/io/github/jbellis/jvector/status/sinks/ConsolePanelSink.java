@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.status.sinks;
 import io.github.jbellis.jvector.status.eventing.RunState;
 import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -140,7 +140,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     private Display display;
     private final Thread renderThread;
     private final Map<StatusTracker<?>, TaskNode> taskNodes;
-    private final Map<TrackerScope, ScopeNode> scopeNodes;
+    private final Map<StatusScope, ScopeNode> scopeNodes;
     private final DisplayNode rootNode;
     private final DateTimeFormatter timeFormatter;
     private final long refreshRateMs;
@@ -380,7 +380,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
     private void cleanupCompletedTasks(long now) {
         // Remove completed tasks and scopes based on parent completion status
         List<Map.Entry<StatusTracker<?>, TaskNode>> tasksToRemove = new ArrayList<>();
-        List<Map.Entry<TrackerScope, ScopeNode>> scopesToRemove = new ArrayList<>();
+        List<Map.Entry<StatusScope, ScopeNode>> scopesToRemove = new ArrayList<>();
 
         // Cleanup tasks
         for (Map.Entry<StatusTracker<?>, TaskNode> entry : taskNodes.entrySet()) {
@@ -404,7 +404,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         }
 
         // Cleanup scopes
-        for (Map.Entry<TrackerScope, ScopeNode> entry : scopeNodes.entrySet()) {
+        for (Map.Entry<StatusScope, ScopeNode> entry : scopeNodes.entrySet()) {
             ScopeNode node = entry.getValue();
             if (node.finishTime > 0) {
                 // Check if this completed scope should be removed
@@ -431,7 +431,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
             }
         }
 
-        for (Map.Entry<TrackerScope, ScopeNode> entry : scopesToRemove) {
+        for (Map.Entry<StatusScope, ScopeNode> entry : scopesToRemove) {
             ScopeNode node = entry.getValue();
             scopeNodes.remove(entry.getKey());
             if (node.parent != null) {
@@ -812,11 +812,11 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
      * Called when a scope is created. Adds it to the display hierarchy.
      */
     @Override
-    public void scopeStarted(TrackerScope scope) {
+    public void scopeStarted(StatusScope scope) {
         if (closed.get()) return;
 
         // Find parent scope or use root
-        TrackerScope parentScope = scope.getParent();
+        StatusScope parentScope = scope.getParent();
         DisplayNode parent = parentScope != null ? scopeNodes.get(parentScope) : rootNode;
 
         ScopeNode node = new ScopeNode(scope, parent);
@@ -831,7 +831,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
      * Called when a scope is closed. Marks it as finished but keeps it visible for retention period.
      */
     @Override
-    public void scopeFinished(TrackerScope scope) {
+    public void scopeFinished(StatusScope scope) {
         if (closed.get()) return;
 
         ScopeNode node = scopeNodes.get(scope);
@@ -846,7 +846,7 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
         if (closed.get()) return;
 
         // Find parent: either a scope or root
-        TrackerScope parentScope = task.getParentScope();
+        StatusScope parentScope = task.getParentScope();
         DisplayNode parent = parentScope != null ? scopeNodes.get(parentScope) : rootNode;
 
         TaskNode node = new TaskNode(task, parent);
@@ -2497,10 +2497,10 @@ public class ConsolePanelSink implements StatusSink, AutoCloseable {
      * Node representing an organizational scope
      */
     private static class ScopeNode extends DisplayNode {
-        final TrackerScope scope;
+        final StatusScope scope;
         long finishTime;
 
-        ScopeNode(TrackerScope scope, DisplayNode parent) {
+        ScopeNode(StatusScope scope, DisplayNode parent) {
             super(parent);
             this.scope = scope;
             this.finishTime = 0;

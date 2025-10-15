@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
 import org.junit.jupiter.api.Test;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -63,7 +63,7 @@ public class StatusTrackerTest {
     @Test
     public void instrumentedTaskProgressIsReported() {
         try (StatusContext context = new StatusContext("tracker-test");
-             TrackerScope scope = context.createScope("test")) {
+             StatusScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
             try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 task.setProgress(0.5);
@@ -77,7 +77,7 @@ public class StatusTrackerTest {
     @Test
     public void functorBasedTrackingUsesCustomFunction() {
         try (StatusContext context = new StatusContext("functor", Duration.ofMillis(25));
-             TrackerScope scope = context.createScope("test")) {
+             StatusScope scope = context.createScope("test")) {
             List<Double> samples = new ArrayList<>();
             FunctionTask task = new FunctionTask("functor");
             try (StatusTracker<FunctionTask> tracker = scope.trackTask(task, t -> {
@@ -120,7 +120,7 @@ public class StatusTrackerTest {
             InstrumentedTask task1 = new InstrumentedTask("task1");
             InstrumentedTask task2 = new InstrumentedTask("task2");
 
-            try (TrackerScope scope = context.createScope("TestScope")) {
+            try (StatusScope scope = context.createScope("TestScope")) {
                 try (StatusTracker<InstrumentedTask> tracker1 = scope.trackTask(task1);
                      StatusTracker<InstrumentedTask> tracker2 = scope.trackTask(task2)) {
                     // Verify scope relationship and context
@@ -141,7 +141,7 @@ public class StatusTrackerTest {
     public void addAndRemoveSinksDynamically() {
         RecordingSink sink = new RecordingSink();
         try (StatusContext context = new StatusContext("dynamics");
-             TrackerScope scope = context.createScope("test")) {
+             StatusScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
             try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 // Sinks are managed at context level
@@ -158,7 +158,7 @@ public class StatusTrackerTest {
     @Test
     public void closingTrackerIdempotent() {
         StatusContext context = new StatusContext("idempotent");
-        TrackerScope scope = context.createScope("test");
+        StatusScope scope = context.createScope("test");
         InstrumentedTask task = new InstrumentedTask("task");
         StatusTracker<InstrumentedTask> tracker = scope.trackTask(task);
         tracker.close();
@@ -170,7 +170,7 @@ public class StatusTrackerTest {
     @Test
     public void contextClosesAllScopesAndTasks() {
         StatusContext context = new StatusContext("parent");
-        TrackerScope scope = context.createScope("TestScope");
+        StatusScope scope = context.createScope("TestScope");
         InstrumentedTask task1 = new InstrumentedTask("task1");
         InstrumentedTask task2 = new InstrumentedTask("task2");
         StatusTracker<InstrumentedTask> tracker1 = scope.trackTask(task1);
@@ -188,8 +188,8 @@ public class StatusTrackerTest {
     public void scopeMustShareSameContext() {
         try (StatusContext contextA = new StatusContext("A");
              StatusContext contextB = new StatusContext("B")) {
-            TrackerScope scopeA = contextA.createScope("ScopeA");
-            TrackerScope scopeB = contextB.createScope("ScopeB");
+            StatusScope scopeA = contextA.createScope("ScopeA");
+            StatusScope scopeB = contextB.createScope("ScopeB");
 
             // Attempting to track a task in scopeB using contextA should fail
             IllegalArgumentException ex = assertThrows(
@@ -206,7 +206,7 @@ public class StatusTrackerTest {
     @Test
     public void elapsedRunningTimeTracksExecution() throws InterruptedException {
         try (StatusContext context = new StatusContext("timing");
-             TrackerScope scope = context.createScope("test")) {
+             StatusScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("task");
             try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 assertNull(tracker.getRunningStartTime());

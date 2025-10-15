@@ -51,7 +51,7 @@ class TaskMonitorTest {
     void contextPollsTrackedTasks() throws InterruptedException {
         SampleTask task = new SampleTask();
         try (StatusContext context = new StatusContext("polling", Duration.ofMillis(20));
-             TrackerScope scope = context.createScope("test-scope");
+             StatusScope scope = context.createScope("test-scope");
              StatusTracker<SampleTask> tracker = scope.trackTask(task)) {
 
             assertEquals(RunState.PENDING, tracker.getStatus().runstate);
@@ -72,7 +72,7 @@ class TaskMonitorTest {
     void closingContextStopsPolling() throws InterruptedException {
         SampleTask task = new SampleTask();
         StatusContext context = new StatusContext("closable", Duration.ofMillis(10));
-        TrackerScope scope = context.createScope("test-scope");
+        StatusScope scope = context.createScope("test-scope");
         StatusTracker<SampleTask> tracker = scope.trackTask(task);
 
         task.start(0.1);

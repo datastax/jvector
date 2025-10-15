@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.status.examples;
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusContext;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 
 import java.time.Duration;
@@ -45,8 +45,8 @@ public class ScopeUsageExample {
                                                        java.util.List.of(new ConsoleLoggerSink()))) {
 
             // Create organizational scopes
-            try (TrackerScope ingestionScope = context.createScope("Ingestion");
-                 TrackerScope processingScope = context.createScope("Processing")) {
+            try (StatusScope ingestionScope = context.createScope("Ingestion");
+                 StatusScope processingScope = context.createScope("Processing")) {
 
                 // Track actual work as leaf tasks
                 StatusTracker<ExampleDataProcessingTask> loadTracker =

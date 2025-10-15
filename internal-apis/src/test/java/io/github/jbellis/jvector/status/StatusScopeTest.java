@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
 import io.github.jbellis.jvector.status.sinks.NoopStatusSink;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Verifies that {@link StatusContext} manages track hierarchies and monitoring resources.
  */
-public class StatusTrackerScopeTest {
+public class StatusScopeTest {
 
     private static final class InstrumentedTask implements StatusSource<InstrumentedTask> {
         private final String name;
@@ -70,7 +70,7 @@ public class StatusTrackerScopeTest {
     @Test
     public void tracksRootTaskInSingleContext() {
         try (StatusContext context = new StatusContext("root");
-             TrackerScope scope = context.createScope("root-scope")) {
+             StatusScope scope = context.createScope("root-scope")) {
             InstrumentedTask task = new InstrumentedTask("root-task");
             try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 assertEquals("root", context.getName());
@@ -88,7 +88,7 @@ public class StatusTrackerScopeTest {
             InstrumentedTask task1 = new InstrumentedTask("task1");
             InstrumentedTask task2 = new InstrumentedTask("task2");
 
-            try (TrackerScope scope = context.createScope("TestScope")) {
+            try (StatusScope scope = context.createScope("TestScope")) {
                 try (StatusTracker<InstrumentedTask> tracker1 = scope.trackTask(task1);
                      StatusTracker<InstrumentedTask> tracker2 = scope.trackTask(task2)) {
                     assertSame(scope, tracker1.getParentScope());
@@ -104,7 +104,7 @@ public class StatusTrackerScopeTest {
     @Test
     public void contextOwnsMonitorLifecycle() {
         try (StatusContext context = new StatusContext("root");
-             TrackerScope scope = context.createScope("test")) {
+             StatusScope scope = context.createScope("test")) {
             InstrumentedTask task = new InstrumentedTask("monitored");
             try (StatusTracker<InstrumentedTask> tracker = scope.trackTask(task)) {
                 task.start();
@@ -145,7 +145,7 @@ public class StatusTrackerScopeTest {
         InstrumentedTask task1 = new InstrumentedTask("task1");
         InstrumentedTask task2 = new InstrumentedTask("task2");
 
-        TrackerScope scope = context.createScope("TestScope");
+        StatusScope scope = context.createScope("TestScope");
         StatusTracker<InstrumentedTask> tracker1 = scope.trackTask(task1);
         StatusTracker<InstrumentedTask> tracker2 = scope.trackTask(task2);
 

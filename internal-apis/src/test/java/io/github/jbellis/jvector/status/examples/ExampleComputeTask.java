@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.status.examples;
 
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.eventing.RunState;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
@@ -33,7 +33,7 @@ import java.util.Random;
 /**
  * Demonstration task that simulates CPU-intensive compute operations with configurable
  * parallel subtask spawning. This class illustrates hierarchical task organization by
- * creating its own {@link TrackerScope} containing the main computation task and optional
+ * creating its own {@link StatusScope} containing the main computation task and optional
  * worker subtasks.
  *
  * <p>The task performs simulated computation through trigonometric calculations while
@@ -53,7 +53,7 @@ import java.util.Random;
  *
  * <h2>Example Usage</h2>
  * <pre>{@code
- * try (TrackerScope scope = context.createScope("MyScope")) {
+ * try (StatusScope scope = context.createScope("MyScope")) {
  *     SimulatedClock clock = new SimulatedClock();
  *     ExampleComputeTask task = new ExampleComputeTask(
  *         "MyComputeTask",
@@ -66,7 +66,7 @@ import java.util.Random;
  * }
  * }</pre>
  *
- * @see TrackerScope
+ * @see StatusScope
  * @see StatusTracker
  * @see SimulatedClock
  * @since 4.0.0
@@ -77,7 +77,7 @@ class ExampleComputeTask implements Runnable {
     private final String name;
     private final int iterations;
     private final int parallelSubtasks;
-    private final TrackerScope parentScope;
+    private final StatusScope parentScope;
     private final SimulatedClock clock;
     private final List<Thread> childThreads = new ArrayList<>();
 
@@ -90,7 +90,7 @@ class ExampleComputeTask implements Runnable {
      * @param parentScope the parent tracker scope under which this task's scope will be created
      * @param clock the simulated clock for controlling task timing
      */
-    ExampleComputeTask(String name, int iterations, int parallelSubtasks, TrackerScope parentScope, SimulatedClock clock) {
+    ExampleComputeTask(String name, int iterations, int parallelSubtasks, StatusScope parentScope, SimulatedClock clock) {
         this.name = name;
         this.iterations = iterations;
         this.parallelSubtasks = parallelSubtasks;
@@ -105,9 +105,9 @@ class ExampleComputeTask implements Runnable {
      */
     @Override
     public void run() {
-        try (TrackerScope taskScope = parentScope.createChildScope(name)) {
+        try (StatusScope taskScope = parentScope.createChildScope(name)) {
             // Spawn parallel worker tasks if needed
-            TrackerScope workersScope = null;
+            StatusScope workersScope = null;
             if (parallelSubtasks > 0) {
                 logger.info("Spawning {} parallel worker tasks for {}", parallelSubtasks, name);
                 workersScope = taskScope.createChildScope("Workers");
@@ -163,7 +163,7 @@ class ExampleComputeTask implements Runnable {
     private static class MainTask implements StatusSource<MainTask> {
         private final String name;
         private final int iterations;
-        private final TrackerScope scope;
+        private final StatusScope scope;
         private final SimulatedClock clock;
         private final Random random = new Random();
 
@@ -179,7 +179,7 @@ class ExampleComputeTask implements Runnable {
          * @param scope the tracker scope for registering this task
          * @param clock the simulated clock for timing control
          */
-        MainTask(String name, int iterations, TrackerScope scope, SimulatedClock clock) {
+        MainTask(String name, int iterations, StatusScope scope, SimulatedClock clock) {
             this.name = name;
             this.iterations = iterations;
             this.scope = scope;

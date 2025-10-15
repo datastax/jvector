@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.status.examples;
 
 import io.github.jbellis.jvector.status.SimulatedClock;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +25,7 @@ import java.util.List;
 /**
  * Executor that manages a diverse workload of demo tasks showing different execution patterns.
  * Coordinates {@link ExampleDataProcessingTask}, {@link ExampleComputeTask}, and {@link ExampleValidationTask}
- * instances within a {@link TrackerScope} to demonstrate the organizational hierarchy.
+ * instances within a {@link StatusScope} to demonstrate the organizational hierarchy.
  */
 public class ExampleWorkloadExecutor {
     private final List<Runnable> tasks = new ArrayList<>();
@@ -43,7 +43,7 @@ public class ExampleWorkloadExecutor {
      * ComputeTasks create their own child scopes containing main task and worker subtasks.
      * This method starts the workload and returns immediately.
      */
-    public static ExampleWorkloadExecutor runDemoWorkload(TrackerScope workloadScope, SimulatedClock clock) {
+    public static ExampleWorkloadExecutor runDemoWorkload(StatusScope workloadScope, SimulatedClock clock) {
         ExampleWorkloadExecutor executor = new ExampleWorkloadExecutor(clock);
 
         // Create diverse workload showing different patterns

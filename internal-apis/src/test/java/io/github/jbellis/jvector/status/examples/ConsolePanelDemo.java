@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.status.examples;
 import io.github.jbellis.jvector.status.sinks.ConsolePanelLogIntercept;
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusContext;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.sinks.ConsolePanelSink;
 import io.github.jbellis.jvector.status.sinks.OutputMode;
 
@@ -52,7 +52,7 @@ import java.util.concurrent.TimeUnit;
  * <p>This demo illustrates the clean separation between organizational scopes and work tasks:</p>
  * <ol>
  *   <li>{@link ConsolePanelDemo} - Creates context with organizational scope for workload</li>
- *   <li>{@link TrackerScope} - Organizational container with no progress/state</li>
+ *   <li>{@link StatusScope} - Organizational container with no progress/state</li>
  *   <li>Task types ({@link ExampleDataProcessingTask}, {@link ExampleComputeTask}, {@link ExampleValidationTask}) -
  *       Leaf nodes with actual progress and state</li>
  *   <li>{@link StatusContext} - Routes status updates from tasks to sinks</li>
@@ -166,7 +166,7 @@ public class ConsolePanelDemo {
             context.addSink(consolePanelSink);
 
             // Create organizational scope for the workload
-            try (TrackerScope workloadScope = context.createScope("DemoWorkload")) {
+            try (StatusScope workloadScope = context.createScope("DemoWorkload")) {
 
                 // Launch diverse workload - all tasks are within the scope
                 ExampleWorkloadExecutor executor = ExampleWorkloadExecutor.runDemoWorkload(workloadScope, clock);

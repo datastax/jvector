@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.status.eventing.StatusSink;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
 import io.github.jbellis.jvector.status.sinks.MetricsStatusSink;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -72,7 +72,7 @@ class StatusTrackingIntegrationTest {
         MetricsStatusSink metrics = new MetricsStatusSink();
 
         try (StatusContext context = new StatusContext("integration", Duration.ofMillis(15), List.of(sink, metrics))) {
-            try (TrackerScope scope = context.createScope("TestWorkload")) {
+            try (StatusScope scope = context.createScope("TestWorkload")) {
                 WorkTask task1 = new WorkTask();
                 WorkTask task2 = new WorkTask();
                 try (StatusTracker<WorkTask> tracker1 = scope.trackTask(task1);

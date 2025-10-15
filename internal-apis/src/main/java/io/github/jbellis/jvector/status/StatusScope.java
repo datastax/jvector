@@ -28,7 +28,7 @@ import java.util.function.Function;
 
 /**
  * An organizational container for grouping related tasks in a hierarchical structure.
- * Unlike {@link StatusTracker}, a TrackerScope has no progress or state of its own -
+ * Unlike {@link StatusTracker}, a StatusScope has no progress or state of its own -
  * it serves purely as an umbrella for organizing child tasks and nested scopes.
  *
  * <p><strong>Architectural Role:</strong></p>
@@ -59,20 +59,34 @@ import java.util.function.Function;
  *        └─ Index (Task: PENDING)
  * </pre>
  *
- * <p><strong>Usage Example:</strong></p>
+ * <p><strong>Usage Example with StatusContext:</strong></p>
  * <pre>{@code
  * try (StatusContext context = new StatusContext("pipeline");
- *      TrackerScope dataScope = context.createScope("DataPipeline")) {
+ *      StatusScope dataScope = context.createScope("DataPipeline")) {
  *
  *     // Create nested organizational scopes
- *     TrackerScope ingestionScope = dataScope.createChildScope("Ingestion");
- *     TrackerScope processingScope = dataScope.createChildScope("Processing");
+ *     StatusScope ingestionScope = dataScope.createChildScope("Ingestion");
+ *     StatusScope processingScope = dataScope.createChildScope("Processing");
  *
  *     // Add actual tasks as leaf nodes
  *     StatusTracker<LoadTask> loadTracker = ingestionScope.trackTask(new LoadTask());
  *     StatusTracker<ValidateTask> validateTracker = ingestionScope.trackTask(new ValidateTask());
  *
  *     // Execute tasks...
+ * }
+ * }</pre>
+ *
+ * <p><strong>Usage Example with Default Context:</strong></p>
+ * <pre>{@code
+ * // Create a standalone scope with its own default context
+ * try (StatusScope scope = new StatusScope("my-work")) {
+ *     // Access the auto-created context if needed
+ *     StatusContext context = scope.getContext();
+ *     context.addSink(new ConsoleLoggerSink());
+ *
+ *     // Create tasks directly
+ *     StatusTracker<Task> tracker = scope.trackTask(new Task());
+ *     tracker.getTracked().execute();
  * }
  * }</pre>
  *
@@ -95,23 +109,41 @@ import java.util.function.Function;
  * @see StatusContext
  * @since 4.0.0
  */
-public final class TrackerScope implements AutoCloseable {
+public final class StatusScope implements AutoCloseable {
 
     private final StatusContext context;
-    private final TrackerScope parent;
+    private final StatusScope parent;
     private final String name;
-    private final List<TrackerScope> childScopes = new CopyOnWriteArrayList<>();
+    private final List<StatusScope> childScopes = new CopyOnWriteArrayList<>();
     private final List<StatusTracker<?>> childTasks = new CopyOnWriteArrayList<>();
     private volatile boolean closed = false;
+    private final boolean ownsContext;
+
+    /**
+     * Creates a root StatusScope with its own default StatusContext.
+     * The context will be automatically closed when this scope is closed.
+     * This is useful for simple cases where you don't need to configure
+     * the context explicitly.
+     *
+     * @param name the name of the scope (also used as the context name)
+     */
+    public StatusScope(String name) {
+        this.context = new StatusContext(name);
+        this.parent = null;
+        this.name = name;
+        this.ownsContext = true;
+        context.registerScope(this);
+    }
 
     /**
      * Package-private constructor. Use {@link StatusContext#createScope(String)} or
-     * {@link #createChildScope(String)} to create scopes.
+     * {@link #createChildScope(String)} to create scopes within an existing context.
      */
-    TrackerScope(StatusContext context, TrackerScope parent, String name) {
+    StatusScope(StatusContext context, StatusScope parent, String name) {
         this.context = context;
         this.parent = parent;
         this.name = name;
+        this.ownsContext = false;
 
         if (parent != null) {
             parent.childScopes.add(this);
@@ -122,9 +154,9 @@ public final class TrackerScope implements AutoCloseable {
      * Creates a nested organizational scope under this scope.
      *
      * @param name the name of the child scope
-     * @return a new TrackerScope as a child of this scope
+     * @return a new StatusScope as a child of this scope
      */
-    public TrackerScope createChildScope(String name) {
+    public StatusScope createChildScope(String name) {
         checkNotClosed();
         return context.createChildScope(this, name);
     }
@@ -173,12 +205,14 @@ public final class TrackerScope implements AutoCloseable {
      *
      * @return the parent scope or null
      */
-    public TrackerScope getParent() {
+    public StatusScope getParent() {
         return parent;
     }
 
     /**
      * Returns the context that owns this scope.
+     * For scopes created with the default constructor, this returns
+     * the auto-created context.
      *
      * @return the owning context
      */
@@ -191,7 +225,7 @@ public final class TrackerScope implements AutoCloseable {
      *
      * @return an immutable list of child scopes
      */
-    public List<TrackerScope> getChildScopes() {
+    public List<StatusScope> getChildScopes() {
         return new ArrayList<>(childScopes);
     }
 
@@ -216,7 +250,7 @@ public final class TrackerScope implements AutoCloseable {
      */
     public boolean isComplete() {
         // Check all child scopes are complete
-        for (TrackerScope childScope : childScopes) {
+        for (StatusScope childScope : childScopes) {
             if (!childScope.isComplete()) {
                 return false;
             }
@@ -243,6 +277,8 @@ public final class TrackerScope implements AutoCloseable {
 
     /**
      * Closes this scope, removing it from its parent's child list.
+     * If this scope owns its context (created via the default constructor),
+     * the context will also be closed, which closes all associated resources.
      * Child scopes and tasks are not automatically closed.
      */
     @Override
@@ -257,6 +293,11 @@ public final class TrackerScope implements AutoCloseable {
         }
 
         context.onScopeClosed(this);
+
+        // If we own the context, close it as well
+        if (ownsContext) {
+            context.close();
+        }
     }
 
     /**
@@ -266,9 +307,17 @@ public final class TrackerScope implements AutoCloseable {
         childTasks.remove(tracker);
     }
 
+    /**
+     * Package-private method to add a tracker to this scope's child list.
+     * Used by StatusTracker's public constructor when creating a standalone tracker.
+     */
+    void addChildTask(StatusTracker<?> tracker) {
+        childTasks.add(tracker);
+    }
+
     private void checkNotClosed() {
         if (closed) {
-            throw new IllegalStateException("TrackerScope '" + name + "' has been closed");
+            throw new IllegalStateException("StatusScope '" + name + "' has been closed");
         }
     }
 
@@ -282,7 +331,7 @@ public final class TrackerScope implements AutoCloseable {
         long done = childTasks.stream().filter(StatusTracker::isClosed).count();
 
         // Recursively count from child scopes
-        for (TrackerScope childScope : childScopes) {
+        for (StatusScope childScope : childScopes) {
             active += childScope.childTasks.stream().filter(t -> !t.isClosed()).count();
             done += childScope.childTasks.stream().filter(StatusTracker::isClosed).count();
         }

@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.status.examples;
 
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.eventing.RunState;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
@@ -37,7 +37,7 @@ class ExampleDataProcessingTask implements StatusSource<ExampleDataProcessingTas
 
     private final String name;
     private final int recordCount;
-    private final TrackerScope parentScope;
+    private final StatusScope parentScope;
     private final SimulatedClock clock;
     private final Random random = new Random();
 
@@ -45,7 +45,7 @@ class ExampleDataProcessingTask implements StatusSource<ExampleDataProcessingTas
     private volatile RunState state = RunState.PENDING;
     private volatile boolean interrupted = false;
 
-    ExampleDataProcessingTask(String name, int recordCount, TrackerScope parentScope, SimulatedClock clock) {
+    ExampleDataProcessingTask(String name, int recordCount, StatusScope parentScope, SimulatedClock clock) {
         this.name = name;
         this.recordCount = recordCount;
         this.parentScope = parentScope;

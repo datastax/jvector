@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.status.examples;
 
 import io.github.jbellis.jvector.status.SimulatedClock;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.eventing.RunState;
 import io.github.jbellis.jvector.status.eventing.StatusSource;
 import io.github.jbellis.jvector.status.eventing.StatusUpdate;
@@ -39,22 +39,22 @@ class ExampleValidationTask implements StatusSource<ExampleValidationTask>, Runn
 
     private final String name;
     private final int checkCount;
-    private final TrackerScope parentScope;
+    private final StatusScope parentScope;
     private final Random random = new Random();
 
     private volatile int checksComplete = 0;
     private volatile RunState state = RunState.PENDING;
     private volatile boolean interrupted = false;
     private final List<Thread> childThreads = new ArrayList<>();
-    private TrackerScope detailsScope; // Scope for nested validations
+    private StatusScope detailsScope; // Scope for nested validations
     private final boolean allowNesting; // Only top-level tasks spawn nested validations
     private final SimulatedClock clock;
 
-    ExampleValidationTask(String name, int checkCount, TrackerScope parentScope, SimulatedClock clock) {
+    ExampleValidationTask(String name, int checkCount, StatusScope parentScope, SimulatedClock clock) {
         this(name, checkCount, parentScope, true, clock);
     }
 
-    ExampleValidationTask(String name, int checkCount, TrackerScope parentScope, boolean allowNesting, SimulatedClock clock) {
+    ExampleValidationTask(String name, int checkCount, StatusScope parentScope, boolean allowNesting, SimulatedClock clock) {
         this.name = name;
         this.checkCount = checkCount;
         this.parentScope = parentScope;

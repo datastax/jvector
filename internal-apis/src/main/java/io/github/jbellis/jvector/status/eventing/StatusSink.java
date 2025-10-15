@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.status.eventing;
 
 import io.github.jbellis.jvector.status.StatusContext;
 import io.github.jbellis.jvector.status.StatusTracker;
-import io.github.jbellis.jvector.status.TrackerScope;
+import io.github.jbellis.jvector.status.StatusScope;
 import io.github.jbellis.jvector.status.sinks.ConsoleLoggerSink;
 import io.github.jbellis.jvector.status.sinks.LoggerStatusSink;
 import io.github.jbellis.jvector.status.sinks.MetricsStatusSink;
@@ -225,7 +225,7 @@ public interface StatusSink {
      * @param scope the scope that started
      * @since 4.0.0
      */
-    default void scopeStarted(TrackerScope scope) {
+    default void scopeStarted(StatusScope scope) {
         // No-op by default - sinks can override to handle scope events
     }
 
@@ -239,7 +239,7 @@ public interface StatusSink {
      * @param scope the scope that finished
      * @since 4.0.0
      */
-    default void scopeFinished(TrackerScope scope) {
+    default void scopeFinished(StatusScope scope) {
         // No-op by default - sinks can override to handle scope events
     }
 }
