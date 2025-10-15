@@ -118,7 +118,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     @Test
     // build a random graph, then check that it has at least 90% recall
     public void testRecallOnGraphWithRandomVectors() throws IOException {
-        for (var similarityFunction : List.of(VectorSimilarityFunction.COSINE, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.EUCLIDEAN)) {
+        for (var similarityFunction : VectorSimilarityFunction.values()) {
             for (var addHierarchy : List.of(false, true)) {
                 for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
                     testRecallOnGraphWithRandomVectors(addHierarchy, similarityFunction, featureId);
@@ -183,7 +183,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     @Test
     // build a random graph, then check that it has at least 90% recall
     public void testScoresWithRandomVectors() throws IOException {
-        for (var similarityFunction : List.of(VectorSimilarityFunction.COSINE, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.EUCLIDEAN)) {
+        for (var similarityFunction : VectorSimilarityFunction.values()) {
             for (var addHierarchy : List.of(false, true)) {
                 for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
                     testScoresWithRandomVectors(addHierarchy, similarityFunction, featureId);

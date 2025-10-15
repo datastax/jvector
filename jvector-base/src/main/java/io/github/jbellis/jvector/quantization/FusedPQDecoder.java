@@ -106,16 +106,11 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
             // we have seen enough data to compute `delta`, so take the fast path using the permuted nodes
             VectorUtil.bulkShuffleQuantizedSimilarity(neighborCodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, results, vsf);
         } else {
-            // we have not yet computed worstDistance or delta, so we need to assemble the results manually
-            // from the PQ codebooks
-            var maxDegree = packedNeighbors.maxDegree();
-            for (int i = 0; i < pq.getSubspaceCount(); i++) {
-                for (int j = 0; j < maxDegree; j++) {
-                    results.set(j, results.get(j) + partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(neighborCodes.get(i * maxDegree + j))));
-                }
-            }
+            // we have not yet computed worstDistance or delta, so we need to follow the unquantized path
+            VectorUtil.bulkShuffleRawSimilarity(neighborCodes, pq.compressedVectorSize(), partialSums, results);
 
             // update worstDistance from our new set of results
+            var maxDegree = packedNeighbors.maxDegree();
             for (int i = 0; i < maxDegree; i++) {
                 var result = results.get(i);
                 invocations++;
@@ -298,18 +293,10 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
                 VectorUtil.bulkShuffleQuantizedSimilarityCosine(neighborCodes, pq.compressedVectorSize(), partialQuantizedSums, delta, bestDistance, partialQuantizedSquaredMagnitudes, squaredMagnitudeDelta, minSquaredMagnitude, queryMagnitudeSquared, results);
             } else {
                 // we have not yet computed worstDistance or delta, so we need to assemble the results manually
-                // from the PQ codebooks
-                var maxDegree = packedNeighbors.maxDegree();
-                Arrays.fill(resultSumAggregates, 0);
-                Arrays.fill(resultMagnitudeAggregates, 0);
-                for (int i = 0; i < pq.getSubspaceCount(); i++) {
-                    for (int j = 0; j < maxDegree; j++) {
-                        resultSumAggregates[j] += partialSums.get(i * pq.getClusterCount() + Byte.toUnsignedInt(neighborCodes.get(i * maxDegree + j)));
-                        resultMagnitudeAggregates[j] += partialSquaredMagnitudes.get(i * pq.getClusterCount() + Byte.toUnsignedInt(neighborCodes.get(i * maxDegree + j)));
-                    }
-                }
+                VectorUtil.bulkShuffleRawSimilarityCosine(neighborCodes, pq.compressedVectorSize(), partialSums, partialSquaredMagnitudes, resultSumAggregates, resultMagnitudeAggregates);
 
                 // update worstDistance from our new set of results
+                var maxDegree = packedNeighbors.maxDegree();
                 for (int i = 0; i < maxDegree; i++) {
                     updateWorstDistance(resultSumAggregates[i]);
                     var result = resultSumAggregates[i] / (float) Math.sqrt(resultMagnitudeAggregates[i] * queryMagnitudeSquared);

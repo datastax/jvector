@@ -31,6 +31,29 @@ import jdk.incubator.vector.VectorSpecies;
  */
 final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
+    private enum SIMDVersion {
+        SIMD512,
+        SIMD256,
+        SIMD128
+    }
+
+    private final SIMDVersion SIMD_VERSION;
+
+    public NativeVectorUtilSupport() {
+        int version = 0; // NativeSimdOps.simd_version();
+
+        // This mapping is defined in vector_simd.h
+        switch (version) {
+            case 0 -> // SSE
+                    SIMD_VERSION = SIMDVersion.SIMD128;
+            case 1 -> // AVX2
+                    SIMD_VERSION = SIMDVersion.SIMD256;
+            case 2 -> // AVX512
+                    SIMD_VERSION = SIMDVersion.SIMD512;
+            default -> throw new UnsupportedOperationException("Unsupported SIMD version: " + version);
+        }
+    }
+
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset)
     {
@@ -112,6 +135,37 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         }
     }
 
+    // These block sizes are tied to the SIMD implementations of the methods in jvector_simd.h,
+    // which are found in jvector_simd.c. Since the methods using this from Java are not in the
+    // most performance critical path, it is just easier not going through the JNI barrier.
+    private int getBlockSize() {
+        int blockSize;
+        switch (SIMD_VERSION) {
+            case SIMDVersion.SIMD128 ->
+                    blockSize = 8;
+            case SIMDVersion.SIMD256 ->
+                    blockSize = 16;
+            case SIMDVersion.SIMD512 ->
+                    blockSize = 32;
+            default -> throw new UnsupportedOperationException("Unsupported SIMD version: " + SIMD_VERSION);
+        }
+        return blockSize;
+    }
+
+    // This implementation stores pqCode in compressedNeighbors using a block-transposed layout.
+    // The block size is determined by the SIMD width.
+    @Override
+    public void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, int length, ByteSequence<?> compressedNeighbors) {
+        int blockSize = getBlockSize();
+
+        int blockIndex = position / blockSize;
+        int offset = blockIndex * blockSize * pqCode.length();
+        int positionWithinBlock = position % blockSize;
+        for (int j = 0; j < pqCode.length(); j++) {
+            compressedNeighbors.set(offset + blockSize * j + positionWithinBlock, pqCode.get(j));
+        }
+    }
+
     @Override
     public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
         assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
@@ -131,6 +185,41 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartialSums).get(), sumDelta, minDistance,
                 ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
     }
+
+    @Override
+    public void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
+        int blockSize = getBlockSize();
+
+        for (int j = 0; j < results.length(); j++) {
+            int blockIndex = j / blockSize;
+            int offset = blockIndex * blockSize * codebookCount;
+            int positionWithinBlock = j % blockSize;
+            for (int i = 0; i < codebookCount; i++) {
+                int singleShuffle = Byte.toUnsignedInt(shuffles.get(offset + blockSize * i + positionWithinBlock));
+                results.set(j, results.get(j) + partials.get(i * codebookCount + singleShuffle));
+            }
+        }
+    }
+
+    @Override
+    public void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                               VectorFloat<?> partialSums,
+                                               VectorFloat<?> partialSquaredMagnitudes,
+                                               float[] resultSumAggregates, float[] resultMagnitudeAggregates) {
+        int blockSize = getBlockSize();
+
+        for (int j = 0; j < partialSums.length(); j++) {
+            int blockIndex = j / blockSize;
+            int offset = blockIndex * blockSize * codebookCount;
+            int positionWithinBlock = j % blockSize;
+            for (int i = 0; i < codebookCount; i++) {
+                int singleShuffle = Byte.toUnsignedInt(shuffles.get(offset + blockSize * i + positionWithinBlock));
+                resultSumAggregates[j] += partialSums.get(i * codebookCount + singleShuffle);
+                resultMagnitudeAggregates[j] += partialSquaredMagnitudes.get(i * codebookCount + singleShuffle);
+            }
+        }
+    }
+
 
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)

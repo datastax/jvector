@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -116,9 +117,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         while (neighbors.hasNext()) {
             int node = neighbors.nextInt();
             var compressed = pqv.get(node);
-            for (int j = 0; j < pqv.getCompressedSize(); j++) {
-                compressedNeighbors.set(j * maxDegree + n, compressed.get(j));
-            }
+            VectorUtil.storePQCodeInNeighbors(compressed, n, maxDegree, compressedNeighbors);
             n++;
         }
 

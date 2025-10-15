@@ -14,6 +14,10 @@ import static java.lang.foreign.MemoryLayout.PathElement.*;
 
 public class NativeSimdOps {
 
+    public static int simd_version() {
+        return 0; // TODO hard-coded for now
+    }
+
     NativeSimdOps() {
         // Should not be called directly
     }

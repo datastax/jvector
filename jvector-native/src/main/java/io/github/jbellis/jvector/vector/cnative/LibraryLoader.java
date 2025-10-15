@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.vector.cnative;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.List;
 
 /**
  * This class is used to load supporting native libraries. First, it tries to load the library from the system path.
@@ -25,9 +26,9 @@ import java.nio.file.Files;
  */
 public class LibraryLoader {
     private LibraryLoader() {}
-    public static boolean loadJvector() {
+    public static boolean loadJvector(String libName) {
         try {
-            System.loadLibrary("jvectorSIMD256");
+            System.loadLibrary(libName);
             return true;
         } catch (UnsatisfiedLinkError e) {
             // ignore
@@ -35,9 +36,9 @@ public class LibraryLoader {
         try {
             // reinventing the wheel instead of picking up deps, so we'll just use the classloader to load the library
             // as a resource and then copy it to a tmp directory and load it from there
-            String libName = System.mapLibraryName("jvectorSIMD256");
-            File tmpLibFile = File.createTempFile(libName.substring(0, libName.lastIndexOf('.')), libName.substring(libName.lastIndexOf('.')));
-            try (var in = LibraryLoader.class.getResourceAsStream("/" + libName);
+            String mappedLibName = System.mapLibraryName(libName);
+            File tmpLibFile = File.createTempFile(mappedLibName.substring(0, mappedLibName.lastIndexOf('.')), mappedLibName.substring(mappedLibName.lastIndexOf('.')));
+            try (var in = LibraryLoader.class.getResourceAsStream("/" + mappedLibName);
                  var out = Files.newOutputStream(tmpLibFile.toPath())) {
                 if (in != null) {
                     in.transferTo(out);

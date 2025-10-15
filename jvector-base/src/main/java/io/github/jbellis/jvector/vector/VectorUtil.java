@@ -174,8 +174,16 @@ public final class VectorUtil {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
   }
 
+  public static void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, int length, ByteSequence<?> compressedNeighbors) {
+    impl.storePQCodeInNeighbors(pqCode, position, length, compressedNeighbors);
+  }
+
   public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {
     impl.bulkShuffleQuantizedSimilarity(shuffles, codebookCount, quantizedPartials, delta, minDistance, vsf, results);
+  }
+
+  public static void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
+    impl.bulkShuffleRawSimilarity(shuffles, codebookCount, partials, results);
   }
 
   public static void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
@@ -183,6 +191,12 @@ public final class VectorUtil {
                                                           ByteSequence<?> quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude,
                                                           float queryMagnitudeSquared, VectorFloat<?> results) {
     impl.bulkShuffleQuantizedSimilarityCosine(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
+  }
+
+  public static void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                                    VectorFloat<?> partialSums, VectorFloat<?> partialMagnitudes,
+                                                    float[] resultSumAggregates, float[] resultMagnitudeAggregates) {
+    impl.bulkShuffleRawSimilarityCosine(shuffles, codebookCount, partialSums, partialMagnitudes, resultSumAggregates, resultMagnitudeAggregates);
   }
 
   public static int hammingDistance(long[] v1, long[] v2) {

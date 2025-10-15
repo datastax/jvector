@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
+import java.util.List;
+
 /**
  * Experimental!
  * VectorizationProvider implementation that uses MemorySegment vectors and prefers native/Panama SIMD.
@@ -31,13 +33,36 @@ public class NativeVectorizationProvider extends VectorizationProvider {
     private final VectorTypeSupport vectorTypeSupport;
 
     public NativeVectorizationProvider() {
-        var libraryLoaded = LibraryLoader.loadJvector();
+        boolean libraryLoaded = false;
+        boolean compatible = false;
+        // Do not change the order, this will try loading  the libraries starting from the highest SIMD width first.
+        for (String libName : List.of("jvectorSIMD512", "jvectorSIMD256", "jvectorSIMD128")) {
+            System.out.print("Loading library: " + libName);
+
+            libraryLoaded = LibraryLoader.loadJvector(libName);
+            if (!libraryLoaded) {
+                System.out.print(" -> load failure\n");
+                continue;
+            }
+
+            compatible = NativeSimdOps.check_compatibility();
+            if (!compatible) {
+                System.out.print(" -> compatibility failure\n");
+            }
+            if (libraryLoaded && compatible) {
+                System.out.print(" -> success\n");
+                break;
+            }
+        }
+
         if (!libraryLoaded) {
             throw new UnsupportedOperationException("Failed to load supporting native library.");
         }
-        if (!NativeSimdOps.check_compatibility()) {
+        if (!compatible) {
             throw new UnsupportedOperationException("Native SIMD operations are not supported on this platform due to missing CPU support.");
         }
+        System.out.print(" -> success");
+
         this.vectorUtilSupport = new NativeVectorUtilSupport();
         this.vectorTypeSupport = new MemorySegmentVectorProvider();
     }
