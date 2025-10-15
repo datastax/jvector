@@ -24,13 +24,6 @@ package io.github.jbellis.jvector.graph.disk;
  */
 public enum GraphIndexWriterTypes {
     /**
-     * Standard on-disk writer that uses random access for writing.
-     * Supports random access writes and incremental updates via writeInline.
-     * Requires a RandomAccessWriter.
-     */
-    ON_DISK,
-
-    /**
      * Sequential on-disk writer optimized for write-once scenarios.
      * Writes all data sequentially without seeking back, making it suitable
      * for cloud storage or systems that optimize for sequential I/O.

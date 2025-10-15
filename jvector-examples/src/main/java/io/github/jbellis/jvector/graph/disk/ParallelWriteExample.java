@@ -108,8 +108,7 @@ public class ParallelWriteExample {
                         level, index1.getDegree(level), index2.getDegree(level)));
                 }
 
-                // Collect all node IDs from both indices into sorted arrays
-                // (nodes may be in different order due to parallel processing)
+                // Collect all node IDs from both indices into arrays
                 java.util.List<Integer> nodeList1 = new java.util.ArrayList<>();
                 java.util.List<Integer> nodeList2 = new java.util.ArrayList<>();
 
@@ -122,10 +121,6 @@ public class ParallelWriteExample {
                 while (nodes2.hasNext()) {
                     nodeList2.add(nodes2.nextInt());
                 }
-
-                // Sort both lists to compare regardless of order
-                java.util.Collections.sort(nodeList1);
-                java.util.Collections.sort(nodeList2);
 
                 // Verify same set of nodes
                 if (!nodeList1.equals(nodeList2)) {
@@ -143,11 +138,11 @@ public class ParallelWriteExample {
                         level, nodeList1.size(), nodeList2.size());
 
                     if (!onlyIn1.isEmpty()) {
-                        var sample1 = onlyIn1.stream().sorted().limit(10).collect(java.util.stream.Collectors.toList());
+                        var sample1 = onlyIn1.stream().limit(10).collect(java.util.stream.Collectors.toList());
                         System.out.printf("  Nodes only in sequential (first 10): %s%n", sample1);
                     }
                     if (!onlyIn2.isEmpty()) {
-                        var sample2 = onlyIn2.stream().sorted().limit(10).collect(java.util.stream.Collectors.toList());
+                        var sample2 = onlyIn2.stream().limit(10).collect(java.util.stream.Collectors.toList());
                         System.out.printf("  Nodes only in parallel (first 10): %s%n", sample2);
                     }
 
@@ -178,10 +173,6 @@ public class ParallelWriteExample {
                         n1[i] = neighbors1.nextInt();
                         n2[i] = neighbors2.nextInt();
                     }
-
-                    // Sort neighbor arrays before comparing (order may differ due to parallel processing)
-                    Arrays.sort(n1);
-                    Arrays.sort(n2);
 
                     if (!Arrays.equals(n1, n2)) {
                         differentNeighbors++;

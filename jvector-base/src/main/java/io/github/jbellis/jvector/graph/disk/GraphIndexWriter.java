@@ -73,9 +73,9 @@ public interface GraphIndexWriter extends Closeable {
     static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
             getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
         switch (type) {
-            case ON_DISK:
+            case ON_DISK_PARALLEL:
                 if (!(out instanceof RandomAccessWriter)) {
-                    throw new IllegalArgumentException("ON_DISK requires a RandomAccessWriter");
+                    throw new IllegalArgumentException("ON_DISK_PARALLEL requires a RandomAccessWriter");
                 }
                 return new OnDiskGraphIndexWriter.Builder(graphIndex, (RandomAccessWriter) out);
             case ON_DISK_SEQUENTIAL:

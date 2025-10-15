@@ -35,17 +35,17 @@ import java.util.concurrent.*;
 import java.util.function.IntFunction;
 
 /**
- * Orchestrates parallel writing of L0 node records to disk.
+ * Orchestrates parallel writing of L0 node records to disk using asynchronous file I/O.
  * <p>
  * This class manages:
  * - A thread pool for building node records in parallel
  * - Per-thread ImmutableGraphIndex.View instances for thread-safe neighbor iteration
  * - A buffer pool to avoid excessive allocation
- * - A write dispatcher for serialized IO
+ * - Asynchronous file channel writes that maintain correct ordering
  * <p>
  * Usage:
  * <pre>
- * try (var parallelWriter = new ParallelGraphWriter(writer, graph, config)) {
+ * try (var parallelWriter = new ParallelGraphWriter(writer, graph, config, filePath)) {
  *     parallelWriter.writeL0Records(ordinalMapper, inlineFeatures, featureStateSuppliers, baseOffset);
  * }
  * </pre>
@@ -54,57 +54,60 @@ class ParallelGraphWriter implements AutoCloseable {
     private final RandomAccessWriter writer;
     private final ImmutableGraphIndex graph;
     private final ExecutorService executor;
-    private final GraphIndexWriteDispatcher dispatcher;
     private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
     private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
-    private final Path filePath; // Optional: for async writes
+    private final Path filePath;
 
     /**
      * Configuration for parallel writing.
      */
     static class Config {
         final int workerThreads;
-        final int dispatcherQueueCapacity;
         final boolean useDirectBuffers;
 
         /**
          * @param workerThreads number of worker threads for building records (0 = use available processors)
-         * @param dispatcherQueueCapacity max records to buffer before blocking (for backpressure)
          * @param useDirectBuffers whether to use direct ByteBuffers (can be faster for large records)
          */
-        public Config(int workerThreads, int dispatcherQueueCapacity, boolean useDirectBuffers) {
+        public Config(int workerThreads, boolean useDirectBuffers) {
             this.workerThreads = workerThreads <= 0 ? Runtime.getRuntime().availableProcessors() : workerThreads;
-            this.dispatcherQueueCapacity = dispatcherQueueCapacity;
             this.useDirectBuffers = useDirectBuffers;
         }
 
         /**
          * Returns a default configuration suitable for most use cases.
-         * Uses available CPU cores, a queue capacity of 1024, and heap buffers.
+         * Uses available CPU cores and heap buffers.
          *
          * @return default configuration
          */
         public static Config defaultConfig() {
-            return new Config(0, 1024, false);
+            return new Config(0, false);
         }
     }
 
     /**
      * Creates a parallel writer.
      *
-     * @param writer the underlying writer
+     * @param writer the underlying writer (must be BufferedRandomAccessWriter)
      * @param graph the graph being written
      * @param inlineFeatures the inline features to write
      * @param config parallelization configuration
-     * @param filePath optional file path for async writes (can be null)
+     * @param filePath file path for async writes (required, cannot be null)
      */
     public ParallelGraphWriter(RandomAccessWriter writer,
                                ImmutableGraphIndex graph,
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath) {
+        if (filePath == null) {
+            throw new IllegalArgumentException("filePath is required for parallel writes");
+        }
+        if (!(writer instanceof BufferedRandomAccessWriter)) {
+            throw new IllegalArgumentException("writer must be BufferedRandomAccessWriter for parallel writes");
+        }
+
         this.writer = writer;
         this.graph = graph;
         this.filePath = filePath;
@@ -115,7 +118,6 @@ class ParallelGraphWriter implements AutoCloseable {
                 t.setDaemon(false);
                 return t;
             });
-        this.dispatcher = new GraphIndexWriteDispatcher(writer, config.dispatcherQueueCapacity);
 
         // Compute fixed record size for L0
         this.recordSize = Integer.BYTES // node ordinal
@@ -143,7 +145,8 @@ class ParallelGraphWriter implements AutoCloseable {
     }
 
     /**
-     * Writes all L0 node records in parallel.
+     * Writes all L0 node records in parallel using asynchronous file I/O.
+     * Records are written in order to maintain index correctness.
      *
      * @param ordinalMapper maps between old and new ordinals
      * @param inlineFeatures the inline features to write
@@ -159,12 +162,8 @@ class ParallelGraphWriter implements AutoCloseable {
         List<Future<NodeRecordTask.Result>> futures = buildRecords(
                 ordinalMapper, inlineFeatures, featureStateSuppliers, baseOffset);
 
-        // Write results using appropriate strategy
-        if (filePath != null && writer instanceof BufferedRandomAccessWriter) {
-            writeRecordsAsync(futures);
-        } else {
-            writeRecordsSync(futures);
-        }
+        // Write results in order using async I/O
+        writeRecordsAsync(futures);
     }
 
     /**
@@ -215,30 +214,10 @@ class ParallelGraphWriter implements AutoCloseable {
     }
 
     /**
-     * Writes records synchronously via the write dispatcher.
-     * The dispatcher serializes writes through the RandomAccessWriter to ensure thread safety.
-     *
-     * @param futures the completed record building tasks
-     * @throws IOException if an I/O error occurs
-     */
-    private void writeRecordsSync(List<Future<NodeRecordTask.Result>> futures) throws IOException {
-        try {
-            for (Future<NodeRecordTask.Result> future : futures) {
-                NodeRecordTask.Result result = future.get();
-                dispatcher.submit(result);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Interrupted while writing records", e);
-        } catch (ExecutionException e) {
-            throw unwrapExecutionException(e);
-        }
-    }
-
-    /**
      * Writes records asynchronously using AsynchronousFileChannel for improved throughput.
+     * Records are written in sequential order by iterating through the futures list, which
+     * ensures that even though record building is parallelized, writes occur in the correct order.
      * Creates a dedicated thread pool for async I/O operations and properly cleans up resources.
-     * Requires filePath to be set.
      *
      * @param futures the completed record building tasks
      * @throws IOException if an I/O error occurs
@@ -327,9 +306,6 @@ class ParallelGraphWriter implements AutoCloseable {
                 executor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
-
-            // Close dispatcher (waits for all writes to complete)
-            dispatcher.close();
 
             // Close all views (CopyOnWriteArrayList is safe for concurrent iteration)
             for (var view : allViews) {
