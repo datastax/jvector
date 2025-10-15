@@ -24,7 +24,14 @@
 
 package io.github.jbellis.jvector.exceptions;
 
+/**
+ * RuntimeException wrapper for InterruptedException.
+ */
 public final class ThreadInterruptedException extends RuntimeException {
+  /**
+   * Creates a ThreadInterruptedException wrapping the given InterruptedException.
+   * @param ie the InterruptedException to wrap
+   */
   public ThreadInterruptedException(InterruptedException ie) {
     super(ie);
   }
