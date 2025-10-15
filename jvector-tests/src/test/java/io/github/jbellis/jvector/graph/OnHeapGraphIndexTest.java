@@ -140,9 +140,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
      */
     @Test
     public void testGraphConstructionWithNonIdentityOrdinalMapping() throws IOException {
-        // create random mapping from graph node id to ravv ordinal
-        int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).toArray();
-        shuffle(graphToRavvOrdMap, getRandom());
+        // create reversed mapping from graph node id to ravv ordinal
+        int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
         var bsp = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, graphToRavvOrdMap, SIMILARITY_FUNCTION);
         try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
                 baseVectorsRavv.dimension(),
