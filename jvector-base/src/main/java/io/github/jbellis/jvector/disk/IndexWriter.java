@@ -20,9 +20,14 @@ import java.io.Closeable;
 import java.io.DataOutput;
 import java.io.IOException;
 
+/**
+ * Interface for writing index data.
+ */
 public interface IndexWriter extends DataOutput, Closeable {
     /**
+     * Returns the current position in the output.
      * @return the current position in the output
+     * @throws IOException if an I/O error occurs
      */
     long position() throws IOException;
 }

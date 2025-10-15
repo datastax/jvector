@@ -55,10 +55,18 @@ public class SimpleMappedReader extends ByteBufferReader {
         // Individual readers don't close anything
     }
 
+    /**
+     * Supplier for SimpleMappedReader instances.
+     */
     public static class Supplier implements ReaderSupplier {
         private final MappedByteBuffer buffer;
         private static final Unsafe unsafe = getUnsafe();
 
+        /**
+         * Creates a Supplier for the given path.
+         * @param path the path to read from
+         * @throws IOException if an I/O error occurs
+         */
         public Supplier(Path path) throws IOException {
             try (var raf = new RandomAccessFile(path.toString(), "r")) {
                 if (raf.length() > Integer.MAX_VALUE) {

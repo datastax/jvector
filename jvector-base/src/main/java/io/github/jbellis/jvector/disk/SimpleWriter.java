@@ -30,6 +30,11 @@ public class SimpleWriter implements IndexWriter {
     private final FileOutputStream fos;
     private final DataOutputStream dos;
 
+    /**
+     * Creates a SimpleWriter for the given path.
+     * @param path the path to write to
+     * @throws IOException if an I/O error occurs
+     */
     public SimpleWriter(Path path) throws IOException {
         fos = new FileOutputStream(path.toFile());
         dos = new DataOutputStream(fos);

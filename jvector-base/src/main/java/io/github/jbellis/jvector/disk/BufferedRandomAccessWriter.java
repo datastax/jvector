@@ -35,6 +35,11 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
     private final RandomAccessFile raf;
     private final DataOutputStream stream;
 
+    /**
+     * Creates a buffered random access writer for the given path.
+     * @param path the path to write to
+     * @throws FileNotFoundException if the file cannot be created
+     */
     public BufferedRandomAccessWriter(Path path) throws FileNotFoundException {
         raf = new RandomAccessFile(path.toFile(), "rw");
         stream = new DataOutputStream(new BufferedOutputStream(new RandomAccessOutputStream(raf)));
@@ -89,9 +94,8 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
 
     /**
      * return the CRC32 checksum for the range [startOffset .. endOffset)
-     * <p>
+     *
      * the file pointer will be left at endOffset.
-     * <p>
      */
     @Override
     public long checksum(long startOffset, long endOffset) throws IOException {
