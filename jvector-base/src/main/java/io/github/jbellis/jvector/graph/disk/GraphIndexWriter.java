@@ -36,6 +36,7 @@ public interface GraphIndexWriter extends Closeable {
      * Each supplier takes a node ordinal and returns a FeatureState suitable for Feature.writeInline.
      *
      * @param featureStateSuppliers a map of FeatureId to a function that returns a Feature.State
+     * @throws IOException if an I/O error occurs
      */
     void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
 }
