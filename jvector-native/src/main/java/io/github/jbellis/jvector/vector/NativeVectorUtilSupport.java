@@ -136,8 +136,9 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     // These block sizes are tied to the SIMD implementations of the methods in jvector_simd.h,
-    // which are found in jvector_simd.c. Since the methods using this from Java are not in the
-    // most performance critical path, it is just easier not going through the JNI barrier.
+    // which are found in jvector_sse.c, jvector_avx2.c, and jvector_avx512.c.
+    // Since the methods using this from Java are not in the most performance critical path,
+    // it is just easier not going through the JNI barrier.
     private int getBlockSize() {
         int blockSize;
         switch (SIMD_VERSION) {

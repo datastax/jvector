@@ -17,9 +17,6 @@
 
 #include <stdbool.h>
 
-#ifndef VECTOR_SIMD_DOT_H
-#define VECTOR_SIMD_DOT_H
-
 // check CPU support
 bool check_compatibility(void);
 
@@ -37,4 +34,3 @@ void bulk_quantized_shuffle_cosine(const unsigned char* shuffles, int codebookCo
 
 // Code use by PQ
 float assemble_and_sum(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
-#endif
