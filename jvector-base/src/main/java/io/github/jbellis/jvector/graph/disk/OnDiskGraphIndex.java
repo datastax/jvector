@@ -225,21 +225,41 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset) {
         try (var reader = readerSupplier.get()) {
-            logger.debug("Loading OnDiskGraphIndex from offset={}", offset);
-            var header = Header.load(reader, offset);
-
-            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
-                    header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
-            logger.debug("Position after reading header={}",
-                    reader.getPosition());
-            if (header.common.version >= 5) {
-                logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
-                return loadFromFooter(readerSupplier, reader.getPosition());
-            } else {
-                return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
-            }
+            return load(readerSupplier, reader, offset, reader.length());
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
+        }
+    }
+
+    /**
+     * Load an index from the given reader supplier where header and graph are located on the same file,
+     * where the index starts at `offset` and ends at `overrideLength`.
+     *
+     * @param readerSupplier the reader supplier to use to read the graph and index.
+     * @param offset the offset in bytes from the start of the file where the index starts.
+     * @param overrideLength the length of the file to use instead of the length of the reader supplier.
+     */
+    public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset, long overrideLength) {
+        try (var reader = readerSupplier.get()) {
+            return load(readerSupplier, reader, offset, overrideLength);
+        } catch (Exception e) {
+            throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
+        }
+    }
+
+    private static OnDiskGraphIndex load(ReaderSupplier readerSupplier, RandomAccessReader reader, long offset, long overrideLength) throws IOException {
+        logger.debug("Loading OnDiskGraphIndex from offset={} length={}", offset, overrideLength);
+        var header = Header.load(reader, offset);
+
+        logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
+                header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
+        logger.debug("Position after reading header={}",
+                reader.getPosition());
+        if (header.common.version >= 5) {
+            logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
+            return loadFromFooter(readerSupplier, reader.getPosition(), overrideLength);
+        } else {
+            return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
         }
     }
 
@@ -257,11 +277,13 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      * In this implementation we will assume that the {@link ReaderSupplier} must vend slices of IndexOutput that contain the graph index and nothing else.
      * @param readerSupplier the reader supplier to use to read the graph index.
      *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
+     * @param neighborsOffset the offset in bytes from the start of the file where the neighbors start.
+     * @param overrideLength the length of the file to use instead of the length of the reader supplier.
      * @return the loaded index.
      */
-    private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
+    private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset, long overrideLength) {
         try (var in = readerSupplier.get()) {
-            final long magicOffset = in.length() - FOOTER_MAGIC_SIZE;
+            final long magicOffset = overrideLength - FOOTER_MAGIC_SIZE;
             logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
             in.seek(magicOffset);
             int version = in.readInt();
