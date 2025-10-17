@@ -68,6 +68,10 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return FeatureId.FUSED_PQ;
     }
 
+    public ProductQuantization getPQ() {
+        return pq;
+    }
+
     @Override
     public int headerSize() {
         return pq.compressorSize();

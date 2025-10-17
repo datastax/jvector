@@ -313,6 +313,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return features.keySet();
     }
 
+    public Map<FeatureId, ? extends Feature> getFeatures() {
+        return features;
+    }
+
     public int getDimension() {
         return dimension;
     }
