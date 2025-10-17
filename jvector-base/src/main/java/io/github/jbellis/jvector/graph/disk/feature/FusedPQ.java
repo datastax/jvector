@@ -35,6 +35,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.function.IntFunction;
 
 /**
  * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
@@ -109,14 +110,13 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
             compressedNeighbors = vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree);
         }
         var state = (FusedPQ.State) state_;
-        var pqv = state.pqVectors;
 
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
         int n = 0;
         compressedNeighbors.zero();
         while (neighbors.hasNext()) {
             int node = neighbors.nextInt();
-            var compressed = pqv.get(node);
+            var compressed = state.compressedVectorFunction.apply(node);
             VectorUtil.storePQCodeInNeighbors(compressed, n, maxDegree, compressedNeighbors);
             n++;
         }
@@ -126,12 +126,16 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
 
     public static class State implements Feature.State {
         public final ImmutableGraphIndex.View view;
-        public final PQVectors pqVectors;
+        public final IntFunction<ByteSequence<?>> compressedVectorFunction;
         public final int nodeId;
 
         public State(ImmutableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
+            this(view, pqVectors::get, nodeId);
+        }
+
+        public State(ImmutableGraphIndex.View view, IntFunction<ByteSequence<?>> compressedVectorFunction, int nodeId) {
             this.view = view;
-            this.pqVectors = pqVectors;
+            this.compressedVectorFunction = compressedVectorFunction;
             this.nodeId = nodeId;
         }
     }
@@ -139,7 +143,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     @Override
     public void writeSourceFeature(DataOutput out, Feature.State state_) throws IOException {
         var state = (FusedPQ.State) state_;
-        var compressed = state.pqVectors.get(state.nodeId);
+        var compressed = state.compressedVectorFunction.apply(state.nodeId);
         var temp = pqCodeScratch.get();
         for (int i = 0; i < compressed.length(); i++) {
             temp.set(i, compressed.get(i));
