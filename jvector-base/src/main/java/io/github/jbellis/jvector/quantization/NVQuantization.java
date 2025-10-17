@@ -150,16 +150,17 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
             VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
         }
         VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
-        return compute(globalMean, nSubVectors);
+        return create(globalMean, nSubVectors);
     }
 
     /**
-     * Computes the global mean vector and the data structures used to divide each vector into subvectors.
+     * Creates a NVQuantization instance by using the global mean and computing the data structures used to divide each
+     * vector into subvectors.
      *
      * @param scaledGlobalMean the mean of the graph (its average vector)
      * @param nSubVectors number of subvectors
      */
-    public static NVQuantization compute(VectorFloat<?> scaledGlobalMean, int nSubVectors) {
+    public static NVQuantization create(VectorFloat<?> scaledGlobalMean, int nSubVectors) {
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(scaledGlobalMean.length(), nSubVectors);
         return new NVQuantization(subvectorSizesAndOffsets, scaledGlobalMean);
     }
