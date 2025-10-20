@@ -81,9 +81,9 @@ class NodeRecordTask implements Callable<NodeRecordTask.Result> {
 
     @Override
     public Result call() throws Exception {
-        buffer.clear();
+        // Writer automatically clears buffer on construction
         var writer = new ByteBufferIndexWriter(buffer);
-        
+
         var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
         
         // Write node ordinal
@@ -150,19 +150,17 @@ class NodeRecordTask implements Callable<NodeRecordTask.Result> {
         }
         
         // Verify we wrote exactly the expected amount
-        if (buffer.position() != recordSize) {
+        if (writer.bytesWritten() != recordSize) {
             throw new IllegalStateException(
                 String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes",
-                              newOrdinal, recordSize, buffer.position()));
+                              newOrdinal, recordSize, writer.bytesWritten()));
         }
 
-        // Copy buffer data before returning to avoid race with thread-local buffer reuse
-        // The buffer is thread-local and will be reused for the next task on this thread
-        buffer.flip();
-        ByteBuffer bufferCopy = ByteBuffer.allocate(buffer.remaining());
-        bufferCopy.put(buffer);
-        bufferCopy.flip();
+        // Writer handles flip, copy, and reset internally
+        // The copy ensures thread-local buffer can be safely reused for the next task
+        ByteBuffer dataCopy = writer.cloneBuffer();
+        writer.reset();
 
-        return new Result(newOrdinal, fileOffset, bufferCopy);
+        return new Result(newOrdinal, fileOffset, dataCopy);
     }
 }

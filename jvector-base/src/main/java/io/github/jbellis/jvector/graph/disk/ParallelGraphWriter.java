@@ -145,8 +145,13 @@ class ParallelGraphWriter implements AutoCloseable {
     }
 
     /**
-     * Writes all L0 node records in parallel using asynchronous file I/O.
-     * Records are written in order to maintain index correctness.
+     * Writes all L0 node records in parallel using asynchronous file I/O with memory-aware backpressure.
+     * Records are written in order to maintain index correctness. The implementation uses a streaming
+     * approach with bounded memory usage to prevent heap exhaustion on large graphs.
+     * <p>
+     * The method builds records in chunks sized according to available heap memory. When a chunk is full,
+     * it is written to disk before building the next chunk. This provides natural backpressure and prevents
+     * memory issues when processing very large graphs.
      *
      * @param ordinalMapper maps between old and new ordinals
      * @param inlineFeatures the inline features to write
@@ -158,36 +163,17 @@ class ParallelGraphWriter implements AutoCloseable {
                                List<Feature> inlineFeatures,
                                Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
                                long baseOffset) throws IOException {
-        // Build all records in parallel
-        List<Future<NodeRecordTask.Result>> futures = buildRecords(
-                ordinalMapper, inlineFeatures, featureStateSuppliers, baseOffset);
-
-        // Write results in order using async I/O
-        writeRecordsAsync(futures);
-    }
-
-    /**
-     * Builds all node records in parallel using the worker thread pool.
-     * Each worker thread obtains its own graph view and buffer from thread-local storage.
-     *
-     * @param ordinalMapper maps between old and new ordinals
-     * @param inlineFeatures the inline features to write
-     * @param featureStateSuppliers suppliers for feature state
-     * @param baseOffset the file offset where L0 records start
-     * @return list of futures for all record building tasks
-     */
-    private List<Future<NodeRecordTask.Result>> buildRecords(
-            OrdinalMapper ordinalMapper,
-            List<Feature> inlineFeatures,
-            Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
-            long baseOffset) {
+        // Calculate optimal buffer size based on available heap memory
+        int bufferSize = calculateOptimalBufferSize();
         int maxOrdinal = ordinalMapper.maxOrdinal();
-        List<Future<NodeRecordTask.Result>> futures = new ArrayList<>(maxOrdinal + 1);
+        List<Future<NodeRecordTask.Result>> futures = new ArrayList<>(bufferSize);
 
+        // Build and write records in chunks to manage memory usage
         for (int newOrdinal = 0; newOrdinal <= maxOrdinal; newOrdinal++) {
             final int ordinal = newOrdinal;
             final long fileOffset = baseOffset + (long) ordinal * recordSize;
 
+            // Submit task to build this record
             Future<NodeRecordTask.Result> future = executor.submit(() -> {
                 var view = viewPerThread.get();
                 var buffer = bufferPerThread.get();
@@ -208,9 +194,53 @@ class ParallelGraphWriter implements AutoCloseable {
             });
 
             futures.add(future);
+
+            // When buffer is full, write this batch and clear for next batch
+            if (futures.size() >= bufferSize) {
+                writeRecordsAsync(futures);
+                futures.clear();
+            }
         }
 
-        return futures;
+        // Write any remaining records
+        if (!futures.isEmpty()) {
+            writeRecordsAsync(futures);
+        }
+    }
+
+    /**
+     * Calculates the optimal buffer size based on available heap memory.
+     * Uses a conservative approach to prevent memory exhaustion while maintaining
+     * good parallelism and throughput.
+     * <p>
+     * The calculation considers:
+     * - Current heap usage and maximum heap size
+     * - Estimated memory per record (data + Future/Result overhead)
+     * - Conservative allocation (20% of available memory)
+     * - Reasonable bounds (min 100, max 1000000 records)
+     *
+     * @return the number of records to buffer before writing
+     */
+    private int calculateOptimalBufferSize() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemory = runtime.maxMemory();
+        long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+        long availableMemory = maxMemory - usedMemory;
+
+        // Use 25% of available memory for buffering to be conservative
+        long memoryForBuffer = (long) (availableMemory * 0.2);
+
+        // Estimate memory per record:
+        // - ByteBuffer copy (recordSize bytes)
+        // - Future wrapper and Result object overhead (~1KB)
+        int estimatedMemoryPerRecord = recordSize + 1024;
+
+        int calculatedBufferSize = (int) (memoryForBuffer / estimatedMemoryPerRecord);
+
+        // Ensure buffer size is reasonable:
+        // - Minimum 100 records to ensure some parallelism
+        // - Maximum 1000000 records to cap memory usage
+        return Math.max(100, Math.min(calculatedBufferSize, 1000000));
     }
 
     /**
@@ -238,13 +268,33 @@ class ParallelGraphWriter implements AutoCloseable {
                         return t;
                     });
 
+            // Use a bounded list to allow multiple concurrent async writes while providing backpressure
+            // Buffer size is 2x the I/O thread pool size to keep the pipeline full
+            int maxConcurrentWrites = numThreads * 2;
+            List<Future<Integer>> pendingWrites = new ArrayList<>(maxConcurrentWrites);
+
             try (var afc = AsynchronousFileChannel.open(filePath, opts, fileWritePool)) {
                 for (Future<NodeRecordTask.Result> future : futures) {
                     NodeRecordTask.Result result = future.get();
 
+                    // Submit async write and track the future
                     // result.data is already a copy made in NodeRecordTask to avoid
                     // race conditions with thread-local buffer reuse
-                    afc.write(result.data, result.fileOffset).get();
+                    Future<Integer> writeFuture = afc.write(result.data, result.fileOffset);
+                    pendingWrites.add(writeFuture);
+
+                    // When buffer is full, wait for all pending writes to complete
+                    if (pendingWrites.size() >= maxConcurrentWrites) {
+                        for (Future<Integer> wf : pendingWrites) {
+                            wf.get(); // Wait for write completion
+                        }
+                        pendingWrites.clear();
+                    }
+                }
+
+                // Wait for any remaining pending writes
+                for (Future<Integer> wf : pendingWrites) {
+                    wf.get();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

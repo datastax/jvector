@@ -35,14 +35,31 @@ public class ByteBufferIndexWriter implements IndexWriter {
     private final int initialPosition;
 
     /**
-     * Creates a writer that writes to the given buffer starting at its current position.
-     * The buffer's position will be advanced as data is written.
+     * Creates a writer that writes to the given buffer.
      * The buffer's byte order is set to BIG_ENDIAN to match DataOutput behavior.
+     *
+     * @param buffer the buffer to write to
+     * @param autoClear if true, automatically clears the buffer before writing
      */
-    public ByteBufferIndexWriter(ByteBuffer buffer) {
+    public ByteBufferIndexWriter(ByteBuffer buffer, boolean autoClear) {
         this.buffer = buffer;
+        if (autoClear) {
+            buffer.clear();
+        }
         this.buffer.order(ByteOrder.BIG_ENDIAN);
         this.initialPosition = buffer.position();
+    }
+
+    /**
+     * Creates a writer that writes to the given buffer, automatically clearing it first.
+     * The buffer's byte order is set to BIG_ENDIAN to match DataOutput behavior.
+     * This is the most common usage pattern and is equivalent to:
+     * {@code new ByteBufferIndexWriter(buffer, true)}
+     *
+     * @param buffer the buffer to write to (will be cleared)
+     */
+    public ByteBufferIndexWriter(ByteBuffer buffer) {
+        this(buffer, true);
     }
 
     /**
@@ -88,7 +105,52 @@ public class ByteBufferIndexWriter implements IndexWriter {
      * Resets the buffer position to the initial position, allowing reuse.
      */
     public void reset() {
+        // Reset for next use
+        buffer.clear();
         buffer.position(initialPosition);
+    }
+
+    /**
+     * Returns an independent copy of the written data as a new ByteBuffer.
+     * The returned buffer is ready to read (position=0, limit=written data length).
+     * The writer's buffer is automatically reset and ready for reuse.
+     * <p>
+     * This method handles all buffer management:
+     * <ul>
+     *   <li>Flips the buffer to prepare for reading (sets limit=position, position=initialPosition)</li>
+     *   <li>Allocates and creates a copy of the data</li>
+     *   <li>Resets the buffer for the next write operation</li>
+     * </ul>
+     * <p>
+     * This is the recommended way to extract data from the writer when the buffer
+     * will be reused (e.g., in thread-local scenarios).
+     *
+     * @return a new ByteBuffer containing a copy of the written data
+     */
+    public ByteBuffer cloneBuffer() {
+        // Calculate the amount of data written
+        int bytesWritten = buffer.position() - initialPosition;
+
+        // Set limit to current position and position to initial for reading
+        int savedPosition = buffer.position();
+        buffer.position(initialPosition);
+        buffer.limit(savedPosition);
+
+        // Create independent copy
+        ByteBuffer copy = ByteBuffer.allocate(bytesWritten);
+        copy.put(buffer);
+        copy.flip();
+
+        return copy;
+    }
+
+    /**
+     * Returns the number of bytes written since construction or last reset.
+     *
+     * @return bytes written
+     */
+    public int bytesWritten() {
+        return buffer.position() - initialPosition;
     }
 
     @Override
