@@ -1437,7 +1437,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(magFloat4, results, offset);
         }
-        for (j = 0; j < results.length(); j++) {
+        for (; j < results.length(); j++) {
             float sum = 0;
             float magnitude = 0;
 
