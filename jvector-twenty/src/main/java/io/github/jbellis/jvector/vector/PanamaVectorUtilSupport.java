@@ -1119,14 +1119,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
     }
 
-    private static FloatVector extractAndConvertToDouble(ByteVector partialVectorLow, ByteVector partialVectorHigh, int part) {
+    private static IntVector extractAndConvertToDouble(ByteVector partialVectorLow, ByteVector partialVectorHigh, int part) {
         var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, part);
         partialVectorLow0 = partialVectorLow0.and((short) 0xff);
         var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, part);
         partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
 
         var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
-        return (FloatVector) partialVector0.convert(VectorOperators.I2F, 0);
+        return partialVector0;
     }
 
     private void bulkShuffleQuantizedSimilarityEuclidean(ByteSequence<?> shuffles, int codebookCount,
@@ -1141,10 +1141,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int j;
         for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
-            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
@@ -1184,19 +1184,24 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 }
             }
 
-            sum1 = ones.div(sum1.mul(delta).add(minDistance + 1));
-            sum2 = ones.div(sum2.mul(delta).add(minDistance + 1));
-            sum3 = ones.div(sum3.mul(delta).add(minDistance + 1));
-            sum4 = ones.div(sum4.mul(delta).add(minDistance + 1));
+            var sumFloat1 = (FloatVector) sum1.convert(VectorOperators.I2F, 0);
+            var sumFloat2 = (FloatVector) sum2.convert(VectorOperators.I2F, 0);
+            var sumFloat3 = (FloatVector) sum3.convert(VectorOperators.I2F, 0);
+            var sumFloat4 = (FloatVector) sum4.convert(VectorOperators.I2F, 0);
+
+            sumFloat1 = ones.div(sumFloat1.mul(delta).add(minDistance + 1));
+            sumFloat2 = ones.div(sumFloat2.mul(delta).add(minDistance + 1));
+            sumFloat3 = ones.div(sumFloat3.mul(delta).add(minDistance + 1));
+            sumFloat4 = ones.div(sumFloat4.mul(delta).add(minDistance + 1));
 
             int offset = j;
-            intoVectorFloat(sum1, results, offset);
+            intoVectorFloat(sumFloat1, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum2, results, offset);
+            intoVectorFloat(sumFloat2, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum3, results, offset);
+            intoVectorFloat(sumFloat3, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum4, results, offset);
+            intoVectorFloat(sumFloat4, results, offset);
         }
         for (; j < results.length(); j++) {
             int val = 0;
@@ -1218,10 +1223,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int j;
         for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
-            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
@@ -1261,19 +1266,24 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 }
             }
 
-            sum1 = sum1.mul(delta).add(minDistance + 1).div(2);
-            sum2 = sum2.mul(delta).add(minDistance + 1).div(2);
-            sum3 = sum3.mul(delta).add(minDistance + 1).div(2);
-            sum4 = sum4.mul(delta).add(minDistance + 1).div(2);
+            var sumFloat1 = (FloatVector) sum1.convert(VectorOperators.I2F, 0);
+            var sumFloat2 = (FloatVector) sum2.convert(VectorOperators.I2F, 0);
+            var sumFloat3 = (FloatVector) sum3.convert(VectorOperators.I2F, 0);
+            var sumFloat4 = (FloatVector) sum4.convert(VectorOperators.I2F, 0);
+
+            sumFloat1 = sumFloat1.mul(delta).add(minDistance + 1).div(2);
+            sumFloat2 = sumFloat2.mul(delta).add(minDistance + 1).div(2);
+            sumFloat3 = sumFloat3.mul(delta).add(minDistance + 1).div(2);
+            sumFloat4 = sumFloat4.mul(delta).add(minDistance + 1).div(2);
 
             int offset = j;
-            intoVectorFloat(sum1, results, offset);
+            intoVectorFloat(sumFloat1, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum2, results, offset);
+            intoVectorFloat(sumFloat2, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum3, results, offset);
+            intoVectorFloat(sumFloat3, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum4, results, offset);
+            intoVectorFloat(sumFloat4, results, offset);
         }
         for (; j < results.length(); j++) {
             int val = 0;
@@ -1297,10 +1307,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int j;
         for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
-            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var sum4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
@@ -1340,15 +1350,20 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 }
             }
 
-            sum1 = sum1.mul(sumDelta).add(minDistance);
-            sum2 = sum2.mul(sumDelta).add(minDistance);
-            sum3 = sum3.mul(sumDelta).add(minDistance);
-            sum4 = sum4.mul(sumDelta).add(minDistance);
+            var sumFloat1 = (FloatVector) sum1.convert(VectorOperators.I2F, 0);
+            var sumFloat2 = (FloatVector) sum2.convert(VectorOperators.I2F, 0);
+            var sumFloat3 = (FloatVector) sum3.convert(VectorOperators.I2F, 0);
+            var sumFloat4 = (FloatVector) sum4.convert(VectorOperators.I2F, 0);
 
-            var mag1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var mag2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var mag3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-            var mag4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            sumFloat1 = sumFloat1.mul(sumDelta).add(minDistance);
+            sumFloat2 = sumFloat2.mul(sumDelta).add(minDistance);
+            sumFloat3 = sumFloat3.mul(sumDelta).add(minDistance);
+            sumFloat4 = sumFloat4.mul(sumDelta).add(minDistance);
+
+            var mag1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var mag2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var mag3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
+            var mag4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
@@ -1388,34 +1403,39 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 }
             }
 
-            mag1 = mag1.mul(magnitudeDelta).add(minMagnitude);
-            mag2 = mag2.mul(magnitudeDelta).add(minMagnitude);
-            mag3 = mag3.mul(magnitudeDelta).add(minMagnitude);
-            mag4 = mag4.mul(magnitudeDelta).add(minMagnitude);
+            var magFloat1 = (FloatVector) mag1.convert(VectorOperators.I2F, 0);
+            var magFloat2 = (FloatVector) mag2.convert(VectorOperators.I2F, 0);
+            var magFloat3 = (FloatVector) mag3.convert(VectorOperators.I2F, 0);
+            var magFloat4 = (FloatVector) mag4.convert(VectorOperators.I2F, 0);
 
-            var divisor1 = mag1.mul(queryMagnitudeSquared).sqrt();
-            var divisor2 = mag2.mul(queryMagnitudeSquared).sqrt();
-            var divisor3 = mag3.mul(queryMagnitudeSquared).sqrt();
-            var divisor4 = mag4.mul(queryMagnitudeSquared).sqrt();
+            magFloat1 = magFloat1.mul(magnitudeDelta).add(minMagnitude);
+            magFloat2 = magFloat2.mul(magnitudeDelta).add(minMagnitude);
+            magFloat3 = magFloat3.mul(magnitudeDelta).add(minMagnitude);
+            magFloat4 = magFloat4.mul(magnitudeDelta).add(minMagnitude);
 
-            sum1 = sum1.div(divisor1);
-            sum2 = sum2.div(divisor2);
-            sum3 = sum3.div(divisor3);
-            sum4 = sum4.div(divisor4);
+            var divisor1 = magFloat1.mul(queryMagnitudeSquared).sqrt();
+            var divisor2 = magFloat2.mul(queryMagnitudeSquared).sqrt();
+            var divisor3 = magFloat3.mul(queryMagnitudeSquared).sqrt();
+            var divisor4 = magFloat4.mul(queryMagnitudeSquared).sqrt();
 
-            sum1 = sum1.add(1).div(2);
-            sum2 = sum2.add(1).div(2);
-            sum3 = sum3.add(1).div(2);
-            sum4 = sum4.add(1).div(2);
+            magFloat1 = sumFloat1.div(divisor1);
+            magFloat2 = sumFloat2.div(divisor2);
+            magFloat3 = sumFloat3.div(divisor3);
+            magFloat4 = sumFloat4.div(divisor4);
+
+            magFloat1 = magFloat1.add(1).div(2);
+            magFloat2 = magFloat2.add(1).div(2);
+            magFloat3 = magFloat3.add(1).div(2);
+            magFloat4 = magFloat4.add(1).div(2);
 
             int offset = j;
-            intoVectorFloat(sum1, results, offset);
+            intoVectorFloat(magFloat1, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum2, results, offset);
+            intoVectorFloat(magFloat2, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum3, results, offset);
+            intoVectorFloat(magFloat3, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sum4, results, offset);
+            intoVectorFloat(magFloat4, results, offset);
         }
         for (j = 0; j < results.length(); j++) {
             float sum = 0;
