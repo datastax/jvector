@@ -38,12 +38,6 @@ void initialize_constants() {
 
         initialIndexRegister = _mm256_setr_epi32(-8, -7, -6, -5, -4, -3, -2, -1);
         indexIncrement = _mm256_set1_epi32(8);
-
-        #elif defined(__SSE4_1__)
-        maskFifthBit = _mm_set1_epi16(0x0010);
-        maskSixthBit = _mm_set1_epi16(0x0020);
-        maskSeventhBit = _mm_set1_epi16(0x0040);
-        maskEighthBit = _mm_set1_epi16(0x0080);
     }
 }
 
