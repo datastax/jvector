@@ -68,11 +68,6 @@ class TestArraySliceByteSequence {
         slice.set(0, (byte) 10);
         assertEquals(10, slice.get(0));
         assertEquals(10, baseSequence.get(1));
-
-        // Test setLittleEndianShort
-        slice.setLittleEndianShort(0, (short) 258); // 258 = 0x0102
-        assertEquals(2, slice.get(0));  // least significant byte
-        assertEquals(1, slice.get(1));  // most significant byte
     }
 
     @Test

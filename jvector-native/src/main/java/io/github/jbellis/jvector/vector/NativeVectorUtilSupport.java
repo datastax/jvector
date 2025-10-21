@@ -156,7 +156,7 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     // This implementation stores pqCode in compressedNeighbors using a block-transposed layout.
     // The block size is determined by the SIMD width.
     @Override
-    public void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, int length, ByteSequence<?> compressedNeighbors) {
+    public void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, ByteSequence<?> compressedNeighbors) {
         int blockSize = getBlockSize();
 
         int blockIndex = position / blockSize;

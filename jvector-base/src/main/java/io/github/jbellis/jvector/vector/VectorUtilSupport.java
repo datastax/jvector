@@ -141,16 +141,10 @@ public interface VectorUtilSupport {
    * Other implementations might choose a different layout for the compressed neighbors (e.g., based on SIMD considerations).
    * @param pqCode the PQ code to store
    * @param position the position of the PQ code in the compressed neighbors
-   * @param length the number of PQ codes that compressedNeighbors holds
    * @param compressedNeighbors the compressed neighbors to store the PQ code in
    */
-  default void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, int length, ByteSequence<?> compressedNeighbors) {
-    for (int j = 0; j < pqCode.length(); j++) {
-      compressedNeighbors.set(position * pqCode.length() + j, pqCode.get(j));
-    }
-  }
+  void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, ByteSequence<?> compressedNeighbors);
 
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
@@ -167,20 +161,8 @@ public interface VectorUtilSupport {
    * @param vsf      The similarity function to use.
    * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
    */
-  default void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
-    switch (vsf) {
-      case EUCLIDEAN:
-        bulkShuffleQuantizedSimilarityEuclidean(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-        break;
-      case DOT_PRODUCT:
-        bulkShuffleQuantizedSimilarityDotProduct(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-        break;
-      default:
-        throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
-    }
-  }
+  void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorSimilarityFunction vsf, VectorFloat<?> results);
 
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
   /**
    * Calculates the raw similarity of multiple product quantization-encoded vectors against a single query vector,
    * using precomputed raw similarity fragments derived from codebook contents and evaluations during a search.
@@ -193,72 +175,8 @@ public interface VectorUtilSupport {
    *                 the fragments for one codebook, followed by all the fragments for the next codebook, and so on.
    * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
    */
-  default void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
-    for (int j = 0; j < results.length(); j++) {
-      float val = 0;
-      for (int i = 0; i < codebookCount; i++) {
-        var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
-        val += combineBytes(i, shuffle, partials);
-      }
-      results.set(j, val);
-    }
-  }
+  void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results);
 
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
-  /**
-   * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
-   * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
-   * It assumes 256 clusters per codebook.
-   * @param shuffles a sequence of shuffles to be used against partial pre-computed fragments. These are PQ-encoded
-   *                 vectors stored using a layout that is SIMD dependent. In the default implementation, these vectors are stored in rows.
-   * @param codebookCount The number of codebooks used in the PQ encoding.
-   * @param quantizedPartials The quantized precomputed score fragments for each codebook entry. These are stored as a contiguous vector of all
-   *                          the fragments for one codebook, followed by all the fragments for the next codebook, and so on. These have been
-   *                          quantized by quantizePartialSums.
-   * @param delta the multiplicative factor used during quantization, to be used here for dequantization.
-   * @param minDistance the additive factor used during quantization, to be used here for dequantization.
-   * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
-   */
-  private static  void bulkShuffleQuantizedSimilarityEuclidean(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results) {
-    for (int j = 0; j < results.length(); j++) {
-      int val = 0;
-      for (int i = 0; i < codebookCount; i++) {
-        var shuffle = computeSingleShuffleQuantized(i, j, shuffles, codebookCount);
-        val += combineBytes(i, shuffle, quantizedPartials);
-      }
-      results.set(j, 1 / (1 + (delta * val) + minDistance));
-    }
-  }
-
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
-  /**
-   * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
-   * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
-   * It assumes 256 clusters per codebook.
-   * @param shuffles a sequence of shuffles to be used against partial pre-computed fragments. These are PQ-encoded
-   *                 vectors stored using a layout that is SIMD dependent. In the default implementation, these vectors are stored in rows.
-   * @param codebookCount The number of codebooks used in the PQ encoding.
-   * @param quantizedPartials The quantized precomputed score fragments for each codebook entry. These are stored as a contiguous vector of all
-   *                          the fragments for one codebook, followed by all the fragments for the next codebook, and so on. These have been
-   *                          quantized by quantizePartialSums.
-   * @param delta the multiplicative factor used during quantization, to be used here for dequantization.
-   * @param minDistance the additive factor used during quantization, to be used here for dequantization.
-   * @param results  The output vector to store the similarity scores. This should be pre-allocated to the same size as the number of shuffles.
-   */
-  private static void bulkShuffleQuantizedSimilarityDotProduct(ByteSequence<?> shuffles, int codebookCount,
-                                                               ByteSequence<?> quantizedPartials,
-                                                               float delta, float minDistance, VectorFloat<?> results) {
-    for (int j = 0; j < results.length(); j++) {
-      int val = 0;
-      for (int i = 0; i < codebookCount; i++) {
-        var shuffle = computeSingleShuffleQuantized(i, j, shuffles, codebookCount);
-        val += combineBytes(i, shuffle, quantizedPartials);
-      }
-      results.set(j, (1 + (delta * val) + minDistance) / 2);
-    }
-  }
-
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
   /**
    * Calculates the similarity score of multiple product quantization-encoded vectors against a single query vector,
    * using quantized precomputed similarity score fragments derived from codebook contents and evaluations during a search.
@@ -278,30 +196,11 @@ public interface VectorUtilSupport {
    * @param queryMagnitudeSquared The squared magnitude of the query vector.
    * @param results  The output vector to store the similarity distances. This should be pre-allocated to the same size as the number of shuffles.
    */
-  default void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                    ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                    ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                    float queryMagnitudeSquared, VectorFloat<?> results) {
-    for (int j = 0; j < results.length(); j++) {
-      float sum = 0;
-      float magnitude = 0;
+  void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                            ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+                                            ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+                                            float queryMagnitudeSquared, VectorFloat<?> results);
 
-      for (int i = 0; i < codebookCount; i++) {
-        var shuffle = computeSingleShuffleQuantized(i, j, shuffles, codebookCount);
-        var val = combineBytes(i, shuffle, quantizedPartialSums);
-        sum += val;
-        val = combineBytes(i, shuffle, quantizedPartialSquaredMagnitudes);
-        magnitude += val;
-      }
-
-      float unquantizedSum = sumDelta * sum + minDistance;
-      float unquantizedMagnitude = magnitudeDelta * magnitude + minMagnitude;
-      double divisor = Math.sqrt(unquantizedMagnitude * queryMagnitudeSquared);
-      results.set(j, (1 + (float) (unquantizedSum / divisor)) / 2);
-    }
-  }
-
-  // default implementation used here because Panama SIMD can't express necessary SIMD operations and degrades to scalar
   /**
    * Calculates the raw similarity of multiple product quantization-encoded vectors against a single query vector,
    * using precomputed raw similarity fragments derived from codebook contents and evaluations during a search.
@@ -318,57 +217,21 @@ public interface VectorUtilSupport {
    * @param resultSumAggregates  The output vector to store the dot products. This should be pre-allocated to the same size as the number of shuffles.
    * @param resultMagnitudeAggregates The output vector to store the norms of the vectors. This should be pre-allocated to the same size as the number of shuffles.
    */
-  default void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                              VectorFloat<?> partialSums,
-                                              VectorFloat<?> partialSquaredMagnitudes,
-                                              float[] resultSumAggregates, float[] resultMagnitudeAggregates) {
-    for (int j = 0; j < resultSumAggregates.length; j++) {
-      float sum = 0;
-      float magnitude = 0;
-
-      for (int i = 0; i < codebookCount; i++) {
-        var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
-        var val = combineBytes(i, shuffle, partialSums);
-        sum += val;
-        val = combineBytes(i, shuffle, partialSquaredMagnitudes);
-        magnitude += val;
-      }
-
-      resultSumAggregates[j] = sum;
-      resultMagnitudeAggregates[j] = magnitude;
-    }
-  }
-
-  private static int combineBytes(int i, int shuffle, ByteSequence<?> quantizedPartials) {
-    // This is a 16-bit value stored in two bytes, so we need to move in multiples of two and then combine them.
-    var lowByte = quantizedPartials.get(i * 512 + shuffle);
-    var highByte = quantizedPartials.get(i * 512 + shuffle + 1);
-    return ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
-  }
-
-  private static float combineBytes(int i, int shuffle, VectorFloat<?> partials) {
-    return partials.get(i * 256 + shuffle);
-  }
-
-  private static int computeSingleShuffleQuantized(int codebookPosition, int neighborPosition, ByteSequence<?> shuffles, int codebookCount) {
-    // This points to a 16-bit value stored in two bytes, so we need to move in multiples of two.
-    return Byte.toUnsignedInt(shuffles.get(neighborPosition * codebookCount + codebookPosition)) * 2;
-  }
-
-  private static int computeSingleShuffle(int codebookPosition, int neighborPosition, ByteSequence<?> shuffles, int codebookCount) {
-    // This points to a 16-bit value stored in two bytes, so we need to move in multiples of two.
-    return Byte.toUnsignedInt(shuffles.get(neighborPosition * codebookCount + codebookPosition));
-  }
+  void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partialSums,
+                                      VectorFloat<?> partialSquaredMagnitudes,
+                                      float[] resultSumAggregates, float[] resultMagnitudeAggregates);
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums, VectorFloat<?> partialMins);
 
   /**
-   * Quantizes values in partials (of length N = M * K) into unsigned little-endian 16-bit integers stored in quantizedPartials in the same order.
-   * partialBases is of length M. For each indexed chunk of K values in partials, each value in the chunk is quantized by subtracting the value
+   * Quantize values in partials (of length N = M * K) into unsigned 16-bit integers stored in quantizedPartials as follows.
+   * The quantized information is stored in quantizedPartials as 2N = M * K bytes, which can be viewed as a matrix of
+   * 2M rows and K columns. The even rows contain the low bytes of the 16-bit values, and the odd rows contain the high bytes.
+   * For each indexed chunk of K values in partials, each value in the chunk is quantized by subtracting the value
    * in partialBases as the same index and dividing by delta. If the value is greater than 65535, 65535 will be used.
-   *
+   * <p>
    * The caller is responsible for ensuring than no value in partialSums is larger than its corresponding partialBase.
    *
    * @param delta the divisor to use for quantization

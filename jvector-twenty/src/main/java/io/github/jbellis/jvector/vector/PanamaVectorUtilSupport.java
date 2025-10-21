@@ -1035,12 +1035,445 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return min;
     }
 
+    // This implementation stores pqCode in compressedNeighbors using a block-transposed layout.
+    // The block size is determined by the SIMD width.
+    @Override
+    public void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, ByteSequence<?> compressedNeighbors) {
+        int blockSize = ByteVector.SPECIES_PREFERRED.length();
+
+        int blockIndex = position / blockSize;
+        int offset = blockIndex * blockSize * pqCode.length();
+        int positionWithinBlock = position % blockSize;
+        for (int j = 0; j < pqCode.length(); j++) {
+            compressedNeighbors.set(offset + blockSize * j + positionWithinBlock, pqCode.get(j));
+        }
+    }
+
+    private static int combineBytes(int i, int shuffle, ByteSequence<?> quantizedPartials) {
+        var lowByte = quantizedPartials.get(i * 512 + shuffle);
+        var highByte = quantizedPartials.get((i * 512) + 256 + shuffle);
+        return ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+    }
+
+    private static float combineBytes(int i, int shuffle,  VectorFloat<?> partials) {
+        return partials.get(i * 256 + shuffle);
+    }
+
+    private static int computeSingleShuffle(int codebookPosition, int neighborPosition, ByteSequence<?> shuffles, int codebookCount) {
+        int blockSize = ByteVector.SPECIES_PREFERRED.length();
+
+        int blockIndex = neighborPosition / blockSize;
+        int positionWithinBlock = neighborPosition % blockSize;
+        int offset = blockIndex * blockSize * codebookCount;
+        return Byte.toUnsignedInt(shuffles.get(offset + blockSize * codebookPosition + positionWithinBlock));
+    }
+
+    @Override
+    public void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
+        for (int j = 0; j < results.length(); j++) {
+            float val = 0;
+            for (int i = 0; i < codebookCount; i++) {
+                var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
+                val += combineBytes(i, shuffle, partials);
+            }
+            results.set(j, val);
+        }
+    }
+
+    @Override
+    public void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                               VectorFloat<?> partialSums,
+                                               VectorFloat<?> partialSquaredMagnitudes,
+                                               float[] resultSumAggregates, float[] resultMagnitudeAggregates) {
+        for (int j = 0; j < resultSumAggregates.length; j++) {
+            float sum = 0;
+            float magnitude = 0;
+
+            for (int i = 0; i < codebookCount; i++) {
+                var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
+                var val = combineBytes(i, shuffle, partialSums);
+                sum += val;
+                val = combineBytes(i, shuffle, partialSquaredMagnitudes);
+                magnitude += val;
+            }
+
+            resultSumAggregates[j] = sum;
+            resultMagnitudeAggregates[j] = magnitude;
+        }
+    }
+
+    @Override
+    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount,
+                                               ByteSequence<?> quantizedPartials,
+                                               float delta, float minDistance, VectorSimilarityFunction vsf,
+                                               VectorFloat<?> results) {
+        switch (vsf) {
+            case EUCLIDEAN:
+                bulkShuffleQuantizedSimilarityEuclidean(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
+                break;
+            case DOT_PRODUCT:
+                bulkShuffleQuantizedSimilarityDotProduct(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
+                break;
+            default:
+                throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
+        }
+    }
+
+    private static FloatVector extractAndConvertToDouble(ByteVector partialVectorLow, ByteVector partialVectorHigh, int part) {
+        var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, part);
+        partialVectorLow0 = partialVectorLow0.and((short) 0xff);
+        var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, part);
+        partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
+
+        var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
+        return (FloatVector) partialVector0.convert(VectorOperators.I2F, 0);
+    }
+
+    private void bulkShuffleQuantizedSimilarityEuclidean(ByteSequence<?> shuffles, int codebookCount,
+                                                         ByteSequence<?> quantizedPartials,
+                                                         float delta, float minDistance, VectorFloat<?> results) {
+        var resultsVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(results.length());
+
+        int codebookSize = 256;
+        var codebookVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(codebookSize);
+
+        var ones = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 1.0f);
+
+        int j;
+        for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
+            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+            for (int i = 0; i < codebookCount; i++) {
+                // The first term in the position is the block index, and the second one is the codebook index
+                int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
+                var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
+
+                for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
+                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
+                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
+
+                    ByteVector shuffleVectorK;
+                    VectorMask<Byte> mask;
+                    if (k < 128) {
+                        // We subtract k to map the values to the relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.sub((byte) k);
+                    } else {
+                        // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.add((byte) (256 - k));
+                    }
+                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
+                    var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
+                    mask = maskGE.and(maskLT);
+
+                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
+                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+
+                    var partialFloatVector0 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 0);
+                    var partialFloatVector1 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 1);
+                    var partialFloatVector2 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 2);
+                    var partialFloatVector3 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 3);
+
+                    sum1 = sum1.add(partialFloatVector0);
+                    sum2 = sum2.add(partialFloatVector1);
+                    sum3 = sum3.add(partialFloatVector2);
+                    sum4 = sum4.add(partialFloatVector3);
+                }
+            }
+
+            sum1 = ones.div(sum1.mul(delta).add(minDistance + 1));
+            sum2 = ones.div(sum2.mul(delta).add(minDistance + 1));
+            sum3 = ones.div(sum3.mul(delta).add(minDistance + 1));
+            sum4 = ones.div(sum4.mul(delta).add(minDistance + 1));
+
+            int offset = j;
+            intoVectorFloat(sum1, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum2, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum3, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum4, results, offset);
+        }
+        for (; j < results.length(); j++) {
+            int val = 0;
+            for (int i = 0; i < codebookCount; i++) {
+                var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
+                val += combineBytes(i, shuffle, quantizedPartials);
+            }
+            results.set(j, 1 / (1 + (delta * val) + minDistance));
+        }
+    }
+
+    private void bulkShuffleQuantizedSimilarityDotProduct(ByteSequence<?> shuffles, int codebookCount,
+                                                          ByteSequence<?> quantizedPartials,
+                                                          float delta, float minDistance, VectorFloat<?> results) {
+        var resultsVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(results.length());
+
+        int codebookSize = 256;
+        var codebookVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(codebookSize);
+
+        int j;
+        for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
+            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+            for (int i = 0; i < codebookCount; i++) {
+                // The first term in the position is the block index, and the second one is the codebook index
+                int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
+                var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
+
+                for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
+                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
+                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
+
+                    ByteVector shuffleVectorK;
+                    VectorMask<Byte> mask;
+                    if (k < 128) {
+                        // We subtract k to map the values to the relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.sub((byte) k);
+                    } else {
+                        // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.add((byte) (256 - k));
+                    }
+                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
+                    var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
+                    mask = maskGE.and(maskLT);
+
+                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
+                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+
+                    var partialFloatVector0 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 0);
+                    var partialFloatVector1 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 1);
+                    var partialFloatVector2 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 2);
+                    var partialFloatVector3 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 3);
+
+                    sum1 = sum1.add(partialFloatVector0);
+                    sum2 = sum2.add(partialFloatVector1);
+                    sum3 = sum3.add(partialFloatVector2);
+                    sum4 = sum4.add(partialFloatVector3);
+                }
+            }
+
+            sum1 = sum1.mul(delta).add(minDistance + 1).div(2);
+            sum2 = sum2.mul(delta).add(minDistance + 1).div(2);
+            sum3 = sum3.mul(delta).add(minDistance + 1).div(2);
+            sum4 = sum4.mul(delta).add(minDistance + 1).div(2);
+
+            int offset = j;
+            intoVectorFloat(sum1, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum2, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum3, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum4, results, offset);
+        }
+        for (; j < results.length(); j++) {
+            int val = 0;
+            for (int i = 0; i < codebookCount; i++) {
+                var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
+                val += combineBytes(i, shuffle, quantizedPartials);
+            }
+            results.set(j, (1 + (delta * val) + minDistance) / 2);
+        }
+    }
+
+    @Override
+    public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                                      ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+                                                      ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+                                                      float queryMagnitudeSquared, VectorFloat<?> results) {
+        var resultsVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(results.length());
+
+        int codebookSize = 256;
+        var codebookVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(codebookSize);
+
+        int j;
+        for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
+            var sum1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var sum4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+            for (int i = 0; i < codebookCount; i++) {
+                // The first term in the position is the block index, and the second one is the codebook index
+                int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
+                var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
+
+                for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
+                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i) * codebookSize + k);
+                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i + 1) * codebookSize + k);
+
+                    ByteVector shuffleVectorK;
+                    VectorMask<Byte> mask;
+                    if (k < 128) {
+                        // We subtract k to map the values to the relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.sub((byte) k);
+                    } else {
+                        // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.add((byte) (256 - k));
+                    }
+                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
+                    var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
+                    mask = maskGE.and(maskLT);
+
+                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
+                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+
+                    var partialFloatVector0 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 0);
+                    var partialFloatVector1 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 1);
+                    var partialFloatVector2 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 2);
+                    var partialFloatVector3 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 3);
+
+                    sum1 = sum1.add(partialFloatVector0);
+                    sum2 = sum2.add(partialFloatVector1);
+                    sum3 = sum3.add(partialFloatVector2);
+                    sum4 = sum4.add(partialFloatVector3);
+                }
+            }
+
+            sum1 = sum1.mul(sumDelta).add(minDistance);
+            sum2 = sum2.mul(sumDelta).add(minDistance);
+            sum3 = sum3.mul(sumDelta).add(minDistance);
+            sum4 = sum4.mul(sumDelta).add(minDistance);
+
+            var mag1 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var mag2 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var mag3 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+            var mag4 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+            for (int i = 0; i < codebookCount; i++) {
+                // The first term in the position is the block index, and the second one is the codebook index
+                int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
+                var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
+
+                for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
+                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i) * codebookSize + k);
+                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i + 1) * codebookSize + k);
+
+                    ByteVector shuffleVectorK;
+                    VectorMask<Byte> mask;
+                    if (k < 128) {
+                        // We subtract k to map the values to the relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.sub((byte) k);
+                    } else {
+                        // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
+                        shuffleVectorK = shuffleVector.add((byte) (256 - k));
+                    }
+                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
+                    var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
+                    mask = maskGE.and(maskLT);
+
+                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
+                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+
+                    var partialFloatVector0 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 0);
+                    var partialFloatVector1 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 1);
+                    var partialFloatVector2 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 2);
+                    var partialFloatVector3 = extractAndConvertToDouble(partialVectorLow, partialVectorHigh, 3);
+
+                    mag1 = mag1.add(partialFloatVector0);
+                    mag2 = mag2.add(partialFloatVector1);
+                    mag3 = mag3.add(partialFloatVector2);
+                    mag4 = mag4.add(partialFloatVector3);
+                }
+            }
+
+            mag1 = mag1.mul(magnitudeDelta).add(minMagnitude);
+            mag2 = mag2.mul(magnitudeDelta).add(minMagnitude);
+            mag3 = mag3.mul(magnitudeDelta).add(minMagnitude);
+            mag4 = mag4.mul(magnitudeDelta).add(minMagnitude);
+
+            var divisor1 = mag1.mul(queryMagnitudeSquared).sqrt();
+            var divisor2 = mag2.mul(queryMagnitudeSquared).sqrt();
+            var divisor3 = mag3.mul(queryMagnitudeSquared).sqrt();
+            var divisor4 = mag4.mul(queryMagnitudeSquared).sqrt();
+
+            sum1 = sum1.div(divisor1);
+            sum2 = sum2.div(divisor2);
+            sum3 = sum3.div(divisor3);
+            sum4 = sum4.div(divisor4);
+
+            sum1 = sum1.add(1).div(2);
+            sum2 = sum2.add(1).div(2);
+            sum3 = sum3.add(1).div(2);
+            sum4 = sum4.add(1).div(2);
+
+            int offset = j;
+            intoVectorFloat(sum1, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum2, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum3, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
+            intoVectorFloat(sum4, results, offset);
+        }
+        for (j = 0; j < results.length(); j++) {
+            float sum = 0;
+            float magnitude = 0;
+
+            for (int i = 0; i < codebookCount; i++) {
+                var shuffle = computeSingleShuffle(i, j, shuffles, codebookCount);
+                var val = combineBytes(i, shuffle, quantizedPartialSums);
+                sum += val;
+                val = combineBytes(i, shuffle, quantizedPartialSquaredMagnitudes);
+                magnitude += val;
+            }
+
+            float unquantizedSum = sumDelta * sum + minDistance;
+            float unquantizedMagnitude = magnitudeDelta * magnitude + minMagnitude;
+            double divisor = Math.sqrt(unquantizedMagnitude * queryMagnitudeSquared);
+            results.set(j, (1 + (float) (unquantizedSum / divisor)) / 2);
+        }
+    }
+
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
         VectorSpecies<Short> shortSpecies;
+        VectorSpecies<Byte> byteSpecies;
+        VectorMask<Byte> mask;
+
         switch (PREFERRED_BIT_SIZE) {
-            case 512 -> shortSpecies = ShortVector.SPECIES_256;
-            case 256 -> shortSpecies = ShortVector.SPECIES_128;
-            case 128 -> shortSpecies = ShortVector.SPECIES_64;
+            case 512 -> {
+                shortSpecies = ShortVector.SPECIES_256;
+                byteSpecies = ByteVector.SPECIES_256;
+                mask = VectorMask.fromValues(byteSpecies,
+                        true, true, true, true,
+                        true, true, true, true,
+                        true, true, true, true,
+                        true, true, true, true,
+                        false, false, false, false,
+                        false, false, false, false,
+                        false, false, false, false,
+                        false, false, false, false
+                );
+            }
+            case 256 -> {
+                shortSpecies = ShortVector.SPECIES_128;
+                byteSpecies = ByteVector.SPECIES_128;
+                mask = VectorMask.fromValues(byteSpecies,
+                        true, true, true, true,
+                        true, true, true, true,
+                        false, false, false, false,
+                        false, false, false, false
+                );
+            }
+            case 128 -> {
+                shortSpecies = ShortVector.SPECIES_64;
+                byteSpecies = ByteVector.SPECIES_64;
+                mask = VectorMask.fromValues(byteSpecies,
+                        true, true, true, true,
+                        false, false, false, false
+                );
+            }
             default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
         }
 
@@ -1057,12 +1490,16 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
                 quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_PREFERRED)).min(FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535));
                 var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, shortSpecies, 0);
-                intoByteSequence(quantizedBytes.reinterpretAsBytes(), quantizedPartials, 2 * (i * codebookSize + j));
+                var lowBytes = quantizedBytes.and((short) 0x00FF).convertShape(VectorOperators.S2B, byteSpecies, 0);;
+                intoByteSequence(lowBytes.reinterpretAsBytes(), quantizedPartials, (2 * i) * codebookSize + j, mask);
+                var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and((short) 0x00FF).convertShape(VectorOperators.S2B, byteSpecies, 0);
+                intoByteSequence(highBytes.reinterpretAsBytes(), quantizedPartials, (2 * i + 1) * codebookSize + j, mask);
             }
             for (; j < codebookSize; j++) {
                 var val = partials.get(i * codebookSize + j);
                 var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
-                quantizedPartials.setLittleEndianShort(i * codebookSize + j, quantized);
+                quantizedPartials.set((2 * i) * codebookSize + j, (byte) (quantized & 0xFF));
+                quantizedPartials.set((2 * i + 1) * codebookSize + j, (byte) ((quantized >> 8) & 0xFF));
             }
         }
     }

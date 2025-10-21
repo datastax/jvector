@@ -88,11 +88,6 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
     }
 
     @Override
-    public void setLittleEndianShort(int shortIndex, short value) {
-        segment.set(LITTLE_ENDIAN_SHORT_LAYOUT_UNALIGNED, shortIndex * 2, value);
-    }
-
-    @Override
     public void zero() {
         segment.fill((byte) 0);
     }

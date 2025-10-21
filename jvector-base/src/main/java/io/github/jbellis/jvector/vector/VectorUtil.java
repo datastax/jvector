@@ -174,8 +174,8 @@ public final class VectorUtil {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
   }
 
-  public static void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, int length, ByteSequence<?> compressedNeighbors) {
-    impl.storePQCodeInNeighbors(pqCode, position, length, compressedNeighbors);
+  public static void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, ByteSequence<?> compressedNeighbors) {
+    impl.storePQCodeInNeighbors(pqCode, position, compressedNeighbors);
   }
 
   public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {

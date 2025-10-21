@@ -117,7 +117,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         while (neighbors.hasNext()) {
             int node = neighbors.nextInt();
             var compressed = pqv.get(node);
-            VectorUtil.storePQCodeInNeighbors(compressed, n, maxDegree, compressedNeighbors);
+            VectorUtil.storePQCodeInNeighbors(compressed, n, compressedNeighbors);
             n++;
         }
 
