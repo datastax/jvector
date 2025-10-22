@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -82,14 +83,15 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     /**
      * A SearchScoreProvider for a single-pass search based on exact similarity.
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
-     * e.g. during construction.
+     * e.g. during construction. The ordinal mapper is used to map between the graph's ordinals
+     * and the ordinals used by the RandomAccessVectorValues.
      */
-    public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
+    public static DefaultSearchScoreProvider exact(VectorFloat<?> v, OrdinalMapper ordinalMapper, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
         var sf = new ScoreFunction.ExactScoreFunction() {
             @Override
             public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
+                return vsf.compare(v, ravv.getVector(ordinalMapper.oldToNew(node2)));
             }
         };
         return new DefaultSearchScoreProvider(sf);

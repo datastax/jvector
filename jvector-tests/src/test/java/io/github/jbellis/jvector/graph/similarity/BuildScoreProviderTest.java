@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -24,6 +25,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -46,9 +48,13 @@ public class BuildScoreProviderTest {
         var ravv = new ListRandomAccessVectorValues(vectors, 2);
 
         // Create non-identity mapping: graph node 0 -> ravv ordinal 2, graph node 1 -> ravv ordinal 0, graph node 2 -> ravv ordinal 1
-        int[] graphToRavvOrdMap = {2, 0, 1};
+        var oldToNew = new HashMap<Integer, Integer>();
+        oldToNew.put(0, 2);
+        oldToNew.put(1, 0);
+        oldToNew.put(2, 1);
+        var ordinalMapper = new OrdinalMapper.MapMapper(oldToNew);
         
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, graphToRavvOrdMap, vsf);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, ordinalMapper, vsf);
         
         // Test that searchProviderFor(graphNode) uses the correct RAVV ordinal
         var ssp0 = bsp.searchProviderFor(0); // should use ravv ordinal 2 (vector [-1, 0])

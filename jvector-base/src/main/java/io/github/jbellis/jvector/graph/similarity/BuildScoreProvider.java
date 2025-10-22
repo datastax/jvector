@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -89,14 +90,16 @@ public interface BuildScoreProvider {
      * Helper method for the special case that mapping between graph node IDs and ravv ordinals is the identity function.
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
-        return randomAccessScoreProvider(ravv, IntStream.range(0, ravv.size()).toArray(), similarityFunction);
+        // We don't know the max ordinal, and that's fine, so we just use Integer.MAX_VALUE
+        return randomAccessScoreProvider(ravv, new OrdinalMapper.IdentityMapper(Integer.MAX_VALUE), similarityFunction);
     }
 
     /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
-     * graphToRavvOrdMap maps graph node IDs to ravv ordinals.
+     * graphToRavvOrdMap maps graph node IDs to ravv ordinals. The OrdinalMapper is used to map between the graph's ordinals
+     * and the ordinals used by the RandomAccessVectorValues via the oldToNew method.
      */
-    static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap, VectorSimilarityFunction similarityFunction) {
+    static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, OrdinalMapper ordinalMapper, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
         var vectors = ravv.threadLocalSupplier();
@@ -125,22 +128,22 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(vector, graphToRavvOrdMap, similarityFunction, vc);
+                return DefaultSearchScoreProvider.exact(vector, ordinalMapper, similarityFunction, vc);
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
                 RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(graphToRavvOrdMap[node1]);
+                var v = randomAccessVectorValues.getVector(ordinalMapper.oldToNew(node1));
                 return searchProviderFor(v);
             }
 
             @Override
             public SearchScoreProvider diversityProviderFor(int node1) {
                 RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(graphToRavvOrdMap[node1]);
+                var v = randomAccessVectorValues.getVector(ordinalMapper.oldToNew(node1));
                 var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(v, graphToRavvOrdMap, similarityFunction, vc);
+                return DefaultSearchScoreProvider.exact(v, ordinalMapper, similarityFunction, vc);
             }
         };
     }
