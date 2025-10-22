@@ -24,6 +24,14 @@ public class RemappedRandomAccessVectorValues implements RandomAccessVectorValue
     private final RandomAccessVectorValues ravv;
     private final int[] graphToRavvOrdMap;
 
+    /**
+     * Remaps a RAVV to a different set of ordinals.  This is useful when the ordinals used by the graph
+     * do not match the ordinals used by the RAVV.
+     *
+     * @param ravv the RAVV to remap
+     * @param graphToRavvOrdMap a mapping from the graph's ordinals to the RAVV's ordinals where
+     *                         graphToRavvOrdMap[i] is the RAVV ordinal corresponding to graph ordinal i.
+     */
     public RemappedRandomAccessVectorValues(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
         this.ravv = ravv;
         this.graphToRavvOrdMap = graphToRavvOrdMap;
