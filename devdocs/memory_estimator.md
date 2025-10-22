@@ -1,6 +1,15 @@
 ## Estimating Memory Requirements
 
-JVector includes a core `MemoryCostEstimator` utility that projects the RAM footprint of a graph build before you invest in the full construction. The estimator builds a small sample index, measures per-node and fixed overheads (optionally including product-quantized vectors), and extrapolates from there. This is useful for capacity planning or comparing deployment profiles (hierarchy vs. flat, PQ vs. raw vectors, indexing buffers vs. serving buffers).
+JVector includes a core `MemoryCostEstimator` utility that projects the RAM footprint of a graph build before you invest in the full construction. Unlike the generic `RamUsageEstimator` (which inspects existing Java objects), this tool is domain-aware: it spins up a *representative* mini-index with `GraphIndexBuilder`, records the bytes consumed by graph structures, PQ vectors/codebooks, and thread-local buffers, then extrapolates what a full-scale build would cost. In other words, it answers “how much RAM will this configuration require?” rather than “how much does this in-memory object currently use?”.
+
+Key differences from `RamUsageEstimator`:
+
+- **Configuration-driven.** You supply an `IndexConfig`; the estimator knows about graph degree, hierarchy, overflow ratio, PQ knobs, etc.
+- **Includes build/serving buffers.** It models the per-thread scratch space `GraphIndexBuilder` and `GraphSearcher` allocate, which a generic object walk would miss.
+- **Deployment profiles.** Through `MemoryModel.breakdownForProfile` you can inspect scenarios like MINIMAL_MEMORY, GRAPH_IN_MEMORY_PQ, etc.
+- **Predictive rather than introspective.** You can estimate requirements before ever building the full index.
+
+Use `RamUsageEstimator` when you need an exact footprint of *current* objects (e.g., debugging) and `MemoryCostEstimator` when planning or sizing JVector indexes.
 
 ### Quick Start
 

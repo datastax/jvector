@@ -44,6 +44,10 @@ import java.util.logging.Logger;
  * <p>This class uses assumptions that were discovered for the Hotspot virtual machine. If you use a
  * non-OpenJDK/Oracle-based JVM, the measurements may be slightly wrong.
  *
+ * <p>For predictive, configuration-driven sizing of JVector indexes (as opposed to inspecting
+ * already instantiated objects) see {@code devdocs/memory_estimator.md} and
+ * {@link io.github.jbellis.jvector.MemoryCostEstimator}.
+ *
  * @see #shallowSizeOf(Object)
  * @see #shallowSizeOfInstance(Class)
  */

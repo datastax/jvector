@@ -37,7 +37,12 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Utility to extrapolate the memory profile of a graph index from a small sample build.
+ * Predictive sizing utility for JVector indexes. Unlike generic heap estimators such as {@code
+ * RamUsageEstimator}, this class is configuration-aware: it constructs a small, representative
+ * sample index using {@link GraphIndexBuilder} (and {@link ProductQuantization} when configured),
+ * records the measured footprint of graph structures, PQ vectors/codebooks, and thread-local
+ * buffers, then extrapolates the expected memory cost for larger datasets. Use this when planning
+ * or capacity-sizing an index rather than when inspecting already-instantiated objects.
  */
 public final class MemoryCostEstimator {
     private static final VectorTypeSupport VTS = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -222,7 +227,11 @@ public final class MemoryCostEstimator {
     }
 
     /**
-     * Build a sample index to derive a {@link MemoryModel} for the supplied configuration.
+     * Build a sample index to derive a {@link MemoryModel} for the supplied configuration. The
+     * sample size should remain modest (default cap: 10&nbsp;000) because this method actually
+     * runs {@link GraphIndexBuilder} and (optionally) {@link ProductQuantization} to gather real
+     * measurements. If you only need object-level metrics for already instantiated structures,
+     * prefer {@link io.github.jbellis.jvector.util.RamUsageEstimator} instead.
      */
     public static MemoryModel createModel(IndexConfig config, int sampleSize) throws Exception {
         if (sampleSize <= 0) {
