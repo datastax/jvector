@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -27,11 +26,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
 /**
@@ -59,6 +56,7 @@ class ParallelGraphWriter implements AutoCloseable {
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath;
+    private static final AtomicInteger threadCounter = new AtomicInteger(0);
 
     /**
      * Configuration for parallel writing.
@@ -90,7 +88,7 @@ class ParallelGraphWriter implements AutoCloseable {
     /**
      * Creates a parallel writer.
      *
-     * @param writer the underlying writer (must be BufferedRandomAccessWriter)
+     * @param writer the underlying writer
      * @param graph the graph being written
      * @param inlineFeatures the inline features to write
      * @param config parallelization configuration
@@ -101,20 +99,13 @@ class ParallelGraphWriter implements AutoCloseable {
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath) {
-        if (filePath == null) {
-            throw new IllegalArgumentException("filePath is required for parallel writes");
-        }
-        if (!(writer instanceof BufferedRandomAccessWriter)) {
-            throw new IllegalArgumentException("writer must be BufferedRandomAccessWriter for parallel writes");
-        }
-
         this.writer = writer;
         this.graph = graph;
-        this.filePath = filePath;
+        this.filePath = Objects.requireNonNull(filePath);
         this.executor = Executors.newFixedThreadPool(config.workerThreads,
             r -> {
                 Thread t = new Thread(r);
-                t.setName("ParallelGraphWriter-Worker");
+                t.setName("ParallelGraphWriter-Worker-" + threadCounter.getAndIncrement());
                 t.setDaemon(false);
                 return t;
             });
@@ -227,7 +218,7 @@ class ParallelGraphWriter implements AutoCloseable {
         long usedMemory = runtime.totalMemory() - runtime.freeMemory();
         long availableMemory = maxMemory - usedMemory;
 
-        // Use 25% of available memory for buffering to be conservative
+        // Use 20% of available memory for buffering to be conservative
         long memoryForBuffer = (long) (availableMemory * 0.2);
 
         // Estimate memory per record:

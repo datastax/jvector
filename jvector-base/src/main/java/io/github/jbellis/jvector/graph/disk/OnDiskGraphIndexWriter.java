@@ -355,8 +355,14 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         out.flush();
     }
 
-    //TODO: How do the parallel writes work with the footer?
-    /** CRC32 checksum of bytes written since the starting offset */
+    /** CRC32 checksum of bytes written since the starting offset
+     * Note on parallel writes and footer handling:
+     * When parallel writes are enabled (via {@link #setParallelWrites(boolean)}), it is the caller's responsibility
+     * to ensure that all parallel write operations have fully completed before writing the footer (e.g., checksum).
+     * The footer must only be written after all data has been flushed and no further writes are in progress,
+     * to avoid data corruption or incomplete checksums. This class does not currently coordinate or synchronize
+     * footer writing with parallel operations. Parallel writes are experimental and should be used with caution.
+     */
     public synchronized long checksum() throws IOException {
         long endOffset = out.position();
         return out.checksum(startOffset, endOffset);
