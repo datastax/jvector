@@ -69,14 +69,19 @@ import static org.junit.Assert.assertTrue;
  *   </tr>
  *   <tr>
  *     <td>Hierarchical, high-M (M=48)</td>
- *     <td>0.21</td><td>0.60</td><td>0.21</td><td>0.19</td><td>0.42</td><td>0.60</td><td>0.96</td>
+ *     <td>0.10</td><td>0.21</td><td>0.51</td><td>0.19</td><td>0.42</td><td>0.60</td><td>0.96</td>
  *   </tr>
  *   <tr>
  *     <td>Hierarchical, cosine</td>
  *     <td>2.26</td><td>1.59</td><td>1.59</td><td>0.60</td><td>0.80</td><td>0.80</td><td>1.65</td>
  *   </tr>
  * </table>
- * All scenarios remain well within the ±20&nbsp;% tolerance enforced by the assertions.
+ * All scenarios remain well within the ±5&nbsp;% tolerance enforced by the assertions. The full
+ * sweep (six configurations × seven dimensionalities) completes in ~23&nbsp;s on an M2 Max laptop;
+ * expect higher runtimes if CPU parallelism or vector acceleration is limited. If you instead
+ * force every run to use the 10&nbsp;000 vector sample cap, the 64d scenarios finish in a few seconds
+ * while the 4096d cases stretch past a minute apiece because Product Quantization dominates wall
+ * time at the higher dimensionalities.
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
@@ -85,7 +90,7 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
     private static final int[] DIMENSIONS = {64, 128, 256, 512, 1024, 2048, 4096};
     private static final int BASE_SAMPLE_SIZE = 1_000;
     private static final int BASE_VERIFICATION_SIZE = 5_000;
-    private static final double TOLERANCE = 0.20; // 20% relative error
+    private static final double TOLERANCE = 0.05; // 5% relative error (roughly 2x worst observed)
 
     @Test
     public void testEstimateAccuracyHierarchicalWithPQ() throws Exception {
@@ -220,6 +225,9 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
     }
 
     private int sampleSizeFor(int dimension) {
+        // Scaling the sample size keeps 64d runs sub-second while preventing 4096d + PQ
+        // configurations from ballooning past a minute; the 10k cap is still available for
+        // deeper diagnostics, but not used in this quick regression sweep.
         if (dimension >= 4096) {
             return 200;
         }

@@ -48,13 +48,13 @@ Pick a sample size between 1,000 and 10,000 vectors; larger samples tighten the 
 
 ### Accuracy
 
-`MemoryCostEstimatorAccuracyTest` exercises the estimator against real graph builds with and without PQ. The measured footprint must stay within a 20% tolerance of the prediction. Current coverage includes
+`MemoryCostEstimatorAccuracyTest` exercises the estimator against real graph builds with and without PQ. The measured footprint must stay within a 5% tolerance (roughly twice the worst error we have observed so far). Running the full six-configuration, seven-dimensionality matrix takes ~23 seconds on an M2 Max laptop; budget additional time on slower hardware. For deep dives you can crank the sample size to the 10,000-vector cap—just note that the 64d cases grow to a few seconds each while the 4096d + PQ runs stretch past a minute apiece. Current coverage includes
 
 * Hierarchical, M=16, no PQ — 64–4096 dims stay within +0.6–1.7% relative error (well below the 20% guardrail)
 * Hierarchical, M=16, PQ (16×256 up to 1024d, 32×256 for ≥2048d) — 64–4096 dims land between +0.04% and +1.45%
 * Flat, M=32, no PQ — 64–4096 dims sit in the +0.0–1.0% range
 * Flat, M=24, PQ (16×256 up to 1024d, 32×256 for ≥2048d) — 64–4096 dims stay within +0.0–1.2%
-* Hierarchical, high degree (M=48, no PQ) — 64–4096 dims remain inside +0.2–1.0%
+* Hierarchical, high degree (M=48, no PQ) — 64–4096 dims remain inside +0.1–1.0%
 * Hierarchical, cosine similarity (M=16, no PQ) — 64–4096 dims land between +0.6–2.3%
 
 If you tune different configurations regularly (e.g., larger degrees or alternative similarity functions), extend the matrix so the backing data stays relevant.
