@@ -193,7 +193,7 @@ public class AutoBenchYAML {
             // Write CSV data
             try (FileWriter writer = new FileWriter(outputFile)) {
                 // Write CSV header
-                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time\n");
+                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited\n");
 
                 // Write one row per dataset with average metrics
                 for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
@@ -205,7 +205,8 @@ public class AutoBenchYAML {
                     writer.write(datasetStats.getQpsStdDev() + ",");
                     writer.write(datasetStats.getAvgLatency() + ",");
                     writer.write(datasetStats.getAvgRecall() + ",");
-                    writer.write(datasetStats.getIndexConstruction() + "\n");
+                    writer.write(datasetStats.getIndexConstruction() + ",");
+                    writer.write(datasetStats.getAvgNodesVisited() + "\n");
                 }
             }
 
