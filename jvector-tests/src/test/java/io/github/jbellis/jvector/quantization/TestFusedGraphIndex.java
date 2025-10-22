@@ -213,6 +213,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
             for (int iQuery = 0; iQuery < 10; iQuery++) {
                 VectorFloat<?> query = randomVector(dim);
 
+                // Instantiating the SearchScoreProvider inside the loop means that we are computing non-quantized distances in the fused case
                 for (int node = 0; node < size; node++) {
                     // Fused computations
                     SearchScoreProvider sspFused = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv);
@@ -227,6 +228,29 @@ public class TestFusedGraphIndex extends RandomizedTest {
                         int neighbor = it.next();
                         float score = ssp.scoreFunction().similarityTo(neighbor);
                         assertEquals(similarities.get(position), score, 1e-6);
+                        position++;
+                    }
+                }
+
+                // Instantiating the SearchScoreProvider outside the loop means that we are computing quantized distances in the fused case
+                SearchScoreProvider sspFused = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv);
+                // Doing a few calls to ensure that we enter the quantized path
+                sspFused.scoreFunction().edgeLoadingSimilarityTo(0);
+                sspFused.scoreFunction().edgeLoadingSimilarityTo(1);
+
+                for (int node = 0; node < size; node++) {
+                    // Fused computations
+                    var similarities = sspFused.scoreFunction().edgeLoadingSimilarityTo(node);
+
+                    // Regular (un-fused) computations
+                    SearchScoreProvider ssp = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv);
+                    var it = graph.getView().getNeighborsIterator(0, node);
+                    int position = 0;
+                    assertTrue(it.size() <= similarities.length());
+                    while (it.hasNext()) {
+                        int neighbor = it.next();
+                        float score = ssp.scoreFunction().similarityTo(neighbor);
+                        assertEquals(similarities.get(position), score, 1e-3);
                         position++;
                     }
                 }
