@@ -203,12 +203,8 @@ public interface ScoreTracker {
             if (this.recentScoresSize > recentScores.length) {
                 recentScores = ArrayUtil.grow(recentScores, this.recentScoresSize);
             }
-            if (this.recentScoresSize > bestScores.size()) {
-                bestScores = new BoundedLongHeap(this.recentScoresSize);
-            } else {
-                bestScores.clear();
-                bestScores.setMaxSize(this.recentScoresSize);
-            }
+            bestScores.clear();
+            bestScores.setMaxSize(bestScoresTracked);
             this.observationCount = 0;
             this.mean = 0;
             this.dSquared = 0;
