@@ -207,6 +207,7 @@ public interface ScoreTracker {
                 bestScores = new BoundedLongHeap(this.recentScoresSize);
             } else {
                 bestScores.clear();
+                bestScores.setMaxSize(this.recentScoresSize);
             }
             this.observationCount = 0;
             this.mean = 0;
@@ -215,10 +216,6 @@ public interface ScoreTracker {
 
         @Override
         public void track(float score) {
-            // TODO do we want to implement a resizeable bestScores heap?
-            if (bestScores.size() == this.recentScoresSize) {
-                bestScores.pop();
-            }
             bestScores.push(floatToSortableInt(score));
             observationCount++;
 
