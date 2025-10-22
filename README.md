@@ -310,6 +310,8 @@ but as soon as you supply a filter, it wants at least one match in every submodu
 You can run `SiftSmall` and `Bench` directly to get an idea of what all is going on here. `Bench` will automatically download required datasets to the `fvec` and `hdf5` directories.
 The files used by `SiftSmall` can be found in the [siftsmall directory](./siftsmall) in the project root.
 
+*Looking for memory sizing guidance?* See [devdocs/memory_estimator.md](devdocs/memory_estimator.md) for the full reference.
+
 To run either class, you can use the Maven exec-plugin via the following incantations:
 
 > `mvn compile exec:exec@bench`
