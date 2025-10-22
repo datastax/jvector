@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.MemoryCostEstimator;
 import io.github.jbellis.jvector.MemoryCostEstimator.IndexConfig;
 import io.github.jbellis.jvector.MemoryCostEstimator.MemoryModel;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -52,19 +53,27 @@ import static org.junit.Assert.assertTrue;
  *   </tr>
  *   <tr>
  *     <td>Hierarchical, no&nbsp;PQ (M=16)</td>
- *     <td>7.83</td><td>8.53</td><td>8.57</td><td>9.53</td><td>10.55</td><td>11.38</td><td>12.09</td>
+ *     <td>1.59</td><td>1.59</td><td>1.59</td><td>0.60</td><td>0.80</td><td>0.80</td><td>1.65</td>
  *   </tr>
  *   <tr>
  *     <td>Hierarchical, PQ (M=16, 16×256 ≤1024d, 32×256 ≥2048d)</td>
- *     <td>7.75</td><td>7.45</td><td>6.91</td><td>6.30</td><td>5.14</td><td>9.30</td><td>0.89</td>
+ *     <td>1.45</td><td>1.40</td><td>1.29</td><td>0.40</td><td>0.04</td><td>0.16</td><td>0.09</td>
  *   </tr>
  *   <tr>
  *     <td>Flat, no&nbsp;PQ (M=32)</td>
- *     <td>1.84</td><td>1.84</td><td>1.84</td><td>1.84</td><td>1.79</td><td>1.63</td><td>0.90</td>
+ *     <td>0.95</td><td>0.95</td><td>0.95</td><td>0.91</td><td>0.84</td><td>0.69</td><td>0.00</td>
  *   </tr>
  *   <tr>
  *     <td>Flat, PQ (M=24, 16×256 ≤1024d, 32×256 ≥2048d)</td>
- *     <td>2.35</td><td>2.27</td><td>2.06</td><td>1.79</td><td>1.05</td><td>1.20</td><td>0.04</td>
+ *     <td>1.21</td><td>1.17</td><td>1.10</td><td>0.88</td><td>0.55</td><td>0.23</td><td>0.00</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Hierarchical, high-M (M=48)</td>
+ *     <td>0.21</td><td>0.60</td><td>0.21</td><td>0.19</td><td>0.42</td><td>0.60</td><td>0.96</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Hierarchical, cosine</td>
+ *     <td>2.26</td><td>1.59</td><td>1.59</td><td>0.60</td><td>0.80</td><td>0.80</td><td>1.65</td>
  *   </tr>
  * </table>
  * All scenarios remain well within the ±20&nbsp;% tolerance enforced by the assertions.
@@ -130,6 +139,42 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
         }
     }
 
+    @Test
+    public void testEstimateAccuracyHierarchicalHighDegree() throws Exception {
+        for (int dimension : DIMENSIONS) {
+            IndexConfig config = new IndexConfig(
+                dimension,
+                48,
+                1.5f,
+                true,
+                VectorSimilarityFunction.EUCLIDEAN,
+                null,
+                null,
+                null
+            );
+
+            verifyEstimateAccuracy(config, dimension, "hierarchical-highM");
+        }
+    }
+
+    @Test
+    public void testEstimateAccuracyHierarchicalCosine() throws Exception {
+        for (int dimension : DIMENSIONS) {
+            IndexConfig config = new IndexConfig(
+                dimension,
+                16,
+                1.5f,
+                true,
+                VectorSimilarityFunction.COSINE,
+                null,
+                null,
+                null
+            );
+
+            verifyEstimateAccuracy(config, dimension, "hierarchical-cosine");
+        }
+    }
+
     private void verifyEstimateAccuracy(IndexConfig config, int dimension, String label) throws Exception {
         int sampleSize = Math.max(sampleSizeFor(dimension), minimumSampleSize(config));
         int verificationSize = verificationSizeFor(dimension);
@@ -163,7 +208,15 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
 
     private MemoryModel buildModel(IndexConfig config, int sampleSize, long seed) throws Exception {
         Measurement measurement = measure(config, sampleSize, seed);
-        return new MemoryModel(config, sampleSize, measurement.graphBytes(), measurement.pqBytes());
+        return new MemoryModel(
+            config,
+            sampleSize,
+            measurement.bytesPerNodeGraph(),
+            measurement.fixedGraphOverhead(),
+            measurement.hierarchyFactor(),
+            measurement.bytesPerNodePQ(),
+            measurement.fixedCodebookBytes()
+        );
     }
 
     private int sampleSizeFor(int dimension) {
@@ -224,6 +277,11 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
 
         long graphBytes;
         long pqBytes = 0L;
+        long bytesPerNodeGraph;
+        long fixedGraphOverhead;
+        double hierarchyFactor;
+        long bytesPerNodePQ = 0L;
+        long fixedCodebookBytes = 0L;
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, config.similarityFunction);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(
@@ -239,6 +297,28 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
             ImmutableGraphIndex graph = builder.build(ravv);
             graphBytes = graph.ramBytesUsed();
 
+            OnHeapGraphIndex onHeapGraph = (OnHeapGraphIndex) graph;
+            long sumNodeBytes = 0L;
+            long level0NodeBytes = 0L;
+            for (int level = 0; level <= onHeapGraph.getMaxLevel(); level++) {
+                long perNode = onHeapGraph.ramBytesUsedOneNode(level);
+                long nodesAtLevel = onHeapGraph.size(level);
+                long levelBytes = perNode * nodesAtLevel;
+                sumNodeBytes += levelBytes;
+                if (level == 0) {
+                    level0NodeBytes = levelBytes;
+                }
+            }
+
+            fixedGraphOverhead = Math.max(0L, graphBytes - sumNodeBytes);
+            bytesPerNodeGraph = size == 0 ? 0L : level0NodeBytes / size;
+            hierarchyFactor = level0NodeBytes == 0
+                ? 1.0
+                : Math.max(1.0, (double) sumNodeBytes / (double) level0NodeBytes);
+            if (!config.useHierarchy) {
+                hierarchyFactor = 1.0;
+            }
+
             if (config.usesPQ()) {
                 ProductQuantization pq = ProductQuantization.compute(
                     ravv,
@@ -252,10 +332,20 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
 
                 PQVectors pqVectors = pq.encodeAll(ravv, PhysicalCoreExecutor.pool());
                 pqBytes = pqVectors.ramBytesUsed();
+                fixedCodebookBytes = pq.ramBytesUsed();
+                bytesPerNodePQ = size == 0 ? 0L : Math.max(0L, (pqBytes - fixedCodebookBytes) / size);
             }
         }
 
-        return new Measurement(graphBytes, pqBytes);
+        return new Measurement(
+            graphBytes,
+            pqBytes,
+            bytesPerNodeGraph,
+            fixedGraphOverhead,
+            hierarchyFactor,
+            bytesPerNodePQ,
+            fixedCodebookBytes
+        );
     }
 
     private List<VectorFloat<?>> generateVectors(int dimension, int count, long seed) {
@@ -276,18 +366,46 @@ public class MemoryCostEstimatorAccuracyTest extends LuceneTestCase {
     private static class Measurement {
         private final long graphBytes;
         private final long pqBytes;
+        private final long bytesPerNodeGraph;
+        private final long fixedGraphOverhead;
+        private final double hierarchyFactor;
+        private final long bytesPerNodePQ;
+        private final long fixedCodebookBytes;
 
-        private Measurement(long graphBytes, long pqBytes) {
+        private Measurement(long graphBytes,
+                             long pqBytes,
+                             long bytesPerNodeGraph,
+                             long fixedGraphOverhead,
+                             double hierarchyFactor,
+                             long bytesPerNodePQ,
+                             long fixedCodebookBytes) {
             this.graphBytes = graphBytes;
             this.pqBytes = pqBytes;
+            this.bytesPerNodeGraph = bytesPerNodeGraph;
+            this.fixedGraphOverhead = fixedGraphOverhead;
+            this.hierarchyFactor = hierarchyFactor;
+            this.bytesPerNodePQ = bytesPerNodePQ;
+            this.fixedCodebookBytes = fixedCodebookBytes;
         }
 
-        long graphBytes() {
-            return graphBytes;
+        long bytesPerNodeGraph() {
+            return bytesPerNodeGraph;
         }
 
-        long pqBytes() {
-            return pqBytes;
+        long fixedGraphOverhead() {
+            return fixedGraphOverhead;
+        }
+
+        double hierarchyFactor() {
+            return hierarchyFactor;
+        }
+
+        long bytesPerNodePQ() {
+            return bytesPerNodePQ;
+        }
+
+        long fixedCodebookBytes() {
+            return fixedCodebookBytes;
         }
 
         long totalBytes() {

@@ -19,6 +19,7 @@ package io.github.jbellis.jvector;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
@@ -131,41 +132,30 @@ public final class MemoryCostEstimator {
         public final long bytesPerThreadSearch;
         private final double marginFraction;
 
-        public MemoryModel(IndexConfig config, int sampleSize, long totalGraphBytes, long totalPQBytes) {
-            this(config, sampleSize, totalGraphBytes, totalPQBytes, DEFAULT_MARGIN_FRACTION);
-        }
-
         public MemoryModel(IndexConfig config,
                            int sampleSize,
-                           long totalGraphBytes,
-                           long totalPQBytes,
-                           double marginFraction) {
+                           long bytesPerNodeGraph,
+                           long fixedGraphOverhead,
+                           double hierarchyFactor,
+                           long bytesPerNodePQ,
+                           long fixedCodebookBytes) {
             this.config = config;
             this.sampleSize = sampleSize;
-            this.marginFraction = marginFraction;
+            this.bytesPerNodeGraph = Math.max(0L, bytesPerNodeGraph);
+            this.fixedGraphOverhead = Math.max(0L, fixedGraphOverhead);
+            this.hierarchyFactor = hierarchyFactor;
 
             if (config.usesPQ()) {
-                this.fixedCodebookBytes = estimateCodebookSize(config);
-                this.bytesPerNodePQ = Math.max(0L, (totalPQBytes - fixedCodebookBytes) / sampleSize);
+                this.fixedCodebookBytes = Math.max(0L, fixedCodebookBytes);
+                this.bytesPerNodePQ = Math.max(0L, bytesPerNodePQ);
             } else {
                 this.fixedCodebookBytes = 0L;
                 this.bytesPerNodePQ = 0L;
             }
 
-            this.fixedGraphOverhead = estimateFixedGraphOverhead(sampleSize);
-            this.bytesPerNodeGraph = Math.max(0L, (totalGraphBytes - fixedGraphOverhead) / sampleSize);
-            this.hierarchyFactor = config.useHierarchy ? 1.12d : 1.0d;
             this.bytesPerThreadIndexing = estimateThreadBuffersIndexing(config);
             this.bytesPerThreadSearch = estimateThreadBuffersSearch(config);
-        }
-
-        private static long estimateCodebookSize(IndexConfig config) {
-            int vectorsPerSubspace = config.dimension / config.pqSubspaces;
-            return (long) config.pqSubspaces * config.pqClusters * vectorsPerSubspace * Float.BYTES;
-        }
-
-        private static long estimateFixedGraphOverhead(int sampleSize) {
-            return 4096L + (long) Math.ceil(sampleSize * 1.1) * Integer.BYTES;
+            this.marginFraction = DEFAULT_MARGIN_FRACTION;
         }
 
         private static long estimateThreadBuffersIndexing(IndexConfig config) {
@@ -248,6 +238,11 @@ public final class MemoryCostEstimator {
 
         long graphBytes;
         long pqBytes = 0L;
+        long fixedCodebookBytes = 0L;
+        long bytesPerNodePQ = 0L;
+        long bytesPerNodeGraph;
+        long fixedGraphOverhead;
+        double hierarchyFactor;
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, config.similarityFunction);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(
@@ -263,6 +258,32 @@ public final class MemoryCostEstimator {
             ImmutableGraphIndex graph = builder.build(ravv);
             graphBytes = graph.ramBytesUsed();
 
+            if (!(graph instanceof OnHeapGraphIndex)) {
+                throw new IllegalStateException("MemoryCostEstimator expects an OnHeapGraphIndex sample");
+            }
+            OnHeapGraphIndex onHeapGraph = (OnHeapGraphIndex) graph;
+
+            long sumNodeBytes = 0L;
+            long level0NodeBytes = 0L;
+            for (int level = 0; level <= onHeapGraph.getMaxLevel(); level++) {
+                long perNode = onHeapGraph.ramBytesUsedOneNode(level);
+                long nodesAtLevel = onHeapGraph.size(level);
+                long levelBytes = perNode * nodesAtLevel;
+                sumNodeBytes += levelBytes;
+                if (level == 0) {
+                    level0NodeBytes = levelBytes;
+                }
+            }
+
+            fixedGraphOverhead = Math.max(0L, graphBytes - sumNodeBytes);
+            bytesPerNodeGraph = sampleSize == 0 ? 0L : level0NodeBytes / sampleSize;
+            hierarchyFactor = level0NodeBytes == 0
+                ? 1.0
+                : Math.max(1.0, (double) sumNodeBytes / (double) level0NodeBytes);
+            if (!config.useHierarchy) {
+                hierarchyFactor = 1.0;
+            }
+
             if (config.usesPQ()) {
                 ProductQuantization pq = ProductQuantization.compute(
                     ravv,
@@ -275,10 +296,20 @@ public final class MemoryCostEstimator {
                 );
                 PQVectors pqVectors = pq.encodeAll(ravv, PhysicalCoreExecutor.pool());
                 pqBytes = pqVectors.ramBytesUsed();
+                fixedCodebookBytes = pq.ramBytesUsed();
+                bytesPerNodePQ = sampleSize == 0 ? 0L : Math.max(0L, (pqBytes - fixedCodebookBytes) / sampleSize);
             }
         }
 
-        return new MemoryModel(config, sampleSize, graphBytes, pqBytes);
+        return new MemoryModel(
+            config,
+            sampleSize,
+            bytesPerNodeGraph,
+            fixedGraphOverhead,
+            hierarchyFactor,
+            bytesPerNodePQ,
+            fixedCodebookBytes
+        );
     }
 
     /**
