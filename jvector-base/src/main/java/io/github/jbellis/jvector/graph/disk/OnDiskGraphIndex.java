@@ -227,6 +227,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return features.keySet();
     }
 
+    @Override
     public int getDimension() {
         return dimension;
     }

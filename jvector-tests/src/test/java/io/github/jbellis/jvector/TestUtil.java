@@ -265,6 +265,11 @@ public class TestUtil {
         }
 
         @Override
+        public int getDimension() {
+            throw new NotImplementedException();
+        }
+
+        @Override
         public int getIdUpperBound() {
             return ImmutableGraphIndex.super.getIdUpperBound();
         }
@@ -421,6 +426,11 @@ public class TestUtil {
 
         @Override
         public List<Integer> maxDegrees() {
+            throw new NotImplementedException();
+        }
+
+        @Override
+        public int getDimension() {
             throw new NotImplementedException();
         }
 

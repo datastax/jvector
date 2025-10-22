@@ -73,15 +73,17 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     // Maximum number of neighbors (edges) per node per layer
     final List<Integer> maxDegrees;
+    private final int dimension;
     // The ratio by which we can overflow the neighborhood of a node during construction. Since it is a multiplicative
     // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
     private final double overflowRatio;
 
     private volatile boolean allMutationsCompleted = false;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, double overflowRatio, DiversityProvider diversityProvider) {
+    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
+        this.dimension = dimension;
         setDegrees(maxDegrees);
         entryPoint = new AtomicReference<>();
         this.completions = new CompletionTracker(1024);
@@ -370,6 +372,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
+    public int getDimension() {
+        return dimension;
+    }
+
+    @Override
     public void setAllMutationsCompleted() {
         allMutationsCompleted = true;
     }
@@ -541,7 +548,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      */
     @Experimental
     @Deprecated
-    public static OnHeapGraphIndex load(RandomAccessReader in, double overflowRatio, DiversityProvider diversityProvider) throws IOException {
+    public static OnHeapGraphIndex load(RandomAccessReader in, int dimension, double overflowRatio, DiversityProvider diversityProvider) throws IOException {
         int magic = in.readInt(); // the magic number
         if (magic != OnHeapGraphIndex.MAGIC) {
             throw new IOException("Unsupported magic number: " + magic);
@@ -561,7 +568,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         int entryNode = in.readInt();
 
-        var graph = new OnHeapGraphIndex(layerDegrees, overflowRatio, diversityProvider);
+        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider);
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 

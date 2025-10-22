@@ -151,7 +151,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         log.info("Reading on-heap graph from {}", heapGraphOutputPath);
         MutableGraphIndex reconstructedOnHeapGraphIndex;
         try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
-            reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(baseBuildScoreProvider, ALPHA));
+            reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(baseBuildScoreProvider, ALPHA));
         }
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(graphOutputPath.toAbsolutePath());
