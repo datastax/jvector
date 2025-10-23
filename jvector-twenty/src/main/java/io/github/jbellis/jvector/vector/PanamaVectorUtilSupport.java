@@ -1343,9 +1343,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                      ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                      ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                      float queryMagnitudeSquared, VectorFloat<?> results) {
+                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
         var resultsVectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(results.length());
 
         int codebookSize = 256;
@@ -1542,13 +1542,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        VectorSpecies<Short> shortSpecies;
         VectorSpecies<Byte> byteSpecies;
         VectorMask<Byte> mask;
 
         switch (PREFERRED_BIT_SIZE) {
             case 512 -> {
-                shortSpecies = ShortVector.SPECIES_256;
                 byteSpecies = ByteVector.SPECIES_256;
                 mask = VectorMask.fromValues(byteSpecies,
                         true, true, true, true,
@@ -1562,7 +1560,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 );
             }
             case 256 -> {
-                shortSpecies = ShortVector.SPECIES_128;
                 byteSpecies = ByteVector.SPECIES_128;
                 mask = VectorMask.fromValues(byteSpecies,
                         true, true, true, true,
@@ -1572,7 +1569,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 );
             }
             case 128 -> {
-                shortSpecies = ShortVector.SPECIES_64;
                 byteSpecies = ByteVector.SPECIES_64;
                 mask = VectorMask.fromValues(byteSpecies,
                         true, true, true, true,
@@ -1585,6 +1581,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var codebookSize = partials.length() / partialBases.length();
         var codebookCount = partialBases.length();
 
+        var invDeltaVec = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 1 / delta);
+        var zeros = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        var max65535 = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535);
+        var vectorFF = IntVector.broadcast(IntVector.SPECIES_PREFERRED, 0x00FF);
+
         for (int i = 0; i < codebookCount; i++) {
             var vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(codebookSize);
             var codebookBase = partialBases.get(i);
@@ -1592,12 +1593,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int j = 0;
             for (; j < vectorizedLength; j += FloatVector.SPECIES_PREFERRED.length()) {
                 var partialVector = fromVectorFloat(FloatVector.SPECIES_PREFERRED, partials, i * codebookSize + j);
-                var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
-                quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_PREFERRED)).min(FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535));
-                var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, shortSpecies, 0);
-                var lowBytes = quantizedBytes.and((short) 0x00FF).convertShape(VectorOperators.S2B, byteSpecies, 0);;
+                var quantized = partialVector.sub(codebookBaseVector).mul(invDeltaVec);
+                quantized = quantized.max(zeros).min(max65535);
+                var quantizedBytes = (IntVector) quantized.convertShape(VectorOperators.F2I, IntVector.SPECIES_PREFERRED, 0);
+                var lowBytes = quantizedBytes.and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);;
                 intoByteSequence(lowBytes.reinterpretAsBytes(), quantizedPartials, (2 * i) * codebookSize + j, mask);
-                var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and((short) 0x00FF).convertShape(VectorOperators.S2B, byteSpecies, 0);
+                var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
                 intoByteSequence(highBytes.reinterpretAsBytes(), quantizedPartials, (2 * i + 1) * codebookSize + j, mask);
             }
             for (; j < codebookSize; j++) {
@@ -1913,7 +1914,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
-            float alpha, float x0, float minValue, float maxValue) {
+                                         float alpha, float x0, float minValue, float maxValue) {
         FloatVector squaredSumVec = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
 
         int vectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(quantizedVector.length());
@@ -1955,7 +1956,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
-            float alpha, float x0, float minValue, float maxValue) {
+                                   float alpha, float x0, float minValue, float maxValue) {
         FloatVector dotProdVec = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
 
         int vectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(quantizedVector.length());
@@ -1995,8 +1996,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float[] nvqCosine8bit(VectorFloat<?> vector,
-            ByteSequence<?> quantizedVector, float alpha, float x0, float minValue, float maxValue,
-            VectorFloat<?> centroid) {
+                                 ByteSequence<?> quantizedVector, float alpha, float x0, float minValue, float maxValue,
+                                 VectorFloat<?> centroid) {
         if (vector.length() != centroid.length()) {
             throw new IllegalArgumentException("Vectors must have the same length");
         }
@@ -2126,4 +2127,3 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(),  clusterCount, partialSums, aMagnitude, bMagnitude);
     }
 }
-
