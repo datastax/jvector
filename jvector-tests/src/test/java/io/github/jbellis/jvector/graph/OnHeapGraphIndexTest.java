@@ -45,6 +45,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.commons.lang3.ArrayUtils.shuffle;
 import static org.junit.Assert.assertEquals;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
@@ -61,6 +62,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private static final float NEIGHBOR_OVERFLOW = 1.2f;
     private static final boolean ADD_HIERARCHY = false;
     private static final int TOP_K = 10;
+    private static VectorSimilarityFunction SIMILARITY_FUNCTION = VectorSimilarityFunction.EUCLIDEAN;
 
     private Path testDirectory;
 
@@ -71,6 +73,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private RandomAccessVectorValues newVectorsRavv;
     private RandomAccessVectorValues allVectorsRavv;
     private VectorFloat<?> queryVector;
+    private int[] groundTruthBaseVectors;
     private int[] groundTruthAllVectors;
     private BuildScoreProvider baseBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
@@ -100,11 +103,12 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         allVectorsRavv = new ListRandomAccessVectorValues(allVectors, DIMENSION);
 
         queryVector = createRandomVector(DIMENSION);
-        groundTruthAllVectors = getGroundTruth(allVectorsRavv, queryVector, TOP_K, VectorSimilarityFunction.EUCLIDEAN);
+        groundTruthBaseVectors = getGroundTruth(baseVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION);
+        groundTruthAllVectors = getGroundTruth(allVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION);
 
         // score provider using the raw, in-memory vectors
-        baseBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, VectorSimilarityFunction.EUCLIDEAN);
-        allBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(allVectorsRavv, VectorSimilarityFunction.EUCLIDEAN);
+        baseBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, SIMILARITY_FUNCTION);
+        allBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(allVectorsRavv, SIMILARITY_FUNCTION);
         var baseGraphIndexBuilder = new GraphIndexBuilder(baseBuildScoreProvider,
                 baseVectorsRavv.dimension(),
                 M, // graph degree
@@ -129,14 +133,38 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         TestUtil.deleteQuietly(testDirectory);
     }
 
+    /**
+     * Test that we can build a graph with a non-identity mapping from graph node id to ravv ordinal
+     * and that the recall is the same as the identity mapping (meaning the graphs are equivalent)
+     * @throws IOException exception
+     */
+    @Test
+    public void testGraphConstructionWithNonIdentityOrdinalMapping() throws IOException {
+        // create reversed mapping from graph node id to ravv ordinal
+        int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, graphToRavvOrdMap, SIMILARITY_FUNCTION);
+        try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
+                baseVectorsRavv.dimension(),
+                M, // graph degree
+                BEAM_WIDTH, // construction search depth
+                NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
+                ALPHA, // relax neighbor diversity requirement by this factor
+                ADD_HIERARCHY); // add the hierarchy) {
+             var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(baseVectorsRavv)) {
+            float recallFromBaseGraphIndexFromShuffledVectors = calculateRecall(baseGraphIndexFromShuffledVectors, bsp, queryVector, groundTruthBaseVectors, TOP_K);
+            float recallFromBaseGraphIndex = calculateRecall(baseGraphIndex, baseBuildScoreProvider, queryVector, groundTruthBaseVectors, TOP_K);
+            Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.01f);
+        }
+    }
 
     /**
      * Create an {@link OnHeapGraphIndex} persist it as a {@link OnDiskGraphIndex} and reconstruct back to a mutable {@link OnHeapGraphIndex}
+     * Using identity mapping from graph node id to ravv ordinal
      * Make sure that both graphs are equivalent
      * @throws IOException
      */
     @Test
-    public void testReconstructionOfOnHeapGraphIndex() throws IOException {
+    public void testReconstructionOfOnHeapGraphIndex_withIdentityOrdinalMapping() throws IOException {
         var graphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
         var heapGraphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName() + "_onHeap");
 
@@ -163,6 +191,44 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
             TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
             TestUtil.assertGraphEquals(onDiskGraph, reconstructedOnHeapGraphIndex);
+        }
+    }
+
+    /**
+     * Create an {@link OnHeapGraphIndex} persist it as a {@link OnDiskGraphIndex} and reconstruct back to a mutable {@link OnHeapGraphIndex}
+     * Using random mapping from graph node id to ravv ordinal
+     * Make sure that both graphs are equivalent
+     * @throws IOException
+     */
+    @Test
+    public void testReconstructionOfOnHeapGraphIndex_withNonIdentityOrdinalMapping() throws IOException {
+        var graphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
+        var heapGraphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName() + "_onHeap");
+
+        // create reversed mapping from graph node id to ravv ordinal
+        int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, graphToRavvOrdMap, SIMILARITY_FUNCTION);
+        try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
+                baseVectorsRavv.dimension(),
+                M, // graph degree
+                BEAM_WIDTH, // construction search depth
+                NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
+                ALPHA, // relax neighbor diversity requirement by this factor
+                ADD_HIERARCHY); // add the hierarchy) {
+             var baseGraphIndex = baseGraphIndexBuilder.build(baseVectorsRavv)) {
+            log.info("Writing graph to {}", graphOutputPath);
+            TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
+
+            log.info("Writing on-heap graph to {}", heapGraphOutputPath);
+            try (SimpleWriter writer = new SimpleWriter(heapGraphOutputPath.toAbsolutePath())) {
+                ((OnHeapGraphIndex) baseGraphIndex).save(writer);
+            }
+
+            log.info("Reading on-heap graph from {}", heapGraphOutputPath);
+            try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
+                MutableGraphIndex reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(bsp, ALPHA));
+                TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
+            }
         }
     }
 
