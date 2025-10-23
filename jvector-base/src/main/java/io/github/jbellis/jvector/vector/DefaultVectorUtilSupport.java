@@ -395,7 +395,7 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
       var localBest = partialBases.get(i);
       for (int j = 0; j < codebookSize; j++) {
         var val = partials.get(i * codebookSize + j);
-        var quantized = (short) Math.min((val - localBest) / delta, 65535);
+        var quantized = (short) (Math.min((val - localBest) / delta, 65535) + 0.5);
         quantizedPartials.set((2 * i) * codebookSize + j, (byte) (quantized & 0xFF));
         quantizedPartials.set((2 * i + 1) * codebookSize + j, (byte) ((quantized >> 8) & 0xFF));
       }
