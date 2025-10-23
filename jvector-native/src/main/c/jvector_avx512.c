@@ -44,6 +44,9 @@ int simd_version(void) {
     return 2;
 }
 
+void quantized_partials(float delta, const float* partials, int codebookCount, int codesCount, int const float* partialBases, unsigned char* quantizedPartials) {
+}
+
 /* Bulk shuffles for Fused ADC
  * These shuffles take an array of transposed PQ neighbors (in shuffles) and an of quantized partial distances to shuffle.
  * Partial distance quantization depends on the best distance and delta used to quantize.

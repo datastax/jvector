@@ -27,6 +27,7 @@ bool check_compatibility(void);
 int simd_version(void);
 
 // Code use by Fused PQ
+void quantized_partials(float delta, const float* partials, int codebookCount, int codesCount, int const float* partialBases, unsigned char* quantizedPartials);
 void store_pq_code_in_neighbors(const unsigned char* pqCode, int position, int length, const unsigned char* compressedNeighbors);
 void bulk_quantized_shuffle_dot(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results);
 void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results);

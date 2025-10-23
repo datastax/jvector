@@ -45,6 +45,65 @@ int simd_version(void) {
     return 1;
 }
 
+void quantized_partials(float delta, const float* partials, int codebookCount, int codesCount, int const float* partialBases, unsigned char* quantizedPartials) {
+    __mm256 codebookBaseVector = _mm256_set1_ps(codebookBase);
+    __mm256 invDeltaVec = _mm256_set1_ps(1 / delta);
+    __mm256 zeros = _mm256_set1_ps(0);
+    __mm256 max65535 = _mm256_set1_ps(65535);
+    __mm256i vectorFF = _mm256_set1_ps(0x00FF);
+    __mm256i shuffle = _mm256_set_epi8(
+        1, 3, 5, 7, 9, 11, 13, 15,
+        0, 2, 4, 6, 8, 10, 12, 14,
+        17, 19, 21, 23, 25, 27, 29, 31
+        16, 18, 20, 22, 24, 26, 28, 30
+    );
+    __m128i storeMask = _mm_set_epi8(
+        1, 1, 1, 1, 1, 1, 1, 1,
+        0, 0, 0, 0, 0, 0, 0, 0
+    );
+
+    for (int i = 0; i < codebookCount; i++) {
+        const float codebookBase = partialBases[i];
+        int j = 0;
+        for (; j < codebookSize; j += 8) {
+            int store_offset = (2 * i) * codebookSize + j;
+
+            __m256 partialVector = _mm256_load_ps(partials + i * codebookSize + j);
+            partialVector = _mm256_mul_ps(_mm256_sub_ps(partialVector, codebookBaseVector), invDeltaVec);
+            partialVector = _mm256_min_ps(_mm256_max_ps(partialVector, zeros), max65535);
+            __m256i quantized = _mm256_cvtps_epi32(partialVector);
+            __m256i lowBytes = _mm256_and_si256(quantized, vectorFF);
+            // lowBytes = [0, 0, 0, l0, 0, 0, 0, l1, 0, 0, 0, l2, 0, 0, 0, l3, 0, 0, 0, l4, 0, 0, 0, l5, 0, 0, 0, l6, 0, 0, 0, l7]
+            __m256i highBytes = _mm256_and_si256(_mm256_srli_epi32(quantized, 8), vectorFF);
+            // highBytes = [0, 0, 0, h0, 0, 0, 0, h1, 0, 0, 0, h2, 0, 0, 0, h3, 0, 0, 0, h4, 0, 0, 0, h5, 0, 0, 0, h6, 0, 0, 0, h7]
+            __m256i packed = _mm256_packus_epi32(lowBytes, highBytes);
+            // packed = [0, l0, 0, l1, 0, l2, 0, l3, 0, h0, 0, h1, 0, h2, 0, h3, 0, l4, 0, l5, 0, l6, 0, l7, 0, h4, 0, h5, 0, h6, 0, h7]
+            __m256i packed = _mm256_permute4x64_epi64(packed16, 0b11011000);
+            // packed = [0, l0, 0, l1, 0, l2, 0, l3, 0, l4, 0, l5, 0, l6, 0, l7, 0, h0, 0, h1, 0, h2, 0, h3, 0, h4, 0, h5, 0, h6, 0, h7]
+            packed = _mm256_shuffle_epi8(packed, shuffle)
+            // packed = [l0, l1, l2, l3, l4, l5, l6, l7, 0, 0, 0, 0, 0, 0, 0, 0, h0, h1, h2, h3, h4, h5, h6, h7, 0, 0, 0, 0, 0, 0, 0, 0]
+
+            // Extract the low bytes
+            __128i lowPacked = _mm256_castsi256_si128(packed);
+            // lowPacked = [l0, l1, l2, l3, l4, l5, l6, l7, 0, 0, 0, 0, 0, 0, 0, 0]
+            _mm_maskmoveu_si128(lowPacked, storeMask, quantizedPartials + store_offset, mask);
+
+            // Extract the high bytes now
+            packed = _mm256_permute4x64_epi64(packed, 0b01001110)
+            // packed = [h0, h1, h2, h3, h4, h5, h6, h7, 0, 0, 0, 0, 0, 0, 0, 0, l0, l1, l2, l3, l4, l5, l6, l7, 0, 0, 0, 0, 0, 0, 0, 0]
+            __128i highPacked = _mm256_castsi256_si128(packed);
+            // highPacked = [h0, h1, h2, h3, h4, h5, h6, h7, 0, 0, 0, 0, 0, 0, 0, 0]
+            _mm_maskmoveu_si128(lowPacked, storeMask, quantizedPartials + store_offset + codebookSize + j, mask);
+        }
+//        for (; j < codebookSize; j++) {
+//            var val = partials.get(i * codebookSize + j);
+//            var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
+//            quantizedPartials.set((2 * i) * codebookSize + j, (byte) (quantized & 0xFF));
+//            quantizedPartials.set((2 * i + 1) * codebookSize + j, (byte) ((quantized >> 8) & 0xFF));
+//        }
+    }
+}
+
 /* Bulk shuffles for Fused ADC
  * These shuffles take an array of transposed PQ neighbors (in shuffles) and an of quantized partial distances to shuffle.
  * Partial distance quantization depends on the best distance and delta used to quantize.
@@ -67,14 +126,25 @@ int simd_version(void) {
  * The function apply_pairwise_shuffle permutes and blends consecutive segment pairs. These resulting blends get merged hierarchically.
  */
 
-inline __m256i apply_pairwise_shuffle(__m256i shuffle, const char* quantizedPartials, int offset) {
-    __m256i partialsVecA = _mm256_loadu_epi16(quantizedPartials + offset);
-    __m256i partialsVecB = _mm256_loadu_epi16(quantizedPartials + offset + 32);
+__attribute__((always_inline)) inline __m256i apply_pairwise_shuffle(__m256i shuffle, const char* quantizedPartials, int offset) {
+    __m128i partialsVecA = _mm_loadu_epi16(quantizedPartials + offset);
+    __m128i partialsVecB = _mm_loadu_epi16(quantizedPartials + offset + 16);
+    __m128i partialsVecAB = _mm_permutex2var_epi16(partialsVecA, shuffle, partialsVecB);
+
+    __m128i partialsVecC = _mm_loadu_epi16(quantizedPartials + offset + 32);
+    __m128i partialsVecD = _mm_loadu_epi16(quantizedPartials + offset + 48);
+    __m128i partialsVecCD = _mm_permutex2var_epi16(partialsVecC, shuffle, partialsVecD);
+
+    __m256 partialsABCD = _mm256_castps128_ps256(a);
+    c = _mm256_insertf128_ps(c,b,1);
+
+    __m256i partialsVecA = _mm256_loadu_si256((const __m256i*) quantizedPartials + offset);
+    __m256i partialsVecB = _mm256_loadu_si256((const __m256i*) quantizedPartials + offset + 32);
     __m256i partialsVecAB = _mm256_permutex2var_epi16(partialsVecA, shuffle, partialsVecB);
     return partialsVecAB;
 }
 
-inline __m256i lookup_partial_sums(__m256i shuffle, const char* quantizedPartials, int i) {
+__attribute__((always_inline)) inline __m256i lookup_partial_sums(__m256i shuffle, const char* quantizedPartials, int i) {
     __m256i partialsVecA = apply_pairwise_shuffle(shuffle, quantizedPartials, i * 512);
     __m256i partialsVecB = apply_pairwise_shuffle(shuffle, quantizedPartials, i * 512 + 64);
     __m256i partialsVecC = apply_pairwise_shuffle(shuffle, quantizedPartials, i * 512 + 128);
