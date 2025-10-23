@@ -63,10 +63,28 @@ public class ByteBufferIndexWriter implements IndexWriter {
     }
 
     /**
+     * Creates a new {@code ByteBufferIndexWriter} with the specified capacity.
+     * <p>
+     * If {@code offHeap} is {@code true}, a direct (off-heap) {@link ByteBuffer} is used;
+     * otherwise, a heap-based buffer is used.
+     *
+     * @param capacity the buffer capacity in bytes
+     * @param offHeap  if {@code true}, use a direct (off-heap) buffer; otherwise, use a heap buffer
+     * @return a new {@code ByteBufferIndexWriter} backed by a buffer of the specified type and capacity
+     */
+    public static ByteBufferIndexWriter create(int capacity, boolean offHeap) {
+        if (offHeap) {
+            return allocateDirect(capacity);
+        } else {
+            return allocate(capacity);
+        }
+    }
+
+    /**
      * Creates a writer with a new heap ByteBuffer of the given capacity.
      * The buffer uses BIG_ENDIAN byte order.
      */
-    public static ByteBufferIndexWriter allocate(int capacity) {
+    private static ByteBufferIndexWriter allocate(int capacity) {
         ByteBuffer buffer = ByteBuffer.allocate(capacity);
         buffer.order(ByteOrder.BIG_ENDIAN);
         return new ByteBufferIndexWriter(buffer);
@@ -76,7 +94,7 @@ public class ByteBufferIndexWriter implements IndexWriter {
      * Creates a writer with a new direct ByteBuffer of the given capacity.
      * The buffer uses BIG_ENDIAN byte order.
      */
-    public static ByteBufferIndexWriter allocateDirect(int capacity) {
+    private static ByteBufferIndexWriter allocateDirect(int capacity) {
         ByteBuffer buffer = ByteBuffer.allocateDirect(capacity);
         buffer.order(ByteOrder.BIG_ENDIAN);
         return new ByteBufferIndexWriter(buffer);

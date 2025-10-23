@@ -217,12 +217,12 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         // We will use the abstract method because no random access is needed
         writeSeparatedFeatures(featureStateSuppliers);
 
-        // Write the header again with updated offsets
         if (version >= 5) {
             writeFooter(view, out.position());
         }
-
         final var endOfGraphPosition = out.position();
+
+        // Write the header again with updated offsets
         writeHeader(view);
         out.seek(endOfGraphPosition);
         out.flush();
