@@ -1595,8 +1595,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 var partialVector = fromVectorFloat(FloatVector.SPECIES_PREFERRED, partials, i * codebookSize + j);
                 var quantized = partialVector.sub(codebookBaseVector).mul(invDeltaVec);
                 quantized = quantized.max(zeros).min(max65535);
+                quantized = quantized.add(0.5f); // Use rounding: add 0.5 and apply floor
                 var quantizedBytes = (IntVector) quantized.convertShape(VectorOperators.F2I, IntVector.SPECIES_PREFERRED, 0);
-                var lowBytes = quantizedBytes.and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);;
+                var lowBytes = quantizedBytes.and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
                 intoByteSequence(lowBytes.reinterpretAsBytes(), quantizedPartials, (2 * i) * codebookSize + j, mask);
                 var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
                 intoByteSequence(highBytes.reinterpretAsBytes(), quantizedPartials, (2 * i + 1) * codebookSize + j, mask);
