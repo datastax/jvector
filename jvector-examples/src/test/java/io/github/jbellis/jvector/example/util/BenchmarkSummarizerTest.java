@@ -115,8 +115,8 @@ public class BenchmarkSummarizerTest {
     @Test
     public void testSummaryStatsToString() {
         // Create a SummaryStats instance
-        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4);
-        
+        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4, 0.2, 100)
+;
         // Verify toString output
         String expected = String.format(
             "Benchmark Summary (across %d configurations):%n" +

@@ -121,7 +121,7 @@ public class SummarizerTest {
         System.out.println("\nTest: SummaryStats toString method");
         
         // Create a SummaryStats instance
-        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4);
+        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4, 0.2, 100);
         
         // Verify toString output
         String expected = String.format(
