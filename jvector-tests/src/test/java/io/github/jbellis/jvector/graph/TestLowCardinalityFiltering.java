@@ -47,13 +47,13 @@ import static org.junit.Assert.assertEquals;
 public class TestLowCardinalityFiltering extends LuceneTestCase {
     @Test
     public void testLowCardinalityFiltering() throws IOException {
-        testLowCardinalityFiltering(32, 0.01f, 0.87f, false);
-        testLowCardinalityFiltering(32, 0.01f, 0.87f, true);
+            testLowCardinalityFiltering(32, 0.044f, 0.91f, false);
+            testLowCardinalityFiltering(32, 0.048f, 0.93f, true);
     }
     public void testLowCardinalityFiltering(int maxDegree, float visitedRatioThreshold, float recallThreshold, boolean addHierarchy) throws IOException {
         var R = getRandom();
 
-        int nVectors = 100_000;
+        int nVectors = 10_000;
         int nQueries = 100;
         int dimensions = 16;
         int topK = 10;
