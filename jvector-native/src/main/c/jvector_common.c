@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-unsigned int combineBytes(int i, unsigned int shuffle, const char* quantizedPartials) {
-    // This is a 16-bit value stored in two bytes, so we need to move in multiples of two and then combine them.
+unsigned int combineBytes(int i, unsigned int shuffle, const unsigned char* quantizedPartials) {
     unsigned int lowByte = quantizedPartials[i * 512 + shuffle];
-    unsigned int highByte = quantizedPartials[i * 512 + shuffle + 1];
+    unsigned int highByte = quantizedPartials[(i * 512) + shuffle + 256];
     return (highByte << 8) | lowByte;
 }
 
-unsigned int computeSingleShuffle(int i, int j, const unsigned char* shuffles, int nNeighbors) {
-    // This points to a 16-bit value stored in two bytes, so we need to move in multiples of two.
-    unsigned int temp = shuffles[i * nNeighbors + j];
-    return temp * 2;
+unsigned int computeSingleShuffle(int codebookPosition, int neighborPosition, const unsigned char* shuffles, int nNeighbors, int blockSize) {
+    int blockIndex = neighborPosition / blockSize;
+    int positionWithinBlock = neighborPosition % blockSize;
+    int offset = blockIndex * blockSize * nNeighbors;
+    return shuffles[offset + blockSize * codebookPosition + positionWithinBlock];
 }

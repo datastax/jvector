@@ -18,6 +18,6 @@
 
 // Auxiliary scalar functions common to all SIMD widths
 
-unsigned int combineBytes(int i, unsigned int shuffle, const char* quantizedPartials);
+unsigned int combineBytes(int i, unsigned int shuffle, const unsigned char* quantizedPartials);
 
-unsigned int computeSingleShuffle(int i, int j, const unsigned char* shuffles, int nNeighbors);
+unsigned int computeSingleShuffle(int codebookPosition, int neighborPosition, const unsigned char* shuffles, int nNeighbors, int blockSize);
