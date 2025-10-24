@@ -17,7 +17,7 @@ package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.example.BenchResult;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.HashMap;
