@@ -29,10 +29,18 @@ import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
+/**
+ * Abstract base class for writing graph indexes to disk.
+ * @param <T> the type of the output writer
+ */
 public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
+    /** EOF magic number. */
     public static final int FOOTER_MAGIC = 0x4a564244; // "EOF magic"
+    /** The size of the offset in the footer. */
     public static final int FOOTER_OFFSET_SIZE = Long.BYTES; // The size of the offset in the footer
+    /** The size of the magic number in the footer. */
     public static final int FOOTER_MAGIC_SIZE = Integer.BYTES; // The size of the magic number in the footer
+    /** The total size of the footer. */
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE; // The total size of the footer
     final int version;
     final ImmutableGraphIndex graph;
@@ -72,12 +80,17 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     }
 
     /**
+     * Gets the maximum ordinal written so far.
      * @return the maximum ordinal written so far, or -1 if no ordinals have been written yet
      */
     public int getMaxOrdinal() {
         return maxOrdinalWritten;
     }
 
+    /**
+     * Gets the set of features.
+     * @return the feature set
+     */
     public Set<FeatureId> getFeatureSet() {
         return featureMap.keySet();
     }
@@ -96,6 +109,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     }
 
     /**
+     * Computes sequential renumbering for graph ordinals.
+     * @param graph the graph index to renumber
      * @return a Map of old to new graph ordinals where the new ordinals are sequential starting at 0,
      * while preserving the original relative ordering in `graph`.  That is, for all node ids i and j,
      * if i &lt; j in `graph` then map[i] &lt; map[j] in the returned map.  "Holes" left by
@@ -150,6 +165,9 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * <p>
      * Public so that you can write the index size (and thus usefully open an OnDiskGraphIndex against the index)
      * to read Features from it before writing the edges.
+     * @param view the graph index view
+     * @param startOffset the start offset
+     * @throws IOException if an I/O error occurs
      */
     public synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
         // graph-level properties
@@ -231,6 +249,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * <p>
      * K - the type of the writer to build
      * T - the type of the output stream
+     * @param <K> the type of the writer to build
+     * @param <T> the type of the output stream
      */
     public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> {
         final ImmutableGraphIndex graphIndex;
@@ -239,6 +259,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         OrdinalMapper ordinalMapper;
         int version;
 
+        /**
+         * Constructs a Builder.
+         * @param graphIndex the graph index
+         * @param out the output writer
+         */
         public Builder(ImmutableGraphIndex graphIndex, T out) {
             this.graphIndex = graphIndex;
             this.out = out;
@@ -246,6 +271,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             this.version = OnDiskGraphIndex.CURRENT_VERSION;
         }
 
+        /**
+         * Sets the version.
+         * @param version the version
+         * @return this builder
+         */
         public Builder<K, T> withVersion(int version) {
             if (version > OnDiskGraphIndex.CURRENT_VERSION) {
                 throw new IllegalArgumentException("Unsupported version: " + version);
@@ -255,16 +285,31 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             return this;
         }
 
+        /**
+         * Adds a feature.
+         * @param feature the feature
+         * @return this builder
+         */
         public Builder<K, T> with(Feature feature) {
             features.put(feature.id(), feature);
             return this;
         }
 
+        /**
+         * Sets the ordinal mapper.
+         * @param ordinalMapper the ordinal mapper
+         * @return this builder
+         */
         public Builder<K, T> withMapper(OrdinalMapper ordinalMapper) {
             this.ordinalMapper = ordinalMapper;
             return this;
         }
 
+        /**
+         * Builds the writer.
+         * @return the writer
+         * @throws IOException if an I/O error occurs
+         */
         public K build() throws IOException {
             if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
                 throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
@@ -289,12 +334,28 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             return reallyBuild(dimension);
         }
 
+        /**
+         * Actually builds the writer with the given dimension.
+         * @param dimension the dimension
+         * @return the writer
+         * @throws IOException if an I/O error occurs
+         */
         protected abstract K reallyBuild(int dimension) throws IOException;
 
+        /**
+         * Sets the ordinal mapping.
+         * @param oldToNewOrdinals the old to new ordinals map
+         * @return this builder
+         */
         public Builder<K, T> withMap(Map<Integer, Integer> oldToNewOrdinals) {
             return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
         }
 
+        /**
+         * Gets a feature by ID.
+         * @param featureId the feature ID
+         * @return the feature
+         */
         public Feature getFeature(FeatureId featureId) {
             return features.get(featureId);
         }
