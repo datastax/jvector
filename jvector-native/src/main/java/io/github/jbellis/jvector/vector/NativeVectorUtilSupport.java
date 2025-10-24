@@ -161,16 +161,20 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 //        }
 //    }
 
-//    @Override
-//    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
-//        assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
-//        switch (vsf) {
+    @Override
+    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
+        var copy = results.copy();
+        super.bulkShuffleQuantizedSimilarity(shuffles, codebookCount, quantizedPartials, delta, bestDistance, vsf, copy);
+
+        assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
+        switch (vsf) {
 //            case DOT_PRODUCT -> NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
-//            case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
-//            case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
-//        }
-//    }
-//
+            case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean(((MemorySegmentByteSequence) shuffles).get(), codebookCount, results.length(), ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
+            case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
+        }
+        System.out.println(1);
+    }
+
 //    @Override
 //    public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
 //                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,

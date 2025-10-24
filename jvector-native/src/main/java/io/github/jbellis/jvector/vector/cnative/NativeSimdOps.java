@@ -270,6 +270,69 @@ public class NativeSimdOps {
         }
     }
 
+    private static class bulk_quantized_shuffle_euclidean {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_euclidean");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * }
+     */
+    public static FunctionDescriptor bulk_quantized_shuffle_euclidean$descriptor() {
+        return bulk_quantized_shuffle_euclidean.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * }
+     */
+    public static MethodHandle bulk_quantized_shuffle_euclidean$handle() {
+        return bulk_quantized_shuffle_euclidean.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * }
+     */
+    public static MemorySegment bulk_quantized_shuffle_euclidean$address() {
+        return bulk_quantized_shuffle_euclidean.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * }
+     */
+    public static void bulk_quantized_shuffle_euclidean(MemorySegment shuffles, int codebookCount, int codesCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
+        var mh$ = bulk_quantized_shuffle_euclidean.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("bulk_quantized_shuffle_euclidean", shuffles, codebookCount, codesCount, quantizedPartials, delta, minDistance, results);
+            }
+            mh$.invokeExact(shuffles, codebookCount, codesCount, quantizedPartials, delta, minDistance, results);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class assemble_and_sum {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             NativeSimdOps.C_FLOAT,
