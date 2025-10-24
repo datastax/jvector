@@ -80,14 +80,14 @@ void quantized_partials(float delta, const float* partials, int codebookCount, i
             packed = _mm256_permute4x64_epi64(packed, 0b11011000);
             packed = _mm256_shuffle_epi8(packed, shuffle);
 
-            // Extract the low bytes
+            // Extract the low 128 bits
             __m128i lowPacked = _mm256_castsi256_si128(packed);
             _mm_maskmoveu_si128(lowPacked, storeMask, quantizedPartials + store_offset);
 
             // Put the high bytes in the first 128 bits
-            packed = _mm256_permute4x64_epi64(packed, 0b01001110);
+            packed = _mm256_permute4x64_epi64(packed, 0b01001110); // four 2-bit elements: 1032
 
-            // Extract the high bytes
+            // Extract the high 128 bits
             __m128i highPacked = _mm256_castsi256_si128(packed);
             _mm_maskmoveu_si128(highPacked, storeMask, quantizedPartials + store_offset + codebookSize);
         }
@@ -176,47 +176,120 @@ void quantized_partials(float delta, const float* partials, int codebookCount, i
 //    __m256 dequantizedVec = _mm256_fmadd_ps(floatVec, deltaVec, baseVec);
 //    return dequantizedVec;
 //}
-//
-//void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results) {
-//    int length = codebookCount * codesCount;
-//    int j = 0;
-//    for (; j + 16 <= codesCount; j += 16) {
-//        __m256i sum = _mm256_setzero_si256();
-//
-//        for (int i = 0; i < codebookCount; i++) {
-//            int byte = j * codebookCount + i * 16;
-//            __m128i smallShuffle = _mm_loadu_epi8(shuffles + byte);
-//            __m256i shuffle = _mm256_cvtepu8_epi16(smallShuffle);
-//            __m256i partialsVec = lookup_partial_sums(shuffle, quantizedPartials, i);
-//            sum = _mm256_adds_epu16(sum, partialsVec);
-//        }
-//
-//        __m128i quantizedResultsLeftRaw = _mm256_extracti32x4_epi32(sum, 0);
-//        __m128i quantizedResultsRightRaw = _mm256_extracti32x4_epi32(sum, 1);
-//        __m256 resultsLeft = dequantize(quantizedResultsLeftRaw, delta, minDistance);
-//        __m256 resultsRight = dequantize(quantizedResultsRightRaw, delta, minDistance);
-//
-//        __m256 ones = _mm256_set1_ps(1.0);
-//        resultsLeft = _mm256_add_ps(resultsLeft, ones);
-//        resultsRight = _mm256_add_ps(resultsRight, ones);
-//        resultsLeft = _mm256_rcp14_ps(resultsLeft);
-//        resultsRight = _mm256_rcp14_ps(resultsRight);
-//
-//        _mm256_storeu_ps(results + j, resultsLeft);
-//        _mm256_storeu_ps(results + j + 8, resultsRight);
-//    }
-//    if (j < codesCount) {
-//        for (; j < codesCount; j++) {
-//            unsigned int val = 0;
-//            for (int i = 0; i < codebookCount; i++) {
-//                unsigned int shuffle = computeSingleShuffle(i, j, shuffles, codesCount);
-//                val += combineBytes(i, shuffle, quantizedPartials);
-//            }
-//            results[j] = 1 / (1 + delta * val + minDistance);
-//        }
-//    }
-//}
-//
+
+__attribute__((always_inline)) inline
+__m256i apply_shuffle(__m256i shuffleVector, int k, __m256i partials) {
+    // We need the shuffles to be relative to the vector indices, so we subtract k
+    __m256i kVector = _mm256_set1_epi8(k);
+    __m256i shuffleVectorK = _mm256_sub_epi8(shuffleVector, kVector);
+
+    __m256i seventhBit = _mm256_set1_epi8(0b10000000); // 0b10000000 = 0x80
+    __m256i min = _mm256_set1_epi8(k);
+    __m256i max = _mm256_set1_epi8(k + 15);
+    __m256i mask = _mm256_cmpgt_epi8(min, shuffleVector);
+    mask = _mm256_or_si256(mask, _mm256_cmpgt_epi8(shuffleVector, max));
+    // mask contains 0xFF in the in-range and 0 in the out-of-range shuffles.
+    // We transform to contain 0 in the in-range positions and 0x80 in the out-of-range positions
+    mask = _mm256_and_si256(mask, seventhBit);
+
+    // We add that seventh bit to shuffleVectorK so that _mm256_shuffle_epi8 outputs a zero in that position
+    shuffleVectorK = _mm256_or_si256(shuffleVectorK, mask);
+    return _mm256_shuffle_epi8(partials, shuffleVectorK);
+}
+
+__attribute__((always_inline)) inline
+__m256i convert_2x_epu8_epi32(__m256i partials) {
+    // Extract the low 128 bits
+    __m128i lowBits = _mm256_castsi256_si128(partials);
+    __m256i lowBits0 = _mm256_cvtepu8_epi32(lowBits);
+
+    // Put the high bytes in the first 128 bits
+    __m256i permutedPartials = _mm256_permute4x64_epi64(partials, 0b01001110); // four 2-bit elements: 1032
+    __m128i highBits = _mm256_castsi256_si128(permutedPartials);
+    __m256i highBits0 = _mm256_cvtepu8_epi32(highBits);
+    highBits0 = _mm256_slli_epi32(highBits0, 8);
+
+    return _mm256_or_si256(lowBits0, highBits0);
+}
+
+void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results) {
+    __m256 deltaVec = _mm256_set1_ps(delta);
+    __m256 minDistancePlusOneVec = _mm256_set1_ps(minDistance + 1);
+
+    int codebookSize = 256;
+
+    int j = 0;
+    for (; j + 32 <= codesCount; j += 32) {
+        __m256i sum0 = _mm256_setzero_si256();
+        __m256i sum1 = _mm256_setzero_si256();
+        __m256i sum2 = _mm256_setzero_si256();
+        __m256i sum3 = _mm256_setzero_si256();
+
+        for (int i = 0; i < codebookCount; i++) {
+            int position = j * codebookCount + i * 32;
+            __m256i shuffleVector = _mm256_lddqu_si256((__m256i const *) (shuffles + position));
+
+            for (int k = 0; k < codebookSize; k += 32) {
+                int offset = (2 * i) * codebookSize + k;
+                __m256i partialLow = _mm256_lddqu_si256((__m256i const *) (quantizedPartials + offset));
+                __m256i partialHigh = _mm256_lddqu_si256((__m256i const *) (quantizedPartials + offset + codebookSize));
+
+                /*
+                 * We are interested in the values of partialLow and partialHigh in the range [k, k + 32).
+                 * Since _mm256_shuffle_epi8 operates on 128-bit lanes, we create two halves:
+                 * - partialLowHighA in [k, k + 16) that contains the first 128 bits of partialLow and the first 128 bits of partialHigh
+                 * - partialLowHighB in [k + 16, k + 32) that contains the last 128 bits of partialLow and the last 128 bits of partialHigh
+                */
+
+                __m256i partialLowHighA = _mm256_permute2x128_si256(partialLow, partialHigh, 0x20);
+                __m256i partialLowHighB = _mm256_permute2x128_si256(partialLow, partialHigh, 0x31);
+
+                partialLowHighA = apply_shuffle(shuffleVector, k, partialLowHighA);
+                partialLowHighB = apply_shuffle(shuffleVector, k + 16, partialLowHighA);
+
+                sum0 = _mm256_add_epi32(sum0, convert_2x_epu8_epi32(partialLowHighA));
+                partialLowHighA = _mm256_permute4x64_epi64(partialLowHighA, 0b10110001); // four 2-bit elements: 2301
+                sum1 = _mm256_add_epi32(sum1, convert_2x_epu8_epi32(partialLowHighA));
+
+                sum2 = _mm256_add_epi32(sum2, convert_2x_epu8_epi32(partialLowHighB));
+                partialLowHighB = _mm256_permute4x64_epi64(partialLowHighB, 0b10110001); // four 2-bit elements: 2301
+                sum3 = _mm256_add_epi32(sum3, convert_2x_epu8_epi32(partialLowHighB));
+            }
+        }
+
+        __m256 sumF0 = _mm256_cvtepi32_ps(sum0);
+        __m256 sumF1 = _mm256_cvtepi32_ps(sum1);
+        __m256 sumF2 = _mm256_cvtepi32_ps(sum2);
+        __m256 sumF3 = _mm256_cvtepi32_ps(sum3);
+
+        sumF0 = _mm256_fmadd_ps(sumF0, deltaVec, minDistancePlusOneVec);
+        sumF1 = _mm256_fmadd_ps(sumF1, deltaVec, minDistancePlusOneVec);
+        sumF2 = _mm256_fmadd_ps(sumF2, deltaVec, minDistancePlusOneVec);
+        sumF3 = _mm256_fmadd_ps(sumF3, deltaVec, minDistancePlusOneVec);
+
+        sumF0 = _mm256_rcp_ps(sumF0);
+        sumF1 = _mm256_rcp_ps(sumF1);
+        sumF2 = _mm256_rcp_ps(sumF2);
+        sumF3 = _mm256_rcp_ps(sumF3);
+
+        float* storePosition = results + j;
+        _mm256_storeu_ps(storePosition, sumF0);
+        _mm256_storeu_ps(storePosition + 8, sumF1);
+        _mm256_storeu_ps(storePosition + 16, sumF2);
+        _mm256_storeu_ps(storePosition + 24, sumF3);
+    }
+    if (j < codesCount) {
+        for (; j < codesCount; j++) {
+            unsigned int val = 0;
+            for (int i = 0; i < codebookCount; i++) {
+                unsigned int shuffle = computeSingleShuffle(i, j, shuffles, codesCount, 32);
+                val += combineBytes(i, shuffle, quantizedPartials);
+            }
+            results[j] = 1 / (1 + delta * val + minDistance);
+        }
+    }
+}
+
 //void bulk_quantized_shuffle(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results) {
 //    int length = codebookCount * codesCount;
 //    int j = 0;
