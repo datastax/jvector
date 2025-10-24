@@ -45,6 +45,10 @@ import static org.junit.Assert.assertEquals;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestLowCardinalityFiltering extends LuceneTestCase {
+    /*
+    This test replicates https://github.com/jbellis/pwtest/tree/master natively in JVector.
+    It splits the vectors in two classes (with probability 0.5) and tests that the filtering works when the query belongs to one of them.
+     */
     @Test
     public void testLowCardinalityFiltering() throws IOException {
             testLowCardinalityFiltering(32, 0.044f, 0.91f, false);
