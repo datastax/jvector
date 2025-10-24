@@ -1158,7 +1158,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                         // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
                         shuffleVectorK = shuffleVector.add((byte) (256 - k));
                     }
-                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    // We are only interested in the values in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
                     var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
                     var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
                     mask = maskGE.and(maskLT);
