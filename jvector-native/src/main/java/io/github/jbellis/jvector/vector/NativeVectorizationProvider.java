@@ -36,13 +36,16 @@ public class NativeVectorizationProvider extends VectorizationProvider {
         boolean libraryLoaded = false;
         boolean compatible = false;
         // Do not change the order, this will try loading  the libraries starting from the highest SIMD width first.
-        for (String libName : List.of("jvectorAVX512", "jvectorAVX256", "jvectorSSE128")) {
-            System.out.print("Loading library: " + libName);
+//        for (String libName : List.of("jvectorAVX512", "jvectorAVX256", "jvectorSSE128")) {
+        for (String libName : List.of("jvectorAVX256")) {
+            System.out.println("Loading library: " + libName);
 
-            libraryLoaded = LibraryLoader.loadJvector(libName);
-            if (!libraryLoaded) {
-                System.out.print(" -> load failure\n");
-                continue;
+            {
+                libraryLoaded = LibraryLoader.loadJvector(libName);
+                if (!libraryLoaded) {
+                    System.out.print(" -> load failure\n");
+                    continue;
+                }
             }
 
             compatible = NativeSimdOps.check_compatibility();
@@ -61,7 +64,6 @@ public class NativeVectorizationProvider extends VectorizationProvider {
         if (!compatible) {
             throw new UnsupportedOperationException("Native SIMD operations are not supported on this platform due to missing CPU support.");
         }
-        System.out.print(" -> success");
 
         this.vectorUtilSupport = new NativeVectorUtilSupport();
         this.vectorTypeSupport = new MemorySegmentVectorProvider();
