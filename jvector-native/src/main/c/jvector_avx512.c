@@ -44,7 +44,7 @@ int simd_version(void) {
     return 2;
 }
 
-void quantized_partials(float delta, const float* partials, int codebookCount, int codesCount, int const float* partialBases, unsigned char* quantizedPartials) {
+void quantized_partials(float delta, const float* partials, int codebookCount, int codesCount, const float* partialBases, unsigned char* quantizedPartials) {
 }
 
 /* Bulk shuffles for Fused ADC
