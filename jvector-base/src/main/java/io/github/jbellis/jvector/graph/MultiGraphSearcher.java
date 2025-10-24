@@ -25,13 +25,14 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.GrowableLongHeap;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
@@ -39,14 +40,23 @@ import org.agrona.collections.IntHashSet;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ForkJoinPool;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 
 /**
+ * Experimental!
+ * <p>
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
  * search algorithm, see {@link ImmutableGraphIndex}.
  */
-public class GraphSearcher implements Closeable {
-    private ImmutableGraphIndex.View view;
+@Experimental
+public class MultiGraphSearcher implements Closeable {
+    private List<ImmutableGraphIndex.View> views;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
@@ -57,63 +67,68 @@ public class GraphSearcher implements Closeable {
     private final NodesUnsorted evictedResults;
 
     // Search parameters that we save here for use by resume()
-    private Bits acceptOrds;
-    private SearchScoreProvider scoreProvider;
+    private final MultiviewBits acceptOrds;
+    private List<SearchScoreProvider> scoreProviders;
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
+
+    private final List<ExplicitThreadLocal<GraphSearcher>> searchers;
+
+    private final ForkJoinPool simdExecutor;
 
     private int visitedCount;
     private int expandedCount;
     private int expandedCountBaseLayer;
 
     /**
-     * Creates a new graph searcher from the given GraphIndex
+     * Creates a new graph searcher from the given list of GraphIndex
+     *
+     * @param graphs           List of GraphIndex
      */
-    public GraphSearcher(ImmutableGraphIndex graph) {
-        this(graph.getView());
+    public MultiGraphSearcher(List<ImmutableGraphIndex> graphs) {
+        this(graphs, PhysicalCoreExecutor.pool());
     }
 
     /**
-     * Creates a new graph searcher from the given GraphIndex.View
+     * Creates a new graph searcher from the given list of GraphIndex
+     *
+     * @param graphs           List of GraphIndex
+     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
+     *                         the number of physical cores.
      */
-    protected GraphSearcher(ImmutableGraphIndex.View view) {
-        this.view = view;
+    public MultiGraphSearcher(List<ImmutableGraphIndex> graphs, ForkJoinPool simdExecutor) {
+        this.views = graphs.stream().map(ImmutableGraphIndex::getView).collect(Collectors.toList());
+        this.searchers = new ArrayList<>();
+        for (var view : views) {
+            this.searchers.add(ExplicitThreadLocal.withInitial(() -> new GraphSearcher(view)));
+        }
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
         this.approximateResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
+        this.pruneSearch = true;
+        this.acceptOrds = new MultiviewBits(graphs.size());
+
+        this.simdExecutor = simdExecutor;
 
         this.pruneSearch = true;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
-    protected int getVisitedCount() {
-        return visitedCount;
-    }
-
-    protected int getExpandedCount() {
-        return expandedCount;
-    }
-
-    protected int getExpandedCountBaseLayer() {
-        return expandedCountBaseLayer;
-    }
-
-    private void initializeScoreProvider(SearchScoreProvider scoreProvider) {
-        this.scoreProvider = scoreProvider;
-        if (scoreProvider.reranker() == null) {
+    private void initializeScoreProvider(List<SearchScoreProvider> scoreProviders) {
+        this.scoreProviders = scoreProviders;
+        if (scoreProviders.stream().anyMatch(sp -> sp.reranker() == null)) {
             cachingReranker = null;
-            return;
+        } else {
+            cachingReranker = new CachingReranker(scoreProviders);
         }
-
-        cachingReranker = new CachingReranker(scoreProvider);
     }
 
-    public ImmutableGraphIndex.View getView() {
-        return view;
+    public List<ImmutableGraphIndex.View> getViews() {
+        return views;
     }
 
     /**
@@ -122,6 +137,9 @@ public class GraphSearcher implements Closeable {
      * @param usage a boolean that determines whether we do early termination or not.
      */
     public void usePruning(boolean usage) {
+        for (var searcher : searchers) {
+            searcher.get().usePruning(usage);
+        }
         pruneSearch = usage;
     }
 
@@ -129,10 +147,14 @@ public class GraphSearcher implements Closeable {
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
-        try (var searcher = new GraphSearcher(graph)) {
-            var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
-            return searcher.search(ssp, topK, acceptOrds);
+    public static MultiSearchResult search(VectorFloat<?> queryVector, int topK, List<RandomAccessVectorValues> vectors, VectorSimilarityFunction similarityFunction, List<ImmutableGraphIndex> graphs, List<Bits> acceptOrds) {
+        try (var searcher = new MultiGraphSearcher(graphs)) {
+            var ssps = new ArrayList<SearchScoreProvider>(graphs.size());
+            for (var iView = 0; iView < searcher.views.size(); iView++) {
+                var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors.get(iView));
+                ssps.add(ssp);
+            }
+            return searcher.search(ssps, topK, topK, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -142,10 +164,18 @@ public class GraphSearcher implements Closeable {
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
-        try (var searcher = new GraphSearcher(graph)) {
-            var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
-            return searcher.search(ssp, topK, rerankK, 0.f, acceptOrds);
+    public static MultiSearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, List<RandomAccessVectorValues> vectors, VectorSimilarityFunction similarityFunction, List<ImmutableGraphIndex> graphs, List<Bits> acceptOrds) {
+        if (acceptOrds.size() != graphs.size()) {
+            throw new IllegalArgumentException("Number of acceptOrds: " + acceptOrds.size() + " != " + graphs.size());
+        }
+
+        try (var searcher = new MultiGraphSearcher(graphs)) {
+            var ssps = new ArrayList<SearchScoreProvider>(graphs.size());
+            for (var iView = 0; iView < searcher.views.size(); iView++) {
+                var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors.get(iView));
+                ssps.add(ssp);
+            }
+            return searcher.search(ssps, topK, rerankK, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -158,34 +188,14 @@ public class GraphSearcher implements Closeable {
      * to the underlying graph, such as {@link OnHeapGraphIndex.ConcurrentGraphIndexView}. This is an optimization over
      * creating a new graph searcher with every update to the view.
      *
-     * @param view the new view
+     * @param views the new views
      */
-    public void setView(ImmutableGraphIndex.View view) {
-        this.view = view;
+    public void setView(List<ImmutableGraphIndex.View> views) {
+        this.views = views;
     }
 
     /**
-     * Call GraphSearcher constructor instead
-     */
-    @Deprecated
-    public static class Builder {
-        private final ImmutableGraphIndex.View view;
-
-        public Builder(ImmutableGraphIndex.View view) {
-            this.view = view;
-        }
-
-        public Builder withConcurrentUpdates() {
-            return this;
-        }
-
-        public GraphSearcher build() {
-            return new GraphSearcher(view);
-        }
-    }
-
-    /**
-     * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
+     * @param scoreProviders  provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
@@ -199,119 +209,28 @@ public class GraphSearcher implements Closeable {
      *                        that we don't search the entire graph trying to satisfy topK.
      * @return a SearchResult containing the topK results and the number of nodes visited during the search.
      */
-    public SearchResult search(SearchScoreProvider scoreProvider,
-                               int topK,
-                               int rerankK,
-                               float threshold,
-                               Bits acceptOrds)
+    public MultiSearchResult search(List<SearchScoreProvider> scoreProviders,
+                                    int topK,
+                                    int rerankK,
+                                    float threshold,
+                                    List<Bits> acceptOrds)
     {
-        NodeAtLevel entry = view.entryNode();
-        if (acceptOrds == null) {
+        if (acceptOrds.size() != views.size()) {
+            throw new IllegalArgumentException("Number of acceptOrds: " + acceptOrds.size() + " != " + views.size());
+        }
+        if (acceptOrds.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("Use MatchAllBits to indicate that all ordinals are accepted, instead of null");
         }
         if (rerankK < topK) {
             throw new IllegalArgumentException(String.format("rerankK %d must be >= topK %d", rerankK, topK));
         }
 
-        if (entry == null) {
-            return new SearchResult(new SearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
+        if (views.stream().allMatch(v -> v.entryNode() == null)) {
+            return new MultiSearchResult(new MultiSearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
-        internalSearch(scoreProvider, entry, topK, rerankK, threshold, acceptOrds);
-        return reranking(topK, rerankK);
-    }
-
-    /**
-     * Performs a search, leaving the results in the internal member variable approximateResults.
-     * It does not perform reranking.
-     *
-     * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param entry           the entry point to the graph. Assumed to be not null.
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
-     *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
-     *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
-     * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
-     *                        If {@link Bits#ALL}, all nodes are acceptable.
-     *                        It is caller's responsibility to ensure that there are enough acceptable nodes
-     *                        that we don't search the entire graph trying to satisfy topK.
-     */
-    protected void internalSearch(SearchScoreProvider scoreProvider,
-                                  NodeAtLevel entry,
-                                  int topK,
-                                  int rerankK,
-                                  float threshold,
-                                  Bits acceptOrds)
-    {
-        initializeInternal(scoreProvider, entry, acceptOrds);
-
-        // Move downward from entry.level to 1
-        for (int lvl = entry.level; lvl > 0; lvl--) {
-            // Search this layer with minimal parameters since we just want the best candidate
-            searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
-            assert approximateResults.size() == 1 : approximateResults.size();
-            setEntryPointsFromPreviousLayer();
-        }
-
-        // Now do the main search at layer 0
-        searchLayer0(topK, rerankK, threshold);
-    }
-
-    /**
-     * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
-     *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
-     *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
-     * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
-     *                        If {@link Bits#ALL}, all nodes are acceptable.
-     *                        It is caller's responsibility to ensure that there are enough acceptable nodes
-     *                        that we don't search the entire graph trying to satisfy topK.
-     * @return a SearchResult containing the topK results and the number of nodes visited during the search.
-     */
-    public SearchResult search(SearchScoreProvider scoreProvider,
-                               int topK,
-                               float threshold,
-                               Bits acceptOrds) {
-        return search(scoreProvider, topK, topK, threshold, acceptOrds);
-    }
-
-
-    /**
-     * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
-     *                        If {@link Bits#ALL}, all nodes are acceptable.
-     *                        It is caller's responsibility to ensure that there are enough acceptable nodes
-     *                        that we don't search the entire graph trying to satisfy topK.
-     * @return a SearchResult containing the topK results and the number of nodes visited during the search.
-     */
-    public SearchResult search(SearchScoreProvider scoreProvider,
-                               int topK,
-                               Bits acceptOrds)
-    {
-        return search(scoreProvider, topK, 0.0f, acceptOrds);
-    }
-
-    void setEntryPointsFromPreviousLayer() {
-        // push the candidates seen so far back onto the queue for the next layer
-        // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
-        approximateResults.foreach(candidates::push);
-        evictedResults.foreach(candidates::push);
-        evictedResults.clear();
-        approximateResults.clear();
-    }
-
-    void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
-        // save search parameters for potential later resume
-        initializeScoreProvider(scoreProvider);
-        this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
+        initializeScoreProvider(scoreProviders);
+        initializeBits(acceptOrds);
 
         // reset the scratch data structures
         approximateResults.clear();
@@ -319,14 +238,58 @@ public class GraphSearcher implements Closeable {
         candidates.clear();
         visited.clear();
 
-        // Start with entry point
-        float score = scoreProvider.scoreFunction().similarityTo(entry.node);
-        visited.add(entry.node);
-        candidates.push(entry.node, score);
-
+        // reset the counters
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
+
+        IntStream.range(0, views.size()).parallel().forEach(iView -> {
+            var searcher = searchers.get(iView).get();
+            var view = views.get(iView);
+
+            var entry = view.entryNode();
+            if (entry != null) {
+                var sp = scoreProviders.get(iView);
+
+                // Only rerankK matters here
+                searcher.internalSearch(sp, entry, topK, topK, threshold, acceptOrds.get(iView));
+
+                synchronized(this) {
+                    int finalIView = iView;
+                    searcher.approximateResults.foreach((node, score) -> {
+                        int internalNodeId = composeInternalNodeId(finalIView, node, views.size());
+                        candidates.push(internalNodeId, score);
+                        visited.add(internalNodeId);
+                    });
+
+                    visitedCount += searcher.getVisitedCount();
+                    expandedCount += searcher.getExpandedCount();
+                    expandedCountBaseLayer += searcher.getExpandedCountBaseLayer();
+                }
+            }
+        });
+
+        // Now do the main multi-index search at layer 0
+        return resume(topK, rerankK, threshold);
+    }
+
+    void initializeBits(List<Bits> rawAcceptOrds) {
+        for (var iView = 0; iView < views.size(); iView++) {
+            var bits = Bits.intersectionOf(rawAcceptOrds.get(iView), views.get(iView).liveNodes());
+            this.acceptOrds.add(bits);
+        }
+    }
+
+    private static int getGraphId(int internalNodeId, int nGraphs) {
+        return internalNodeId % nGraphs;
+    }
+
+    private static int getNodeId(int internalNodeId, int nGraphs) {
+        return internalNodeId / nGraphs;
+    }
+
+    private static int composeInternalNodeId(int iView, int nodeId, int nGraphs) {
+        return nodeId * nGraphs + iView;
     }
 
     private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
@@ -344,43 +307,21 @@ public class GraphSearcher implements Closeable {
 
     /**
      * Performs a single-layer ANN search, expanding from the given candidates queue.
+     * Modifies the internal search state.
+     * When it's done, `approximateResults` contains the best `rerankK` results found at layer 0.
      *
-     * @param scoreProvider       the current query's scoring/approximation logic
+     * @param scoreProviders      the current query's scoring/approximation logic for each index
      * @param rerankK             how many results to over-query for approximate ranking
      * @param threshold           similarity threshold, or 0f if none
-     * @param level               which layer to search
-     *                            <p>
-     *                            Modifies the internal search state.
-     *                            When it's done, `approximateResults` contains the best `rerankK` results found at the given layer.
-     * @param acceptOrdsThisLayer a Bits instance indicating which nodes are acceptable results.
+     * @param acceptOrdsThisLayer a Bits instance indicating which nodes are acceptable results for each index
      *                            If {@link Bits#ALL}, all nodes are acceptable.
      *                            It is caller's responsibility to ensure that there are enough acceptable nodes
      *                            that we don't search the entire graph trying to satisfy topK.
      */
-    // Since Astra / Cassandra's usage drives the design decisions here, it's worth being explicit
-    // about how that works and why.
-    //
-    // Astra breaks logical indexes up across multiple physical OnDiskGraphIndex pieces, one per sstable.
-    // Each of these pieces is searched independently, and the results are combined.  To avoid doing
-    // more work than necessary, Astra assumes that each physical ODGI will contribute responses
-    // to the final result in proportion to its size, and only asks for that many results in the initial
-    // search.  If this assumption is incorrect, or if the rows found turn out to be deleted or overwritten
-    // by later requests (which will be in a different sstable), Astra wants a lightweight way to resume
-    // the search where it was left off to get more results.
-    //
-    // Because Astra uses a nonlinear overquerying strategy (i.e. rerankK will be larger in proportion to
-    // topK for small values of topK than for large), it's especially important to avoid reranking more
-    // results than necessary.  Thus, Astra will look at the worstApproximateInTopK value from the first
-    // ODGI, and use that as the rerankFloor for the next.  Thus, rerankFloor helps avoid believed-to-be-
-    // unnecessary work in the initial search, but if the caller needs to resume() then that belief was
-    // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
-    //
-    // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
-                        int rerankK,
-                        float threshold,
-                        int level,
-                        Bits acceptOrdsThisLayer)
+    void multiSearch(List<SearchScoreProvider> scoreProviders,
+                     int rerankK,
+                     float threshold,
+                     MultiviewBits acceptOrdsThisLayer)
     {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
@@ -399,7 +340,9 @@ public class GraphSearcher implements Closeable {
                 // process the top candidate
                 float topCandidateScore = candidates.topScore();
                 int topCandidateNode = candidates.pop();
-                if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
+                int viewId = getGraphId(topCandidateNode, views.size());
+                int nodeId = getNodeId(topCandidateNode, views.size());
+                if (acceptOrdsThisLayer.get(viewId, nodeId) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
                 }
 
@@ -408,21 +351,21 @@ public class GraphSearcher implements Closeable {
                     continue;
                 }
 
-                if (level == 0) {
-                    expandedCountBaseLayer++;
-                }
+                expandedCountBaseLayer++;
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
-                var scoreFunction = scoreProvider.scoreFunction();
+                var scoreFunction = scoreProviders.get(viewId).scoreFunction();
                 var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
                 if (useEdgeLoading) {
-                    similarities = scoreFunction.edgeLoadingSimilarityTo(topCandidateNode);
+                    similarities = scoreFunction.edgeLoadingSimilarityTo(nodeId);
                 }
                 int i = 0;
-                for (var it = view.getNeighborsIterator(level, topCandidateNode); it.hasNext(); ) {
+                for (var it = views.get(viewId).getNeighborsIterator(0, nodeId); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
-                    if (!visited.add(friendOrd)) {
+                    int internalNodeId = composeInternalNodeId(viewId, friendOrd, views.size());
+
+                    if (!visited.add(internalNodeId)) {
                         continue;
                     }
                     visitedCount++;
@@ -431,7 +374,7 @@ public class GraphSearcher implements Closeable {
                             ? similarities.get(i)
                             : scoreFunction.similarityTo(friendOrd);
                     scoreTracker.track(friendSimilarity);
-                    candidates.push(friendOrd, friendSimilarity);
+                    candidates.push(internalNodeId, friendSimilarity);
                     i++;
                 }
             }
@@ -442,7 +385,7 @@ public class GraphSearcher implements Closeable {
         }
     }
 
-    private void searchLayer0(int topK, int rerankK, float threshold) {
+    MultiSearchResult resume(int topK, int rerankK, float threshold) {
         // rR is persistent to save on allocations
         rerankedResults.clear();
         rerankedResults.setMaxSize(topK);
@@ -451,10 +394,8 @@ public class GraphSearcher implements Closeable {
         evictedResults.foreach(candidates::push);
         evictedResults.clear();
 
-        searchOneLayer(scoreProvider, rerankK, threshold, 0, acceptOrds);
-    }
+        multiSearch(scoreProviders, rerankK, threshold, acceptOrds);
 
-    SearchResult reranking(int topK, int rerankK) {
         // rerank results
         assert approximateResults.size() <= rerankK;
         NodeQueue popFromQueue;
@@ -480,21 +421,18 @@ public class GraphSearcher implements Closeable {
         }
         // pop the top K results from the results queue, which has the worst candidates at the top
         assert popFromQueue.size() <= topK;
-        var nodes = new SearchResult.NodeScore[popFromQueue.size()];
+        var nodes = new MultiSearchResult.NodeScore[popFromQueue.size()];
         for (int i = nodes.length - 1; i >= 0; i--) {
             var nScore = popFromQueue.topScore();
             var n = popFromQueue.pop();
-            nodes[i] = new SearchResult.NodeScore(n, nScore);
+            int viewId = getGraphId(n, views.size());
+            int nodeId = getNodeId(n, views.size());
+            nodes[i] = new MultiSearchResult.NodeScore(viewId, nodeId, nScore);
         }
         // that should be everything
         assert popFromQueue.size() == 0;
 
-        return new SearchResult(nodes, visitedCount, expandedCount, expandedCountBaseLayer, reranked, worstApproximateInTopK);
-    }
-
-    SearchResult resume(int topK, int rerankK, float threshold) {
-        searchLayer0(topK, rerankK, threshold);
-        return reranking(topK, rerankK);
+        return new MultiSearchResult(nodes, visitedCount, expandedCount, expandedCountBaseLayer, reranked, worstApproximateInTopK);
     }
 
     @SuppressWarnings("StatementWithEmptyBody")
@@ -525,7 +463,7 @@ public class GraphSearcher implements Closeable {
      * SearchResult.visitedCount resets with each call to `search` or `resume`.
      */
     @Experimental
-    public SearchResult resume(int additionalK, int rerankK) {
+    public MultiSearchResult resume(int additionalK, int rerankK) {
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
@@ -534,18 +472,20 @@ public class GraphSearcher implements Closeable {
 
     @Override
     public void close() throws IOException {
-        view.close();
+        for (ImmutableGraphIndex.View view : views) {
+            view.close();
+        }
     }
 
     private static class CachingReranker implements ScoreFunction.ExactScoreFunction {
         // this cache never gets cleared out (until a new search reinitializes it),
         // but we expect resume() to be called at most a few times so it's fine
         private final Int2ObjectHashMap<Float> cachedScores;
-        private final SearchScoreProvider scoreProvider;
+        private final List<SearchScoreProvider> scoreProviders;
         private int rerankCalls;
 
-        public CachingReranker(SearchScoreProvider scoreProvider) {
-            this.scoreProvider = scoreProvider;
+        public CachingReranker(List<SearchScoreProvider> scoreProviders) {
+            this.scoreProviders = scoreProviders;
             cachedScores = new Int2ObjectHashMap<>();
             rerankCalls = 0;
         }
@@ -556,13 +496,37 @@ public class GraphSearcher implements Closeable {
                 return cachedScores.get(node2);
             }
             rerankCalls++;
-            float score = scoreProvider.reranker().similarityTo(node2);
+
+            int viewId = getGraphId(node2, scoreProviders.size());
+            int nodeId = getNodeId(node2, scoreProviders.size());
+
+            float score = scoreProviders.get(viewId).reranker().similarityTo(nodeId);
             cachedScores.put(node2, Float.valueOf(score));
             return score;
         }
 
         public int getRerankCalls() {
             return rerankCalls;
+        }
+    }
+
+    private class MultiviewBits {
+        private List<Bits> acceptOrds;
+
+        public MultiviewBits(int capacity) {
+            acceptOrds = new ArrayList<>(capacity);
+        }
+
+        public boolean add(Bits bits) {
+            return acceptOrds.add(bits);
+        }
+
+        public boolean get(int view, int index) {
+            return get(view).get(index);
+        }
+
+        public Bits get(int view) {
+            return acceptOrds.get(view);
         }
     }
 }

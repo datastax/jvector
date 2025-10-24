@@ -26,12 +26,9 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
-import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
+import io.github.jbellis.jvector.example.util.*;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -42,17 +39,13 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
@@ -158,11 +151,14 @@ public class Grid {
                             DataSet ds,
                             Path testDirectory) throws IOException
     {
+        var ravv = ds.getBaseRavv();
+
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        String graphNamePrefix = "graph";
         if (buildCompressor == null) {
-            indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory);
+            indexes = buildInMemory(ravv, ds.similarityFunction, featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, testDirectory, graphNamePrefix);
         } else {
-            indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+            indexes = buildOnDisk(ravv, ds.similarityFunction, featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor, testDirectory, graphNamePrefix, ds.name);
         }
 
         try {
@@ -179,8 +175,7 @@ public class Grid {
                 }
 
                 indexes.forEach((features, index) -> {
-                    try (var cs = new ConfiguredSystem(ds, index, cv,
-                                                       index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
+                    try (var cs = new SingleConfiguredSystem(ds, index, cv)) {
                         testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
@@ -192,27 +187,28 @@ public class Grid {
             }
         } finally {
             for (int n = 0; n < featureSets.size(); n++) {
-                Files.deleteIfExists(testDirectory.resolve("graph" + n));
+                Files.deleteIfExists(testDirectory.resolve(graphNamePrefix + n));
             }
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
-                                                                        int M,
-                                                                        int efConstruction,
-                                                                        float neighborOverflow,
-                                                                        boolean addHierarchy,
-                                                                        boolean refineFinalGraph,
-                                                                        DataSet ds,
-                                                                        Path testDirectory,
-                                                                        VectorCompressor<?> buildCompressor)
+    protected static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(RandomAccessVectorValues ravv,
+                                                                          VectorSimilarityFunction similarityFunction,
+                                                                          List<? extends Set<FeatureId>> featureSets,
+                                                                          int M,
+                                                                          int efConstruction,
+                                                                          float neighborOverflow,
+                                                                          boolean addHierarchy,
+                                                                          boolean refineFinalGraph,
+                                                                          VectorCompressor<?> buildCompressor,
+                                                                          Path testDirectory,
+                                                                          String graphNamePrefix,
+                                                                          String datasetName)
             throws IOException
     {
-        var floatVectors = ds.getBaseRavv();
-
-        var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
+        var pq = (PQVectors) buildCompressor.encodeAll(ravv);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pq);
+        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
         Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
@@ -220,8 +216,8 @@ public class Grid {
         OnDiskGraphIndexWriter scoringWriter = null;
         int n = 0;
         for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor());
+            var graphPath = testDirectory.resolve(graphNamePrefix + n++);
+            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, ravv, pq.getCompressor());
             var writer = bws.builder.build();
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
@@ -235,9 +231,9 @@ public class Grid {
 
         // build the graph incrementally
         long startTime = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
+        var vv = ravv.threadLocalSupplier();
         PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+            IntStream.range(0, ravv.size()).parallel().forEach(node -> {
                 writers.forEach((features, writer) -> {
                     try {
                         var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
@@ -277,13 +273,13 @@ public class Grid {
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
-        indexBuildTimes.put(ds.name, totalTime);
+        indexBuildTimes.put(datasetName, totalTime);
 
         // open indexes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
         n = 0;
         for (var features : featureSets) {
-            var graphPath = testDirectory.resolve("graph" + n++);
+            var graphPath = testDirectory.resolve(graphNamePrefix + n++);
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
         }
@@ -356,32 +352,33 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
+    protected static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemory(RandomAccessVectorValues ravv,
+                                                                          VectorSimilarityFunction similarityFunction,
+                                                                          List<? extends Set<FeatureId>> featureSets,
                                                                           int M,
                                                                           int efConstruction,
                                                                           float neighborOverflow,
                                                                           boolean addHierarchy,
                                                                           boolean refineFinalGraph,
-                                                                          DataSet ds,
-                                                                          Path testDirectory)
+                                                                          Path testDirectory,
+                                                                          String graphNamePrefix)
             throws IOException
     {
-        var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                          floatVectors.dimension(),
-                                                          M,
-                                                          efConstruction,
-                                                          neighborOverflow,
-                                                          1.2f,
-                                                          addHierarchy,
-                                                          refineFinalGraph,
-                                                          PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
+                ravv.dimension(),
+                M,
+                efConstruction,
+                neighborOverflow,
+                1.2f,
+                addHierarchy,
+                refineFinalGraph,
+                PhysicalCoreExecutor.pool(),
+                FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
+        var onHeapGraph = builder.build(ravv);
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",
                           M,
@@ -400,8 +397,8 @@ public class Grid {
                 System.out.println("Skipping Fused ADC feature when building in memory");
                 continue;
             }
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null);
+            var graphPath = testDirectory.resolve(graphNamePrefix + n++);
+            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, ravv, null);
             try (var writer = bws.builder.build()) {
                 start = System.nanoTime();
                 writer.write(bws.suppliers);
@@ -417,16 +414,16 @@ public class Grid {
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
     static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
 
-    private static void testConfiguration(ConfiguredSystem cs,
-                                          Map<Integer, List<Double>> topKGrid,
-                                          List<Boolean> usePruningGrid,
-                                          int M,
-                                          int efConstruction,
-                                          float neighborOverflow,
-                                          boolean addHierarchy,
-                                          Map<String, List<String>> benchmarkSpec) {
+    protected static void testConfiguration(ConfiguredSystem configuredSystem,
+                                            Map<Integer, List<Double>> topKGrid,
+                                            List<Boolean> usePruningGrid,
+                                            int M,
+                                            int efConstruction,
+                                            float neighborOverflow,
+                                            boolean addHierarchy,
+                                            Map<String, List<String>> benchmarkSpec) {
         int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.index);
+        System.out.format("Using %s:%n", configuredSystem.indexName());
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
         var benchmarks = setupBenchmarks(benchmarkSpec);
@@ -446,7 +443,7 @@ public class Grid {
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    var results = tester.run(configuredSystem, topK, rerankK, usePruning, queryRuns);
                     printer.printRow(overquery, results);
                 }
                 printer.printFooter();
@@ -546,6 +543,10 @@ public class Grid {
             List<Boolean> usePruningGrid) throws IOException {
 
         List<BenchResult> results = new ArrayList<>();
+        var ravv = ds.getBaseRavv();
+
+        Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        String graphNamePrefix = "graph";
         for (int m : mGrid) {
             for (int ef : efConstructionGrid) {
                 for (float neighborOverflow : neighborOverflowGrid) {
@@ -558,9 +559,9 @@ public class Grid {
                                         var compressor = getCompressor(buildCompressor, ds);
                                         var searchCompressorObj = getCompressor(searchCompressor, ds);
                                         CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
-                                        var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
-                                        ImmutableGraphIndex index = indexes.get(features);
-                                        try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
+                                        var indices = buildOnDisk(ravv, ds.similarityFunction, List.of(features), m, ef, neighborOverflow, addHierarchy, false, compressor, testDirectory, graphNamePrefix, ds.name);
+                                        ImmutableGraphIndex index = indices.get(features);
+                                        try (SingleConfiguredSystem cs = new SingleConfiguredSystem(ds, index, cvArg)) {
                                             int queryRuns = 2;
                                             List<QueryBenchmark> benchmarks = List.of(
                                                     (diagnostic_level > 0 ?
@@ -618,10 +619,10 @@ public class Grid {
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
         var cp = cpSupplier.apply(ds);
         if (!cp.supportsCaching()) {
-            return cp.computeCompressor(ds);
+            return cp.computeCompressor(ds.getBaseRavv());
         }
 
-        var fname = cp.idStringFor(ds);
+        var fname = cp.idStringFor(ds.name);
         return cachedCompressors.computeIfAbsent(fname, __ -> {
             var path = Paths.get(pqCacheDir).resolve(fname);
             if (path.toFile().exists()) {
@@ -639,7 +640,8 @@ public class Grid {
             }
 
             var start = System.nanoTime();
-            var compressor = cp.computeCompressor(ds);
+            var compressor = cp.computeCompressor(ds.getBaseRavv());
+            //var compressor = cp.computeCompressor(ds.getBaseRavv());
             System.out.format("%s build in %.2fs,%n", compressor, (System.nanoTime() - start) / 1_000_000_000.0);
             if (cp.supportsCaching()) {
                 try {
@@ -653,53 +655,5 @@ public class Grid {
             }
             return compressor;
         });
-    }
-
-    public static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
-        ImmutableGraphIndex index;
-        CompressedVectors cv;
-        Set<FeatureId> features;
-
-        private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            return new GraphSearcher(index);
-        });
-
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
-            this.ds = ds;
-            this.index = index;
-            this.cv = cv;
-            this.features = features;
-        }
-
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            // if we're not compressing then just use the exact score function
-            if (cv == null) {
-                return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
-            }
-
-            var scoringView = (ImmutableGraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
-            } else {
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
-            }
-            var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
-            return new DefaultSearchScoreProvider(asf, rr);
-        }
-
-        public GraphSearcher getSearcher() {
-            return searchers.get();
-        }
-
-        public DataSet getDataSet() {
-            return ds;
-        }
-
-        @Override
-        public void close() throws Exception {
-            searchers.close();
-        }
     }
 }

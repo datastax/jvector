@@ -109,6 +109,10 @@ public interface ScoreTracker {
             this.threshold = threshold;
         }
 
+        TwoPhaseTracker() {
+            this(0);
+        }
+
         void reset(double threshold) {
             this.bestScores.clear();
             this.observationCount = 0;
@@ -189,6 +193,10 @@ public interface ScoreTracker {
             this.observationCount = 0;
             this.mean = 0;
             this.dSquared = 0;
+        }
+
+        RelaxedMonotonicityTracker() {
+            this(100);
         }
 
         private static int getRecentScoresSize(int bestScoresTracked) {

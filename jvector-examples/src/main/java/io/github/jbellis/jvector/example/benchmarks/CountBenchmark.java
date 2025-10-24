@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -92,7 +92,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,
@@ -105,14 +105,13 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = executor.size();
 
         for (int run = 0; run < queryRuns; run++) {
             IntStream.range(0, totalQueries)
                     .parallel()
                     .forEach(i -> {
-                        SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                        SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, i);
                         nodesVisited.add(sr.getVisitedCount());
                         nodesExpanded.add(sr.getExpandedCount());
                         nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());

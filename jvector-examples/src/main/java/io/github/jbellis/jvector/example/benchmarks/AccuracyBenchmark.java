@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.SearchResult;
 
@@ -78,7 +78,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,
@@ -88,27 +88,26 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = executor.size();
 
         // execute all queries in parallel and collect results
         List<SearchResult> results = IntStream.range(0, totalQueries)
                 .parallel()
-                .mapToObj(i -> QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i))
+                .mapToObj(i -> executor.executeQuery(topK, rerankK, usePruning, i))
                 .collect(Collectors.toList());
 
         var list = new ArrayList<Metric>();
         if (computeRecall) {
             // compute recall for this run
             double recall = AccuracyMetrics.recallFromSearchResults(
-                            cs.getDataSet().groundTruth, results, topK, topK
+                    executor.getGroundTruth(), results, topK, topK
             );
             list.add(Metric.of("Recall@" + topK, formatRecall, recall));
         }
         if (computeMAP) {
             // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
-                            cs.getDataSet().groundTruth, results, topK
+                    executor.getGroundTruth(), results, topK
             );
             list.add(Metric.of("MAP@" + topK, formatMAP, map));
         }

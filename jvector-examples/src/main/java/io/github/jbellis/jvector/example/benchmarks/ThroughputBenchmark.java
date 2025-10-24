@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -127,7 +127,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
     @Override
     public List<Metric> runBenchmark(
-            ConfiguredSystem cs,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,
@@ -137,8 +137,9 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
-        int dim = cs.getDataSet().getDimension();
+        int totalQueries = executor.size();
+        //int dim = executor.dimension(); TODO: Add this to ConfiguredSystem
+        int dim = 1024; // Placeholder dimension
 
         // Warmup Phase with diagnostics
         double[] warmupQps = new double[numWarmupRuns];
@@ -157,8 +158,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                                 randQ.set(j, ThreadLocalRandom.current().nextFloat());
                             }
                             VectorUtil.l2normalize(randQ);
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, randQ);
+                            SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, k);
                             SINK += sr.getVisitedCount();
                             
                             long queryEnd = System.nanoTime();
@@ -210,9 +210,8 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         .parallel()
                         .forEach(i -> {
                             long queryStart = System.nanoTime();
-                            
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, i);
+
+                            SearchResult sr = executor.executeQuery(topK, rerankK, usePruning, i);
                             // "Use" the result to prevent optimization
                             visitedAdder.add(sr.getVisitedCount());
                             

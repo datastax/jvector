@@ -53,8 +53,6 @@ public class BenchYAML {
             System.out.println("Executing the following datasets: " + datasetNames);
 
             for (var datasetName : datasetNames) {
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
-
                 if (datasetName.endsWith(".hdf5")) {
                     datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
                 }
@@ -77,6 +75,12 @@ public class BenchYAML {
             String datasetName = config.dataset;
 
             DataSet ds = DataSetLoader.loadDataSet(datasetName);
+
+            MultiGrid.runAll(10, ds, config.construction.outDegree, config.construction.efConstruction,
+                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(), config.search.topKOverquery,
+                    config.search.useSearchPruning, config.search.benchmarks);
 
             Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,

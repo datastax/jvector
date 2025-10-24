@@ -41,7 +41,6 @@ public class MultiConfig {
         boolean useDefault = !configFile.exists();
         if (useDefault) {
             configFile = new File(defaultDirectory + "default.yml");
-            System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
         }
         var config = getConfig(configFile);
         if (useDefault) {

@@ -17,11 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.util.ConfiguredSystem;
 
 /**
  * Orchestrates running a set of QueryBenchmark instances
@@ -41,14 +39,14 @@ public class QueryTester {
      * Run each benchmark once and return a map from each Summary class
      * to its returned summary instance.
      *
-     * @param cs          the configured system under test
+     * @param executor    the query executor under test
      * @param topK        the top‑K parameter for all benchmarks
      * @param rerankK     the rerank‑K parameter
      * @param usePruning  whether to enable pruning
      * @param queryRuns   number of runs for each benchmark
      */
     public List<Metric> run(
-            ConfiguredSystem cs,
+            ConfiguredSystem executor,
             int topK,
             int rerankK,
             boolean usePruning,
@@ -57,7 +55,7 @@ public class QueryTester {
         List<Metric> results = new ArrayList<>();
 
         for (var benchmark : benchmarks) {
-            var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+            var metrics = benchmark.runBenchmark(executor, topK, rerankK, usePruning, queryRuns);
             results.addAll(metrics);
         }
 
