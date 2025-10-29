@@ -443,13 +443,15 @@ public class GraphIndexBuilder implements Closeable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
-        var vv = ravv.threadLocalSupplier();
-        int size = ravv.size();
+        // If a mapping is provided, wrap the RAVV so that getVector(node) returns the vector at graphToRavvOrdMap[node]
+        var wrappedRavv = (graphToRavvOrdMap != null) ? new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap) : ravv;
+        var vv = wrappedRavv.threadLocalSupplier();
+        int size = wrappedRavv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
-                int ravvOrdinal = (graphToRavvOrdMap != null) ? graphToRavvOrdMap[node] : node;
-                addGraphNode(node, vv.get().getVector(ravvOrdinal));
+                // The RAVV is already wrapped with the mapping, so we can just use node directly
+                addGraphNode(node, vv.get().getVector(node));
             });
         }).join();
 
@@ -1025,7 +1027,7 @@ public class GraphIndexBuilder implements Closeable {
 
             // parallel graph construction from the merge documents Ids
             PhysicalCoreExecutor.pool().submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(graphToRavvOrdMap[ord]));
+                builder.addGraphNode(ord, vv.get().getVector(ord));
             })).join();
 
             builder.cleanup();

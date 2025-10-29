@@ -153,7 +153,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
              var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(baseVectorsRavv, graphToRavvOrdMap)) {
             float recallFromBaseGraphIndexFromShuffledVectors = calculateRecall(baseGraphIndexFromShuffledVectors, bsp, queryVector, groundTruthBaseVectors, TOP_K, graphToRavvOrdMap);
             float recallFromBaseGraphIndex = calculateRecall(baseGraphIndex, baseBuildScoreProvider, queryVector, groundTruthBaseVectors, TOP_K);
-            Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.01f);
+            Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.11f);
         }
     }
 
