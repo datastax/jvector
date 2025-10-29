@@ -50,9 +50,6 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     private ByteSequence<?> compressedNeighbors = null;
 
     public FusedPQ(int maxDegree, ProductQuantization pq) {
-        if (maxDegree != 32) {
-            throw new IllegalArgumentException("maxDegree must be 32 for FusedADC. This limitation may be removed in future releases");
-        }
         if (pq.getClusterCount() != 256) {
             throw new IllegalArgumentException("FusedADC requires a 256-cluster PQ. This limitation may be removed in future releases");
         }
