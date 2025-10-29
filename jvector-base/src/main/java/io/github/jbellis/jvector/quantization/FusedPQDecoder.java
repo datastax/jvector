@@ -27,8 +27,6 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.agrona.collections.Int2ObjectHashMap;
 
-import java.util.Arrays;
-
 /**
  * Performs similarity comparisons with compressed vectors without decoding them.
  * These decoders use Quick(er) ADC-style transposed vectors fused into a graph.
