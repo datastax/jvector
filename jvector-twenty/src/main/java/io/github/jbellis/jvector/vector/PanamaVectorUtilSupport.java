@@ -23,7 +23,6 @@ import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
-import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
@@ -1135,19 +1134,22 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int j;
         for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
+            var sum0 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
-            var sum4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
                 int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
                 var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
 
+                var partialVectorLow = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+                var partialVectorHigh = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+
                 for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
-                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
-                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
+                    var partialVectorLowSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
+                    var partialVectorHighSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
 
                     ByteVector shuffleVectorK;
                     VectorMask<Byte> mask;
@@ -1163,62 +1165,70 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
                     mask = maskGE.and(maskLT);
 
-                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
-                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+                    partialVectorLowSegment = shuffleVectorK.selectFrom(partialVectorLowSegment);
+                    partialVectorHighSegment = shuffleVectorK.selectFrom(partialVectorHighSegment);
 
-                    // Process sum partials - convert bytes to ints and combine (part 0)
-                    var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 0);
-                    partialVectorLow0 = partialVectorLow0.and((short) 0xff);
-                    var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 0);
-                    partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
-                    var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 1)
-                    var partialVectorLow1 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 1);
-                    partialVectorLow1 = partialVectorLow1.and((short) 0xff);
-                    var partialVectorHigh1 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 1);
-                    partialVectorHigh1 = partialVectorHigh1.and((short) 0xff);
-                    var partialVector1 = partialVectorLow1.or(partialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 2)
-                    var partialVectorLow2 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 2);
-                    partialVectorLow2 = partialVectorLow2.and((short) 0xff);
-                    var partialVectorHigh2 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 2);
-                    partialVectorHigh2 = partialVectorHigh2.and((short) 0xff);
-                    var partialVector2 = partialVectorLow2.or(partialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 3)
-                    var partialVectorLow3 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 3);
-                    partialVectorLow3 = partialVectorLow3.and((short) 0xff);
-                    var partialVectorHigh3 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 3);
-                    partialVectorHigh3 = partialVectorHigh3.and((short) 0xff);
-                    var partialVector3 = partialVectorLow3.or(partialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
-
-                    sum1 = sum1.add(partialVector0);
-                    sum2 = sum2.add(partialVector1);
-                    sum3 = sum3.add(partialVector2);
-                    sum4 = sum4.add(partialVector3);
+                    // This add is not truly adding anything because the mask is exclusive across iterations (no overlaps).
+                    // It is more akin to a masked logical or, where partialVectorLow always has zeros in the masked-out positions.
+                    partialVectorLow = partialVectorLow.add(partialVectorLowSegment, mask);
+                    partialVectorHigh = partialVectorHigh.add(partialVectorHighSegment, mask);
                 }
+
+                // The next code section seems like a bunch of spaghetti code. We tried refactoring it to improve
+                // readability or code re-usage but the code generated by Panama in JDK 20 will get slower.
+
+                // Process sum partials - convert bytes to ints and combine (part 0)
+                var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 0);
+                partialVectorLow0 = partialVectorLow0.and((short) 0xff);
+                var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 0);
+                partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
+                var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 1)
+                var partialVectorLow1 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 1);
+                partialVectorLow1 = partialVectorLow1.and((short) 0xff);
+                var partialVectorHigh1 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 1);
+                partialVectorHigh1 = partialVectorHigh1.and((short) 0xff);
+                var partialVector1 = partialVectorLow1.or(partialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 2)
+                var partialVectorLow2 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 2);
+                partialVectorLow2 = partialVectorLow2.and((short) 0xff);
+                var partialVectorHigh2 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 2);
+                partialVectorHigh2 = partialVectorHigh2.and((short) 0xff);
+                var partialVector2 = partialVectorLow2.or(partialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 3)
+                var partialVectorLow3 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 3);
+                partialVectorLow3 = partialVectorLow3.and((short) 0xff);
+                var partialVectorHigh3 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 3);
+                partialVectorHigh3 = partialVectorHigh3.and((short) 0xff);
+                var partialVector3 = partialVectorLow3.or(partialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
+
+                sum0 = sum0.add(partialVector0);
+                sum1 = sum1.add(partialVector1);
+                sum2 = sum2.add(partialVector2);
+                sum3 = sum3.add(partialVector3);
             }
 
+            var sumFloat0 = (FloatVector) sum0.convert(VectorOperators.I2F, 0);
             var sumFloat1 = (FloatVector) sum1.convert(VectorOperators.I2F, 0);
             var sumFloat2 = (FloatVector) sum2.convert(VectorOperators.I2F, 0);
             var sumFloat3 = (FloatVector) sum3.convert(VectorOperators.I2F, 0);
-            var sumFloat4 = (FloatVector) sum4.convert(VectorOperators.I2F, 0);
 
+            sumFloat0 = ones.div(sumFloat0.fma(deltaVec, minDistancePlusOneVec));
             sumFloat1 = ones.div(sumFloat1.fma(deltaVec, minDistancePlusOneVec));
             sumFloat2 = ones.div(sumFloat2.fma(deltaVec, minDistancePlusOneVec));
             sumFloat3 = ones.div(sumFloat3.fma(deltaVec, minDistancePlusOneVec));
-            sumFloat4 = ones.div(sumFloat4.fma(deltaVec, minDistancePlusOneVec));
 
             int offset = j;
+            intoVectorFloat(sumFloat0, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat1, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat2, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat3, results, offset);
-            offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sumFloat4, results, offset);
         }
         for (; j < results.length(); j++) {
             int val = 0;
@@ -1243,22 +1253,24 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var deltaVec = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, delta / 2);
         var minDistancePlusOneVec = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, (minDistance + 1) / 2);
 
-
         int j;
         for (j = 0; j < resultsVectorizedLength; j += ByteVector.SPECIES_PREFERRED.length()) {
+            var sum0 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum1 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum2 = IntVector.zero(IntVector.SPECIES_PREFERRED);
             var sum3 = IntVector.zero(IntVector.SPECIES_PREFERRED);
-            var sum4 = IntVector.zero(IntVector.SPECIES_PREFERRED);
 
             for (int i = 0; i < codebookCount; i++) {
                 // The first term in the position is the block index, and the second one is the codebook index
                 int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
                 var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
 
+                var partialVectorLow = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+                var partialVectorHigh = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+
                 for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
-                    var partialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
-                    var partialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
+                    var partialVectorLowSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i) * codebookSize + k);
+                    var partialVectorHighSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartials, (2 * i + 1) * codebookSize + k);
 
                     ByteVector shuffleVectorK;
                     VectorMask<Byte> mask;
@@ -1269,67 +1281,75 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                         // Byte is signed so we have to compute its two-complement to get relative offsets within the SIMD vector
                         shuffleVectorK = shuffleVector.add((byte) (256 - k));
                     }
-                    // We are only interested in the values that are in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
+                    // We are only interested in the values in the range [k, k + ByteVector.SPECIES_PREFERRED.length())
                     var maskGE = shuffleVectorK.compare(VectorOperators.GE, (byte) 0);
                     var maskLT = shuffleVectorK.compare(VectorOperators.LT, (byte) ByteVector.SPECIES_PREFERRED.length());
                     mask = maskGE.and(maskLT);
 
-                    partialVectorLow = shuffleVectorK.selectFrom(partialVectorLow, mask);
-                    partialVectorHigh = shuffleVectorK.selectFrom(partialVectorHigh, mask);
+                    partialVectorLowSegment = shuffleVectorK.selectFrom(partialVectorLowSegment);
+                    partialVectorHighSegment = shuffleVectorK.selectFrom(partialVectorHighSegment);
 
-                    // Process sum partials - convert bytes to ints and combine (part 0)
-                    var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 0);
-                    partialVectorLow0 = partialVectorLow0.and((short) 0xff);
-                    var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 0);
-                    partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
-                    var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 1)
-                    var partialVectorLow1 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 1);
-                    partialVectorLow1 = partialVectorLow1.and((short) 0xff);
-                    var partialVectorHigh1 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 1);
-                    partialVectorHigh1 = partialVectorHigh1.and((short) 0xff);
-                    var partialVector1 = partialVectorLow1.or(partialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 2)
-                    var partialVectorLow2 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 2);
-                    partialVectorLow2 = partialVectorLow2.and((short) 0xff);
-                    var partialVectorHigh2 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 2);
-                    partialVectorHigh2 = partialVectorHigh2.and((short) 0xff);
-                    var partialVector2 = partialVectorLow2.or(partialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 3)
-                    var partialVectorLow3 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 3);
-                    partialVectorLow3 = partialVectorLow3.and((short) 0xff);
-                    var partialVectorHigh3 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 3);
-                    partialVectorHigh3 = partialVectorHigh3.and((short) 0xff);
-                    var partialVector3 = partialVectorLow3.or(partialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
-
-                    sum1 = sum1.add(partialVector0);
-                    sum2 = sum2.add(partialVector1);
-                    sum3 = sum3.add(partialVector2);
-                    sum4 = sum4.add(partialVector3);
+                    // This add is not truly adding anything because the mask is exclusive across iterations (no overlaps).
+                    // It is more akin to a masked logical or, where partialVectorLow always has zeros in the masked-out positions.
+                    partialVectorLow = partialVectorLow.add(partialVectorLowSegment, mask);
+                    partialVectorHigh = partialVectorHigh.add(partialVectorHighSegment, mask);
                 }
+
+                // The next code section seems like a bunch of spaghetti code. We tried refactoring it to improve
+                // readability or code re-usage but the code generated by Panama in JDK 20 will get slower.
+
+                // Process sum partials - convert bytes to ints and combine (part 0)
+                var partialVectorLow0 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 0);
+                partialVectorLow0 = partialVectorLow0.and((short) 0xff);
+                var partialVectorHigh0 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 0);
+                partialVectorHigh0 = partialVectorHigh0.and((short) 0xff);
+                var partialVector0 = partialVectorLow0.or(partialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 1)
+                var partialVectorLow1 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 1);
+                partialVectorLow1 = partialVectorLow1.and((short) 0xff);
+                var partialVectorHigh1 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 1);
+                partialVectorHigh1 = partialVectorHigh1.and((short) 0xff);
+                var partialVector1 = partialVectorLow1.or(partialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 2)
+                var partialVectorLow2 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 2);
+                partialVectorLow2 = partialVectorLow2.and((short) 0xff);
+                var partialVectorHigh2 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 2);
+                partialVectorHigh2 = partialVectorHigh2.and((short) 0xff);
+                var partialVector2 = partialVectorLow2.or(partialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 3)
+                var partialVectorLow3 = (IntVector) partialVectorLow.convert(VectorOperators.B2I, 3);
+                partialVectorLow3 = partialVectorLow3.and((short) 0xff);
+                var partialVectorHigh3 = (IntVector) partialVectorHigh.convert(VectorOperators.B2I, 3);
+                partialVectorHigh3 = partialVectorHigh3.and((short) 0xff);
+                var partialVector3 = partialVectorLow3.or(partialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
+
+                sum0 = sum0.add(partialVector0);
+                sum1 = sum1.add(partialVector1);
+                sum2 = sum2.add(partialVector2);
+                sum3 = sum3.add(partialVector3);
             }
 
+            var sumFloat0 = (FloatVector) sum0.convert(VectorOperators.I2F, 0);
             var sumFloat1 = (FloatVector) sum1.convert(VectorOperators.I2F, 0);
             var sumFloat2 = (FloatVector) sum2.convert(VectorOperators.I2F, 0);
             var sumFloat3 = (FloatVector) sum3.convert(VectorOperators.I2F, 0);
-            var sumFloat4 = (FloatVector) sum4.convert(VectorOperators.I2F, 0);
 
+            sumFloat0 = sumFloat0.fma(deltaVec, minDistancePlusOneVec);
             sumFloat1 = sumFloat1.fma(deltaVec, minDistancePlusOneVec);
             sumFloat2 = sumFloat2.fma(deltaVec, minDistancePlusOneVec);
             sumFloat3 = sumFloat3.fma(deltaVec, minDistancePlusOneVec);
-            sumFloat4 = sumFloat4.fma(deltaVec, minDistancePlusOneVec);
 
             int offset = j;
+            intoVectorFloat(sumFloat0, results, offset);
+            offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat1, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat2, results, offset);
             offset += FloatVector.SPECIES_PREFERRED.length();
             intoVectorFloat(sumFloat3, results, offset);
-            offset += FloatVector.SPECIES_PREFERRED.length();
-            intoVectorFloat(sumFloat4, results, offset);
         }
         for (; j < results.length(); j++) {
             int val = 0;
@@ -1375,14 +1395,19 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 int position = j * codebookCount + i * ByteVector.SPECIES_PREFERRED.length();
                 var shuffleVector = fromByteSequence(ByteVector.SPECIES_PREFERRED, shuffles, position);
 
+                var sumPartialVectorLow = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+                var sumPartialVectorHigh = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+                var magPartialVectorLow = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+                var magPartialVectorHigh = ByteVector.zero(ByteVector.SPECIES_PREFERRED);
+
                 for (int k = 0; k < codebookVectorizedLength; k += ByteVector.SPECIES_PREFERRED.length()) {
                     // Load sum partials
-                    var sumPartialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i) * codebookSize + k);
-                    var sumPartialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i + 1) * codebookSize + k);
+                    var sumPartialVectorLowSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i) * codebookSize + k);
+                    var sumPartialVectorHighSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSums, (2 * i + 1) * codebookSize + k);
 
                     // Load magnitude partials
-                    var magPartialVectorLow = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i) * codebookSize + k);
-                    var magPartialVectorHigh = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i + 1) * codebookSize + k);
+                    var magPartialVectorLowSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i) * codebookSize + k);
+                    var magPartialVectorHighSegment = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedPartialSquaredMagnitudes, (2 * i + 1) * codebookSize + k);
 
                     ByteVector shuffleVectorK;
                     VectorMask<Byte> mask;
@@ -1399,80 +1424,90 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     mask = maskGE.and(maskLT);
 
                     // Apply shuffle to sum partials
-                    sumPartialVectorLow = shuffleVectorK.selectFrom(sumPartialVectorLow, mask);
-                    sumPartialVectorHigh = shuffleVectorK.selectFrom(sumPartialVectorHigh, mask);
+                    sumPartialVectorLowSegment = shuffleVectorK.selectFrom(sumPartialVectorLowSegment);
+                    sumPartialVectorHighSegment = shuffleVectorK.selectFrom(sumPartialVectorHighSegment);
 
                     // Apply shuffle to magnitude partials
-                    magPartialVectorLow = shuffleVectorK.selectFrom(magPartialVectorLow, mask);
-                    magPartialVectorHigh = shuffleVectorK.selectFrom(magPartialVectorHigh, mask);
+                    magPartialVectorLowSegment = shuffleVectorK.selectFrom(magPartialVectorLowSegment);
+                    magPartialVectorHighSegment = shuffleVectorK.selectFrom(magPartialVectorHighSegment);
 
-                    // Process sum partials - convert bytes to ints and combine (part 0)
-                    var sumPartialVectorLow0 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 0);
-                    sumPartialVectorLow0 = sumPartialVectorLow0.and((short) 0xff);
-                    var sumPartialVectorHigh0 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 0);
-                    sumPartialVectorHigh0 = sumPartialVectorHigh0.and((short) 0xff);
-                    var sumPartialVector0 = sumPartialVectorLow0.or(sumPartialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 1)
-                    var sumPartialVectorLow1 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 1);
-                    sumPartialVectorLow1 = sumPartialVectorLow1.and((short) 0xff);
-                    var sumPartialVectorHigh1 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 1);
-                    sumPartialVectorHigh1 = sumPartialVectorHigh1.and((short) 0xff);
-                    var sumPartialVector1 = sumPartialVectorLow1.or(sumPartialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 2)
-                    var sumPartialVectorLow2 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 2);
-                    sumPartialVectorLow2 = sumPartialVectorLow2.and((short) 0xff);
-                    var sumPartialVectorHigh2 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 2);
-                    sumPartialVectorHigh2 = sumPartialVectorHigh2.and((short) 0xff);
-                    var sumPartialVector2 = sumPartialVectorLow2.or(sumPartialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process sum partials - convert bytes to ints and combine (part 3)
-                    var sumPartialVectorLow3 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 3);
-                    sumPartialVectorLow3 = sumPartialVectorLow3.and((short) 0xff);
-                    var sumPartialVectorHigh3 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 3);
-                    sumPartialVectorHigh3 = sumPartialVectorHigh3.and((short) 0xff);
-                    var sumPartialVector3 = sumPartialVectorLow3.or(sumPartialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process magnitude partials - convert bytes to ints and combine (part 0)
-                    var magPartialVectorLow0 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 0);
-                    magPartialVectorLow0 = magPartialVectorLow0.and((short) 0xff);
-                    var magPartialVectorHigh0 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 0);
-                    magPartialVectorHigh0 = magPartialVectorHigh0.and((short) 0xff);
-                    var magPartialVector0 = magPartialVectorLow0.or(magPartialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process magnitude partials - convert bytes to ints and combine (part 1)
-                    var magPartialVectorLow1 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 1);
-                    magPartialVectorLow1 = magPartialVectorLow1.and((short) 0xff);
-                    var magPartialVectorHigh1 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 1);
-                    magPartialVectorHigh1 = magPartialVectorHigh1.and((short) 0xff);
-                    var magPartialVector1 = magPartialVectorLow1.or(magPartialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process magnitude partials - convert bytes to ints and combine (part 2)
-                    var magPartialVectorLow2 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 2);
-                    magPartialVectorLow2 = magPartialVectorLow2.and((short) 0xff);
-                    var magPartialVectorHigh2 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 2);
-                    magPartialVectorHigh2 = magPartialVectorHigh2.and((short) 0xff);
-                    var magPartialVector2 = magPartialVectorLow2.or(magPartialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
-
-                    // Process magnitude partials - convert bytes to ints and combine (part 3)
-                    var magPartialVectorLow3 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 3);
-                    magPartialVectorLow3 = magPartialVectorLow3.and((short) 0xff);
-                    var magPartialVectorHigh3 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 3);
-                    magPartialVectorHigh3 = magPartialVectorHigh3.and((short) 0xff);
-                    var magPartialVector3 = magPartialVectorLow3.or(magPartialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
-
-                    // Accumulate in integer vectors (faster than float accumulation)
-                    sum0 = sum0.add(sumPartialVector0);
-                    sum1 = sum1.add(sumPartialVector1);
-                    sum2 = sum2.add(sumPartialVector2);
-                    sum3 = sum3.add(sumPartialVector3);
-
-                    mag0 = mag0.add(magPartialVector0);
-                    mag1 = mag1.add(magPartialVector1);
-                    mag2 = mag2.add(magPartialVector2);
-                    mag3 = mag3.add(magPartialVector3);
+                    // This add is not truly adding anything because the mask is exclusive across iterations (no overlaps).
+                    // It is more akin to a masked logical or, where partialVectorLow always has zeros in the masked-out positions.
+                    sumPartialVectorLow = sumPartialVectorLow.add(sumPartialVectorLowSegment, mask);
+                    sumPartialVectorHigh = sumPartialVectorHigh.add(sumPartialVectorHighSegment, mask);
+                    magPartialVectorLow = magPartialVectorLow.add(magPartialVectorLowSegment, mask);
+                    magPartialVectorHigh = magPartialVectorHigh.add(magPartialVectorHighSegment, mask);
                 }
+
+                // The next code section seems like a bunch of spaghetti code. We tried refactoring it to improve
+                // readability or code re-usage but the code generated by Panama in JDK 20 will get slower.
+
+                // Process sum partials - convert bytes to ints and combine (part 0)
+                var sumPartialVectorLow0 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 0);
+                sumPartialVectorLow0 = sumPartialVectorLow0.and((short) 0xff);
+                var sumPartialVectorHigh0 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 0);
+                sumPartialVectorHigh0 = sumPartialVectorHigh0.and((short) 0xff);
+                var sumPartialVector0 = sumPartialVectorLow0.or(sumPartialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 1)
+                var sumPartialVectorLow1 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 1);
+                sumPartialVectorLow1 = sumPartialVectorLow1.and((short) 0xff);
+                var sumPartialVectorHigh1 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 1);
+                sumPartialVectorHigh1 = sumPartialVectorHigh1.and((short) 0xff);
+                var sumPartialVector1 = sumPartialVectorLow1.or(sumPartialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 2)
+                var sumPartialVectorLow2 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 2);
+                sumPartialVectorLow2 = sumPartialVectorLow2.and((short) 0xff);
+                var sumPartialVectorHigh2 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 2);
+                sumPartialVectorHigh2 = sumPartialVectorHigh2.and((short) 0xff);
+                var sumPartialVector2 = sumPartialVectorLow2.or(sumPartialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
+
+                // Process sum partials - convert bytes to ints and combine (part 3)
+                var sumPartialVectorLow3 = (IntVector) sumPartialVectorLow.convert(VectorOperators.B2I, 3);
+                sumPartialVectorLow3 = sumPartialVectorLow3.and((short) 0xff);
+                var sumPartialVectorHigh3 = (IntVector) sumPartialVectorHigh.convert(VectorOperators.B2I, 3);
+                sumPartialVectorHigh3 = sumPartialVectorHigh3.and((short) 0xff);
+                var sumPartialVector3 = sumPartialVectorLow3.or(sumPartialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
+
+                // Process magnitude partials - convert bytes to ints and combine (part 0)
+                var magPartialVectorLow0 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 0);
+                magPartialVectorLow0 = magPartialVectorLow0.and((short) 0xff);
+                var magPartialVectorHigh0 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 0);
+                magPartialVectorHigh0 = magPartialVectorHigh0.and((short) 0xff);
+                var magPartialVector0 = magPartialVectorLow0.or(magPartialVectorHigh0.lanewise(VectorOperators.LSHL, 8));
+
+                // Process magnitude partials - convert bytes to ints and combine (part 1)
+                var magPartialVectorLow1 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 1);
+                magPartialVectorLow1 = magPartialVectorLow1.and((short) 0xff);
+                var magPartialVectorHigh1 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 1);
+                magPartialVectorHigh1 = magPartialVectorHigh1.and((short) 0xff);
+                var magPartialVector1 = magPartialVectorLow1.or(magPartialVectorHigh1.lanewise(VectorOperators.LSHL, 8));
+
+                // Process magnitude partials - convert bytes to ints and combine (part 2)
+                var magPartialVectorLow2 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 2);
+                magPartialVectorLow2 = magPartialVectorLow2.and((short) 0xff);
+                var magPartialVectorHigh2 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 2);
+                magPartialVectorHigh2 = magPartialVectorHigh2.and((short) 0xff);
+                var magPartialVector2 = magPartialVectorLow2.or(magPartialVectorHigh2.lanewise(VectorOperators.LSHL, 8));
+
+                // Process magnitude partials - convert bytes to ints and combine (part 3)
+                var magPartialVectorLow3 = (IntVector) magPartialVectorLow.convert(VectorOperators.B2I, 3);
+                magPartialVectorLow3 = magPartialVectorLow3.and((short) 0xff);
+                var magPartialVectorHigh3 = (IntVector) magPartialVectorHigh.convert(VectorOperators.B2I, 3);
+                magPartialVectorHigh3 = magPartialVectorHigh3.and((short) 0xff);
+                var magPartialVector3 = magPartialVectorLow3.or(magPartialVectorHigh3.lanewise(VectorOperators.LSHL, 8));
+
+                // Accumulate in integer vectors (faster than float accumulation)
+                sum0 = sum0.add(sumPartialVector0);
+                sum1 = sum1.add(sumPartialVector1);
+                sum2 = sum2.add(sumPartialVector2);
+                sum3 = sum3.add(sumPartialVector3);
+
+                mag0 = mag0.add(magPartialVector0);
+                mag1 = mag1.add(magPartialVector1);
+                mag2 = mag2.add(magPartialVector2);
+                mag3 = mag3.add(magPartialVector3);
             }
 
             // Convert accumulated integers to floats once at the end
@@ -1542,71 +1577,75 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        VectorSpecies<Byte> byteSpecies;
-        VectorMask<Byte> mask;
-
-        switch (PREFERRED_BIT_SIZE) {
-            case 512 -> {
-                byteSpecies = ByteVector.SPECIES_256;
-                mask = VectorMask.fromValues(byteSpecies,
-                        true, true, true, true,
-                        true, true, true, true,
-                        true, true, true, true,
-                        true, true, true, true,
-                        false, false, false, false,
-                        false, false, false, false,
-                        false, false, false, false,
-                        false, false, false, false
-                );
-            }
-            case 256 -> {
-                byteSpecies = ByteVector.SPECIES_128;
-                mask = VectorMask.fromValues(byteSpecies,
-                        true, true, true, true,
-                        true, true, true, true,
-                        false, false, false, false,
-                        false, false, false, false
-                );
-            }
-            case 128 -> {
-                byteSpecies = ByteVector.SPECIES_64;
-                mask = VectorMask.fromValues(byteSpecies,
-                        true, true, true, true,
-                        false, false, false, false
-                );
-            }
-            default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
-        }
-
         var codebookSize = partials.length() / partialBases.length();
         var codebookCount = partialBases.length();
 
-        var invDeltaVec = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 1 / delta);
-        var zeros = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
-        var max65535 = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535);
-        var vectorFF = IntVector.broadcast(IntVector.SPECIES_PREFERRED, 0x00FF);
+        // For now, commenting out the Panama code because it seems slower than the scalar version.
+
+//        VectorSpecies<Byte> byteSpecies;
+//        VectorMask<Byte> mask;
+//
+//        switch (PREFERRED_BIT_SIZE) {
+//            case 512 -> {
+//                byteSpecies = ByteVector.SPECIES_256;
+//                mask = VectorMask.fromValues(byteSpecies,
+//                        true, true, true, true,
+//                        true, true, true, true,
+//                        true, true, true, true,
+//                        true, true, true, true,
+//                        false, false, false, false,
+//                        false, false, false, false,
+//                        false, false, false, false,
+//                        false, false, false, false
+//                );
+//            }
+//            case 256 -> {
+//                byteSpecies = ByteVector.SPECIES_128;
+//                mask = VectorMask.fromValues(byteSpecies,
+//                        true, true, true, true,
+//                        true, true, true, true,
+//                        false, false, false, false,
+//                        false, false, false, false
+//                );
+//            }
+//            case 128 -> {
+//                byteSpecies = ByteVector.SPECIES_64;
+//                mask = VectorMask.fromValues(byteSpecies,
+//                        true, true, true, true,
+//                        false, false, false, false
+//                );
+//            }
+//            default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
+//        }
+
+//        var invDeltaVec = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 1 / delta);
+//        var zeros = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+//        var max65535 = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, 65535);
+//        var vectorFF = IntVector.broadcast(IntVector.SPECIES_PREFERRED, 0x00FF);
 
         for (int i = 0; i < codebookCount; i++) {
-            var vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(codebookSize);
+            int outPosition = (2 * i) * codebookSize;
+
+//            var vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(codebookSize);
             var codebookBase = partialBases.get(i);
-            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, codebookBase);
+//            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, codebookBase);
             int j = 0;
-            for (; j < vectorizedLength; j += FloatVector.SPECIES_PREFERRED.length()) {
-                var partialVector = fromVectorFloat(FloatVector.SPECIES_PREFERRED, partials, i * codebookSize + j);
-                var quantized = partialVector.sub(codebookBaseVector).mul(invDeltaVec);
-                quantized = quantized.max(zeros).min(max65535);
-                quantized = quantized.add(0.5f); // Use rounding: add 0.5 and apply floor
-                var quantizedBytes = (IntVector) quantized.convertShape(VectorOperators.F2I, IntVector.SPECIES_PREFERRED, 0);
-                var lowBytes = quantizedBytes.and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
-                intoByteSequence(lowBytes.reinterpretAsBytes(), quantizedPartials, (2 * i) * codebookSize + j, mask);
-                var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
-                intoByteSequence(highBytes.reinterpretAsBytes(), quantizedPartials, (2 * i + 1) * codebookSize + j, mask);
-            }
+//            for (; j < vectorizedLength; j += FloatVector.SPECIES_PREFERRED.length()) {
+//                var partialVector = fromVectorFloat(FloatVector.SPECIES_PREFERRED, partials, i * codebookSize + j);
+//                var quantized = partialVector.sub(codebookBaseVector).mul(invDeltaVec);
+//                quantized = quantized.add(0.5f); // Use rounding: add 0.5 and apply floor
+//                quantized = quantized.max(zeros).min(max65535);
+//                var quantizedBytes = (IntVector) quantized.convertShape(VectorOperators.F2I, IntVector.SPECIES_PREFERRED, 0);
+//                var lowBytes = quantizedBytes.and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
+//                intoByteSequence(lowBytes.reinterpretAsBytes(), quantizedPartials, outPosition + j, mask);
+//                var highBytes = quantizedBytes.lanewise(VectorOperators.LSHR, 8).and(vectorFF).convertShape(VectorOperators.I2B, byteSpecies, 0);
+//                intoByteSequence(highBytes.reinterpretAsBytes(), quantizedPartials, outPosition + codebookSize + j, mask);
+//            }
             for (; j < codebookSize; j++) {
                 var val = partials.get(i * codebookSize + j);
-                var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
-                quantizedPartials.set((2 * i) * codebookSize + j, (byte) (quantized & 0xFF));
-                quantizedPartials.set((2 * i + 1) * codebookSize + j, (byte) ((quantized >> 8) & 0xFF));
+                var quantized = (int) Math.min(Math.max(((val - codebookBase) / delta) + 0.5, 0), 65535);
+                quantizedPartials.set(outPosition + j, (byte) (quantized & 0xFF));
+                quantizedPartials.set(outPosition + codebookSize + j, (byte) ((quantized >> 8) & 0xFF));
             }
         }
     }
