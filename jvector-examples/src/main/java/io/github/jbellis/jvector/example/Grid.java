@@ -563,11 +563,6 @@ public class Grid {
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
                                             List<QueryBenchmark> benchmarks = List.of(
-                                                    (diagnostic_level > 0 ?
-                                                            ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
-                                                            ThroughputBenchmark.createDefault()),
-                                                    LatencyBenchmark.createDefault(),
-                                                    CountBenchmark.createDefault(),
                                                     AccuracyBenchmark.createDefault()
                                             );
                                             QueryTester tester = new QueryTester(benchmarks);

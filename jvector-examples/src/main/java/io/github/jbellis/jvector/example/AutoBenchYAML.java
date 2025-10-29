@@ -60,12 +60,10 @@ public class AutoBenchYAML {
      */
     private static List<String> getAllDatasetNames() {
         List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
+        allDatasets.add("cohere-english-v3-100k");
         allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
+        allDatasets.add("ada002-100k");
+        allDatasets.add("ada002-1M");
 
         return allDatasets;
     }
