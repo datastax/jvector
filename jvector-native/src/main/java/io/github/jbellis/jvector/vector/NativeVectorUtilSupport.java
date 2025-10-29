@@ -31,28 +31,7 @@ import jdk.incubator.vector.VectorSpecies;
  */
 final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
-    private enum SIMDVersion {
-        SIMD512,
-        SIMD256,
-        SIMD128
-    }
-
-    private final SIMDVersion SIMD_VERSION;
-
-    public NativeVectorUtilSupport() {
-        int version = 0; // NativeSimdOps.simd_version();
-
-        // This mapping is defined in vector_simd.h
-        switch (version) {
-            case 0 -> // SSE
-                    SIMD_VERSION = SIMDVersion.SIMD128;
-            case 1 -> // AVX2
-                    SIMD_VERSION = SIMDVersion.SIMD256;
-            case 2 -> // AVX512
-                    SIMD_VERSION = SIMDVersion.SIMD512;
-            default -> throw new UnsupportedOperationException("Unsupported SIMD version: " + version);
-        }
-    }
+    public NativeVectorUtilSupport() {}
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
@@ -129,24 +108,6 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 //        }
 //    }
 
-//    // These block sizes are tied to the SIMD implementations of the methods in jvector_simd.h,
-//    // which are found in jvector_sse.c, jvector_avx2.c, and jvector_avx512.c.
-//    // Since the methods using this from Java are not in the most performance critical path,
-//    // it is just easier not going through the JNI barrier.
-//    private int getBlockSize() {
-//        int blockSize;
-//        switch (SIMD_VERSION) {
-//            case SIMDVersion.SIMD128 ->
-//                    blockSize = 8;
-//            case SIMDVersion.SIMD256 ->
-//                    blockSize = 16;
-//            case SIMDVersion.SIMD512 ->
-//                    blockSize = 32;
-//            default -> throw new UnsupportedOperationException("Unsupported SIMD version: " + SIMD_VERSION);
-//        }
-//        return blockSize;
-//    }
-
 //    // This implementation stores pqCode in compressedNeighbors using a block-transposed layout.
 //    // The block size is determined by the SIMD width.
 //    @Override
@@ -163,27 +124,27 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
-        var copy = results.copy();
-        super.bulkShuffleQuantizedSimilarity(shuffles, codebookCount, quantizedPartials, delta, bestDistance, vsf, copy);
-
         assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
         switch (vsf) {
-//            case DOT_PRODUCT -> NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
+            case DOT_PRODUCT -> {
+                throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
+//                NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
+            }
             case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean(((MemorySegmentByteSequence) shuffles).get(), codebookCount, results.length(), ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
             case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
         }
-        System.out.println(1);
     }
 
-//    @Override
-//    public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-//                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-//                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-//                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
+    @Override
+    public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
+                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
+        throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
 //        assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
 //        NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartialSums).get(), sumDelta, minDistance,
 //                ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
-//    }
+    }
 
 //    @Override
 //    public void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
@@ -221,17 +182,9 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-//        long start = System.nanoTime();
-//        super.quantizePartials(delta, partials, partialBases, quantizedPartials);
-//        double time1 = (double) (System.nanoTime() - start) * 1e-6;
-//
-//
-//        long start2 = System.nanoTime();
         var codebookSize = partials.length() / partialBases.length();
         var codebookCount = partialBases.length();
         NativeSimdOps.quantized_partials(delta, ((MemorySegmentVectorFloat) partials).get(), codebookCount, codebookSize, ((MemorySegmentVectorFloat) partialBases).get(), ((MemorySegmentByteSequence) quantizedPartials).get());
-//        double time2 = (double) (System.nanoTime() - start2) * 1e-6;
-//        System.out.println(time1 + "," + time2);
     }
 
     @Override

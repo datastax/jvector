@@ -289,7 +289,7 @@ public class NativeSimdOps {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int nNeighbors, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
      */
     public static FunctionDescriptor bulk_quantized_shuffle_euclidean$descriptor() {
@@ -299,7 +299,7 @@ public class NativeSimdOps {
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int nNeighbors, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
      */
     public static MethodHandle bulk_quantized_shuffle_euclidean$handle() {
@@ -309,7 +309,7 @@ public class NativeSimdOps {
     /**
      * Address for:
      * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int nNeighbors, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
      */
     public static MemorySegment bulk_quantized_shuffle_euclidean$address() {
@@ -318,16 +318,16 @@ public class NativeSimdOps {
 
     /**
      * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int codesCount, const char *quantizedPartials, float delta, float minDistance, float *results)
+     * void bulk_quantized_shuffle_euclidean(const unsigned char *shuffles, int codebookCount, int nNeighbors, const char *quantizedPartials, float delta, float minDistance, float *results)
      * }
      */
-    public static void bulk_quantized_shuffle_euclidean(MemorySegment shuffles, int codebookCount, int codesCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
+    public static void bulk_quantized_shuffle_euclidean(MemorySegment shuffles, int codebookCount, int nNeighbors, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
         var mh$ = bulk_quantized_shuffle_euclidean.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("bulk_quantized_shuffle_euclidean", shuffles, codebookCount, codesCount, quantizedPartials, delta, minDistance, results);
+                traceDowncall("bulk_quantized_shuffle_euclidean", shuffles, codebookCount, nNeighbors, quantizedPartials, delta, minDistance, results);
             }
-            mh$.invokeExact(shuffles, codebookCount, codesCount, quantizedPartials, delta, minDistance, results);
+            mh$.invokeExact(shuffles, codebookCount, nNeighbors, quantizedPartials, delta, minDistance, results);
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
         }

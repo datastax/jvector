@@ -29,9 +29,9 @@ int simd_version(void);
 // Code use by Fused PQ
 void quantized_partials(float delta, const float* partials, int codebookCount, int codebookSize, const float* partialBases, unsigned char* quantizedPartials);
 //void store_pq_code_in_neighbors(const unsigned char* pqCode, int position, int length, const unsigned char* compressedNeighbors);
-//void bulk_quantized_shuffle_dot(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results);
-void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartials, float delta, float minDistance, float* results);
-//void bulk_quantized_shuffle_cosine(const unsigned char* shuffles, int codebookCount, int codesCount, const char* quantizedPartialSums, float sumDelta, float minDistance, const char* quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float* results);
+//void bulk_quantized_shuffle_dot(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartials, float delta, float minDistance, float* results);
+void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartials, float delta, float minDistance, float* results);
+//void bulk_quantized_shuffle_cosine(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartialSums, float sumDelta, float minDistance, const char* quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float* results);
 
 // Code use by PQ
 float assemble_and_sum(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
