@@ -52,16 +52,17 @@ import static org.junit.Assert.assertEquals;
 public class OnHeapGraphIndexTest extends RandomizedTest  {
     private final static Logger log = org.apache.logging.log4j.LogManager.getLogger(OnHeapGraphIndexTest.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private static final int NUM_BASE_VECTORS = 100;
-    private static final int NUM_NEW_VECTORS = 100;
+    private static final int NUM_BASE_VECTORS = 1000;
+    private static final int NUM_NEW_VECTORS = 1000;
     private static final int NUM_ALL_VECTORS = NUM_BASE_VECTORS + NUM_NEW_VECTORS;
     private static final int DIMENSION = 16;
     private static final int M = 8;
-    private static final int BEAM_WIDTH = 100;
+    private static final int BEAM_WIDTH = 200;
     private static final float ALPHA = 1.2f;
     private static final float NEIGHBOR_OVERFLOW = 1.2f;
     private static final boolean ADD_HIERARCHY = false;
     private static final int TOP_K = 10;
+    private static final int NUM_QUERY_VECTORS = 100;
     private static VectorSimilarityFunction SIMILARITY_FUNCTION = VectorSimilarityFunction.EUCLIDEAN;
 
     private Path testDirectory;
@@ -72,9 +73,9 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private RandomAccessVectorValues baseVectorsRavv;
     private RandomAccessVectorValues newVectorsRavv;
     private RandomAccessVectorValues allVectorsRavv;
-    private VectorFloat<?> queryVector;
-    private int[] groundTruthBaseVectors;
-    private int[] groundTruthAllVectors;
+    private ArrayList<VectorFloat<?>> queryVectors;
+    private ArrayList<int[]> groundTruthBaseVectors;
+    private ArrayList<int[]> groundTruthAllVectors;
     private BuildScoreProvider baseBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
     private ImmutableGraphIndex baseGraphIndex;
@@ -102,9 +103,16 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         newVectorsRavv = new ListRandomAccessVectorValues(newVectors, DIMENSION);
         allVectorsRavv = new ListRandomAccessVectorValues(allVectors, DIMENSION);
 
-        queryVector = createRandomVector(DIMENSION);
-        groundTruthBaseVectors = getGroundTruth(baseVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION);
-        groundTruthAllVectors = getGroundTruth(allVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION);
+        // Create multiple query vectors for more stable recall measurements
+        queryVectors = new ArrayList<>(NUM_QUERY_VECTORS);
+        groundTruthBaseVectors = new ArrayList<>(NUM_QUERY_VECTORS);
+        groundTruthAllVectors = new ArrayList<>(NUM_QUERY_VECTORS);
+        for (int i = 0; i < NUM_QUERY_VECTORS; i++) {
+            VectorFloat<?> queryVector = createRandomVector(DIMENSION);
+            queryVectors.add(queryVector);
+            groundTruthBaseVectors.add(getGroundTruth(baseVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION));
+            groundTruthAllVectors.add(getGroundTruth(allVectorsRavv, queryVector, TOP_K, SIMILARITY_FUNCTION));
+        }
 
         // score provider using the raw, in-memory vectors
         baseBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, SIMILARITY_FUNCTION);
@@ -151,8 +159,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy) {
              var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(baseVectorsRavv, graphToRavvOrdMap)) {
-            float recallFromBaseGraphIndexFromShuffledVectors = calculateRecall(baseGraphIndexFromShuffledVectors, bsp, queryVector, groundTruthBaseVectors, TOP_K, graphToRavvOrdMap);
-            float recallFromBaseGraphIndex = calculateRecall(baseGraphIndex, baseBuildScoreProvider, queryVector, groundTruthBaseVectors, TOP_K);
+            float recallFromBaseGraphIndexFromShuffledVectors = calculateAverageRecall(baseGraphIndexFromShuffledVectors, bsp, queryVectors, groundTruthBaseVectors, TOP_K, graphToRavvOrdMap);
+            float recallFromBaseGraphIndex = calculateAverageRecall(baseGraphIndex, baseBuildScoreProvider, queryVectors, groundTruthBaseVectors, TOP_K, null);
             Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.11f);
         }
     }
@@ -257,10 +265,11 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
             final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, graphToRavvOrdMap);
             ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
-            // Verify that the recall is similar
-            float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
-            float recallFromAllGraphIndex = calculateRecall(allGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
-            Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.3f);
+            // Verify that the recall is similar across multiple queries
+            // Note: Incremental insertion can have slightly different recall than bulk indexing due to the order of insertions
+            float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateAverageRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVectors, groundTruthAllVectors, TOP_K, null);
+            float recallFromAllGraphIndex = calculateAverageRecall(allGraphIndex, allBuildScoreProvider, queryVectors, groundTruthAllVectors, TOP_K, null);
+            Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.05f);
         }
     }
 
@@ -306,10 +315,11 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
                 ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
-                // Verify that the recall is similar
-                float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBsp, queryVector, groundTruthAllVectors, TOP_K, allGraphToRavvOrdMap);
-                float recallFromAllGraphIndex = calculateRecall(allGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
-                Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.3f);
+                // Verify that the recall is similar across multiple queries
+                // Note: Non-identity mapping can have slightly lower recall due to the complexity of merging with remapped ordinals
+                float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateAverageRecall(reconstructedAllNodeOnHeapGraphIndex, allBsp, queryVectors, groundTruthAllVectors, TOP_K, allGraphToRavvOrdMap);
+                float recallFromAllGraphIndex = calculateAverageRecall(allGraphIndex, allBuildScoreProvider, queryVectors, groundTruthAllVectors, TOP_K, null);
+                Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.20f);
             }
         }
     }
@@ -345,6 +355,26 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         }
         exactResults.sort((a, b) -> Float.compare(b.score, a.score));
         return exactResults.stream().limit(topK).mapToInt(nodeScore -> nodeScore.node).toArray();
+    }
+
+    /**
+     * Calculate average recall across multiple query vectors for more stable measurements
+     * @param graphIndex the graph index to search
+     * @param buildScoreProvider the score provider
+     * @param queryVectors the list of query vectors
+     * @param groundTruths the list of ground truth results for each query
+     * @param k the number of results to consider
+     * @param graphToRavvOrdMap optional mapping from graph node IDs to RAVV ordinals
+     * @return the average recall across all queries
+     */
+    private static float calculateAverageRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider,
+                                                ArrayList<VectorFloat<?>> queryVectors, ArrayList<int[]> groundTruths,
+                                                int k, int[] graphToRavvOrdMap) throws IOException {
+        float totalRecall = 0.0f;
+        for (int i = 0; i < queryVectors.size(); i++) {
+            totalRecall += calculateRecall(graphIndex, buildScoreProvider, queryVectors.get(i), groundTruths.get(i), k, graphToRavvOrdMap);
+        }
+        return totalRecall / queryVectors.size();
     }
 
     private static float calculateRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k) throws IOException {
