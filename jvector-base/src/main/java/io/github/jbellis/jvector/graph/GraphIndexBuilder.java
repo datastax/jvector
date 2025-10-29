@@ -987,7 +987,6 @@ public class GraphIndexBuilder implements Closeable {
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
      * @param buildScoreProvider the provider responsible for calculating build scores.
      * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
-     * @param graphToRavvOrdMap a mapping from the old graph's node ids to the newVectors RAVV node ids
      * @param beamWidth the width of the beam used during the graph building process.
      * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
      * @param alpha the weight factor for balancing score computations.
