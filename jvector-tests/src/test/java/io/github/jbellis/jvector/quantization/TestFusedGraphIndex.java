@@ -74,7 +74,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     @Test
     public void testFusedGraph() throws Exception {
         // generate random graph, M=32, 256-dimension vectors
-        var graph = new TestUtil.RandomlyConnectedGraphIndex(1000, 32, getRandom());
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(1000, 32, random);
         var outputPath = testDirectory.resolve("large_graph");
         var vectors = createRandomVectors(1000,  512);
         var ravv = new ListRandomAccessVectorValues(vectors, 512);
@@ -90,24 +90,24 @@ public class TestFusedGraphIndex extends RandomizedTest {
             try (var cachedOnDiskView = onDiskGraph.getView())
             {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
-                    var queryVector = TestUtil.randomVector(getRandom(), 512);
+                    var queryVector = TestUtil.randomVector(random, 512);
                     var pqScoreFunction = pqv.precomputedScoreFunctionFor(queryVector, similarityFunction);
                     for (int i = 0; i < 50; i++) {
                         var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
-                        var ordinal = getRandom().nextInt(graph.size(0));
+                        var ordinal = random.nextInt(graph.size(0));
 
                         // first pass compares fused ADC's edge similarity prior to having enough information for quantization to PQ
                         var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal);
                         var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();
-                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 0.01);
+                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 1e-3);
                         }
                         // second pass compares fused ADC's edge similarity after quantization to edge similarity before quantization
                         var edgeSimilaritiesCopy = edgeSimilarities.copy(); // results of second pass
                         var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal); // results of third pass
                         for (int j = 0; j < fusedEdgeSimilarities.length(); j++) {
-                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 0.01);
+                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 1e-3);
                         }
                     }
                 }
