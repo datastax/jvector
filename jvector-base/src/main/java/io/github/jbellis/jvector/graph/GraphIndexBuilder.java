@@ -451,7 +451,6 @@ public class GraphIndexBuilder implements Closeable {
         cleanup();
         return graph;
     }
-
     /**
      * Validates that the current entry node has been completely added.
      */
@@ -979,7 +978,6 @@ public class GraphIndexBuilder implements Closeable {
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
      * @param buildScoreProvider the provider responsible for calculating build scores.
      * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
-     * @param graphToRavvOrdMap a mapping from the old graph's node ids to the newVectors RAVV node ids
      * @param beamWidth the width of the beam used during the graph building process.
      * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
      * @param alpha the weight factor for balancing score computations.
@@ -990,14 +988,46 @@ public class GraphIndexBuilder implements Closeable {
      */
     @Experimental
     public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RandomAccessVectorValues newVectors,
+                                                            RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
-                                                            int[] graphToRavvOrdMap,
                                                             int beamWidth,
                                                             float overflowRatio,
                                                             float alpha,
                                                             boolean addHierarchy) throws IOException {
+
+            return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, addHierarchy, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Convenience method to build a new graph from an existing one, with the addition of new nodes.
+     * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     *
+     * @param in a reader from which to read the on-heap graph.
+     * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param startingNodeOffset the offset in the newVectors RAVV where the new vectors start
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
+     * @param alpha the weight factor for balancing score computations.
+     * @param addHierarchy whether to add hierarchical structures while building the graph.
+     * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
+     * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     *
+     * @return the in-memory representation of the graph index.
+     * @throws IOException if an I/O error occurs during the graph loading or conversion process.
+     */
+    @Experimental
+    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                            RemappedRandomAccessVectorValues newVectors,
+                                                            BuildScoreProvider buildScoreProvider,
+                                                            int startingNodeOffset,
+                                                            int beamWidth,
+                                                            float overflowRatio,
+                                                            float alpha,
+                                                            boolean addHierarchy,
+                                                            ForkJoinPool simdExecutor,
+                                                            ForkJoinPool parallelExecutor) throws IOException {
 
         var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
 
@@ -1012,15 +1042,15 @@ public class GraphIndexBuilder implements Closeable {
                     alpha,
                     addHierarchy,
                     true,
-                    PhysicalCoreExecutor.pool(),
-                    ForkJoinPool.commonPool()
+                    simdExecutor,
+                    parallelExecutor
             );
 
             var vv = newVectors.threadLocalSupplier();
 
             // parallel graph construction from the merge documents Ids
-            PhysicalCoreExecutor.pool().submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(graphToRavvOrdMap[ord]));
+            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
+                builder.addGraphNode(ord, vv.get().getVector(ord));
             })).join();
 
             builder.cleanup();
