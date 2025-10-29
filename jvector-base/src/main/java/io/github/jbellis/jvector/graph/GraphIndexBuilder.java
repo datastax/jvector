@@ -446,13 +446,12 @@ public class GraphIndexBuilder implements Closeable {
         return reallyBuild(new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap));
     }
 
-    public ImmutableGraphIndex reallyBuild(RandomAccessVectorValues remmappedRavv) {
-        var vv = remmappedRavv.threadLocalSupplier();
-        int size = remmappedRavv.size();
+    public ImmutableGraphIndex reallyBuild(RandomAccessVectorValues ravv) {
+        var vv = ravv.threadLocalSupplier();
+        int size = ravv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
-                // The RAVV is already wrapped with the mapping, so we can just use node directly
                 addGraphNode(node, vv.get().getVector(node));
             });
         }).join();
