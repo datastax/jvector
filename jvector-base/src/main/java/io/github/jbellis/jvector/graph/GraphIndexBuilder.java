@@ -439,14 +439,16 @@ public class GraphIndexBuilder implements Closeable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        return build(ravv, null);
+        return reallyBuild(ravv);
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
-        // If a mapping is provided, wrap the RAVV so that getVector(node) returns the vector at graphToRavvOrdMap[node]
-        var wrappedRavv = (graphToRavvOrdMap != null) ? new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap) : ravv;
-        var vv = wrappedRavv.threadLocalSupplier();
-        int size = wrappedRavv.size();
+        return reallyBuild(new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap));
+    }
+
+    public ImmutableGraphIndex reallyBuild(RandomAccessVectorValues remmappedRavv) {
+        var vv = remmappedRavv.threadLocalSupplier();
+        int size = remmappedRavv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
@@ -458,7 +460,6 @@ public class GraphIndexBuilder implements Closeable {
         cleanup();
         return graph;
     }
-
     /**
      * Validates that the current entry node has been completely added.
      */
@@ -997,10 +998,9 @@ public class GraphIndexBuilder implements Closeable {
      */
     @Experimental
     public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RandomAccessVectorValues newVectors,
+                                                            RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
-                                                            int[] graphToRavvOrdMap,
                                                             int beamWidth,
                                                             float overflowRatio,
                                                             float alpha,

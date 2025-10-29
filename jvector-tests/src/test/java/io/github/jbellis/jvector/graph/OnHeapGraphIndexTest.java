@@ -207,7 +207,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
         // create reversed mapping from graph node id to ravv ordinal
         int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, graphToRavvOrdMap, SIMILARITY_FUNCTION);
+        final RemappedRandomAccessVectorValues remmappedRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(remmappedRavv, SIMILARITY_FUNCTION);
         try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
                 baseVectorsRavv.dimension(),
                 M, // graph degree
@@ -215,7 +216,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy) {
-             var baseGraphIndex = baseGraphIndexBuilder.build(baseVectorsRavv, graphToRavvOrdMap)) {
+             var baseGraphIndex = baseGraphIndexBuilder.build(remmappedRavv)) {
             log.info("Writing graph to {}", graphOutputPath);
             TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
 
@@ -253,12 +254,13 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
-            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
+            final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, graphToRavvOrdMap);
+            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
 
             // Verify that the recall is similar
             float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
             float recallFromAllGraphIndex = calculateRecall(allGraphIndex, allBuildScoreProvider, queryVector, groundTruthAllVectors, TOP_K);
-            Assert.assertEquals(recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.11f);
+            Assert.assertEquals(recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.01f);
         }
     }
 
