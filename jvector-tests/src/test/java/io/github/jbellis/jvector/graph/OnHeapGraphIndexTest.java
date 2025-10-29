@@ -150,7 +150,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     public void testGraphConstructionWithNonIdentityOrdinalMapping() throws IOException {
         // create reversed mapping from graph node id to ravv ordinal
         int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, graphToRavvOrdMap, SIMILARITY_FUNCTION);
+        final RemappedRandomAccessVectorValues remappedBaseVectorsRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(remappedBaseVectorsRavv, SIMILARITY_FUNCTION);
         try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
                 baseVectorsRavv.dimension(),
                 M, // graph degree
@@ -158,7 +159,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy) {
-             var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(baseVectorsRavv, graphToRavvOrdMap)) {
+             var baseGraphIndexFromShuffledVectors = baseGraphIndexBuilder.build(remappedBaseVectorsRavv)) {
             float recallFromBaseGraphIndexFromShuffledVectors = calculateAverageRecall(baseGraphIndexFromShuffledVectors, bsp, queryVectors, groundTruthBaseVectors, TOP_K, graphToRavvOrdMap);
             float recallFromBaseGraphIndex = calculateAverageRecall(baseGraphIndex, baseBuildScoreProvider, queryVectors, groundTruthBaseVectors, TOP_K, null);
             Assert.assertEquals(recallFromBaseGraphIndex, recallFromBaseGraphIndexFromShuffledVectors, 0.11f);

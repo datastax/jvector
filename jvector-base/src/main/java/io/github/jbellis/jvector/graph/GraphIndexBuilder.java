@@ -439,14 +439,6 @@ public class GraphIndexBuilder implements Closeable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        return reallyBuild(ravv);
-    }
-
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
-        return reallyBuild(new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap));
-    }
-
-    public ImmutableGraphIndex reallyBuild(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
