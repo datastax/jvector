@@ -24,7 +24,7 @@ construction:
 search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
-#    100: [1.0, 2.0]
+    100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
     - type: PQ
