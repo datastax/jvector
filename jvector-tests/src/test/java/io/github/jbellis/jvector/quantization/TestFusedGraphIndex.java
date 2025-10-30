@@ -92,22 +92,20 @@ public class TestFusedGraphIndex extends RandomizedTest {
                 for (var similarityFunction : VectorSimilarityFunction.values()) {
                     var queryVector = TestUtil.randomVector(random, 512);
                     var pqScoreFunction = pqv.precomputedScoreFunctionFor(queryVector, similarityFunction);
-                    for (int i = 0; i < 50; i++) {
-                        var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
-                        var ordinal = random.nextInt(graph.size(0));
+                    var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
 
-                        // first pass compares fused ADC's edge similarity prior to having enough information for quantization to PQ
+                    for (int i = 0; i < 50; i++) {
+                        var ordinal = random.nextInt(graph.size(0));
+                        fusedScoreFunction.enableSimilarityToNeighbors(ordinal);
+
                         var neighbors = cachedOnDiskView.getNeighborsIterator(0, ordinal);
-                        var edgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal);
                         for (int j = 0; neighbors.hasNext(); j++) {
                             var neighbor = neighbors.next();
-                            assertEquals(pqScoreFunction.similarityTo(neighbor), edgeSimilarities.get(j), 1e-3);
-                        }
-                        // second pass compares fused ADC's edge similarity after quantization to edge similarity before quantization
-                        var edgeSimilaritiesCopy = edgeSimilarities.copy(); // results of second pass
-                        var fusedEdgeSimilarities = fusedScoreFunction.edgeLoadingSimilarityTo(ordinal); // results of third pass
-                        for (int j = 0; j < fusedEdgeSimilarities.length(); j++) {
-                            assertEquals(fusedEdgeSimilarities.get(j), edgeSimilaritiesCopy.get(j), 1e-3);
+                            assertEquals(
+                                    pqScoreFunction.similarityTo(neighbor),
+                                    fusedScoreFunction.similarityToNeighbor(ordinal, j),
+                                    1e-3
+                            );
                         }
                     }
                 }
@@ -172,7 +170,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
                     totalMatches.put(fused, totalMatches.get(fused) + computeOverlap(actualNodeIds, expected.nodesCopy()));
                 }
             }
-            assertTrue(Math.abs(totalMatches.get(true) - totalMatches.get(false)) < 2);
+            assertEquals(totalMatches.get(true), totalMatches.get(false));
             for (var fused : List.of(true, false)) {
                 double overlap = totalMatches.get(fused) / (double) (100 * topK);
                 assertTrue("overlap=" + overlap, overlap > 0.90);
@@ -213,45 +211,21 @@ public class TestFusedGraphIndex extends RandomizedTest {
             for (int iQuery = 0; iQuery < 10; iQuery++) {
                 VectorFloat<?> query = randomVector(dim);
 
-                // Instantiating the SearchScoreProvider inside the loop means that we are computing non-quantized distances in the fused case
-                for (int node = 0; node < size; node++) {
-                    // Fused computations
-                    SearchScoreProvider sspFused = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv);
-                    var similarities = sspFused.scoreFunction().edgeLoadingSimilarityTo(node);
-
-                    // Regular (un-fused) computations
-                    SearchScoreProvider ssp = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv);
-                    var it = graph.getView().getNeighborsIterator(0, node);
-                    int position = 0;
-                    assertTrue(it.size() <= similarities.length());
-                    while (it.hasNext()) {
-                        int neighbor = it.next();
-                        float score = ssp.scoreFunction().similarityTo(neighbor);
-                        assertEquals(similarities.get(position), score, 1e-6);
-                        position++;
-                    }
-                }
-
-                // Instantiating the SearchScoreProvider outside the loop means that we are computing quantized distances in the fused case
-                SearchScoreProvider sspFused = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv);
-                // Doing a few calls to ensure that we enter the quantized path
-                sspFused.scoreFunction().edgeLoadingSimilarityTo(0);
-                sspFused.scoreFunction().edgeLoadingSimilarityTo(1);
+                var scoreFunction = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv).scoreFunction();
+                var fusedScoreFunction = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv).scoreFunction();
 
                 for (int node = 0; node < size; node++) {
-                    // Fused computations
-                    var similarities = sspFused.scoreFunction().edgeLoadingSimilarityTo(node);
-
-                    // Regular (un-fused) computations
-                    SearchScoreProvider ssp = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv);
+                    fusedScoreFunction.enableSimilarityToNeighbors(node);
                     var it = graph.getView().getNeighborsIterator(0, node);
-                    int position = 0;
-                    assertTrue(it.size() <= similarities.length());
+                    int neighIndex = 0;
                     while (it.hasNext()) {
                         int neighbor = it.next();
-                        float score = ssp.scoreFunction().similarityTo(neighbor);
-                        assertEquals(similarities.get(position), score, 1e-3);
-                        position++;
+                        assertEquals(
+                                scoreFunction.similarityTo(neighbor),
+                                fusedScoreFunction.similarityToNeighbor(node, neighIndex),
+                                1e-6
+                        );
+                        neighIndex++;
                     }
                 }
             }

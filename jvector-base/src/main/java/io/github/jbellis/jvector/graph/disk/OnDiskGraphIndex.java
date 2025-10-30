@@ -577,19 +577,20 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         @Override
         public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
-            var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
+            var useEdgeLoading = scoreFunction.supportsSimilarityToNeighbors();
             if (useEdgeLoading && level == 0) {
-                VectorFloat<?> similarities = scoreFunction.edgeLoadingSimilarityTo(node);
+                scoreFunction.enableSimilarityToNeighbors(node);
 
                 for (int i = 0; i < nodeDegree; i++) {
                     var friendOrd = neighbors[i];
                     if (visited.apply(friendOrd)) {
-                        float friendSimilarity = similarities.get(i);
+                        float friendSimilarity = scoreFunction.similarityToNeighbor(node, i);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
             } else {
-                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                var it = getNeighborsIterator(level, node);
+                while (it.hasNext()) {
                     var friendOrd = it.nextInt();
                     if (visited.apply(friendOrd)) {
                         float friendSimilarity = scoreFunction.similarityTo(friendOrd);

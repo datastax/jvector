@@ -26,7 +26,6 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -38,7 +37,7 @@ import java.io.UncheckedIOException;
 import java.util.function.IntFunction;
 
 /**
- * Implements Quick ADC-style scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
+ * Implements scoring by fusing PQ-encoded neighbors into an OnDiskGraphIndex.
  */
 public class FusedPQ extends AbstractFeature implements FusedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -47,11 +46,10 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     private final ThreadLocal<VectorFloat<?>> reusableResults;
     private final ExplicitThreadLocal<ByteSequence<?>> reusableNeighborCodes;
     private final ExplicitThreadLocal<ByteSequence<?>> pqCodeScratch;
-    private ByteSequence<?> compressedNeighbors = null;
 
     public FusedPQ(int maxDegree, ProductQuantization pq) {
         if (pq.getClusterCount() != 256) {
-            throw new IllegalArgumentException("FusedADC requires a 256-cluster PQ. This limitation may be removed in future releases");
+            throw new IllegalArgumentException("FusedPQ requires a 256-cluster PQ. This limitation may be removed in future releases");
         }
         this.maxDegree = maxDegree;
         this.pq = pq;
@@ -107,22 +105,20 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     // generate the fused set based on the neighbors of the node, not just the node itself
     @Override
     public void writeInline(DataOutput out, Feature.State state_) throws IOException {
-        if (compressedNeighbors == null) {
-            compressedNeighbors = vectorTypeSupport.createByteSequence(pq.compressedVectorSize() * maxDegree);
-        }
         var state = (FusedPQ.State) state_;
 
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
-        int n = 0;
-        compressedNeighbors.zero();
+        int count = 0;
         while (neighbors.hasNext()) {
             int node = neighbors.nextInt();
             var compressed = state.compressedVectorFunction.apply(node);
-            VectorUtil.storePQCodeInNeighbors(compressed, n, compressedNeighbors);
-            n++;
+            vectorTypeSupport.writeByteSequence(out, compressed.copy());
+            count++;
         }
-
-        vectorTypeSupport.writeByteSequence(out, compressedNeighbors);
+        pqCodeScratch.get().zero();
+        for (; count < maxDegree; count++) {
+            vectorTypeSupport.writeByteSequence(out, pqCodeScratch.get());
+        }
     }
 
     public static class State implements Feature.State {
@@ -152,10 +148,10 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         vectorTypeSupport.writeByteSequence(out, temp);
     }
 
-    public class FusedADCInlineSource implements InlineSource {
+    public static class FusedPQInlineSource implements InlineSource {
         private ByteSequence<?> code;
 
-        public FusedADCInlineSource(ByteSequence<?> code) {
+        public FusedPQInlineSource(ByteSequence<?> code) {
             this.code = code;
         }
 
@@ -169,7 +165,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         int length = pq.getSubspaceCount();
         var code = vectorTypeSupport.createByteSequence(length);
         vectorTypeSupport.readByteSequence(in, code);
-        return new FusedADCInlineSource(code);
+        return new FusedPQInlineSource(code);
     }
 
     public class PackedNeighbors {

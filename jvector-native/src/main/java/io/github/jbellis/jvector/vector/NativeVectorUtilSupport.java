@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.vector;
 
 import java.nio.ByteOrder;
 
-import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
@@ -29,6 +29,7 @@ import jdk.incubator.vector.VectorSpecies;
 /**
  * VectorUtilSupport implementation that prefers native/Panama SIMD.
  */
+@Experimental
 final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
     public NativeVectorUtilSupport() {}
@@ -68,13 +69,13 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return assembleAndSum(data, dataBase, baseOffsets, 0, baseOffsets.length());
     }
 
-    @Override
-    public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
-        assert baseOffsets.offset() == 0 : "Base offsets are expected to have an offset of 0. Found: " + baseOffsets.offset();
-        // baseOffsets is a pointer into a PQ chunk - we need to index into it by baseOffsetsOffset and provide baseOffsetsLength to the native code
-        return NativeSimdOps.assemble_and_sum(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, baseOffsetsLength);
-    }
-
+//    @Override
+//    public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
+//        assert baseOffsets.offset() == 0 : "Base offsets are expected to have an offset of 0. Found: " + baseOffsets.offset();
+//        // baseOffsets is a pointer into a PQ chunk - we need to index into it by baseOffsetsOffset and provide baseOffsetsLength to the native code
+//        return NativeSimdOps.assemble_and_sum(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, baseOffsetsLength);
+//        return assembleAndSum
+//    }
 
     @Override
     public float assembleAndSumPQ(
@@ -90,113 +91,16 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return assembleAndSumPQ_128(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
     }
 
-//    @Override
-//    public void calculatePartialSums(VectorFloat<?> codebook, int codebookBase, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
-//        switch (vsf) {
-//            case DOT_PRODUCT -> NativeSimdOps.calculate_partial_sums_dot_f32_512(((MemorySegmentVectorFloat)codebook).get(), codebookBase, size, clusterCount, ((MemorySegmentVectorFloat)query).get(), queryOffset, ((MemorySegmentVectorFloat)partialSums).get());
-//            case EUCLIDEAN -> NativeSimdOps.calculate_partial_sums_euclidean_f32_512(((MemorySegmentVectorFloat)codebook).get(), codebookBase, size, clusterCount, ((MemorySegmentVectorFloat)query).get(), queryOffset, ((MemorySegmentVectorFloat)partialSums).get());
-//            case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for calculatePartialSums");
-//        }
-//    }
-//
-//    @Override
-//    public void calculatePartialSums(VectorFloat<?> codebook, int codebookBase, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums, VectorFloat<?> partialBestDistances) {
-//        switch (vsf) {
-//            case DOT_PRODUCT -> NativeSimdOps.calculate_partial_sums_best_dot_f32_512(((MemorySegmentVectorFloat)codebook).get(), codebookBase, size, clusterCount, ((MemorySegmentVectorFloat)query).get(), queryOffset, ((MemorySegmentVectorFloat)partialSums).get(), ((MemorySegmentVectorFloat)partialBestDistances).get());
-//            case EUCLIDEAN -> NativeSimdOps.calculate_partial_sums_best_euclidean_f32_512(((MemorySegmentVectorFloat)codebook).get(), codebookBase, size, clusterCount, ((MemorySegmentVectorFloat)query).get(), queryOffset, ((MemorySegmentVectorFloat)partialSums).get(), ((MemorySegmentVectorFloat)partialBestDistances).get());
-//            case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for calculatePartialSums");
-//        }
-//    }
-
-//    // This implementation stores pqCode in compressedNeighbors using a block-transposed layout.
-//    // The block size is determined by the SIMD width.
-//    @Override
-//    public void storePQCodeInNeighbors(ByteSequence<?> pqCode, int position, ByteSequence<?> compressedNeighbors) {
-//        int blockSize = getBlockSize();
-//
-//        int blockIndex = position / blockSize;
-//        int offset = blockIndex * blockSize * pqCode.length();
-//        int positionWithinBlock = position % blockSize;
-//        for (int j = 0; j < pqCode.length(); j++) {
-//            compressedNeighbors.set(offset + blockSize * j + positionWithinBlock, pqCode.get(j));
-//        }
-//    }
-
-    @Override
-    public void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float bestDistance, VectorSimilarityFunction vsf, VectorFloat<?> results) {
-        assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
-        switch (vsf) {
-            case DOT_PRODUCT -> {
-                throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
-//                NativeSimdOps.bulk_quantized_shuffle_dot_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
-            }
-            case EUCLIDEAN -> NativeSimdOps.bulk_quantized_shuffle_euclidean(((MemorySegmentByteSequence) shuffles).get(), codebookCount, results.length(), ((MemorySegmentByteSequence) quantizedPartials).get(), delta, bestDistance, ((MemorySegmentVectorFloat) results).get());
-            case COSINE -> throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
-        }
-    }
-
-    @Override
-    public void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-                                                     ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
-                                                     ByteSequence<?> quantizedPartialSquaredMagnitudes, float magnitudeDelta, float minMagnitude,
-                                                     float queryMagnitudeSquared, VectorFloat<?> results) {
-        throw new UnsupportedOperationException("Cosine similarity not supported for bulkShuffleQuantizedSimilarity");
-//        assert shuffles.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + shuffles.offset();
-//        NativeSimdOps.bulk_quantized_shuffle_cosine_f32_512(((MemorySegmentByteSequence) shuffles).get(), codebookCount, ((MemorySegmentByteSequence) quantizedPartialSums).get(), sumDelta, minDistance,
-//                ((MemorySegmentByteSequence) quantizedPartialSquaredMagnitudes).get(), magnitudeDelta, minMagnitude, queryMagnitudeSquared, ((MemorySegmentVectorFloat) results).get());
-    }
-
-//    @Override
-//    public void bulkShuffleRawSimilarity(ByteSequence<?> shuffles, int codebookCount, VectorFloat<?> partials, VectorFloat<?> results) {
-//        int blockSize = getBlockSize();
-//
-//        for (int j = 0; j < results.length(); j++) {
-//            int blockIndex = j / blockSize;
-//            int offset = blockIndex * blockSize * codebookCount;
-//            int positionWithinBlock = j % blockSize;
-//            for (int i = 0; i < codebookCount; i++) {
-//                int singleShuffle = Byte.toUnsignedInt(shuffles.get(offset + blockSize * i + positionWithinBlock));
-//                results.set(j, results.get(j) + partials.get(i * codebookCount + singleShuffle));
-//            }
-//        }
-//    }
-//
-//    @Override
-//    public void bulkShuffleRawSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
-//                                               VectorFloat<?> partialSums,
-//                                               VectorFloat<?> partialSquaredMagnitudes,
-//                                               float[] resultSumAggregates, float[] resultMagnitudeAggregates) {
-//        int blockSize = getBlockSize();
-//
-//        for (int j = 0; j < partialSums.length(); j++) {
-//            int blockIndex = j / blockSize;
-//            int offset = blockIndex * blockSize * codebookCount;
-//            int positionWithinBlock = j % blockSize;
-//            for (int i = 0; i < codebookCount; i++) {
-//                int singleShuffle = Byte.toUnsignedInt(shuffles.get(offset + blockSize * i + positionWithinBlock));
-//                resultSumAggregates[j] += partialSums.get(i * codebookCount + singleShuffle);
-//                resultMagnitudeAggregates[j] += partialSquaredMagnitudes.get(i * codebookCount + singleShuffle);
-//            }
-//        }
-//    }
-
-    @Override
-    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        var codebookSize = partials.length() / partialBases.length();
-        var codebookCount = partialBases.length();
-        NativeSimdOps.quantized_partials(delta, ((MemorySegmentVectorFloat) partials).get(), codebookCount, codebookSize, ((MemorySegmentVectorFloat) partialBases).get(), ((MemorySegmentByteSequence) quantizedPartials).get());
-    }
-
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
     }
 
-    @Override
-    public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
-    {
-        assert encoded.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + encoded.offset();
-        // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
-        return NativeSimdOps.pq_decoded_cosine_similarity(((MemorySegmentByteSequence) encoded).get(), encodedOffset, encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
-    }
+//    @Override
+//    public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
+//    {
+//        assert encoded.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + encoded.offset();
+//        // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
+//        return NativeSimdOps.pq_decoded_cosine_similarity(((MemorySegmentByteSequence) encoded).get(), encodedOffset, encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
+//    }
 }
