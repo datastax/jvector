@@ -253,7 +253,8 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
 
         var config = new ParallelGraphWriter.Config(
             parallelWorkerThreads,
-            parallelUseDirectBuffers
+            parallelUseDirectBuffers,
+            8  // Default task multiplier (8x cores)
         );
 
         try (var parallelWriter = new ParallelGraphWriter(

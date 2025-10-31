@@ -259,7 +259,8 @@ public class ByteBufferIndexWriter implements IndexWriter {
         // Use standard DataOutputStream UTF encoding
         byte[] bytes = s.getBytes("UTF-8");
         int utflen = bytes.length;
-        
+        // UTF format stores the string length as a 2-byte (16-bit) unsigned integer prefix,
+        // which has a maximum value of 65535
         if (utflen > 65535) {
             throw new IOException("encoded string too long: " + utflen + " bytes");
         }
