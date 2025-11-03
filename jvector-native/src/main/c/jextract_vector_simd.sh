@@ -22,7 +22,7 @@ printf "AUTO_INSTALL_GCC=%s\n" "${AUTO_INSTALL_GCC}"
 
 mkdir -p ../resources
 # compile jvector_simd_check.c as x86-64
-# compile jvector_avx512.c as skylake-avx512
+# compile jvector_simd.c as skylake-avx512
 # produce one shared library
 
 # Desired minimum GCC version
@@ -48,26 +48,10 @@ CURRENT_GCC_VERSION=$(gcc -dumpversion)
 
 # Check if the current GCC version is greater than or equal to the minimum required version
 if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GCC_VERSION" | sort -V | head -n1)" = "$MIN_GCC_VERSION" ]; then
-    rm -rf ../resources/libjvectorAVX512.so
-    gcc -fPIC -O3 -march=x86-64-v4 -c jvector_simd_check.c -o jvector_simd_check.o
-    gcc -fPIC -O3 -march=x86-64-v4 -c jvector_common.c -o jvector_common.o
-    gcc -fPIC -O3 -march=x86-64-v4 -c jvector_avx512.c -o jvector_simd.o
-    gcc -shared -o ../resources/libjvectorAVX512.so jvector_simd_check.o jvector_common.o jvector_simd.o
-    echo "Compilation 512 works."
-
-    rm -rf ../resources/libjvectorAVX256.so
-    gcc -fPIC -O3 -march=x86-64-v3 -c jvector_simd_check.c -o jvector_simd_check.o
-    gcc -fPIC -O3 -march=x86-64-v3 -c jvector_common.c -o jvector_common.o
-    gcc -fPIC -O3 -march=x86-64-v3 -c jvector_avx2.c -o jvector_simd.o
-    gcc -shared -o ../resources/libjvectorAVX256.so jvector_simd_check.o jvector_common.o jvector_simd.o
-    echo "Compilation 256 works."
-
-    rm -rf ../resources/libjvectorSSE128.so
-    gcc -fPIC -O3 -march=x86-64-v2 -c jvector_simd_check.c -o jvector_simd_check.o
-    gcc -fPIC -O3 -march=x86-64-v2 -c jvector_common.c -o jvector_common.o
-    gcc -fPIC -O3 -march=x86-64-v2 -c jvector_sse.c -o jvector_simd.o
-    gcc -shared -o ../resources/libjvectorSSE128.so jvector_simd_check.o jvector_common.o jvector_simd.o
-    echo "Compilation 128 works."
+    rm -rf ../resources/libjvector.so
+    gcc -fPIC -O3 -march=icelake-server -c jvector_simd.c -o jvector_simd.o
+    gcc -fPIC -O3 -march=x86-64 -c jvector_simd_check.c -o jvector_simd_check.o
+    gcc -shared -o ../resources/libjvector.so jvector_simd_check.o jvector_simd.o
 
     rm -rf jvector_common.o
     rm -rf jvector_simd.o

@@ -21,8 +21,6 @@ import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.util.List;
-
 /**
  * Experimental!
  * VectorizationProvider implementation that uses MemorySegment vectors and prefers native/Panama SIMD.
@@ -33,38 +31,13 @@ public class NativeVectorizationProvider extends VectorizationProvider {
     private final VectorTypeSupport vectorTypeSupport;
 
     public NativeVectorizationProvider() {
-        boolean libraryLoaded = false;
-        boolean compatible = false;
-        // Do not change the order, this will try loading  the libraries starting from the highest SIMD width first.
-//        for (String libName : List.of("jvectorAVX512", "jvectorAVX256", "jvectorSSE128")) {
-        for (String libName : List.of("jvectorAVX256")) {
-            System.out.println("Loading library: " + libName);
-
-            {
-                libraryLoaded = LibraryLoader.loadJvector(libName);
-                if (!libraryLoaded) {
-                    System.out.print(" -> load failure\n");
-                    continue;
-                }
-            }
-
-            compatible = NativeSimdOps.check_compatibility();
-            if (!compatible) {
-                System.out.print(" -> compatibility failure\n");
-            }
-            if (libraryLoaded && compatible) {
-                System.out.print(" -> success\n");
-                break;
-            }
-        }
-
+        var libraryLoaded = LibraryLoader.loadJvector();
         if (!libraryLoaded) {
             throw new UnsupportedOperationException("Failed to load supporting native library.");
         }
-        if (!compatible) {
+        if (!NativeSimdOps.check_compatibility()) {
             throw new UnsupportedOperationException("Native SIMD operations are not supported on this platform due to missing CPU support.");
         }
-
         this.vectorUtilSupport = new NativeVectorUtilSupport();
         this.vectorTypeSupport = new MemorySegmentVectorProvider();
     }

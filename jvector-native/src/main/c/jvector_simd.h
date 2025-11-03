@@ -13,27 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
 #include <stdbool.h>
+
+#ifndef VECTOR_SIMD_DOT_H
+#define VECTOR_SIMD_DOT_H
 
 // check CPU support
 bool check_compatibility(void);
 
-// Return the version of the SIMD implementation
-// 0: SSE
-// 1: AVX2
-// 2: AVX512
-int simd_version(void);
-
-// Code use by Fused PQ
-void quantized_partials(float delta, const float* partials, int codebookCount, int codebookSize, const float* partialBases, unsigned char* quantizedPartials);
-//void store_pq_code_in_neighbors(const unsigned char* pqCode, int position, int length, const unsigned char* compressedNeighbors);
-//void bulk_quantized_shuffle_dot(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartials, float delta, float minDistance, float* results);
-void bulk_quantized_shuffle_euclidean(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartials, float delta, float minDistance, float* results);
-//void bulk_quantized_shuffle_cosine(const unsigned char* shuffles, int codebookCount, int nNeighbors, const char* quantizedPartialSums, float sumDelta, float minDistance, const char* quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float* results);
-
-// Code use by PQ
-float assemble_and_sum(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
-float pq_decoded_cosine_similarity(const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude);
-
+//F32
+float dot_product_f32(int preferred_size, const float* a, int aoffset, const float* b, int boffset, int length);
+float euclidean_f32(int preferred_size, const float* a, int aoffset, const float* b, int boffset, int length);
+void bulk_quantized_shuffle_dot_f32_512(const unsigned char* shuffles, int codebookCount, const char* quantizedPartials, float delta, float minDistance, float* results);
+void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char* shuffles, int codebookCount, const char* quantizedPartials, float delta, float minDistance, float* results);
+void bulk_quantized_shuffle_cosine_f32_512(const unsigned char* shuffles, int codebookCount, const char* quantizedPartialSums, float sumDelta, float minDistance, const char* quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float* results);
+float assemble_and_sum_f32_512(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
+float pq_decoded_cosine_similarity_f32_512(const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude);
+void calculate_partial_sums_dot_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums);
+void calculate_partial_sums_euclidean_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums);
+void calculate_partial_sums_best_dot_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums, float* partialBestDistances);
+void calculate_partial_sums_best_euclidean_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums, float* partialBestDistances);
+#endif
