@@ -284,6 +284,7 @@ Commentary:
 * Foundational work: [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and [a higher level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
 * [Anisotropic PQ paper](https://arxiv.org/abs/1908.10396)
 * [Quicker ADC paper](https://arxiv.org/abs/1812.09162)
+* [NVQ paper](https://arxiv.org/abs/2509.18471)
 
 
 ## Developing and Testing
