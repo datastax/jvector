@@ -29,7 +29,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 
 /**
  * Performs similarity comparisons with compressed vectors without decoding them.
- * These decoders use Quick(er) ADC-style transposed vectors fused into a graph.
+ * These decoders use vectors fused into a graph.
  */
 public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFunction {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -46,9 +46,6 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     protected final VectorSimilarityFunction vsf;
     protected int origin;
 
-    // Implements section 3.4 of "Quicker ADC : Unlocking the Hidden Potential of Product Quantization with SIMD"
-    // The main difference is that since our graph structure rapidly converges towards the best results,
-    // we don't need to scan K values to have enough confidence that our worstDistance bound is reasonable.
     protected FusedPQDecoder(ProductQuantization pq,
                              Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                              VectorFloat<?> query, FusedPQ.PackedNeighbors packedNeighbors,
