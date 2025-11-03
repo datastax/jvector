@@ -8,6 +8,7 @@ construction:
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
+  fusedGraph: [No]
   compression:
     - type: PQ
       parameters:

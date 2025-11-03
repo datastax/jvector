@@ -8,6 +8,7 @@ construction:
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
+  fusedGraph: [Yes, No]
   compression:
     - type: PQ
       parameters:
@@ -17,7 +18,6 @@ construction:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
-    - FUSED+NVQ
     - NVQ
   useSavedIndexIfExists: Yes
 
