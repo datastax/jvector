@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -83,6 +84,16 @@ public interface BuildScoreProvider {
 
     /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
+     *
+     * Helper method for the special case that mapping between graph node IDs and ravv ordinals is the identity function.
+     */
+    static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap, VectorSimilarityFunction similarityFunction) {
+        return randomAccessScoreProvider(new RemappedRandomAccessVectorValues(ravv, graphToRavvOrdMap), similarityFunction);
+    }
+
+    /**
+     * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
+     * graphToRavvOrdMap maps graph node IDs to ravv ordinals.
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without

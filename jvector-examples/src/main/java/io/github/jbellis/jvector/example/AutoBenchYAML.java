@@ -141,8 +141,17 @@ public class AutoBenchYAML {
                         normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
                     }
 
-                    MultiConfig config = MultiConfig.getDefaultConfig("autoDefault");
-                    config.dataset = normalizedDatasetName;
+                    MultiConfig config;
+                    if (finalConfigPath != null) {
+                        config = MultiConfig.getConfig(finalConfigPath);
+                        // Override dataset name if not specified in custom config
+                        if (config.dataset == null || config.dataset.isEmpty()) {
+                            config.dataset = normalizedDatasetName;
+                        }
+                    } else {
+                        config = MultiConfig.getDefaultConfig("autoDefault");
+                        config.dataset = normalizedDatasetName;
+                    }
                     logger.info("Using configuration: {}", config);
 
                     List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds, 
