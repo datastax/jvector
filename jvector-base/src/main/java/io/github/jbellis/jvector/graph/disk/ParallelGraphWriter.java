@@ -83,22 +83,22 @@ class ParallelGraphWriter implements AutoCloseable {
          * @param workerThreads number of worker threads for building records (0 = use available processors)
          * @param useDirectBuffers whether to use direct ByteBuffers (can be faster for large records)
          * @param taskMultiplier multiplier for number of tasks relative to worker threads
-         *                       (8x = good balance for most use cases, higher = more fine-grained parallelism)
+         *                       (4x = good balance for most use cases, higher = more fine-grained parallelism)
          */
         public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier) {
             this.workerThreads = workerThreads <= 0 ? Runtime.getRuntime().availableProcessors() : workerThreads;
             this.useDirectBuffers = useDirectBuffers;
-            this.taskMultiplier = taskMultiplier <= 0 ? 8 : taskMultiplier;
+            this.taskMultiplier = taskMultiplier <= 0 ? 4 : taskMultiplier;
         }
 
         /**
          * Returns a default configuration suitable for most use cases.
-         * Uses available CPU cores, heap buffers, and 8x task multiplier.
+         * Uses available CPU cores, heap buffers, and 4x task multiplier.
          *
          * @return default configuration
          */
         public static Config defaultConfig() {
-            return new Config(0, false, 8);
+            return new Config(0, false, 4);
         }
     }
 
@@ -177,7 +177,7 @@ class ParallelGraphWriter implements AutoCloseable {
 
         // Calculate optimal number of tasks based on cores and task multiplier
         int numCores = Runtime.getRuntime().availableProcessors();
-        int numTasks = Math.min(numCores * taskMultiplier, totalOrdinals);
+        int numTasks = Math.min((totalOrdinals / (numCores * taskMultiplier)), totalOrdinals);
 
         // Calculate ordinals per task (ceiling division to cover all ordinals)
         int ordinalsPerTask = (totalOrdinals + numTasks - 1) / numTasks;
