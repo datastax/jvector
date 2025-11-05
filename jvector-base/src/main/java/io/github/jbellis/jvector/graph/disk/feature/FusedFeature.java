@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.util.Accountable;
 
 import java.io.DataOutput;
 import java.io.IOException;
@@ -34,7 +35,7 @@ public interface FusedFeature extends Feature {
 
     void writeSourceFeature(DataOutput out, State state) throws IOException;
 
-    interface InlineSource {}
+    interface InlineSource extends Accountable {}
 
     InlineSource loadSourceFeature(RandomAccessReader in) throws IOException;
 }

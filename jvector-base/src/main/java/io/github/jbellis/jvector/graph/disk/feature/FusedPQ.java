@@ -155,6 +155,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
             this.code = code;
         }
 
+        @Override
+        public long ramBytesUsed() {
+            return code.length();
+        }
+
         public ByteSequence<?> getCode() {
             return code;
         }
