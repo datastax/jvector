@@ -15,6 +15,7 @@
   This explores a design space allowing for packed representations of vectors fused into the graph in shapes optimal 
   for approximate score calculation. This new feature of graph indexes is opt-in but fully functional now. Any graph
   degree limitations have been lifted. At this time, only 256-cluster ProductQuantization can use fused PQ.
+  Version 6 or greater of the file disk format is required to use this feature.
 
 
 ## API changes
