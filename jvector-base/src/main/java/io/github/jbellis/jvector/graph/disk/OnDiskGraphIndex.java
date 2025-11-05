@@ -89,7 +89,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     // When using fused features, store the features fully in memory for layers > 0
     private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
 
-    OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
+    private OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
         this.readerSupplier = readerSupplier;
         this.version = header.common.version;
@@ -249,7 +249,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
                 return loadFromFooter(readerSupplier, reader.getPosition());
             } else {
-                return new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+                var odgi = new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
+                odgi.getInMemoryLayers(reader);
+                odgi.getInMemoryFeatures(reader);
+                return odgi;
             }
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
@@ -294,7 +297,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     header.common.entryNode,
                     header.common.layerInfo.size(),
                     in.getPosition());
-            return new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+            var odgi = new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+            odgi.getInMemoryLayers(in);
+            odgi.getInMemoryFeatures(in);
+            return odgi;
+
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
         }
@@ -381,8 +388,19 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     @Override
     public long ramBytesUsed() {
+        List<Int2ObjectHashMap<int[]>> inMemoryNeighborsLocal = inMemoryNeighbors.get();
+
+        long inMemoryNeighborsBytes = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+        for (Int2ObjectHashMap<int[]> neighbors : inMemoryNeighborsLocal) {
+            inMemoryNeighborsBytes += neighbors.values().stream().mapToLong(is -> Integer.BYTES * (long) is.length).sum();
+            inMemoryNeighborsBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+        }
+        long inMemoryFeaturesBytes = inMemoryFeatures.get().values().stream().mapToLong(is -> Integer.BYTES * is.ramBytesUsed()).sum();
+        inMemoryFeaturesBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
         return Long.BYTES + 6 * Integer.BYTES + RamUsageEstimator.NUM_BYTES_OBJECT_REF
-                + (long) 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF * FeatureId.values().length;
+                + (long) 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF * FeatureId.values().length
+                + inMemoryNeighborsBytes + inMemoryFeaturesBytes;
     }
 
     public void close() throws IOException {
