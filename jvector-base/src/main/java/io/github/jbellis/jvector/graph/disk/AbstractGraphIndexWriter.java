@@ -47,8 +47,6 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final ImmutableGraphIndex graph;
     final OrdinalMapper ordinalMapper;
     final int dimension;
-    // we don't use Map features but EnumMap is the best way to make sure we don't
-    // accidentally introduce an ordering bug in the future
     final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
     final int headerSize;
