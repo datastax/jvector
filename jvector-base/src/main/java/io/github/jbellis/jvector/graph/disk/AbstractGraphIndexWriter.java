@@ -82,8 +82,12 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             this.inlineFeatures = sortedFeatures.stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
         }
 
-        if (this.inlineFeatures.stream().filter(Feature::isFused).count() > 1) {
+        long fusedFeaturesCount = this.inlineFeatures.stream().filter(Feature::isFused).count();
+        if (fusedFeaturesCount > 1) {
             throw new IllegalArgumentException("At most one fused feature is allowed");
+        }
+        if (fusedFeaturesCount == 1 && version < 6) {
+            throw new IllegalArgumentException("Fused features require version 6 or higher");
         }
         this.out = out;
 
@@ -218,53 +222,45 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         }
 
         // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
-        // Since everything in level 1 is also contained in the high-levels, we only need to write the fused features for level 1.
+        // Since everything in level 1 is also contained in the higher levels, we only need to write the fused features for level 1.
         if (version == 6) {
-            if (graph.getMaxLevel() >= 1) {
-                int level = 1;
-                int layerSize = graph.size(level);
-                int nodesWritten = 0;
-                for (var it = graph.getNodes(level); it.hasNext(); ) {
-                    int originalOrdinal = it.nextInt();
-
-                    // We write the ordinal (node id) so that we can map it to the corresponding feature
-                    final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
-                    out.writeInt(newOrdinal);
-
-                    // There should be only one fused feature per node. This is checked in the class constructor.
-                    for (var feature : inlineFeatures) {
-                        if (feature.isFused()) {
-                            var fusedFeature = (FusedFeature) feature;
-                            var supplier = featureStateSuppliers.get(fusedFeature.id());
-                            if (supplier == null) {
-                                throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
-                            } else {
-                                fusedFeature.writeSourceFeature(out, supplier.apply(originalOrdinal));
-                            }
-                        }
-                    }
-                    nodesWritten++;
+            // There should be only one fused feature per node. This is checked in the class constructor.
+            // This is the only place where we explicitly need the fused feature. If there are more places in the
+            // future, it may be worth having fusedFeature as class member.
+            FusedFeature fusedFeature = null;
+            for (var feature : inlineFeatures) {
+                if (feature.isFused()) {
+                    fusedFeature = (FusedFeature) feature;
                 }
-                if (nodesWritten != layerSize) {
-                    throw new IllegalStateException("Mismatch between layer 1 size and features written");
+            }
+            if (fusedFeature != null) {
+                var supplier = featureStateSuppliers.get(fusedFeature.id());
+                if (supplier == null) {
+                    throw new IllegalStateException("Supplier for feature " + fusedFeature.id() + " not found");
                 }
-            } else {
-                // Write the source feature of the entry node
-                final int originalEntryNode = view.entryNode().node;
-                final int entryNode = ordinalMapper.oldToNew(originalEntryNode);
-                out.writeInt(entryNode);
 
-                // There should be only one fused feature per node. This is checked in the class constructor.
-                for (var feature : inlineFeatures) {
-                    if (feature.isFused()) {
-                        var fusedFeature = (FusedFeature) feature;
-                        var supplier = featureStateSuppliers.get(fusedFeature.id());
-                        if (supplier == null) {
-                            throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
-                        } else {
-                            fusedFeature.writeSourceFeature(out, supplier.apply(originalEntryNode));
-                        }
+                if (graph.getMaxLevel() >= 1) {
+                    int level = 1;
+                    int layerSize = graph.size(level);
+                    int nodesWritten = 0;
+                    for (var it = graph.getNodes(level); it.hasNext(); ) {
+                        int originalOrdinal = it.nextInt();
+
+                        // We write the ordinal (node id) so that we can map it to the corresponding feature
+                        final int newOrdinal = ordinalMapper.oldToNew(originalOrdinal);
+                        out.writeInt(newOrdinal);
+                        fusedFeature.writeSourceFeature(out, supplier.apply(originalOrdinal));
+                        nodesWritten++;
                     }
+                    if (nodesWritten != layerSize) {
+                        throw new IllegalStateException("Mismatch between layer 1 size and features written");
+                    }
+                } else {
+                    // Write the source feature of the entry node
+                    final int originalEntryNode = view.entryNode().node;
+                    final int entryNode = ordinalMapper.oldToNew(originalEntryNode);
+                    out.writeInt(entryNode);
+                    fusedFeature.writeSourceFeature(out, supplier.apply(originalEntryNode));
                 }
             }
         }
