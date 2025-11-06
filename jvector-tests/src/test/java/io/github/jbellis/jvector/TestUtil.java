@@ -344,10 +344,10 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
-                    if (visited.apply(friendOrd)) {
+                    if (visited.mark(friendOrd)) {
                         float friendSimilarity = scoreFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
@@ -493,10 +493,10 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
-                    if (visited.apply(friendOrd)) {
+                    if (visited.mark(friendOrd)) {
                         float friendSimilarity = scoreFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }

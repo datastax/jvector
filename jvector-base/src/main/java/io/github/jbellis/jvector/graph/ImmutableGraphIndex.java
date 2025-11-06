@@ -140,6 +140,17 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     }
 
     /**
+     * Serves as an abstract interface for marking nodes as visited
+     */
+    @FunctionalInterface
+    interface IntMarker {
+        /**
+         * Marks the node and returns true if it was not marked previously. Returns false otherwise
+         */
+        boolean mark(int value);
+    }
+
+    /**
      * Encapsulates the state of a graph for searching.  Re-usable across search calls,
      * but each thread needs its own.
      */
@@ -154,7 +165,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
          * Iterates over the neighbors of a given node if they have not been visited yet.
          * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
          */
-        void processNeighbors(int level, int node, ScoreFunction scoreFunction, Function<Integer, Boolean> visited, NeighborProcessor neighborProcessor);
+        void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
 
         /**
          * This method is deprecated as most View usages should not need size.
