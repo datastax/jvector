@@ -163,11 +163,17 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             if (current != null) {
                 return current;
             }
-            try {
-                return loadInMemoryFeatures(in);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
+            // Only load the in-memory features if the graph is fused
+            for (var feature : features.values()) {
+                if (feature.isFused()) {
+                    try {
+                        return loadInMemoryFeatures(in);
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }
             }
+            return null;
         });
     }
 
