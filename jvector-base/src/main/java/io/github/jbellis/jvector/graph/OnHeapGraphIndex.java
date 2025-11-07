@@ -80,7 +80,9 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private volatile boolean allMutationsCompleted = false;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider) {
+    private final boolean isHierarchical;
+
+    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         this.dimension = dimension;
@@ -94,6 +96,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
                 getDegree(0),
                 (int) (getDegree(0) * overflowRatio))
         );
+        this.isHierarchical = isHierarchical;
     }
 
     /**
@@ -126,6 +129,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         } else {
             return neighs.iterator();
         }
+    }
+
+    @Override
+    public boolean isHierarchical() {
+        return isHierarchical;
     }
 
     @Override
@@ -568,7 +576,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         int entryNode = in.readInt();
 
-        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider);
+        var isHierarchical = layerCount > 1;
+        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider, isHierarchical);
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 

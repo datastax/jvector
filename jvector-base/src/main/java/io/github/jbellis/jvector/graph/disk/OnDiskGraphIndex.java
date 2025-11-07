@@ -228,6 +228,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     @Override
+    public boolean isHierarchical() {
+        return layerInfo.size() > 1;
+    }
+
+    @Override
     public int getDimension() {
         return dimension;
     }

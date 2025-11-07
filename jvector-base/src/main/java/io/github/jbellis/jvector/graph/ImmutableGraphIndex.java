@@ -104,6 +104,15 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     @Override
     void close() throws IOException;
 
+
+    /**
+     * Returns true if this graph is hierarchical, false otherwise.
+     * Note that a graph can be hierarchical even if it has a single layer, i.e., getMaxLevel() == 0.
+     * For example, while building a new hierarchical graph, we may temporarily only have nodes at level 0
+     * because of the random assignment of nodes to levels.
+     */
+    boolean isHierarchical();
+
     /**
      * @return The maximum (coarser) level that contains a vector in the graph.
      */

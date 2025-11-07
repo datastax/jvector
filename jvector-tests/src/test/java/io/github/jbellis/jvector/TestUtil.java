@@ -250,6 +250,11 @@ public class TestUtil {
         }
 
         @Override
+        public boolean isHierarchical() {
+            return layerSizes.size() > 1;
+        }
+
+        @Override
         public int size(int level) {
             return layerSizes.get(level);
         }
@@ -386,6 +391,11 @@ public class TestUtil {
 
         public RandomlyConnectedGraphIndex(int size, int M, Random random) {
             this(List.of(new CommonHeader.LayerInfo(size, M)), random);
+        }
+
+        @Override
+        public boolean isHierarchical() {
+            return layerInfo.size() > 1;
         }
 
         @Override

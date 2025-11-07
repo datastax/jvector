@@ -325,7 +325,7 @@ public class GraphIndexBuilder implements Closeable {
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
 
-        this.graph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
+        this.graph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha), addHierarchy);
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
@@ -349,14 +349,13 @@ public class GraphIndexBuilder implements Closeable {
      * @param beamWidth the width of the beam used during the graph building process.
      * @param neighborOverflow the factor determining how many additional neighbors are allowed beyond the configured limit.
      * @param alpha the weight factor for balancing score computations.
-     * @param addHierarchy whether to add hierarchical structures while building the graph.
      * @param refineFinalGraph whether to perform a refinement step on the final graph structure.
      * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
      * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
      *
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
-    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean addHierarchy, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -371,7 +370,7 @@ public class GraphIndexBuilder implements Closeable {
         this.neighborOverflow = neighborOverflow;
         this.dimension = dimension;
         this.alpha = alpha;
-        this.addHierarchy = addHierarchy;
+        this.addHierarchy = mutableGraphIndex.isHierarchical();
         this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
@@ -983,7 +982,6 @@ public class GraphIndexBuilder implements Closeable {
      * @param beamWidth the width of the beam used during the graph building process.
      * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
      * @param alpha the weight factor for balancing score computations.
-     * @param addHierarchy whether to add hierarchical structures while building the graph.
      *
      * @return the in-memory representation of the graph index.
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
@@ -996,8 +994,7 @@ public class GraphIndexBuilder implements Closeable {
                                                             int[] graphToRavvOrdMap,
                                                             int beamWidth,
                                                             float overflowRatio,
-                                                            float alpha,
-                                                            boolean addHierarchy) throws IOException {
+                                                            float alpha) throws IOException {
 
         var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
 
@@ -1010,7 +1007,6 @@ public class GraphIndexBuilder implements Closeable {
                     beamWidth,
                     overflowRatio,
                     alpha,
-                    addHierarchy,
                     true,
                     PhysicalCoreExecutor.pool(),
                     ForkJoinPool.commonPool()
