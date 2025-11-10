@@ -156,4 +156,19 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         }
         assertGraphEquals(graph, builder.graph);
     }
+
+    // Because RandomAccessVectorValues is exposed in such a way that it allows for subsequent additions to the
+    // vector source, we need to ensure that GraphIndexBuilder can handle this.
+    @Test
+    public void testAddNodesToVectorValuesIteratively() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        var mutableVectors = new ArrayList<VectorFloat<?>>();
+        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(mutableVectors, dimension);
+        try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true)) {
+            for (int i = 0; i < 10; i++) {
+                mutableVectors.add(TestUtil.randomVector(random(), dimension));
+                builder.addGraphNode(i, ravv.getVector(i));
+            }
+        }
+    }
 }

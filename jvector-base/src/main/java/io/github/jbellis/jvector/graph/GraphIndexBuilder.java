@@ -325,7 +325,7 @@ public class GraphIndexBuilder implements Closeable {
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
 
-        this.graph = new OnHeapGraphIndex(maxDegrees, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
+        this.graph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha));
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
@@ -1001,7 +1001,7 @@ public class GraphIndexBuilder implements Closeable {
 
         var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
 
-        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, overflowRatio, diversityProvider);) {
+        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, newVectors.dimension(), overflowRatio, diversityProvider);) {
 
             GraphIndexBuilder builder = new GraphIndexBuilder(
                     buildScoreProvider,

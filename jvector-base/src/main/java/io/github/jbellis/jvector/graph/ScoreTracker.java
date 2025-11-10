@@ -41,7 +41,7 @@ public interface ScoreTracker {
 
             if (threshold > 0) {
                 if (twoPhaseTracker == null) {
-                    twoPhaseTracker = new ScoreTracker.TwoPhaseTracker();
+                    twoPhaseTracker = new ScoreTracker.TwoPhaseTracker(threshold);
                 } else {
                     twoPhaseTracker.reset(threshold);
                 }
@@ -49,7 +49,7 @@ public interface ScoreTracker {
             } else {
                 if (pruneSearch) {
                     if (relaxedMonotonicityTracker == null) {
-                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker();
+                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker(rerankK);
                     } else {
                         relaxedMonotonicityTracker.reset(rerankK);
                     }
@@ -107,10 +107,6 @@ public interface ScoreTracker {
             this.bestScores = new BoundedLongHeap(BEST_SCORES_TRACKED);
             this.observationCount = 0;
             this.threshold = threshold;
-        }
-
-        TwoPhaseTracker() {
-            this(0);
         }
 
         void reset(double threshold) {
@@ -195,10 +191,6 @@ public interface ScoreTracker {
             this.dSquared = 0;
         }
 
-        RelaxedMonotonicityTracker() {
-            this(100);
-        }
-
         private static int getRecentScoresSize(int bestScoresTracked) {
             // A quick empirical study yields that the number of recent scores
             // that we need to consider grows by a factor of ~sqrt(bestScoresTracked / 2)
@@ -211,7 +203,8 @@ public interface ScoreTracker {
             if (this.recentScoresSize > recentScores.length) {
                 recentScores = ArrayUtil.grow(recentScores, this.recentScoresSize);
             }
-            this.bestScores.clear();
+            bestScores.clear();
+            bestScores.setMaxSize(bestScoresTracked);
             this.observationCount = 0;
             this.mean = 0;
             this.dSquared = 0;

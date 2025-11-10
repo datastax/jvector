@@ -228,6 +228,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     @Override
+    public int getDimension() {
+        return dimension;
+    }
+
+    @Override
     public int size(int level) {
         return layerInfo.get(level).size;
     }

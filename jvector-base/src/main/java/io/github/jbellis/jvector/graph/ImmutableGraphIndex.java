@@ -81,6 +81,11 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     List<Integer> maxDegrees();
 
     /**
+     * @return the dimension of the vectors in the graph
+     */
+    int getDimension();
+
+    /**
      * @return the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases;
      * May be different from size() if nodes are being added concurrently, or if nodes have been
      * deleted (and cleaned up).
