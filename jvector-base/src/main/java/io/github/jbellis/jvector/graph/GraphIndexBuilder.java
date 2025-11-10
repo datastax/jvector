@@ -353,6 +353,7 @@ public class GraphIndexBuilder implements Closeable {
      * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
      * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
      */
+    @Experimental
     public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
