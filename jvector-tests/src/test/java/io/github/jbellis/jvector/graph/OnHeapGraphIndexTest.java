@@ -313,9 +313,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 final int[] allGraphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).map(i -> allVectorsRavv.size() - 1 - i).toArray();
                 final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, allGraphToRavvOrdMap);
                 var allBsp = BuildScoreProvider.randomAccessScoreProvider(remappedAllVectorsRavv, SIMILARITY_FUNCTION);
-            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), allVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, graphToRavvOrdMap, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
-
-                ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA, ADD_HIERARCHY);
+                ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
 
                 // Verify that the recall is similar across multiple queries
                 // Note: Non-identity mapping can have slightly lower recall due to the complexity of merging with remapped ordinals

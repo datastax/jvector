@@ -991,7 +991,7 @@ public class GraphIndexBuilder implements Closeable {
                                                             float overflowRatio,
                                                             float alpha) throws IOException {
 
-            return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, addHierarchy, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+            return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -1005,7 +1005,6 @@ public class GraphIndexBuilder implements Closeable {
      * @param beamWidth the width of the beam used during the graph building process.
      * @param overflowRatio the ratio of extra neighbors to allow temporarily when inserting a node.
      * @param alpha the weight factor for balancing score computations.
-     * @param addHierarchy whether to add hierarchical structures while building the graph.
      * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
      * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
      *
@@ -1020,7 +1019,6 @@ public class GraphIndexBuilder implements Closeable {
                                                             int beamWidth,
                                                             float overflowRatio,
                                                             float alpha,
-                                                            boolean addHierarchy,
                                                             ForkJoinPool simdExecutor,
                                                             ForkJoinPool parallelExecutor) throws IOException {
 
