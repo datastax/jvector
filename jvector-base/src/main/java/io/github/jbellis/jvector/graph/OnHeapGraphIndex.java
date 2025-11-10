@@ -576,7 +576,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         int entryNode = in.readInt();
 
-        var isHierarchical = layerCount > 1;
+        boolean isHierarchical = layerCount > 1;
         var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider, isHierarchical);
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
