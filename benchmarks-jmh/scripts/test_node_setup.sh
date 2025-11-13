@@ -43,5 +43,5 @@ java --enable-native-access=ALL-UNNAMED \
   --add-modules=jdk.incubator.vector \
   -XX:+HeapDumpOnOutOfMemoryError \
   -Xmx14G -Djvector.experimental.enable_native_vectorization=true \
-  -jar target/benchmarks-jmh-4.0.0-beta.3-SNAPSHOT.jar
+  -jar target/benchmarks-jmh-4.0.0-rc.4-SNAPSHOT.jar
 
