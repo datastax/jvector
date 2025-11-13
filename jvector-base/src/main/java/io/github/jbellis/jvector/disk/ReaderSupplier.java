@@ -23,8 +23,10 @@ import java.io.IOException;
  */
 public interface ReaderSupplier extends AutoCloseable {
     /**
+     * Creates a new reader.
      * @return a new reader.  It is up to the caller to re-use these readers or close them,
      * the ReaderSupplier is not responsible for caching them.
+     * @throws IOException if an I/O error occurs
      */
     RandomAccessReader get() throws IOException;
 

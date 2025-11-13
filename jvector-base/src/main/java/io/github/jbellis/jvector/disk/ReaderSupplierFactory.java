@@ -22,11 +22,26 @@ import java.nio.file.Path;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+/**
+ * Factory for creating ReaderSupplier instances.
+ */
 public class ReaderSupplierFactory {
     private static final Logger LOG = Logger.getLogger(ReaderSupplierFactory.class.getName());
     private static final String MEMORY_SEGMENT_READER_CLASSNAME = "io.github.jbellis.jvector.disk.MemorySegmentReader$Supplier";
     private static final String MMAP_READER_CLASSNAME = "io.github.jbellis.jvector.example.util.MMapReader$Supplier";
 
+    /**
+     * Private constructor to prevent instantiation.
+     */
+    private ReaderSupplierFactory() {
+    }
+
+    /**
+     * Opens a ReaderSupplier for the given path.
+     * @param path the path to open
+     * @return a ReaderSupplier for the path
+     * @throws IOException if an I/O error occurs
+     */
     public static ReaderSupplier open(Path path) throws IOException {
         try {
             // prefer MemorySegmentReader (available under JDK 20+)
