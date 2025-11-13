@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 /**
@@ -42,19 +41,30 @@ public interface ScoreFunction {
     float similarityTo(int node2);
 
     /**
-     * @return the similarity to all of the nodes that `node2` has an edge towards.
+     * Computes the similarity to the neighborIndex-th neighbor of origin.
+     * Before calling this function, enableSimilarityToNeighbors must be called first with the same origin.
+     * This function only works if it is called for the same origin node multiple times.
      * Used when expanding the neighbors of a search candidate.
+     * @param origin the node we are expanding
+     * @param neighborIndex the index of the neighbor we are scoring, a number between 0 and the number of neighbors of the origin node.
+     * @return the score
      */
-    default VectorFloat<?> edgeLoadingSimilarityTo(int node2) {
+    default float similarityToNeighbor(int origin, int neighborIndex) {
         throw new UnsupportedOperationException("bulk similarity not supported");
     }
 
     /**
-     * @return true if `edgeLoadingSimilarityTo` is supported
+     * Load the corresponding data so that similarityToNeighbor can be used with the neighbors of the origin node.
      */
-    default boolean supportsEdgeLoadingSimilarity() {
+    default void enableSimilarityToNeighbors(int origin) {}
+
+    /**
+     * @return true if `similarityToNeighbor` is supported
+     */
+    default boolean supportsSimilarityToNeighbors() {
         return false;
     }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {

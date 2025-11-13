@@ -23,7 +23,6 @@ import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
-import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
@@ -1035,29 +1034,23 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return min;
     }
 
-    @Override
-    public void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBases, ByteSequence<?> quantizedPartials) {
-        var codebookSize = partials.length() / partialBases.length();
-        var codebookCount = partialBases.length();
+    private static int combineBytes(int i, int shuffle, ByteSequence<?> quantizedPartials) {
+        var lowByte = quantizedPartials.get(i * 512 + shuffle);
+        var highByte = quantizedPartials.get((i * 512) + 256 + shuffle);
+        return ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
+    }
 
-        for (int i = 0; i < codebookCount; i++) {
-            var vectorizedLength = FloatVector.SPECIES_512.loopBound(codebookSize);
-            var codebookBase = partialBases.get(i);
-            var codebookBaseVector = FloatVector.broadcast(FloatVector.SPECIES_512, codebookBase);
-            int j = 0;
-            for (; j < vectorizedLength; j += FloatVector.SPECIES_512.length()) {
-                var partialVector = fromVectorFloat(FloatVector.SPECIES_512, partials, i * codebookSize + j);
-                var quantized = (partialVector.sub(codebookBaseVector)).div(delta);
-                quantized = quantized.max(FloatVector.zero(FloatVector.SPECIES_512)).min(FloatVector.broadcast(FloatVector.SPECIES_512, 65535));
-                var quantizedBytes = (ShortVector) quantized.convertShape(VectorOperators.F2S, ShortVector.SPECIES_256, 0);
-                intoByteSequence(quantizedBytes.reinterpretAsBytes(), quantizedPartials, 2 * (i * codebookSize + j));
-            }
-            for (; j < codebookSize; j++) {
-                var val = partials.get(i * codebookSize + j);
-                var quantized = (short) Math.min((val - codebookBase) / delta, 65535);
-                quantizedPartials.setLittleEndianShort(i * codebookSize + j, quantized);
-            }
-        }
+    private static float combineBytes(int i, int shuffle,  VectorFloat<?> partials) {
+        return partials.get(i * 256 + shuffle);
+    }
+
+    private static int computeSingleShuffle(int codebookPosition, int neighborPosition, ByteSequence<?> shuffles, int codebookCount) {
+        int blockSize = ByteVector.SPECIES_PREFERRED.length();
+
+        int blockIndex = neighborPosition / blockSize;
+        int positionWithinBlock = neighborPosition % blockSize;
+        int offset = blockIndex * blockSize * codebookCount;
+        return Byte.toUnsignedInt(shuffles.get(offset + blockSize * codebookPosition + positionWithinBlock));
     }
 
     @Override
@@ -1364,7 +1357,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
-            float alpha, float x0, float minValue, float maxValue) {
+                                         float alpha, float x0, float minValue, float maxValue) {
         FloatVector squaredSumVec = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
 
         int vectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(quantizedVector.length());
@@ -1406,7 +1399,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
-            float alpha, float x0, float minValue, float maxValue) {
+                                   float alpha, float x0, float minValue, float maxValue) {
         FloatVector dotProdVec = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
 
         int vectorizedLength = ByteVector.SPECIES_PREFERRED.loopBound(quantizedVector.length());
@@ -1446,8 +1439,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float[] nvqCosine8bit(VectorFloat<?> vector,
-            ByteSequence<?> quantizedVector, float alpha, float x0, float minValue, float maxValue,
-            VectorFloat<?> centroid) {
+                                 ByteSequence<?> quantizedVector, float alpha, float x0, float minValue, float maxValue,
+                                 VectorFloat<?> centroid) {
         if (vector.length() != centroid.length()) {
             throw new IllegalArgumentException("Vectors must have the same length");
         }
@@ -1547,34 +1540,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums, VectorFloat<?> partialBest) {
-        float best = vsf == VectorSimilarityFunction.EUCLIDEAN ? Float.MAX_VALUE : -Float.MAX_VALUE;
-        float val;
-        int codebookBase = codebookIndex * clusterCount;
-        for (int i = 0; i < clusterCount; i++) {
-            switch (vsf) {
-                case DOT_PRODUCT:
-                    val = dotProduct(codebook, i * size, query, queryOffset, size);
-                    partialSums.set(codebookBase + i, val);
-                    best = Math.max(best, val);
-                    break;
-                case EUCLIDEAN:
-                    val = squareDistance(codebook, i * size, query, queryOffset, size);
-                    partialSums.set(codebookBase + i, val);
-                    best = Math.min(best, val);
-                    break;
-                default:
-                    throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
-            }
-        }
-        partialBest.set(codebookIndex, best);
-    }
-
-
-
-    @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(),  clusterCount, partialSums, aMagnitude, bMagnitude);
     }
 }
-

@@ -35,6 +35,7 @@ import java.util.Objects;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
@@ -141,6 +142,24 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     int size(int level);
 
     /**
+     * The steps needed to process a neighbor during a search. That is, adding it to the priority queue, etc.
+     */
+    interface NeighborProcessor {
+        void process(int friendOrd, float similarity);
+    }
+
+    /**
+     * Serves as an abstract interface for marking nodes as visited
+     */
+    @FunctionalInterface
+    interface IntMarker {
+        /**
+         * Marks the node and returns true if it was not marked previously. Returns false otherwise
+         */
+        boolean mark(int value);
+    }
+
+    /**
      * Encapsulates the state of a graph for searching.  Re-usable across search calls,
      * but each thread needs its own.
      */
@@ -150,6 +169,12 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
          * is guaranteed to be valid.
          */
         NodesIterator getNeighborsIterator(int level, int node);
+
+        /**
+         * Iterates over the neighbors of a given node if they have not been visited yet.
+         * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
+         */
+        void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
 
         /**
          * This method is deprecated as most View usages should not need size.

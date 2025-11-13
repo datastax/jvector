@@ -25,7 +25,7 @@ The upper layers of the hierarchy are represented by an in-memory adjacency list
 The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
 * Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
 * [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)
-* Fused ADC, where PQ codebooks are transposed and written inline with the graph adjacency list
+* Fused PQ, where PQ codebooks are written inline with the graph adjacency list
 
 The second pass can be performed with
 * Full resolution float32 vectors
@@ -265,13 +265,13 @@ Commentary:
 
 * Embeddings models produce output from a consistent distribution of vectors. This means that you can save and re-use ProductQuantization codebooks, even for a different set of vectors, as long as you had a sufficiently large training set to build it the first time around. ProductQuantization.MAX_PQ_TRAINING_SET_SIZE (128,000 vectors) has proven to be sufficiently large.
 * JDK ThreadLocal objects cannot be referenced except from the thread that created them.  This is a difficult design into which to fit caching of Closeable objects like GraphSearcher.  JVector provides the ExplicitThreadLocal class to solve this.
-* Fused ADC is only compatible with Product Quantization, not Binary Quantization.  This is no great loss since [very few models generate embeddings that are best suited for BQ](https://thenewstack.io/why-vector-size-matters/).  That said, BQ continues to be supported with non-Fused indexes.
+* Fused PQ is only compatible with Product Quantization, not Binary Quantization.  This is no great loss since [very few models generate embeddings that are best suited for BQ](https://thenewstack.io/why-vector-size-matters/).  That said, BQ continues to be supported with non-Fused indexes.
 * JVector heavily utilizes the Panama Vector API(SIMD) for ANN indexing and search.  We have seen cases where the memory bandwidth is saturated during indexing and product quantization and can cause the process to slow down. To avoid this, the batch methods for index and PQ builds use a [PhysicalCoreExecutor](https://javadoc.io/doc/io.github.jbellis/jvector/latest/io/github/jbellis/jvector/util/PhysicalCoreExecutor.html) to limit the amount of operations to the physical core count. The default value is 1/2 the processor count seen by Java. This may not be correct in all setups (e.g. no hyperthreading or hybrid architectures) so if you wish to override the default use the `-Djvector.physical_core_count` property, or pass in your own ForkJoinPool instance.
 
 
 ### Advanced features
 
-* Fused ADC is represented as a Feature that is supported during incremental index construction, like InlineVectors above.  [See the Grid class for sample code](https://github.com/jbellis/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/Grid.java).
+* Fused PQ is represented as a Feature that is supported during incremental index construction, like InlineVectors above.  [See the Grid class for sample code](https://github.com/jbellis/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/Grid.java).
 * Anisotropic PQ is built into the ProductQuantization class and can improve recall, but nobody knows how to tune it (with the T/threshold parameter) except experimentally on a per-model basis, and choosing the wrong setting can make things worse.  From Figure 3 in the paper: 
 ![APQ performnce on Glove first improves and then degrades as T increases](https://github.com/jbellis/jvector/assets/42158/fd459222-6929-43ca-a405-ac34dbaf6646)
 
@@ -285,7 +285,6 @@ Commentary:
 * [Anisotropic PQ paper](https://arxiv.org/abs/1908.10396)
 * [Quicker ADC paper](https://arxiv.org/abs/1812.09162)
 * [NVQ paper](https://arxiv.org/abs/2509.18471)
-
 
 ## Developing and Testing
 This project is organized as a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html). The intent is to produce a multirelease jar suitable for use as

@@ -1,4 +1,4 @@
-version: 5
+version: 6
 
 dataset: default
 
@@ -8,6 +8,7 @@ construction:
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
+  fusedGraph: [No]
   compression:
     - type: PQ
       parameters:

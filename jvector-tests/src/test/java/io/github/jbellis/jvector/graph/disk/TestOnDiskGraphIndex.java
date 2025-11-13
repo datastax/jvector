@@ -28,7 +28,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.TestVectorGraph;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
@@ -497,7 +497,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         var pqv = (PQVectors) pq.encodeAll(ravv);
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, incrementalFadcPath)
                 .with(new InlineVectors(ravv.dimension()))
-                .with(new FusedADC(graph.getDegree(0), pq))
+                .with(new FusedPQ(graph.getDegree(0), pq))
                 .build())
         {
             // write inline vectors incrementally
@@ -506,8 +506,8 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
                 writer.writeInline(i, state);
             }
             // write graph structure, fused ADC
-            writer.write(Feature.singleStateFactory(FeatureId.FUSED_ADC, i -> new FusedADC.State(graph.getView(), pqv, i)));
-            writer.write(Map.of());
+            writer.write(Feature.singleStateFactory(FeatureId.FUSED_PQ, i -> new FusedPQ.State(graph.getView(), pqv, i)));
+            writer.write(Map.of(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal)));
         }
 
         // graph and vectors should be identical

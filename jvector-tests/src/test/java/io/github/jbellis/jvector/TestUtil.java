@@ -24,10 +24,13 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -53,6 +56,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -151,15 +155,38 @@ public class TestUtil {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
-    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, Path outputPath) throws IOException {
-        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
-                .with(new InlineVectors(ravv.dimension()))
-                .with(new FusedADC(graph.maxDegree(), pqv.getCompressor())).build())
-        {
-            var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
-            suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
-            suppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(graph.getView(), pqv, ordinal));
-            writer.write(suppliers);
+
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
+        writeFusedGraph(graph, ravv, pqv, featureId, null, outputPath);
+    }
+
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
+                                       FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
+                                       Path outputPath) throws IOException {
+        var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
+
+        if (oldToNewOrdinals != null) {
+            builder = builder.withMap(oldToNewOrdinals);
+        }
+
+        var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+        suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
+
+        if (featureId == FeatureId.INLINE_VECTORS) {
+            builder.with(new InlineVectors(ravv.dimension()));
+            suppliers.put(featureId, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+        } else if (featureId == FeatureId.NVQ_VECTORS) {
+            int nSubVectors = ravv.dimension() == 2 ? 1 : 2;
+            var nvq = NVQuantization.compute(ravv, nSubVectors);
+            builder.with(new NVQ(nvq));
+            suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(ravv.getVector(ordinal))));
+        } else {
+            throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for reranking");
+        }
+
+        try (var finalWriter = builder.build()) {
+            finalWriter.write(suppliers);
         }
     }
 
@@ -321,6 +348,17 @@ public class TestUtil {
                                                             layerSizes.get(level) - 1);
             }
 
+            @Override
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.mark(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
+            }
+
             @Deprecated
             @Override
             public int size() {
@@ -462,6 +500,17 @@ public class TestUtil {
             public NodesIterator getNeighborsIterator(int level, int node) {
                 var adjacency = layerAdjacency.get(level);
                 return new NodesIterator.ArrayNodesIterator(adjacency.get(node));
+            }
+
+            @Override
+            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.mark(friendOrd)) {
+                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
             }
 
             @Deprecated

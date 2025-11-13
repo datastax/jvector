@@ -34,10 +34,7 @@ public class QueryExecutor {
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
         var queryVector = cs.getDataSet().queryVectors.get(i);
-        var searcher = cs.getSearcher();
-        searcher.usePruning(usePruning);
-        var sf = cs.scoreProviderFor(queryVector, searcher.getView());
-        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        return executeQuery(cs, topK, rerankK, usePruning, queryVector);
     }
 
     // Overload to allow single query injection (e.g., for warm-up with random vectors)

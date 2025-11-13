@@ -58,14 +58,6 @@ public class ArraySliceByteSequence implements ByteSequence<byte[]> {
     }
 
     @Override
-    public void setLittleEndianShort(int shortIndex, short value) {
-        // Can't call setLittleEndianShort because the method shifts the index and we don't require
-        // that the slice is aligned to a short boundary
-        data.set(offset + shortIndex * 2, (byte) (value & 0xFF));
-        data.set(offset + shortIndex * 2 + 1, (byte) ((value >> 8) & 0xFF));
-    }
-
-    @Override
     public void zero() {
         for (int i = 0; i < length; i++) {
             data.set(offset + i, (byte) 0);

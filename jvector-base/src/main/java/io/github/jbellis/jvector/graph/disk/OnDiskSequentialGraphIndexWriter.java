@@ -152,7 +152,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
             }
         }
 
-        writeSparseLevels(view);
+        writeSparseLevels(view, featureStateSuppliers);
 
         writeSeparatedFeatures(featureStateSuppliers);
 

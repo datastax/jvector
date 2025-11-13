@@ -29,7 +29,7 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
-public class SeparatedNVQ implements SeparatedFeature {
+public class SeparatedNVQ extends AbstractSeparatedFeature {
     private final NVQuantization nvq;
     private final NVQScorer scorer;
     private final ThreadLocal<NVQuantization.QuantizedVector> reusableQuantizedVector;
