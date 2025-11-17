@@ -93,9 +93,9 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
     }
 
     /**
-     * return the CRC32 checksum for the range [startOffset .. endOffset)
+     * Returns the CRC32 checksum for the range [startOffset .. endOffset)
      *
-     * the file pointer will be left at endOffset.
+     * The file pointer will be left at endOffset.
      */
     @Override
     public long checksum(long startOffset, long endOffset) throws IOException {
