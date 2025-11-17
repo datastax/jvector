@@ -40,7 +40,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
@@ -768,5 +770,29 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     public int getOriginalDimension() {
         return originalDimension;
+    }
+
+    @Override
+    public double reconstructionError(VectorFloat<?> vector) {
+        var code = vectorTypeSupport.createByteSequence(M);
+
+        if (globalCentroid != null) {
+            vector = sub(vector, globalCentroid);
+        }
+
+        if (anisotropicThreshold > UNWEIGHTED)
+            encodeAnisotropic(vector, code);
+        else
+            encodeUnweighted(vector, code);
+
+        float sum = 0;
+        for (int m = 0; m < M; m++) {
+            int centroidIndex = Byte.toUnsignedInt(code.get(m));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int centroidOffset = subvectorSizesAndOffsets[m][1];
+            sum += VectorUtil.squareL2Distance(codebooks[m], centroidIndex * centroidLength, vector, centroidOffset, centroidLength);
+        }
+
+        return sum / vector.length();
     }
 }

@@ -157,4 +157,15 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
     public String toString() {
         return "BinaryQuantization";
     }
+
+    @Override
+    public double reconstructionError(VectorFloat<?> vector) {
+        double sum = 0;
+        for (int i = 0; i < vector.length(); i++) {
+            boolean bit = vector.get(i) > 0;
+            double diff = (bit ? 1.0f : 0.0f) - vector.get(i);
+            sum += diff * diff;
+        }
+        return sum / vector.length();
+    }
 }
