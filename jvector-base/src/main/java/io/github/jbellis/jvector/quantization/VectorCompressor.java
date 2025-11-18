@@ -80,14 +80,18 @@ public interface VectorCompressor<T> {
     int compressedVectorSize();
 
     /**
-     * Compute the mean squared error for the given vector
+     * Compute the mean squared error (MSE) for the given vector.
+     * </p>
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
      * @param vector the vector to compute the reconstruction error for
      * @return the reconstruction error for the given vector
      */
     double reconstructionError(VectorFloat<?> vector);
 
     /**
-     * Compute the mean squared error for each vector in the stream.
+     * Compute the mean squared error (MSE) for each vector in the stream.
+     * </p>
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
      * @param ravv the vectors to compute the reconstruction error for
      * @return the reconstruction error for each vector
      */
@@ -96,7 +100,9 @@ public interface VectorCompressor<T> {
     }
 
     /**
-     * Compute the mean squared error for each vector in the stream in parallel.
+     * Compute the mean squared error (MSE) for each vector in the stream in parallel.
+     * </p>
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
      * @param ravv the vectors to compute the reconstruction error for
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the reconstruction error for each vector
