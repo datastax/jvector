@@ -28,6 +28,7 @@ public class ConstructionParameters extends CommonParameters {
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
+    public List<Boolean> refineFinalGraph;
     public List<String> reranking;
     public Boolean useSavedIndexIfExists;
 

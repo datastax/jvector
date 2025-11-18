@@ -44,6 +44,7 @@ public class Bench2D {
         ); // rerankK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
+        var refineFinalGraphGrid = List.of(true); // List.of(false, true);
         var usePruningGrid = List.of(false); // List.of(false, true);
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(__ -> CompressorParameters.NONE);
         List<Function<DataSet, CompressorParameters>> searchCompression = Arrays.asList(
@@ -58,7 +59,7 @@ public class Bench2D {
         // 2D grid, built and calculated at runtime
         var grid2d = DataSetCreator.create2DGrid(4_000_000, 10_000, 100);
 
-        Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, featureSets,
-                buildCompression, searchCompression, topKGrid, usePruningGrid);
+        Grid.runAll(grid2d, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid,
+                    featureSets, buildCompression, searchCompression, topKGrid, usePruningGrid);
     }
 }

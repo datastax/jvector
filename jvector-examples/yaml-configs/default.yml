@@ -1,12 +1,13 @@
-version: 4
+version: 5
 
-dataset: cohere-english-v3-100k
+dataset: default
 
 construction:
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
   compression:
     - type: PQ
       parameters:
@@ -31,3 +32,8 @@ search:
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+  benchmarks: # full option set, if the whole "benchmarks" section is not specified, a default set will be used
+    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
+    latency: [ AVG ] # additional options: [ AVG, STD, P999 ]
+    count: [ visited ] # additional options: [ visited, expanded, expanded base layer ]
+    accuracy: [ recall ] # additional options: [ recall, MAP ]

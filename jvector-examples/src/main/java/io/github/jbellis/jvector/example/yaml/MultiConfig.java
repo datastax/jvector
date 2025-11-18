@@ -33,16 +33,29 @@ public class MultiConfig {
     public SearchParameters search;
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
-        File configFile = new File(defaultDirectory + datasetName + ".yml");
-        if (!configFile.exists()) {
+        var name = defaultDirectory + datasetName;
+        if (!name.endsWith(".yml")) {
+            name += ".yml";
+        }
+        File configFile = new File(name);
+        boolean useDefault = !configFile.exists();
+        if (useDefault) {
             configFile = new File(defaultDirectory + "default.yml");
             System.out.println("Default YAML config file: " + configFile.getAbsolutePath());
         }
-        return getConfig(configFile);
+        var config = getConfig(configFile);
+        if (useDefault) {
+            config.dataset = datasetName;
+        }
+        return config;
     }
 
-    public static MultiConfig getConfig(String datasetName) throws FileNotFoundException {
-        File configFile = new File(datasetName);
+    public static MultiConfig getConfig(String configName) throws FileNotFoundException {
+        File configFile = new File(configName);
+        // If the file doesn't exist as an absolute path, try relative to the default directory
+        if (!configFile.exists() && !configName.startsWith("/") && !configName.contains(":")) {
+            configFile = new File(defaultDirectory + configName);
+        }
         return getConfig(configFile);
     }
 

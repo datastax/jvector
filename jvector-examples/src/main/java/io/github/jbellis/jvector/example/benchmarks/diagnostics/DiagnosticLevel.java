@@ -14,13 +14,21 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.example.yaml;
+package io.github.jbellis.jvector.example.benchmarks.diagnostics;
 
-import java.util.List;
-import java.util.Map;
+/**
+ * Defines the level of diagnostic information to collect and log during benchmarks.
+ */
+public enum DiagnosticLevel {
+    /** No diagnostic information collected */
+    NONE,
 
-public class SearchParameters extends CommonParameters {
-    public Map<Integer, List<Double>> topKOverquery;
-    public List<Boolean> useSearchPruning;
-    public Map<String, List<String>> benchmarks;
+    /** Basic system stats (GC, memory, CPU) before and after each run */
+    BASIC,
+
+    /** Detailed timing analysis and per-run statistics */
+    DETAILED,
+
+    /** Verbose logging including individual query times and thread statistics */
+    VERBOSE
 }
