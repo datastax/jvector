@@ -1021,6 +1021,12 @@ public class GraphIndexBuilder implements Closeable {
                                                             float alpha,
                                                             ForkJoinPool simdExecutor,
                                                             ForkJoinPool parallelExecutor) throws IOException {
+        // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
+        //  However, the new inserted vectors do have the new ordinals, so recall:
+        //  - recall will be severely affected
+        //  - there may be repeated IDs
+        //  As a consequence, OnHeapGraphIndexTest.testIncrementalInsertionFromOnDiskIndex_withNonIdentityOrdinalMapping has been disabled for now.
+        //  Leaving this note for future reference and as a warning on this experimental function.
 
         var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
 
