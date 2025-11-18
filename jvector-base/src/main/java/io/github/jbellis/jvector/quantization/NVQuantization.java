@@ -362,11 +362,11 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
     @Override
     public double reconstructionError(VectorFloat<?> vector) {
-        var encodedVector = QuantizedVector.createEmpty(subvectorSizesAndOffsets, bitsPerDimension);
+        final var encodedVector = QuantizedVector.createEmpty(subvectorSizesAndOffsets, bitsPerDimension);
 
-        var tempVector = VectorUtil.sub(vector, globalMean);
+        final var tempVector = VectorUtil.sub(vector, globalMean);
         QuantizedVector.quantizeTo(getSubVectors(tempVector), bitsPerDimension, learn, encodedVector);
-        var vectorSubVectors = this.getSubVectors(tempVector);
+        final var vectorSubVectors = this.getSubVectors(tempVector);
 
         float dist = 0;
         switch (this.bitsPerDimension) {
