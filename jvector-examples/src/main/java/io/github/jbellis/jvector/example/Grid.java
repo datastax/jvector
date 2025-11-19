@@ -167,20 +167,27 @@ public class Grid {
 
         try {
             for (var cpSupplier : compressionGrid) {
-                var compressor = getCompressor(cpSupplier, ds);
-                CompressedVectors cv;
-                if (compressor == null) {
-                    cv = null;
-                    System.out.format("Uncompressed vectors%n");
-                } else {
-                    long start = System.nanoTime();
-                    cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                }
-
                 indexes.forEach((features, index) -> {
-                    try (var cs = new ConfiguredSystem(ds, index, cv,
-                                                       index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
+                    final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
+
+                    CompressedVectors cv;
+                    if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
+                        cv = null;
+                        System.out.format("Fused graph index%n");
+                    } else {
+                        var compressor = getCompressor(cpSupplier, ds);
+
+                        if (compressor == null) {
+                            cv = null;
+                            System.out.format("Uncompressed vectors%n");
+                        } else {
+                            long start = System.nanoTime();
+                            cv = compressor.encodeAll(ds.getBaseRavv());
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        }
+                    }
+
+                    try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                         testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
@@ -673,16 +680,16 @@ public class Grid {
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            // if we're not compressing then just use the exact score function
-            if (cv == null) {
-                return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
-            }
-
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
             } else {
+                // if we're not compressing then just use the exact score function
+                if (cv == null) {
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                }
+
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
             }
             var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
