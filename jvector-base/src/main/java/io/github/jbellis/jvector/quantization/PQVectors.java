@@ -77,7 +77,7 @@ public abstract class PQVectors implements CompressedVectors {
     /**
      * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
      * and split into chunks to avoid exceeding the maximum array size.
-     * </p>
+     * <p>
      * This is a helper method for the special case where the ordinals mapping in the graph and the RAVV/PQVectors are the same.
      *
      * @param pq           the ProductQuantization to use
