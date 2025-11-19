@@ -112,7 +112,7 @@ public abstract class PQVectors implements CompressedVectors {
      *
      * @param pq           the ProductQuantization to use
      * @param vectorCount  the number of vectors to encode
-     * @param ordinalsMapping the graph ordinals to RAVV mapping
+     * @param ordinalsMapping the graph ordinals to RAVV mapping, the function should be defined in [0, vectorCount)
      * @param ravv         the RandomAccessVectorValues to encode
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the PQVectors instance
