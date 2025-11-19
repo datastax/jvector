@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntFunction;
 import java.util.stream.IntStream;
 
 public abstract class PQVectors implements CompressedVectors {
@@ -76,7 +77,7 @@ public abstract class PQVectors implements CompressedVectors {
     /**
      * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
      * and split into chunks to avoid exceeding the maximum array size.
-     *
+     * </p>
      * This is a helper method for the special case where the ordinals mapping in the graph and the RAVV/PQVectors are the same.
      *
      * @param pq           the ProductQuantization to use
@@ -86,7 +87,23 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        return encodeAndBuild(pq, vectorCount, IntStream.range(0, vectorCount).toArray(), ravv, simdExecutor);
+        IntFunction<Integer> mapper = (ordinal) -> ordinal;
+        return encodeAndBuild(pq, vectorCount, mapper, ravv, simdExecutor);
+    }
+
+    /**
+     * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
+     * and split into chunks to avoid exceeding the maximum array size.
+     *
+     * @param pq           the ProductQuantization to use
+     * @param ordinalsMapping the graph ordinals to RAVV mapping
+     * @param ravv         the RandomAccessVectorValues to encode
+     * @param simdExecutor the ForkJoinPool to use for SIMD operations
+     * @return the PQVectors instance
+     */
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int[] ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        IntFunction<Integer> mapper = (ordinal) -> ordinalsMapping[ordinal];
+        return encodeAndBuild(pq, ordinalsMapping.length, mapper, ravv, simdExecutor);
     }
 
     /**
@@ -95,14 +112,14 @@ public abstract class PQVectors implements CompressedVectors {
      *
      * @param pq           the ProductQuantization to use
      * @param vectorCount  the number of vectors to encode
+     * @param ordinalsMapping the graph ordinals to RAVV mapping
      * @param ravv         the RandomAccessVectorValues to encode
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
-     * @param ordinalsMapping the graph ordinals to RAVV mapping
      * @return the PQVectors instance
      */
-    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, int[] ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntFunction<Integer> ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         int compressedDimension = pq.compressedVectorSize();
-        PQLayout layout = new PQLayout(vectorCount,compressedDimension);
+        PQLayout layout = new PQLayout(vectorCount, compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
         for (int i = 0; i < layout.fullSizeChunks; i++) {
             chunks[i] = vectorTypeSupport.createByteSequence(layout.fullChunkBytes);
@@ -115,13 +132,13 @@ public abstract class PQVectors implements CompressedVectors {
         // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
         // and then we are guaranteed safe publication because we join the thread after completion.
         var ravvCopy = ravv.threadLocalSupplier();
-        simdExecutor.submit(() -> IntStream.range(0, ordinalsMapping.length)
+        simdExecutor.submit(() -> IntStream.range(0, vectorCount)
                         .parallel()
                         .forEach(ordinal -> {
                             // Retrieve the slice and mutate it.
                             var localRavv = ravvCopy.get();
                             var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping[ordinal]);
+                            var vector = localRavv.getVector(ordinalsMapping.apply(ordinal));
                             if (vector != null)
                                 pq.encodeTo(vector, slice);
                             else
