@@ -33,6 +33,7 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
+import java.util.function.IntUnaryOperator;
 import java.util.stream.IntStream;
 
 public abstract class PQVectors implements CompressedVectors {
@@ -87,8 +88,7 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        IntFunction<Integer> mapper = (ordinal) -> ordinal;
-        return encodeAndBuild(pq, vectorCount, mapper, ravv, simdExecutor);
+        return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravv, simdExecutor);
     }
 
     /**
@@ -102,7 +102,7 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int[] ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        IntFunction<Integer> mapper = (ordinal) -> ordinalsMapping[ordinal];
+        IntUnaryOperator mapper = (ordinal) -> ordinalsMapping[ordinal];
         return encodeAndBuild(pq, ordinalsMapping.length, mapper, ravv, simdExecutor);
     }
 
@@ -117,7 +117,7 @@ public abstract class PQVectors implements CompressedVectors {
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the PQVectors instance
      */
-    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntFunction<Integer> ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         int compressedDimension = pq.compressedVectorSize();
         PQLayout layout = new PQLayout(vectorCount, compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
@@ -138,7 +138,7 @@ public abstract class PQVectors implements CompressedVectors {
                             // Retrieve the slice and mutate it.
                             var localRavv = ravvCopy.get();
                             var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping.apply(ordinal));
+                            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
                             if (vector != null)
                                 pq.encodeTo(vector, slice);
                             else
