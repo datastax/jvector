@@ -34,14 +34,14 @@ import java.util.stream.Collectors;
  * @param <T> the type of the output writer
  */
 public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
-    /** EOF magic number. */
-    public static final int FOOTER_MAGIC = 0x4a564244; // "EOF magic"
+    /** A magic number to indicate the file footer */
+    public static final int FOOTER_MAGIC = 0x4a564244;
     /** The size of the offset in the footer. */
-    public static final int FOOTER_OFFSET_SIZE = Long.BYTES; // The size of the offset in the footer
+    public static final int FOOTER_OFFSET_SIZE = Long.BYTES;
     /** The size of the magic number in the footer. */
-    public static final int FOOTER_MAGIC_SIZE = Integer.BYTES; // The size of the magic number in the footer
+    public static final int FOOTER_MAGIC_SIZE = Integer.BYTES;
     /** The total size of the footer. */
-    public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE; // The total size of the footer
+    public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
     final int version;
     final ImmutableGraphIndex graph;
     final OrdinalMapper ordinalMapper;
@@ -162,14 +162,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     /**
      * Writes the index header, including the graph size, so that OnDiskGraphIndex can open it.
      * The output IS flushed.
-     * <p>
-     * Public so that you can write the index size (and thus usefully open an OnDiskGraphIndex against the index)
-     * to read Features from it before writing the edges.
      * @param view the graph index view
      * @param startOffset the start offset
      * @throws IOException if an I/O error occurs
      */
-    public synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
+    protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
         // graph-level properties
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
