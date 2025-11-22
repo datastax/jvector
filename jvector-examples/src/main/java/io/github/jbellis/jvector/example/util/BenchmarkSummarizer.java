@@ -36,18 +36,16 @@ public class BenchmarkSummarizer {
         private final double indexConstruction;
         private final int totalConfigurations;
         private final double qpsStdDev;
+        private final double avgNodesVisited;
 
-        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations) {
-            this(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, 0.0);
-        }
-
-        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev) {
+        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev, double avgNodesVisited) {
             this.avgRecall = avgRecall;
             this.avgQps = avgQps;
             this.avgLatency = avgLatency;
             this.indexConstruction = indexConstruction;
             this.totalConfigurations = totalConfigurations;
             this.qpsStdDev = qpsStdDev;
+            this.avgNodesVisited = avgNodesVisited;
         }
 
         public double getAvgRecall() {
@@ -70,6 +68,8 @@ public class BenchmarkSummarizer {
 
         public double getQpsStdDev() { return qpsStdDev; }
 
+        public double getAvgNodesVisited() { return avgNodesVisited; }
+
         @Override
         public String toString() {
             return String.format(
@@ -77,8 +77,9 @@ public class BenchmarkSummarizer {
                 "  Average Recall@k: %.4f%n" +
                 "  Average QPS: %.2f (± %.2f)%n" +
                 "  Average Latency: %.2f ms%n" +
-                "  Index Construction Time: %.2f",
-                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction);
+                "  Index Construction Time: %.2f%n" +
+                "  Average Nodes Visited: %.2f",
+                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction, avgNodesVisited);
         }
     }
     
@@ -89,7 +90,7 @@ public class BenchmarkSummarizer {
      */
     public static SummaryStats summarize(List<BenchResult> results) {
         if (results == null || results.isEmpty()) {
-            return new SummaryStats(0, 0, 0, 0, 0, 0);
+            return new SummaryStats(0, 0, 0, 0, 0, 0, 0);
         }
 
         double totalRecall = 0;
@@ -97,11 +98,13 @@ public class BenchmarkSummarizer {
         double totalLatency = 0;
         double indexConstruction = 0;
         double totalQpsStdDev = 0;
+        double totalNodesVisited = 0;
         
         int recallCount = 0;
         int qpsCount = 0;
         int latencyCount = 0;
         int qpsStdDevCount = 0;
+        int nodesVisitedCount = 0;
 
         for (BenchResult result : results) {
             if (result.metrics == null) continue;
@@ -135,6 +138,13 @@ public class BenchmarkSummarizer {
             }
 
             indexConstruction = extractIndexConstructionMetric(result.metrics);
+
+            // Extract nodes visited metric (format is "Avg Visited")
+            Double nodesVisited = extractNodesVisitedMetric(result.metrics);
+            if (nodesVisited != null) {
+                totalNodesVisited += nodesVisited;
+                nodesVisitedCount++;
+            }
         }
 
         // Calculate averages, handling cases where some metrics might not be present
@@ -142,11 +152,12 @@ public class BenchmarkSummarizer {
         double avgQps = qpsCount > 0 ? totalQps / qpsCount : 0;
         double avgLatency = latencyCount > 0 ? totalLatency / latencyCount : 0;
         double avgQpsStdDev = qpsStdDevCount > 0 ? totalQpsStdDev / qpsStdDevCount : 0;
+        double avgNodesVisited = nodesVisitedCount > 0 ? totalNodesVisited / nodesVisitedCount : 0;
         
         // Count total valid configurations as the maximum count of any metric
         int totalConfigurations = Math.max(Math.max(recallCount, qpsCount), latencyCount);
 
-        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev);
+        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev, avgNodesVisited);
     }
 
     private static Double extractIndexConstructionMetric(Map<String, Object> metrics) {
@@ -235,7 +246,28 @@ public class BenchmarkSummarizer {
         }
         return null;
     }
-    
+
+    /**
+     * Extract an average nodes visited metric from the metrics map
+     * @param metrics Map of metrics
+     * @return The average nodes visited value as a Double, or null if not found
+     */
+    private static Double extractNodesVisitedMetric(Map<String, Object> metrics) {
+        // Try exact match first
+        Double value = extractMetric(metrics, "Avg Visited");
+        if (value != null) return value;
+
+        // Look for any key containing "Avg Visited" case insensitive
+        for (Map.Entry<String, Object> entry : metrics.entrySet()) {
+            if (entry.getKey().contains("Avg Visited")) {
+                return convertToDouble(entry.getValue());
+            }
+        }
+
+        return null;
+    }
+
+
     /**
      * Extract a specific metric from the metrics map
      * @param metrics Map of metrics
