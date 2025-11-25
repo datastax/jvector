@@ -16,7 +16,8 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
-import java.io.DataOutput;
+import io.github.jbellis.jvector.disk.IndexWriter;
+
 import java.io.IOException;
 import java.util.EnumMap;
 import java.util.function.IntFunction;
@@ -35,9 +36,9 @@ public interface Feature extends Comparable<Feature> {
 
     int featureSize();
 
-    void writeHeader(DataOutput out) throws IOException;
+    void writeHeader(IndexWriter out) throws IOException;
 
-    default void writeInline(DataOutput out, State state) throws IOException {
+    default void writeInline(IndexWriter out, State state) throws IOException {
         // default no-op
     }
 

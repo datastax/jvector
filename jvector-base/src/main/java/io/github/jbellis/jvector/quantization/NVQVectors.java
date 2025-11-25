@@ -16,13 +16,13 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -48,7 +48,7 @@ public class NVQVectors implements CompressedVectors {
     }
 
     @Override
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         // serializing NVQ at the given version
         nvq.write(out, version);
