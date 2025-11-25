@@ -51,7 +51,7 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 
 /**
  * JMH benchmark that mirrors the ParallelWriteExample: it builds a graph from vectors, then
- * writes the graph to disk sequentially and in parallel using NVQ + FUSED_ADC features,
+ * writes the graph to disk sequentially and in parallel using NVQ + FUSED_PQ features,
  * and verifies that the outputs are identical.
  */
 @BenchmarkMode(Mode.AverageTime)
@@ -70,12 +70,15 @@ public class ParallelWriteBenchmark {
     @Param({"1024"})
     int dimension;
 
+    @Param({"true", "false"})
+    boolean addHierarchy;
+
     // Graph build parameters
     final int M = 32;
     final int efConstruction = 100;
     final float neighborOverflow = 1.2f;
     final float alpha = 1.2f;
-    final boolean addHierarchy = false;
+    //final boolean addHierarchy = false;
     final boolean refineFinalGraph = true;
 
     // Dataset and index state

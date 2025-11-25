@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -241,6 +242,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * @param featureStateSuppliers suppliers for feature state data
      * @throws IOException if an I/O error occurs
      */
+    @Experimental
     private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         if (filePath == null) {
             throw new IllegalStateException("Parallel writes require a file path. Use Builder(ImmutableGraphIndex, Path) constructor.");
@@ -362,7 +364,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * to ensure that all parallel write operations have fully completed before writing the footer (e.g., checksum).
      * The footer must only be written after all data has been flushed and no further writes are in progress,
      * to avoid data corruption or incomplete checksums. This class does not currently coordinate or synchronize
-     * footer writing with parallel operations. Parallel writes are experimental and should be used with caution.
+     * footer writing with parallel operations.
      */
     public synchronized long checksum() throws IOException {
         long endOffset = out.position();
@@ -373,8 +375,6 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * Enables parallel writes for L0 records. This can significantly improve throughput
      * for large graphs by parallelizing record building across multiple cores.
      * <p>
-     * Note: This is currently experimental. The sequential path is the default.
-     *
      * @param enabled whether to enable parallel writes
      */
     public void setParallelWrites(boolean enabled) {

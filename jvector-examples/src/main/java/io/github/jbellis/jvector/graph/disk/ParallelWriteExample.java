@@ -322,7 +322,7 @@ public class ParallelWriteExample {
         int efConstruction = 100;
         float neighborOverflow = 1.2f;
         float alpha = 1.2f;
-        boolean addHierarchy = false;
+        boolean addHierarchy = true;
         boolean refineFinalGraph = true;
 
         System.out.printf("Building graph with PQ-compressed vectors (M=%d, efConstruction=%d)...%n", M, efConstruction);
