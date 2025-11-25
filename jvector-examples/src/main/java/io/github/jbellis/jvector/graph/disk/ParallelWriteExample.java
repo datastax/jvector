@@ -25,7 +25,7 @@ import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -238,7 +238,7 @@ public class ParallelWriteExample {
 
         // Create features: NVQ + FUSED_ADC
         var nvqFeature = new NVQ(nvq);
-        var fusedAdcFeature = new FusedADC(graph.maxDegree(), pq);
+        var fusedPQFeature = new FusedPQ(graph.maxDegree(), pq);
 
         // Build suppliers for inline features (NVQ only - FUSED_ADC needs neighbors)
         Map<FeatureId, IntFunction<Feature.State>> inlineSuppliers = new EnumMap<>(FeatureId.class);
@@ -253,14 +253,14 @@ public class ParallelWriteExample {
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, sequentialPath)
                 .withParallelWrites(false)
                 .with(nvqFeature)
-                .with(fusedAdcFeature)
+                .with(fusedPQFeature)
                 .withMapper(identityMapper)
                 .build()) {
 
             var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
-            writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
 
             writer.write(writeSuppliers);
             view.close();
@@ -273,14 +273,14 @@ public class ParallelWriteExample {
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, parallelPath)
                 .withParallelWrites(true)
                 .with(nvqFeature)
-                .with(fusedAdcFeature)
+                .with(fusedPQFeature)
                 .withMapper(identityMapper)
                 .build()) {
 
             var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
-            writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
 
             writer.write(writeSuppliers);
             view.close();

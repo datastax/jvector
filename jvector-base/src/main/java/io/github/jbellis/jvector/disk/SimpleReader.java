@@ -23,12 +23,17 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 
-// TODO what are the low-hanging optimization options here?
-// The requirement that we need to read from a file that is potentially changing in length
-// limits our options.
+/**
+ * Simple implementation of RandomAccessReader using RandomAccessFile.
+ */
 public class SimpleReader implements RandomAccessReader {
     RandomAccessFile raf;
 
+    /**
+     * Creates a SimpleReader for the given path.
+     * @param path the path to read from
+     * @throws FileNotFoundException if the file cannot be found
+     */
     public SimpleReader(Path path) throws FileNotFoundException {
         raf = new RandomAccessFile(path.toFile(), "r");
     }
@@ -105,9 +110,16 @@ public class SimpleReader implements RandomAccessReader {
         return raf.length();
     }
 
+    /**
+     * Supplier for SimpleReader instances.
+     */
     public static class Supplier implements ReaderSupplier {
         private final Path path;
 
+        /**
+         * Creates a Supplier for the given path.
+         * @param path the path to read from
+         */
         public Supplier(Path path) {
             this.path = path;
         }

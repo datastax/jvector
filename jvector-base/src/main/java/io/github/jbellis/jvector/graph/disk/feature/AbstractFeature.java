@@ -14,20 +14,13 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.disk;
+package io.github.jbellis.jvector.graph.disk.feature;
 
-import java.io.Closeable;
-import java.io.DataOutput;
-import java.io.IOException;
-
-/**
- * Interface for writing index data.
- */
-public interface IndexWriter extends DataOutput, Closeable {
-    /**
-     * Returns the current position in the output.
-     * @return the current position in the output
-     * @throws IOException if an I/O error occurs
-     */
-    long position() throws IOException;
+public abstract class AbstractFeature implements Feature {
+    public int compareTo(Feature f) {
+        if (this.isFused() != f.isFused()) {
+            return Boolean.compare(this.isFused(), f.isFused());
+        }
+        return this.id().compareTo(f.id());
+    }
 }

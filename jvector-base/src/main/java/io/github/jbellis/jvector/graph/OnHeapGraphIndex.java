@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
@@ -48,6 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -80,7 +82,9 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private volatile boolean allMutationsCompleted = false;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider) {
+    private final boolean isHierarchical;
+
+    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         this.dimension = dimension;
@@ -94,6 +98,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
                 getDegree(0),
                 (int) (getDegree(0) * overflowRatio))
         );
+        this.isHierarchical = isHierarchical;
     }
 
     /**
@@ -126,6 +131,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         } else {
             return neighs.iterator();
         }
+    }
+
+    @Override
+    public boolean isHierarchical() {
+        return isHierarchical;
     }
 
     @Override
@@ -463,6 +473,17 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         @Override
+        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                var friendOrd = it.nextInt();
+                if (visited.mark(friendOrd)) {
+                    float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                    neighborProcessor.process(friendOrd, friendSimilarity);
+                }
+            }
+        }
+
+        @Override
         public int size() {
             return OnHeapGraphIndex.this.size(0);
         }
@@ -568,7 +589,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         int entryNode = in.readInt();
 
-        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider);
+        boolean isHierarchical = layerCount > 1;
+        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider, isHierarchical);
 
         Map<Integer, Integer> nodeLevelMap = new HashMap<>();
 

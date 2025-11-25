@@ -8,7 +8,15 @@
 - Support for hierarchical graph indices. This new type of index blends HNSW and DiskANN in a novel way. An
   HNSW-like hierarchy resides in memory for quickly seeding the search. This also reduces the need for caching the
   DiskANN graph near the entrypoint. The base layer of the hierarchy is a DiskANN-like index and inherits its
-  properties. This hierarchical structure can be disabled, ending up with just the base DiskANN layer.  
+  properties. This hierarchical structure can be disabled, ending up with just the base DiskANN layer.
+- The feature previously known as Fused ADC has been renamed to Fused PQ. This feature allows to offload the PQ
+  codebooks from memory during search, storing them within the graph in a way that does not slow down the search.
+  Implementation notes: The implementation of this feature has been overhauled to not require native code acceleration.
+  This explores a design space allowing for packed representations of vectors fused into the graph in shapes optimal 
+  for approximate score calculation. This new feature of graph indexes is opt-in but fully functional now. Any graph
+  degree limitations have been lifted. At this time, only 256-cluster ProductQuantization can use fused PQ.
+  Version 6 or greater of the file disk format is required to use this feature.
+
 
 ## API changes
 - MemorySegmentReader.Supplier and SimpleMappedReader.Supplier must now be explicitly closed, instead of being
@@ -20,7 +28,6 @@
   we do early termination of the search. In certain cases, this can accelerate the search at the potential cost of some
   accuracy. It is set to false by default.
 - The constructors of GraphIndexBuilder allow to specify different maximum out-degrees for the graphs in each layer.
-  However, this feature does not work with FusedADC in this version.
 
 ### API changes in 3.0.6
 

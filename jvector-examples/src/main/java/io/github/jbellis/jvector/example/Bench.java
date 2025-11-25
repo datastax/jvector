@@ -71,7 +71,7 @@ public class Bench {
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(
                 EnumSet.of(FeatureId.NVQ_VECTORS),
-//                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_ADC),
+                EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
 

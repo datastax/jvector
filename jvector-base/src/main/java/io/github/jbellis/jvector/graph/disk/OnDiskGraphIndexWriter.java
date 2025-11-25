@@ -212,7 +212,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         }
 
         // We will use the abstract method because no random access is needed
-        writeSparseLevels(view);
+        writeSparseLevels(view, featureStateSuppliers);
 
         // We will use the abstract method because no random access is needed
         writeSeparatedFeatures(featureStateSuppliers);

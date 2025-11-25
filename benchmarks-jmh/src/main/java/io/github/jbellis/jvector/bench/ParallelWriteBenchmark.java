@@ -26,7 +26,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -85,7 +85,7 @@ public class ParallelWriteBenchmark {
 
     // Feature state reused between iterations
     private NVQ nvqFeature;
-    private FusedADC fusedAdcFeature;
+    private FusedPQ fusedPQFeature;
     private OrdinalMapper identityMapper;
     private Map<FeatureId, IntFunction<Feature.State>> inlineSuppliers;
 
@@ -119,7 +119,7 @@ public class ParallelWriteBenchmark {
         int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
         var nvq = NVQuantization.compute(floatVectors, nSubVectors);
         nvqFeature = new NVQ(nvq);
-        fusedAdcFeature = new FusedADC(graph.maxDegree(), pqVectors.getCompressor());
+        fusedPQFeature = new FusedPQ(graph.maxDegree(), pqVectors.getCompressor());
 
         inlineSuppliers = new EnumMap<>(FeatureId.class);
         inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
@@ -189,13 +189,13 @@ public class ParallelWriteBenchmark {
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path)
                 .withParallelWrites(parallel)
                 .with(nvqFeature)
-                .with(fusedAdcFeature)
+                .with(fusedPQFeature)
                 .withMapper(identityMapper)
                 .build()) {
             var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
-            writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pqVectors, ordinal));
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
 
             writer.write(writeSuppliers);
             view.close();

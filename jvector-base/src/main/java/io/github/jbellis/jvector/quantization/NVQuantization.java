@@ -30,9 +30,14 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
+import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
+import static io.github.jbellis.jvector.vector.VectorUtil.sub;
 
 
 /**
@@ -353,6 +358,37 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
     @Override
     public String toString() {
         return String.format("NVQuantization(sub-vectors=%d)", subvectorSizesAndOffsets.length);
+    }
+
+    @Override
+    public double reconstructionError(VectorFloat<?> vector) {
+        final var encodedVector = QuantizedVector.createEmpty(subvectorSizesAndOffsets, bitsPerDimension);
+
+        final var tempVector = VectorUtil.sub(vector, globalMean);
+        QuantizedVector.quantizeTo(getSubVectors(tempVector), bitsPerDimension, learn, encodedVector);
+        final var vectorSubVectors = this.getSubVectors(tempVector);
+
+        float dist = 0;
+        switch (this.bitsPerDimension) {
+            case EIGHT:
+                for (VectorFloat<?> querySubVector : vectorSubVectors) {
+                    VectorUtil.nvqShuffleQueryInPlace8bit(querySubVector);
+                }
+
+                for (int i = 0; i < vectorSubVectors.length; i++) {
+                    var svDB = encodedVector.subVectors[i];
+                    dist += VectorUtil.nvqSquareL2Distance8bit(
+                            vectorSubVectors[i],
+                            svDB.bytes, svDB.growthRate, svDB.midpoint,
+                            svDB.minValue, svDB.maxValue
+                    );
+                }
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported bits per dimension " + this.bitsPerDimension);
+        }
+
+        return dist / vector.length();
     }
 
     /**

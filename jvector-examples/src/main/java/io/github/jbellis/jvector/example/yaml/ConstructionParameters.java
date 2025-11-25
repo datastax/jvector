@@ -30,18 +30,43 @@ public class ConstructionParameters extends CommonParameters {
     public List<Boolean> addHierarchy;
     public List<Boolean> refineFinalGraph;
     public List<String> reranking;
+    public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
-        return reranking.stream().map(item -> {
-            switch (item) {
-                case "FP":
-                    return EnumSet.of(FeatureId.INLINE_VECTORS);
-                case "NVQ":
-                    return EnumSet.of(FeatureId.NVQ_VECTORS);
-                default:
-                    throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
+        List<EnumSet<FeatureId>> featureSets = null;
+        for (var fusedItem : fusedGraph) {
+            var newFeatures = reranking.stream().map(item -> {
+                EnumSet<FeatureId> features;
+
+                switch (item) {
+                    case "FP":
+                        if (fusedItem) {
+                            features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
+                        } else {
+                            features = EnumSet.of(FeatureId.INLINE_VECTORS);
+                        }
+                        break;
+                    case "NVQ":
+                        if (fusedItem) {
+                            features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
+                        } else {
+                            features = EnumSet.of(FeatureId.NVQ_VECTORS);
+                        }
+                        break;
+                    default:
+                        throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
+                }
+
+                return features;
+            }).collect(Collectors.toList());
+            if (featureSets == null) {
+                featureSets = newFeatures;
+            } else {
+                featureSets.addAll(newFeatures);
             }
-        }).collect(Collectors.toList());
+        }
+
+        return featureSets;
     }
 }

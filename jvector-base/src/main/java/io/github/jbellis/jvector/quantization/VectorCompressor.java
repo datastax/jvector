@@ -26,6 +26,10 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
+import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 /**
  * Interface for vector compression.  T is the encoded (compressed) vector type;
@@ -74,4 +78,38 @@ public interface VectorCompressor<T> {
 
     /** the size of a compressed vector */
     int compressedVectorSize();
+
+    /**
+     * Compute the mean squared error (MSE) for the given vector.
+     *
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
+     * @param vector the vector to compute the reconstruction error for
+     * @return the reconstruction error for the given vector
+     */
+    double reconstructionError(VectorFloat<?> vector);
+
+    /**
+     * Compute the mean squared error (MSE) for each vector in the stream.
+     *
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
+     * @param ravv the vectors to compute the reconstruction error for
+     * @return the reconstruction error for each vector
+     */
+    default double[] reconstructionErrors(RandomAccessVectorValues ravv)  {
+        return IntStream.range(0, ravv.size()).mapToDouble(i -> reconstructionError(ravv.getVector(i))).toArray();
+    }
+
+    /**
+     * Compute the mean squared error (MSE) for each vector in the stream in parallel.
+     *
+     * MSE = (sum of squared errors over all dimensions) / (number of dimensions)
+     * @param ravv the vectors to compute the reconstruction error for
+     * @param simdExecutor the ForkJoinPool to use for SIMD operations
+     * @return the reconstruction error for each vector
+     */
+    default double[] reconstructionErrors(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return simdExecutor.submit(() ->
+                IntStream.range(0, ravv.size()).mapToDouble(i -> reconstructionError(ravv.getVector(i))).toArray()
+        ).join();
+    }
 }

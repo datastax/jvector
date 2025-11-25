@@ -22,15 +22,15 @@ public class NativeSimdOps {
     static final boolean TRACE_DOWNCALLS = Boolean.getBoolean("jextract.trace.downcalls");
 
     static void traceDowncall(String name, Object... args) {
-         String traceArgs = Arrays.stream(args)
-                       .map(Object::toString)
-                       .collect(Collectors.joining(", "));
-         System.out.printf("%s(%s)\n", name, traceArgs);
+        String traceArgs = Arrays.stream(args)
+                .map(Object::toString)
+                .collect(Collectors.joining(", "));
+        System.out.printf("%s(%s)\n", name, traceArgs);
     }
 
     static MemorySegment findOrThrow(String symbol) {
         return SYMBOL_LOOKUP.find(symbol)
-            .orElseThrow(() -> new UnsatisfiedLinkError("unresolved symbol: " + symbol));
+                .orElseThrow(() -> new UnsatisfiedLinkError("unresolved symbol: " + symbol));
     }
 
     static MethodHandle upcallHandle(Class<?> fi, String name, FunctionDescriptor fdesc) {
@@ -98,7 +98,7 @@ public class NativeSimdOps {
 
     private static class check_compatibility {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_BOOL    );
+                NativeSimdOps.C_BOOL    );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("check_compatibility");
 
@@ -148,19 +148,19 @@ public class NativeSimdOps {
             }
             return (boolean)mh$.invokeExact();
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class dot_product_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("dot_product_f32");
@@ -211,19 +211,19 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(preferred_size, a, aoffset, b, boffset, length);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class euclidean_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("euclidean_f32");
@@ -274,18 +274,18 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(preferred_size, a, aoffset, b, boffset, length);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class bulk_quantized_shuffle_dot_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_dot_f32_512");
@@ -336,18 +336,18 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class bulk_quantized_shuffle_euclidean_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_euclidean_f32_512");
@@ -398,22 +398,22 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class bulk_quantized_shuffle_cosine_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_cosine_f32_512");
@@ -464,18 +464,18 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class assemble_and_sum_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("assemble_and_sum_f32_512");
@@ -526,20 +526,20 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class pq_decoded_cosine_similarity_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_FLOAT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_FLOAT
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_FLOAT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("pq_decoded_cosine_similarity_f32_512");
@@ -590,19 +590,19 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(baseOffsets, baseOffsetsOffset, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class calculate_partial_sums_dot_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_dot_f32_512");
@@ -653,19 +653,19 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class calculate_partial_sums_euclidean_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_euclidean_f32_512");
@@ -716,20 +716,20 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class calculate_partial_sums_best_dot_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_best_dot_f32_512");
@@ -780,20 +780,20 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class calculate_partial_sums_best_euclidean_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_POINTER
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_best_euclidean_f32_512");
@@ -844,8 +844,7 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
         } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
+            throw new AssertionError("should not reach here", ex$);
         }
     }
 }
-

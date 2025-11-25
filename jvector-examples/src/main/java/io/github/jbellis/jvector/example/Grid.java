@@ -21,10 +21,10 @@ import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
 import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.*;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
@@ -35,7 +35,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedADC;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -167,20 +167,27 @@ public class Grid {
 
         try {
             for (var cpSupplier : compressionGrid) {
-                var compressor = getCompressor(cpSupplier, ds);
-                CompressedVectors cv;
-                if (compressor == null) {
-                    cv = null;
-                    System.out.format("Uncompressed vectors%n");
-                } else {
-                    long start = System.nanoTime();
-                    cv = compressor.encodeAll(ds.getBaseRavv());
-                    System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                }
-
                 indexes.forEach((features, index) -> {
-                    try (var cs = new ConfiguredSystem(ds, index, cv,
-                                                       index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of())) {
+                    final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
+
+                    CompressedVectors cv;
+                    if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
+                        cv = null;
+                        System.out.format("Fused graph index%n");
+                    } else {
+                        var compressor = getCompressor(cpSupplier, ds);
+
+                        if (compressor == null) {
+                            cv = null;
+                            System.out.format("Uncompressed vectors%n");
+                        } else {
+                            long start = System.nanoTime();
+                            cv = compressor.encodeAll(ds.getBaseRavv());
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        }
+                    }
+
+                    try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                         testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
@@ -255,15 +262,15 @@ public class Grid {
         builder.cleanup();
 
         // write the edge lists and close the writers
-        // if our feature set contains Fused ADC, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
+        // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
         writers.entrySet().stream().parallel().forEach(entry -> {
             var writer = entry.getValue();
             var features = entry.getKey();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_ADC)) {
+            if (features.contains(FeatureId.FUSED_PQ)) {
                 writeSuppliers = new EnumMap<>(FeatureId.class);
                 var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_ADC, ordinal -> new FusedADC.State(view, pq, ordinal));
+                writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pq, ordinal));
             } else {
                 writeSuppliers = Map.of();
             }
@@ -310,13 +317,13 @@ public class Grid {
                     builder.with(new InlineVectors(floatVectors.dimension()));
                     suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
                     break;
-                case FUSED_ADC:
+                case FUSED_PQ:
                     if (pq == null) {
                         System.out.println("Skipping Fused ADC feature due to null ProductQuantization");
                         continue;
                     }
                     // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
-                    builder.with(new FusedADC(onHeapGraph.maxDegree(), pq));
+                    builder.with(new FusedPQ(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
                     int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
@@ -399,7 +406,7 @@ public class Grid {
         }
         int n = 0;
         for (var features : featureSets) {
-            if (features.contains(FeatureId.FUSED_ADC)) {
+            if (features.contains(FeatureId.FUSED_PQ)) {
                 System.out.println("Skipping Fused ADC feature when building in memory");
                 continue;
             }
@@ -676,16 +683,16 @@ public class Grid {
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            // if we're not compressing then just use the exact score function
-            if (cv == null) {
-                return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
-            }
-
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_ADC)) {
+            if (features.contains(FeatureId.FUSED_PQ)) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
             } else {
+                // if we're not compressing then just use the exact score function
+                if (cv == null) {
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                }
+
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
             }
             var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);

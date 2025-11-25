@@ -396,7 +396,6 @@ public class GraphSearcher implements Closeable {
 
             // track scores to predict when we are done with threshold queries
             var scoreTracker = scoreTrackerFactory.getScoreTracker(pruneSearch, rerankK, threshold);
-            VectorFloat<?> similarities = null;
 
             // the main search loop
             while (candidates.size() > 0) {
@@ -423,25 +422,12 @@ public class GraphSearcher implements Closeable {
 
                 // score the neighbors of the top candidate and add them to the queue
                 var scoreFunction = scoreProvider.scoreFunction();
-                var useEdgeLoading = scoreFunction.supportsEdgeLoadingSimilarity();
-                if (useEdgeLoading) {
-                    similarities = scoreFunction.edgeLoadingSimilarityTo(topCandidateNode);
-                }
-                int i = 0;
-                for (var it = view.getNeighborsIterator(level, topCandidateNode); it.hasNext(); ) {
-                    var friendOrd = it.nextInt();
-                    if (!visited.add(friendOrd)) {
-                        continue;
-                    }
+                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                    scoreTracker.track(score);
+                    candidates.push(node2, score);
                     visitedCount++;
-
-                    float friendSimilarity = useEdgeLoading
-                            ? similarities.get(i)
-                            : scoreFunction.similarityTo(friendOrd);
-                    scoreTracker.track(friendSimilarity);
-                    candidates.push(friendOrd, friendSimilarity);
-                    i++;
-                }
+                };
+                view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
             }
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained

@@ -40,7 +40,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
@@ -72,12 +74,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     final float anisotropicThreshold; // parallel cost multiplier
     private final float[][] centroidNormsSquared; // precomputed norms of the centroids, for encoding
     private final ThreadLocal<VectorFloat<?>> partialSums; // for dot product, euclidean, and cosine partials
-    private final ThreadLocal<VectorFloat<?>> partialBestDistances; // for partial best distances during fused ADC
-    private final ThreadLocal<ByteSequence<?>> partialQuantizedSums; // for quantized sums during fused ADC
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
-    private final AtomicReference<ByteSequence<?>> partialQuantizedSquaredMagnitudes; // for quantized squared magnitude partials during cosine fused ADC
-    protected volatile float squaredMagnitudeDelta = 0; // for cosine fused ADC squared magnitude quantization delta (since this is invariant for a given PQ)
-    protected volatile float minSquaredMagnitude = 0; // for cosine fused ADC minimum squared magnitude (invariant for a given PQ)
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -211,10 +208,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
         this.anisotropicThreshold = anisotropicThreshold;
         this.partialSums = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(getSubspaceCount() * getClusterCount()));
-        this.partialBestDistances = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(getSubspaceCount()));
-        this.partialQuantizedSums = ThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(getSubspaceCount() * getClusterCount() * 2));
         this.partialSquaredMagnitudes = new AtomicReference<>(null);
-        this.partialQuantizedSquaredMagnitudes= new AtomicReference<>(null);
 
 
         centroidNormsSquared = new float[M][clusterCount];
@@ -531,20 +525,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return partialSums.get();
     }
 
-    ByteSequence<?> reusablePartialQuantizedSums() {
-        return partialQuantizedSums.get();
-    }
-
-    VectorFloat<?> reusablePartialBestDistances() {
-        return partialBestDistances.get();
-    }
-
     AtomicReference<VectorFloat<?>> partialSquaredMagnitudes() {
         return partialSquaredMagnitudes;
-    }
-
-    AtomicReference<ByteSequence<?>> partialQuantizedSquaredMagnitudes() {
-        return partialQuantizedSquaredMagnitudes;
     }
 
     public void write(DataOutput out, int version) throws IOException
@@ -768,5 +750,29 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     public int getOriginalDimension() {
         return originalDimension;
+    }
+
+    @Override
+    public double reconstructionError(VectorFloat<?> vector) {
+        var code = vectorTypeSupport.createByteSequence(M);
+
+        if (globalCentroid != null) {
+            vector = sub(vector, globalCentroid);
+        }
+
+        if (anisotropicThreshold > UNWEIGHTED)
+            encodeAnisotropic(vector, code);
+        else
+            encodeUnweighted(vector, code);
+
+        float sum = 0;
+        for (int m = 0; m < M; m++) {
+            int centroidIndex = Byte.toUnsignedInt(code.get(m));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int centroidOffset = subvectorSizesAndOffsets[m][1];
+            sum += VectorUtil.squareL2Distance(codebooks[m], centroidIndex * centroidLength, vector, centroidOffset, centroidLength);
+        }
+
+        return sum / vector.length();
     }
 }
