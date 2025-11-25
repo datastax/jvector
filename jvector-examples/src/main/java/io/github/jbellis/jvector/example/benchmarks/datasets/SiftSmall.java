@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
@@ -52,8 +54,6 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -182,7 +182,7 @@ public class SiftSmall {
 
         // compute and write compressed vectors to disk
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(pqPath)))) {
+        try (IndexWriter writer = new BufferedRandomAccessWriter(pqPath)) {
             // Compress the original vectors using PQ. this represents a compression ratio of 128 * 4 / 16 = 32x
             ProductQuantization pq = ProductQuantization.compute(ravv,
                                                                  16, // number of subspaces
@@ -190,7 +190,7 @@ public class SiftSmall {
                                                                  true); // center the dataset
             var pqv = pq.encodeAll(ravv);
             // write the compressed vectors to disk
-            pqv.write(out);
+            pqv.write(writer);
         }
 
         try (ReaderSupplier rs = ReaderSupplierFactory.open(indexPath)) {
@@ -235,7 +235,7 @@ public class SiftSmall {
                      .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
                      .build();
              // output for the compressed vectors
-             DataOutputStream pqOut = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(pqPath))))
+             IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
             // build the index vector-at-a-time (on disk)
             for (int ordinal = 0; ordinal < baseVectors.size(); ordinal++) {
@@ -255,7 +255,7 @@ public class SiftSmall {
 
             // finish writing the index (by filling in the edge lists) and write our completed PQVectors
             writer.write(Map.of());
-            pqv.write(pqOut);
+            pqv.write(pqWriter);
         }
 
         // searching the index does not change
@@ -298,7 +298,7 @@ public class SiftSmall {
                      .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
                      .build();
              // output for the compressed vectors
-             DataOutputStream pqOut = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(pqPath))))
+             IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
             // build the index vector-at-a-time (on disk)
             for (int ordinal = 0; ordinal < baseVectors.size(); ordinal++) {
@@ -318,7 +318,7 @@ public class SiftSmall {
 
             // finish writing the index (by filling in the edge lists) and write our completed PQVectors
             writer.write(Map.of());
-            pqv.write(pqOut);
+            pqv.write(pqWriter);
         }
 
         // searching the index does not change

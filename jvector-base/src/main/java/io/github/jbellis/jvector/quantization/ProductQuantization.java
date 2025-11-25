@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -29,7 +30,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
@@ -532,7 +532,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return partialSquaredMagnitudes;
     }
 
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         if (version > OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported serialization version " + version);

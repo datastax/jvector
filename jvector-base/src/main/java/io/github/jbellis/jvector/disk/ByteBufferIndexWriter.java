@@ -234,6 +234,11 @@ public class ByteBufferIndexWriter implements IndexWriter {
     }
 
     @Override
+    public void writeFloats(float[] floats, int offset, int count) throws IOException {
+        buffer.asFloatBuffer().put(floats, offset, count);
+    }
+
+    @Override
     public void writeDouble(double v) {
         buffer.putDouble(v);
     }
@@ -264,7 +269,7 @@ public class ByteBufferIndexWriter implements IndexWriter {
         if (utflen > 65535) {
             throw new IOException("encoded string too long: " + utflen + " bytes");
         }
-        
+
         buffer.putShort((short) utflen);
         buffer.put(bytes);
     }

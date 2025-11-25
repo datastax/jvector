@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
@@ -54,8 +55,6 @@ import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -653,7 +652,7 @@ public class Grid {
             if (cp.supportsCaching()) {
                 try {
                     Files.createDirectories(path.getParent());
-                    try (var writer = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
+                    try (var writer = new BufferedRandomAccessWriter(path)) {
                         compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
                     }
                 } catch (IOException e) {
