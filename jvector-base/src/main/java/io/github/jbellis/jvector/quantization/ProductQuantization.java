@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
@@ -183,12 +184,13 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
         var vectors = vectorsMutable; // "effectively final" to make the closure happy
 
-        var refinedCodebooks = simdExecutor.submit(() -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, codebooks[m], anisotropicThreshold);
             return clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
                                      anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
-        }).toArray(VectorFloat<?>[]::new)).join();
+        }).toArray(VectorFloat<?>[]::new);
+        var refinedCodebooks = simdExecutor.submit(callable).join();
 
         return new ProductQuantization(refinedCodebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
@@ -459,11 +461,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
         int M = subvectorSizeAndOffset.length;
-        return simdExecutor.submit(() -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizeAndOffset);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, clusters, anisotropicThreshold);
             return clusterer.cluster(K_MEANS_ITERATIONS, anisotropicThreshold == UNWEIGHTED ? 0 : K_MEANS_ITERATIONS);
-        }).toArray(VectorFloat<?>[]::new)).join();
+        }).toArray(VectorFloat<?>[]::new);
+        return simdExecutor.submit(callable).join();
     }
 
     /**
