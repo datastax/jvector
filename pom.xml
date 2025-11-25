@@ -10,17 +10,17 @@
     <!-- Project Metadata setup -->
     <name>JVector parent</name>
     <description>JVector: the most advanced embedded vector search engine</description>
-    <url>https://github.com/jbellis/jvector</url>
+    <url>https://github.com/datastax/jvector</url>
     <scm child.scm.connection.inherit.append.path="false"
          child.scm.developerConnection.inherit.append.path="false"
          child.scm.url.inherit.append.path="false">
-        <connection>scm:git:git://github.com/jbellis/jvector.git</connection>
-        <developerConnection>scm:git:git@github.com:jbellis/jvector.git</developerConnection>
-        <url>http://github.com/jbellis/jvector/tree/main/</url>
+        <connection>scm:git:git://github.com/datastax/jvector.git</connection>
+        <developerConnection>scm:git:git@github.com:datastax/jvector.git</developerConnection>
+        <url>http://github.com/datastax/jvector/tree/main/</url>
     </scm>
     <issueManagement>
         <system>github</system>
-        <url>http://github.com/jbellis/jvector/issues</url>
+        <url>http://github.com/datastax/jvector/issues</url>
     </issueManagement>
     <licenses>
         <license>
@@ -34,7 +34,7 @@
             <name>Jonathan Ellis</name>
             <email>jbellis@gmail.com</email>
             <organization>JVector</organization>
-            <organizationUrl>https://github.com/jbellis/jvector</organizationUrl>
+            <organizationUrl>https://github.com/datastax/jvector</organizationUrl>
         </developer>
     </developers>
     <!-- Build property abstractions: versions, etc -->
