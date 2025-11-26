@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
@@ -31,7 +32,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.function.IntFunction;
@@ -97,14 +97,14 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     @Override
-    public void writeHeader(DataOutput out) throws IOException {
+    public void writeHeader(IndexWriter out) throws IOException {
         pq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
     }
 
     // this is an awkward fit for the Feature.State design since we need to
     // generate the fused set based on the neighbors of the node, not just the node itself
     @Override
-    public void writeInline(DataOutput out, Feature.State state_) throws IOException {
+    public void writeInline(IndexWriter out, Feature.State state_) throws IOException {
         var state = (FusedPQ.State) state_;
 
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
@@ -138,7 +138,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     @Override
-    public void writeSourceFeature(DataOutput out, Feature.State state_) throws IOException {
+    public void writeSourceFeature(IndexWriter out, Feature.State state_) throws IOException {
         var state = (FusedPQ.State) state_;
         var compressed = state.compressedVectorFunction.apply(state.nodeId);
         var temp = pqCodeScratch.get();

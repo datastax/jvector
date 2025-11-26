@@ -16,10 +16,10 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.util.Accountable;
 
-import java.io.DataOutput;
 import java.io.IOException;
 
 /**
@@ -33,7 +33,7 @@ public interface FusedFeature extends Feature {
         return true;
     }
 
-    void writeSourceFeature(DataOutput out, State state) throws IOException;
+    void writeSourceFeature(IndexWriter out, State state) throws IOException;
 
     interface InlineSource extends Accountable {}
 
