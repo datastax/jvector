@@ -1,12 +1,12 @@
 version: 6
 
-dataset: cohere-english-v3-100k
+dataset: default
 
 construction:
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
-  addHierarchy: [Yes]
+  addHierarchy: [Yes, No]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
@@ -18,12 +18,12 @@ construction:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
-    - NVQ
+    - FP
   useSavedIndexIfExists: Yes
 
 search:
   topKOverquery:
-    10: [1.0]
+    10: [1.0, 2.0, 5.0]
   useSearchPruning: [Yes]
   compression:
     - type: PQ

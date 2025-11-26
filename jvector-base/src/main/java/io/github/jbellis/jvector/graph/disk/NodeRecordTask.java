@@ -21,7 +21,12 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +51,7 @@ class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
     private final int recordSize;
     private final long baseOffset;   // Base file offset for L0 (offsets calculated per-ordinal)
     private final ByteBuffer buffer;
+    private final Path filePath;
 
     /**
      * Result of building a node record.
@@ -71,7 +77,8 @@ class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
                    Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
                    int recordSize,
                    long baseOffset,
-                   ByteBuffer buffer) {
+                   ByteBuffer buffer,
+                   Path filePath) {
         this.startOrdinal = startOrdinal;
         this.endOrdinal = endOrdinal;
         this.ordinalMapper = ordinalMapper;
@@ -82,6 +89,7 @@ class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
         this.recordSize = recordSize;
         this.baseOffset = baseOffset;
         this.buffer = buffer;
+        this.filePath = filePath;
     }
 
     @Override
@@ -125,16 +133,28 @@ class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
                 }
 
                 // Write inline features
+                long featureOffset = fileOffset + Integer.BYTES; // After the ordinal
                 for (var feature : inlineFeatures) {
                     var supplier = featureStateSuppliers.get(feature.id());
                     if (supplier == null) {
-                        // Write zeros for missing supplier
-                        for (int i = 0; i < feature.featureSize(); i++) {
-                            writer.writeByte(0);
+                        // Read existing data from file to preserve what was written by writeInline()
+                        try (var channel = FileChannel.open(filePath, StandardOpenOption.READ)) {
+                            ByteBuffer readBuffer = ByteBuffer.allocate(feature.featureSize());
+                            int bytesRead = channel.read(readBuffer, featureOffset);
+                            if (bytesRead != feature.featureSize()) {
+                                throw new IOException(String.format(
+                                        "Expected to read %d bytes but got %d at offset %d",
+                                        feature.featureSize(), bytesRead, featureOffset));
+                            }
+                            readBuffer.flip();
+                            writer.write(readBuffer.array(), 0, feature.featureSize());
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
                         }
                     } else {
                         feature.writeInline(writer, supplier.apply(originalOrdinal));
                     }
+                    featureOffset += feature.featureSize();
                 }
 
                 // Write neighbors

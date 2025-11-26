@@ -211,7 +211,8 @@ class ParallelGraphWriter implements AutoCloseable {
                         featureStateSuppliers,
                         recordSize,
                         baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                        buffer
+                        buffer,
+                        filePath
                 );
 
                 return task.call();
