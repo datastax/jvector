@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -27,7 +28,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
@@ -134,7 +134,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         // pq codebooks
         pq.write(out, version);
