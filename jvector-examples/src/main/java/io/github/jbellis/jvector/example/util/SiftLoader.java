@@ -56,7 +56,7 @@ public class SiftLoader {
     public static List<List<Integer>> readIvecs(String filename) {
         var groundTruthTopK = new ArrayList<List<Integer>>();
 
-        try (var dis = new DataInputStream(new FileInputStream(filename))) {
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filename)))) {
             while (dis.available() > 0) {
                 var numNeighbors = Integer.reverseBytes(dis.readInt());
                 var neighbors = new ArrayList<Integer>(numNeighbors);
