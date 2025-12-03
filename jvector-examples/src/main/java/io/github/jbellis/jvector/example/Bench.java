@@ -57,7 +57,7 @@ public class Bench {
         List<Function<DataSet, CompressorParameters>> buildCompression = Arrays.asList(
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED),
                 __ -> CompressorParameters.NONE
         );
@@ -66,7 +66,7 @@ public class Bench {
                 // ds -> new CompressorParameters.BQParameters(),
                 ds -> new PQParameters(ds.getDimension() / 8,
                         256,
-                        ds.similarityFunction == VectorSimilarityFunction.EUCLIDEAN,
+                        ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN,
                         UNWEIGHTED)
         );
         List<EnumSet<FeatureId>> featureSets = Arrays.asList(

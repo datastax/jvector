@@ -105,7 +105,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
 
         for (int run = 0; run < queryRuns; run++) {
             IntStream.range(0, totalQueries)
