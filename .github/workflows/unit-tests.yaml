@@ -83,6 +83,13 @@ jobs:
           paths: |
             **/target/surefire-reports/TEST-*.xml
 
+      # Upload Surefire test results as an artifact
+      - name: Upload Surefire Test Results
+        uses: actions/upload-artifact@v4
+        if: always() # ensures upload happens even if tests fail
+        with:
+          name: surefire-results--${{ matrix.isa }}-${{ matrix.jdk }}
+          path: "**/target/surefire-reports/**"
 
   build:
     concurrency:
@@ -120,5 +127,14 @@ jobs:
         with:
           paths: |
             **/target/surefire-reports/TEST-*.xml
+      # Upload Surefire test results as an artifact
+      - name: Upload Surefire Test Results
+        uses: actions/upload-artifact@v4
+        if: always() # ensures upload happens even if tests fail
+        with:
+          name: surefire-results--${{ matrix.os }}-${{ matrix.jdk }}
+          path: "**/target/surefire-reports/**"
+
+
 
         

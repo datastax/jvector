@@ -22,10 +22,7 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.DataSetLoader;
-import io.github.jbellis.jvector.example.yaml.ConstructionParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
-import io.github.jbellis.jvector.example.yaml.SearchParameters;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -134,7 +131,7 @@ public class AutoBenchYAML {
                 logger.info("Loading dataset: {}", datasetName);
                 try {
                     DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
+                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {

@@ -2,6 +2,7 @@ target/
 local/
 .mvn/wrapper/maven-wrapper.jar
 .java-version
+.bob/
 
 ### Bench caches
 pq_cache/
