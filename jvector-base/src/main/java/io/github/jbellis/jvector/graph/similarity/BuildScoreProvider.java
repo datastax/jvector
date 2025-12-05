@@ -83,6 +83,14 @@ public interface BuildScoreProvider {
     SearchScoreProvider diversityProviderFor(int node1);
 
     /**
+     * Create the diversity provider's score function. See {@link #diversityProviderFor(int)} for documentation
+     * on the use of the ScoreFunction.
+     */
+    default ScoreFunction diversityScoreFunctionFor(int node1) {
+        return diversityProviderFor(node1).scoreFunction();
+    }
+
+    /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
      *
      * Helper method for the special case that mapping between graph node IDs and ravv ordinals is the identity function.
@@ -141,6 +149,14 @@ public interface BuildScoreProvider {
                 var vc = vectorsCopy.get();
                 return DefaultSearchScoreProvider.exact(v, similarityFunction, vc);
             }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
+                var v = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                // don't use ESF.reranker, we need thread safety here
+                return (ScoreFunction.ExactScoreFunction) node2 -> similarityFunction.compare(v, vc.getVector(node2));
+            }
         };
     }
 
@@ -162,11 +178,16 @@ public interface BuildScoreProvider {
             }
 
             @Override
-            public SearchScoreProvider diversityProviderFor(int node1) {
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
                 // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
-                var asf = pqv.diversityFunctionFor(node1, vsf); // not precomputed!
+                return pqv.diversityFunctionFor(node1, vsf); // not precomputed!
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                var asf = diversityScoreFunctionFor(node1);
                 return new DefaultSearchScoreProvider(asf);
             }
 
@@ -210,8 +231,18 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
+                return new DefaultSearchScoreProvider(diversityScoreFunctionFor(node1));
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                return searchProviderFor(node1);
+            }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
                 var encoded1 = bqv.get(node1);
-                return new DefaultSearchScoreProvider(new ScoreFunction() {
+                return new ScoreFunction() {
                     @Override
                     public boolean isExact() {
                         return false;
@@ -221,12 +252,7 @@ public interface BuildScoreProvider {
                     public float similarityTo(int node2) {
                         return bqv.similarityBetween(encoded1, bqv.get(node2));
                     }
-                });
-            }
-
-            @Override
-            public SearchScoreProvider diversityProviderFor(int node1) {
-                return searchProviderFor(node1);
+                };
             }
         };
     }
