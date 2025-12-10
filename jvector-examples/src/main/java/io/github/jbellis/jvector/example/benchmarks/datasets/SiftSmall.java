@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.example;
+package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
@@ -66,7 +66,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-// this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
+/**
+ * This is a custom bench for a sift dataset with various API usage modes.
+ * @deprecated This will be replaced with and a newer API and loader.
+ */
+@Deprecated(forRemoval = true)
 public class SiftSmall {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
