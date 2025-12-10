@@ -16,27 +16,27 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.DataOutput;
 import java.io.IOException;
 
 public interface CompressedVectors extends Accountable {
     /**
-     * Write the compressed vectors to the given DataOutput
-     * @param out the DataOutput to write to
+     * Write the compressed vectors to the given IndexWriter
+     * @param out the IndexWriter to write to
      * @param version the serialization version.  versions 2 and 3 are supported
      */
-    void write(DataOutput out, int version) throws IOException;
+    void write(IndexWriter out, int version) throws IOException;
 
     /**
-     * Write the compressed vectors to the given DataOutput at the current serialization version
+     * Write the compressed vectors to the given IndexWriter at the current serialization version
      */
-    default void write(DataOutput out) throws IOException {
+    default void write(IndexWriter out) throws IOException {
         write(out, OnDiskGraphIndex.CURRENT_VERSION);
     }
 

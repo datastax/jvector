@@ -17,12 +17,12 @@
 package io.github.jbellis.jvector.vector;
 
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -59,15 +59,10 @@ final class ArrayVectorProvider implements VectorTypeSupport
     }
 
     @Override
-    public void writeFloatVector(DataOutput out, VectorFloat<?> vector) throws IOException
+    public void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException
     {
         ArrayVectorFloat v = (ArrayVectorFloat)vector;
-        // this seems to be the only way to avoid writing float-at-a-time which is far too slow
-        var fb = FloatBuffer.wrap(v.get());
-        var bb = ByteBuffer.allocate(fb.capacity() * Float.BYTES);
-        bb.asFloatBuffer().put(fb);
-        bb.rewind();
-        out.write(bb.array());
+        out.writeFloats(v.get(), 0, v.length());
     }
 
     @Override
@@ -97,7 +92,7 @@ final class ArrayVectorProvider implements VectorTypeSupport
     }
 
     @Override
-    public void writeByteSequence(DataOutput out, ByteSequence<?> sequence) throws IOException
+    public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
         ArrayByteSequence v = (ArrayByteSequence) sequence;
         out.write(v.get());

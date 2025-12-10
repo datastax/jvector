@@ -15,6 +15,12 @@ replay_pid*
 .idea
 *.iml
 
+### Eclipse/JDTLS ###
+.settings/
+.classpath
+.project
+.factorypath
+
 ### VS Code ###
 .vscode/
 
