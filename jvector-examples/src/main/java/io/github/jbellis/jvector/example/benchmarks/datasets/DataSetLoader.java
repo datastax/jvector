@@ -24,8 +24,8 @@ import java.util.Optional;
 public interface DataSetLoader {
     /**
      * Implementations of this method <EM>MUST NOT</EM> throw exceptions related to the presence or absence of a
-     * requested database. Instead, {@link Optional} should be used. Other errors should still be indicated with
-     * exceptions as usual, including any errors loading a database which has been found. Implementors should reliably
+     * requested dataset. Instead, {@link Optional} should be used. Other errors should still be indicated with
+     * exceptions as usual, including any errors loading a dataset which has been found. Implementors should reliably
      * return from this method, avoiding any {@link System#exit(int)} or similar calls.
      *
      * <HR/>

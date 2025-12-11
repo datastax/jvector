@@ -61,7 +61,7 @@ public class BenchYAML {
                         () -> new RuntimeException("Could not load dataset:" + datasetName)
                 );
 
-                MultiConfig config = MultiConfig.getDefaultConfig(rawname);
+                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
                 allConfigs.add(config);
             }
         }
