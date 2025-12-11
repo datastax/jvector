@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.example.util;
+package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -24,28 +24,37 @@ import io.jhdf.HdfFile;
 import io.jhdf.api.Dataset;
 import io.jhdf.object.datatype.FloatingPoint;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 
-public class Hdf5Loader {
+/**
+ * This dataset loader will get and load hdf5 files from <a href="https://ann-benchmarks.com/">ann-benchmarks</a>.
+ */
+public class DataSetLoaderHDF5 implements DataSetLoader {
     public static final String HDF5_DIR = "hdf5/";
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    public static DataSet load(String filename) {
+    /**
+     * {@inheritDoc}
+     */
+    public Optional<DataSet> loadDataSet(String filename) {
+        return maybeDownloadHdf5(filename).map(this::readHdf5Data);
+    }
+
+    private DataSet readHdf5Data(Path filename) {
+
         // infer the similarity
-        VectorSimilarityFunction similarityFunction;
-        if (filename.contains("-angular") || filename.contains("-dot")) {
-            similarityFunction = VectorSimilarityFunction.COSINE;
-        }
-        else if (filename.contains("-euclidean")) {
-            similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
-        }
-        else {
-            throw new IllegalArgumentException("Unknown similarity function -- expected angular or euclidean for " + filename);
-        }
+        VectorSimilarityFunction similarityFunction = getVectorSimilarityFunction(filename);
 
         // read the data
         VectorFloat<?>[] baseVectors;
@@ -84,4 +93,66 @@ public class Hdf5Loader {
 
         return DataSetUtils.getScrubbedDataSet(path.getFileName().toString(), similarityFunction, Arrays.asList(baseVectors), Arrays.asList(queryVectors), gtSets);
     }
+
+    /**
+     * Derive the similarity function from the dataset name.
+     * @param filename filename of the dataset AKA "name"
+     * @return The matching similarity function, or throw an error
+     */
+    private static VectorSimilarityFunction getVectorSimilarityFunction(Path filename) {
+        VectorSimilarityFunction similarityFunction;
+        if (filename.toString().contains("-angular") || filename.toString().contains("-dot")) {
+            similarityFunction = VectorSimilarityFunction.COSINE;
+        }
+        else if (filename.toString().contains("-euclidean")) {
+            similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
+        }
+        else {
+            throw new IllegalArgumentException("Unknown similarity function -- expected angular or euclidean for " + filename);
+        }
+        return similarityFunction;
+    }
+
+    private Optional<Path> maybeDownloadHdf5(String datasetName) {
+
+        Path hdf5DirPath = Path.of(DataSetLoaderHDF5.HDF5_DIR);
+        var localPath = hdf5DirPath.resolve(datasetName);
+        if (Files.exists(localPath)) {
+            return Optional.of(localPath);
+        }
+
+        // Download from https://ann-benchmarks.com/datasetName
+        var url = "https://ann-benchmarks.com/" + datasetName;
+        System.out.println("Downloading: " + url);
+
+        HttpURLConnection connection;
+        while (true) {
+            int responseCode;
+            try {
+                connection = (HttpURLConnection) new URL(url).openConnection();
+                responseCode = connection.getResponseCode();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                return Optional.empty();
+            }
+            if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
+                String newUrl = connection.getHeaderField("Location");
+                System.out.println("Redirect detected to URL: " + newUrl);
+                url = newUrl;
+            } else {
+                break;
+            }
+        }
+
+        try (InputStream in = connection.getInputStream()) {
+            Files.createDirectories(hdf5DirPath);
+            Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new RuntimeException("Error downloading data:" + e.getMessage(),e);
+        }
+        return Optional.of(localPath);
+    }
+
 }
