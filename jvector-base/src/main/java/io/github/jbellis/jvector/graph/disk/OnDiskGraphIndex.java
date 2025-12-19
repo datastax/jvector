@@ -402,11 +402,20 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         List<Int2ObjectHashMap<int[]>> inMemoryNeighborsLocal = inMemoryNeighbors.get();
 
         long inMemoryNeighborsBytes = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        for (Int2ObjectHashMap<int[]> neighbors : inMemoryNeighborsLocal) {
-            inMemoryNeighborsBytes += neighbors.values().stream().mapToLong(is -> Integer.BYTES * (long) is.length).sum();
-            inMemoryNeighborsBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+        if (inMemoryNeighborsLocal != null) {
+            for (Int2ObjectHashMap<int[]> neighbors : inMemoryNeighborsLocal) {
+                if (neighbors != null) {
+                    inMemoryNeighborsBytes += neighbors.values().stream().mapToLong(is -> Integer.BYTES * (long) is.length).sum();
+                }
+                inMemoryNeighborsBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+            }
         }
-        long inMemoryFeaturesBytes = inMemoryFeatures.get().values().stream().mapToLong(is -> Integer.BYTES * is.ramBytesUsed()).sum();
+
+        Int2ObjectHashMap<FusedFeature.InlineSource> inMemoryFeaturesLocal  = inMemoryFeatures.get();
+        long inMemoryFeaturesBytes = 0;
+        if (inMemoryFeaturesLocal != null) {
+            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(is -> Integer.BYTES * is.ramBytesUsed()).sum();
+        }
         inMemoryFeaturesBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
         return Long.BYTES + 6 * Integer.BYTES + RamUsageEstimator.NUM_BYTES_OBJECT_REF
