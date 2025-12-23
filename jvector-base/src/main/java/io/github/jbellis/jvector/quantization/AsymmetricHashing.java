@@ -1,0 +1,937 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.quantization;
+
+import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+
+import java.io.DataOutput;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.concurrent.ForkJoinPool;
+import java.util.Random;
+import java.util.stream.IntStream;
+import org.apache.commons.math3.linear.*;
+
+import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
+
+/**
+ * Asymmetric Hashing (ASH) for float vectors.
+ * Encodes each vector into a fixed-length binary code using a learned or random
+ * orthonormal projection and sign thresholding.
+ */
+public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
+    public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
+    private static final int MAGIC = 0x75EC4012;  // TODO update the magic number?
+
+    private static final int HEADER_BITS = 48; // fixed ASH per-vector header
+
+    private static final VectorTypeSupport vectorTypeSupport =
+            VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    // ---------------------------------------------------------------------
+    // Index-wide immutable state
+    // ---------------------------------------------------------------------
+
+    /** Mean of the dataset; also used as degenerate landmark */
+    public final VectorFloat<?> globalMean;
+
+    /** Original (uncompressed) dimensionality */
+    public final int originalDimension;
+
+    /** Total bits per encoded vector (header + body) */
+    public final int encodedBits;
+
+    /** Number of bits in the binary body */
+    public final int quantizedDim;
+
+    /** Optimizer / learning mode */
+    public final int optimizer;
+
+    /** Learned or random Stiefel transform */
+    public final StiefelTransform stiefelTransform;
+
+    /** Debug hook to disable learning paths */
+    @VisibleForTesting
+    public boolean learn = true;
+
+    // ---------------------------------------------------------------------
+    // Quantizer instances (cached)
+    // ---------------------------------------------------------------------
+
+    private final BinaryQuantizer randomQuantizer = new RandomBinaryQuantizer();
+    private final BinaryQuantizer itqQuantizer = new ItqBinaryQuantizer();
+    private final BinaryQuantizer landingQuantizer = new LandingBinaryQuantizer();
+
+    private BinaryQuantizer quantizer() {
+        switch (optimizer) {
+            case RANDOM:
+                return randomQuantizer;
+            case ITQ:
+                return itqQuantizer;
+            case LANDING:
+                return landingQuantizer;
+            default:
+                throw new IllegalStateException("Unknown optimizer " + optimizer);
+        }
+    }
+
+    /**
+     * Class constructor.
+     * @param originalDim the dimensionality of the vectors to be quantized
+     * @param globalMean the mean of the database (its average vector)
+     */
+    private AsymmetricHashing(int originalDim,
+                              int encodedBits,
+                              int quantizedDim,
+                              int optimizer,
+                              VectorFloat<?> globalMean,
+                              StiefelTransform stiefelTransform) {
+        this.originalDimension = originalDim;
+        this.encodedBits = encodedBits;
+        this.quantizedDim = quantizedDim;
+        this.optimizer = optimizer;
+        this.stiefelTransform = Objects.requireNonNull(stiefelTransform, "stiefelTransform");
+        this.globalMean = Objects.requireNonNull(globalMean, "globalMean");
+
+        if (globalMean.length() != originalDimension) {
+            throw new IllegalArgumentException(
+                    "Global mean length does not match original dimension");
+        }
+        if (quantizedDim < 1) {
+            throw new IllegalArgumentException("quantizedDim must be > 0");
+        }
+    }
+
+    /**
+     * Initialize ASH index-wide parameters.
+     *
+     * @param ravv the vectors to quantize
+     * @param optimizer the optimizer to use
+     * @param encodedBits the number of bits used to encode vector, including the header
+     */
+    public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               int optimizer,
+                                               int encodedBits) {
+
+        final int quantizedDim = encodedBits - HEADER_BITS;
+        if (quantizedDim < 1) {
+            throw new IllegalArgumentException(
+                    "Illegal ASH quantized dimensionality: " + quantizedDim);
+        }
+
+        var ravvCopy = ravv.threadLocalSupplier().get();
+        int originalDim = ravvCopy.getVector(0).length();
+
+        // Compute global mean
+        var globalMean = vectorTypeSupport.createFloatVector(originalDim);
+        for (int i = 0; i < ravvCopy.size(); i++) {
+            VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+        }
+        VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
+
+        StiefelTransform stiefelTransform;
+        if (optimizer == RANDOM) {
+            stiefelTransform = runWithoutTraining(originalDim, quantizedDim, new Random(42));
+        } else if (optimizer == ITQ) {
+            throw new IllegalArgumentException("ITQ optimizer not implemented yet");
+        } else if (optimizer == LANDING) {
+            throw new IllegalArgumentException("LANDING optimizer not implemented yet");
+        } else {
+            throw new IllegalArgumentException("Unknown optimizer " + optimizer);
+        }
+
+        return new AsymmetricHashing(
+                originalDim,
+                encodedBits,
+                quantizedDim,
+                optimizer,
+                globalMean,
+                stiefelTransform
+        );
+    }
+
+    /**
+     * Loads an ASH instance from a RandomAccessReader.
+     * This must mirror the ASH header writer exactly.
+     */
+    public static AsymmetricHashing load(RandomAccessReader in) throws IOException {
+
+        int magic = in.readInt();
+        if (magic != MAGIC) {
+            throw new IllegalArgumentException(
+                    String.format("Invalid ASH magic: 0x%08X", magic)
+            );
+        }
+
+        int version = in.readInt();
+        if (version > OnDiskGraphIndex.CURRENT_VERSION) {
+            throw new IllegalArgumentException("Unsupported ASH version " + version);
+        }
+
+        int originalDimension = in.readInt();
+        int encodedBits = in.readInt();
+        int quantizedDim = in.readInt();
+        int optimizer = in.readInt();
+
+        int globalMeanLength = in.readInt();
+        if (globalMeanLength <= 0) {
+            throw new IOException("ASH header missing globalMean");
+        }
+        VectorFloat<?> globalMean = vectorTypeSupport.readFloatVector(in, globalMeanLength);
+
+        // NOTE: StiefelTransform loading will be added in Step 2.
+        // For now, construct a placeholder or re-run the RANDOM initializer.
+        StiefelTransform stiefelTransform;
+
+        if (optimizer == RANDOM) {
+            // Deterministic re-construction for now
+            stiefelTransform = runWithoutTraining(
+                    originalDimension,
+                    quantizedDim,
+                    new Random(42)
+            );
+        } else {
+            throw new IllegalArgumentException(
+                    "ASH optimizer " + optimizer + " requires learned transform; not yet supported in load()"
+            );
+        }
+
+        return new AsymmetricHashing(
+                originalDimension,
+                encodedBits,
+                quantizedDim,
+                optimizer,
+                globalMean,
+                stiefelTransform
+        );
+    }
+
+
+    /**
+     * TODO confirm handling versioning correctly
+     * TODO confirm handling magic number correctly
+     * Writes the ASH index header to DataOutput (used for on-disk indexing)
+     * @param out the DataOutput into which to write the object
+     * @throws IOException if there is a problem writing to out.
+     */
+    public void write(DataOutput out, int version) throws IOException {
+        if (version > OnDiskGraphIndex.CURRENT_VERSION) {
+            throw new IllegalArgumentException("Unsupported version " + version);
+        }
+
+        out.writeInt(MAGIC);
+        out.writeInt(version);
+
+        out.writeInt(originalDimension);
+        out.writeInt(encodedBits);
+        out.writeInt(quantizedDim);
+        out.writeInt(optimizer);
+
+        out.writeInt(globalMean.length());
+        vectorTypeSupport.writeFloatVector(out, globalMean);
+
+        // NOTE: stiefelTransform serialization will be added later
+    }
+
+    // ---------------------------------------------------------------------
+    // Index-level quantization entry point
+    // ---------------------------------------------------------------------
+
+    public void quantizeVector(VectorFloat<?> vector,
+                               float residualNorm,
+                               float dotWithLandmark,
+                               short landmark,
+                               QuantizedVector dest) {
+
+        if (quantizedDim > originalDimension) {
+            throw new IllegalArgumentException(
+                    "quantizedDim (" + quantizedDim +
+                            ") exceeds original dimension (" + originalDimension + ")");
+        }
+
+        QuantizedVector.quantizeTo(
+                vector,
+                residualNorm,
+                dotWithLandmark,
+                landmark,
+                quantizedDim,
+                globalMean,
+                stiefelTransform,
+                quantizer(),
+                dest
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Binary quantization strategies
+    // ---------------------------------------------------------------------
+
+    public interface BinaryQuantizer {
+        void quantizeBody(VectorFloat<?> vector,
+                          VectorFloat<?> globalMean,
+                          int quantizedDim,
+                          StiefelTransform stiefel,
+                          long[] outWords);
+    }
+
+    public static final class RandomBinaryQuantizer implements BinaryQuantizer {
+
+        @Override
+        public void quantizeBody(VectorFloat<?> vector,
+                                 VectorFloat<?> globalMean,
+                                 int quantizedDim,
+                                 StiefelTransform stiefel,
+                                 long[] outWords) {
+
+            RealMatrix A = stiefel.A; // quantizedDim × originalDim
+            int originalDim = A.getColumnDimension();
+
+            final int words = QuantizedVector.wordsForDims(quantizedDim);
+
+            for (int w = 0; w < words; w++) {
+                long bits = 0L;
+                int base = w << 6;
+                int rem = Math.min(64, quantizedDim - base);
+
+                for (int j = 0; j < rem; j++) {
+                    int bitIndex = base + j;
+
+                    // Compute y_j = dot(A[j], x - μ)
+                    double acc = 0.0;
+                    for (int d = 0; d < originalDim; d++) {
+                        acc += A.getEntry(bitIndex, d)
+                                * (vector.get(d) - globalMean.get(d));
+                    }
+
+                    if (acc > 0.0) {
+                        bits |= (1L << j);
+                    }
+                }
+
+                outWords[w] = bits;
+            }
+        }
+    }
+
+    public static final class ItqBinaryQuantizer implements BinaryQuantizer {
+        @Override
+        public void quantizeBody(VectorFloat<?> vector,
+                                 VectorFloat<?> globalMean,
+                                 int quantizedDim,
+                                 StiefelTransform stiefel,
+                                 long[] outWords) {
+            throw new UnsupportedOperationException("ITQ not implemented");
+        }
+    }
+
+    public static final class LandingBinaryQuantizer implements BinaryQuantizer {
+        @Override
+        public void quantizeBody(VectorFloat<?> vector,
+                                 VectorFloat<?> globalMean,
+                                 int quantizedDim,
+                                 StiefelTransform stiefel,
+                                 long[] outWords) {
+            throw new UnsupportedOperationException("LANDING not implemented");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Quantized vector (per-vector data)
+    // ---------------------------------------------------------------------
+
+    public static class QuantizedVector {
+        public float residualNorm;
+        public float dotWithLandmark;
+        public short landmark;
+        public long[] binaryVector;
+
+        private QuantizedVector(float residualNorm,
+                                float dotWithLandmark,
+                                short landmark,
+                                long[] binaryVector) {
+            this.residualNorm = residualNorm;
+            this.dotWithLandmark = dotWithLandmark;
+            this.landmark = landmark;
+            this.binaryVector = binaryVector;
+        }
+
+        public static int wordsForDims(int quantizedDim) {
+            return (quantizedDim + 63) >>> 6;
+        }
+
+        public static QuantizedVector createEmpty(int quantizedDim) {
+            return new QuantizedVector(
+                    0f, 0f, (short) 0,
+                    new long[wordsForDims(quantizedDim)]);
+        }
+
+        public static int serializedSizeBytes(int quantizedDim) {
+            return Float.BYTES + Float.BYTES + Short.BYTES
+                    + wordsForDims(quantizedDim) * Long.BYTES;
+        }
+
+        static void quantizeTo(VectorFloat<?> vector,
+                               float residualNorm,
+                               float dotWithLandmark,
+                               short landmark,
+                               int quantizedDim,
+                               VectorFloat<?> globalMean,
+                               StiefelTransform stiefel,
+                               BinaryQuantizer quantizer,
+                               QuantizedVector dest) {
+
+            dest.residualNorm = residualNorm;
+            dest.dotWithLandmark = dotWithLandmark;
+            dest.landmark = landmark;
+
+            int words = wordsForDims(quantizedDim);
+            if (dest.binaryVector.length < words) {
+                throw new IllegalArgumentException("binaryVector too short");
+            }
+
+            Arrays.fill(dest.binaryVector, 0, words, 0L);
+            quantizer.quantizeBody(vector, globalMean, quantizedDim, stiefel, dest.binaryVector);
+        }
+
+        public void write(DataOutput out, int quantizedDim) throws IOException {
+            out.writeFloat(residualNorm);
+            out.writeFloat(dotWithLandmark);
+            out.writeInt(landmark);
+
+            int words = wordsForDims(quantizedDim);
+            for (int i = 0; i < words; i++) {
+                out.writeLong(binaryVector[i]);
+            }
+        }
+
+        public static QuantizedVector load(RandomAccessReader in,
+                                           int quantizedDim) throws IOException {
+            float residualNorm = in.readFloat();
+            float dotWithLandmark = in.readFloat();
+            short landmark = (short) in.readInt();
+
+            int words = wordsForDims(quantizedDim);
+            long[] body = new long[words];
+            for (int i = 0; i < words; i++) {
+                body[i] = in.readLong();
+            }
+
+            return new QuantizedVector(residualNorm, dotWithLandmark, landmark, body);
+        }
+
+        public static void loadInto(RandomAccessReader in,
+                                    QuantizedVector dest,
+                                    int quantizedDim) throws IOException {
+            dest.residualNorm = in.readFloat();
+            dest.dotWithLandmark = in.readFloat();
+            dest.landmark = (short) in.readInt();
+
+            int words = wordsForDims(quantizedDim);
+            for (int i = 0; i < words; i++) {
+                dest.binaryVector[i] = in.readLong();
+            }
+        }
+
+        /**
+         * Compares two ASH quantized vectors for exact encoded equality.
+         *
+         * <p>
+         * Equality is defined as bitwise equality of all encoded components:
+         * <ul>
+         *   <li>Binary code payload</li>
+         *   <li>Associated landmark index</li>
+         *   <li>Auxiliary scalar values (residual norm, dot-with-landmark)</li>
+         * </ul>
+         *
+         * <p>
+         * Floating-point values are compared using their raw bit representations
+         * rather than tolerance-based comparisons. This is intentional: quantized
+         * vectors are expected to be deterministic outputs of the encoder, and
+         * approximate equality would be ambiguous and unsafe for hashing.
+         * </p>
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            QuantizedVector that = (QuantizedVector) o;
+            return Float.floatToIntBits(residualNorm) == Float.floatToIntBits(that.residualNorm)
+                    && Float.floatToIntBits(dotWithLandmark) == Float.floatToIntBits(that.dotWithLandmark)
+                    && landmark == that.landmark
+                    && Arrays.equals(binaryVector, that.binaryVector);
+        }
+
+        /**
+         * Hash code consistent with {@link #equals(Object)}.
+         *
+         * <p>
+         * This hash reflects the full encoded state of the vector and is suitable
+         * for use in hash-based collections during testing, debugging, or caching.
+         * </p>
+         */
+        @Override
+        public int hashCode() {
+            int result = Integer.hashCode(Float.floatToIntBits(residualNorm));
+            result = 31 * result + Integer.hashCode(Float.floatToIntBits(dotWithLandmark));
+            result = 31 * result + Short.hashCode(landmark);
+            result = 31 * result + Arrays.hashCode(binaryVector);
+            return result;
+        }
+
+    }
+
+    /**
+     * Private helper to provide byte storage for binary body
+     * @param nBits the number of bits to store
+     * @return the byte sequence
+     */
+    private static ByteSequence<?> createBodyByteSequenceForBits(int nBits) {
+        int nBytes = (nBits + 7) >>> 3;
+        return vectorTypeSupport.createByteSequence(nBytes);
+    }
+
+    /**
+     * Orthonormal linear transform on the Stiefel manifold.
+     *
+     * W  : originalDim × quantizedDim
+     * A  : quantizedDim × originalDim, where A = Wᵀ
+     *
+     * The transform is applied as:
+     *     y = A · (x − μ)
+     */
+    public static final class StiefelTransform {
+
+        /** Forward projection (column-orthonormal). */
+        public final RealMatrix W;
+
+        /** Transpose of W, used for projection. */
+        public final RealMatrix A;
+
+        public StiefelTransform(RealMatrix W) {
+            this.W = W;
+            this.A = W.transpose();
+        }
+    }
+
+    /**
+     * RANDOM (untrained) Stiefel initialization.
+     *
+     * Generates a random orthonormal projection from R^originalDim → R^quantizedDim
+     * by sampling a Gaussian matrix and orthonormalizing via QR decomposition.
+     *
+     * A deterministic sign normalization is applied so results are reproducible
+     * across runs and linear algebra backends.
+     *
+     * @param originalDim dimensionality of the input vectors
+     * @param quantizedDim dimensionality of the binary embedding
+     * @param rng random number generator
+     */
+    public static StiefelTransform runWithoutTraining(int originalDim,
+                                                      int quantizedDim,
+                                                      Random rng) {
+
+        if (quantizedDim <= 0 || quantizedDim > originalDim) {
+            throw new IllegalArgumentException(
+                    "Invalid quantizedDim=" + quantizedDim +
+                            " for originalDim=" + originalDim
+            );
+        }
+
+        // Sample Gaussian matrix G ∈ R^{originalDim × quantizedDim}
+        double[][] gaussian = new double[originalDim][quantizedDim];
+        for (int i = 0; i < originalDim; i++) {
+            for (int j = 0; j < quantizedDim; j++) {
+                gaussian[i][j] = rng.nextGaussian();
+            }
+        }
+
+        RealMatrix G = MatrixUtils.createRealMatrix(gaussian);
+
+        // Thin QR decomposition: G = Q R
+        QRDecomposition qr = new QRDecomposition(G);
+        RealMatrix Q = qr.getQ();  // originalDim × quantizedDim
+        RealMatrix R = qr.getR();
+
+        // Normalize QR sign ambiguity for determinism (RANDOM only)
+        int diag = Math.min(R.getRowDimension(), R.getColumnDimension());
+        for (int j = 0; j < diag; j++) {
+            if (R.getEntry(j, j) < 0.0) {
+                for (int i = 0; i < Q.getRowDimension(); i++) {
+                    Q.setEntry(i, j, -Q.getEntry(i, j));
+                }
+            }
+        }
+
+        return new StiefelTransform(Q);
+    }
+
+    @Override
+    @Deprecated
+    public CompressedVectors createCompressedVectors(Object[] compressedVectors) {
+        throw new UnsupportedOperationException("Deprecated createCompressedVectors() method not supported");
+    }
+
+
+    /**
+     * Encodes all vectors using ASH, honoring the caller-provided ForkJoinPool.
+     *
+     * <p><strong>Concurrency model:</strong></p>
+     * <ul>
+     *   <li>The work is partitioned into a small number of contiguous ordinal ranges ("chunks").</li>
+     *   <li>Each chunk is processed sequentially by a single task.</li>
+     *   <li>Chunks are executed in parallel using the provided {@code simdExecutor}.</li>
+     * </ul>
+     *
+     * <p>
+     * This design intentionally avoids {@code IntStream.parallel()} and other
+     * constructs that implicitly use {@link ForkJoinPool#commonPool()}.
+     * All parallelism is derived exclusively from the supplied executor,
+     * ensuring predictable CPU usage and isolation from unrelated workloads.
+     * </p>
+     *
+     * <p><strong>Correctness guarantees:</strong></p>
+     * <ul>
+     *   <li>Each vector ordinal {@code i} is written exactly once to {@code out[i]}.</li>
+     *   <li>The final output array is ordered by ordinal, independent of execution order.</li>
+     *   <li>Missing vectors ({@code null}) are encoded as zero vectors, per the
+     *       {@link VectorCompressor} contract.</li>
+     *   <li>Safe publication is guaranteed by joining all submitted tasks
+     *       before returning.</li>
+     * </ul>
+     *
+     * <p>
+     * This implementation favors clarity and correctness over maximal parallel
+     * granularity. More aggressive chunking or SIMD-aware partitioning can be
+     * layered on later without changing observable semantics.
+     * </p>
+     */
+
+    @Override
+    public ASHVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        final int n = ravv.size();
+
+        // The caller controls parallelism; we derive a bounded number of tasks
+        // directly from the executor rather than using parallel streams.
+        final int parallelism = Math.max(1, simdExecutor.getParallelism());
+
+        // Each task processes a contiguous range of ordinals.
+        // Chunking by contiguous ranges preserves cache locality and
+        // guarantees each ordinal is written exactly once.
+        final int chunkSize = (n + parallelism - 1) / parallelism;
+
+        final QuantizedVector[] out = new QuantizedVector[n];
+        final var ravvSupplier = ravv.threadLocalSupplier();
+
+        // NOTE:
+        // We intentionally do NOT use IntStream.parallel() here.
+        // Parallel streams always execute on ForkJoinPool.commonPool(),
+        // which would ignore the caller-provided executor and risk
+        // oversubscribing CPU resources.
+        var tasks = new java.util.ArrayList<java.util.concurrent.ForkJoinTask<?>>(parallelism);
+
+        for (int t = 0; t < parallelism; t++) {
+            final int start = t * chunkSize;
+            final int end = Math.min(n, start + chunkSize);
+            if (start >= end) {
+                break;
+            }
+
+            tasks.add(simdExecutor.submit(() -> {
+                // Each task uses its own thread-local RAVV view.
+                var localRavv = ravvSupplier.get();
+
+                for (int i = start; i < end; i++) {
+                    VectorFloat<?> v = localRavv.getVector(i);
+
+                    // Contract: missing vectors are encoded as zero vectors.
+                    if (v != null) {
+                        out[i] = encode(v);
+                    } else {
+                        out[i] = QuantizedVector.createEmpty(quantizedDim);
+                    }
+                }
+            }));
+        }
+
+        // Join establishes a happens-before relationship, ensuring safe publication
+        // of all writes to the output array.
+        for (var task : tasks) {
+            task.join();
+        }
+
+        return new ASHVectors(this, out);
+    }
+
+
+    /**
+     * Encodes the input vector using ASH.
+     * @return the header and binary vector payload
+     */
+    @Override
+    public QuantizedVector encode(VectorFloat<?> vector) {
+        var qv = QuantizedVector.createEmpty(this.quantizedDim);
+        encodeTo(vector, qv);
+        return qv;
+    }
+
+    // NOTE:
+    // This is the single-landmark baseline configuration.
+    // All vectors are encoded relative to the global mean (landmark 0).
+    // The design intentionally leaves room for multiple landmarks in the future
+    // without changing the on-disk format.
+    @Override
+    public void encodeTo(VectorFloat<?> vector, QuantizedVector dest) {
+        // Single-landmark baseline: global mean
+        // Landmark index is always 0 in this mode
+        short landmark = 0;
+
+        // Compute dot product with the landmark
+        float dotWithLandmark = VectorUtil.dotProduct(vector, globalMean);
+
+        // Compute residual norm ||x - μ||₂
+        // NOTE:
+        // We store the true L2 norm (not squared) to match ASH semantics and the paper.
+        // squareL2Distance is used for efficiency; the sqrt cost is negligible relative
+        // to projection and hashing.
+        float sqDist = VectorUtil.squareL2Distance(vector, globalMean);
+        float residualNorm = (float) Math.sqrt(sqDist);
+
+        // Binary encoding uses sign(A · (x − μ)) internally
+        quantizeVector(vector, residualNorm, dotWithLandmark, landmark, dest);
+    }
+
+    @Override
+    public int compressorSize() {
+        // Must exactly match write(out, version)
+        int size = 0;
+        size += Integer.BYTES; // MAGIC
+        size += Integer.BYTES; // version
+        size += Integer.BYTES; // originalDimension
+        size += Integer.BYTES; // encodedBits
+        size += Integer.BYTES; // quantizedDim
+        size += Integer.BYTES; // optimizer
+        size += Integer.BYTES; // globalMean length
+        size += Float.BYTES * globalMean.length();
+        return size;
+    }
+
+    @Override
+    public int compressedVectorSize() {
+        int words = QuantizedVector.wordsForDims(quantizedDim);
+        return Float.BYTES           // residualNorm
+                + Float.BYTES           // dotWithLandmark
+                + Integer.BYTES           // landmark
+                + words * Long.BYTES;   // binary payload
+    }
+
+    @Override
+    public double reconstructionError(VectorFloat<?> vector) {
+        throw new UnsupportedOperationException("Reconstruction error not defined for ASH");
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        long bytes = 0L;
+
+        if (globalMean != null) {
+            bytes += globalMean.ramBytesUsed();
+        }
+
+        if (stiefelTransform != null) {
+            bytes += estimateMatrixBytes(stiefelTransform.W);
+            bytes += estimateMatrixBytes(stiefelTransform.A);
+        }
+
+        return bytes;
+    }
+
+    private static long estimateMatrixBytes(RealMatrix m) {
+        if (m == null) return 0L;
+        int rows = m.getRowDimension();
+        int cols = m.getColumnDimension();
+        return (long) rows * cols * Double.BYTES
+                + (long) rows * Long.BYTES;
+    }
+
+    // Exact, element-wise comparison of VectorFloat contents.
+    // We use Float.floatToIntBits to handle -0.0f, NaN, and ensure
+    // stable, bitwise equality suitable for hashing.
+    private static boolean vectorEquals(VectorFloat<?> a, VectorFloat<?> b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.length() != b.length()) return false;
+
+        for (int i = 0; i < a.length(); i++) {
+            if (Float.floatToIntBits(a.get(i)) != Float.floatToIntBits(b.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Hash based on the raw bit representation of each float.
+    // This mirrors vectorEquals and guarantees hash consistency.
+    private static int vectorHash(VectorFloat<?> v) {
+        if (v == null) return 0;
+        int h = 1;
+        for (int i = 0; i < v.length(); i++) {
+            h = 31 * h + Integer.hashCode(Float.floatToIntBits(v.get(i)));
+        }
+        return h;
+    }
+
+    // Exact comparison of two RealMatrix instances by dimensions and entries.
+    // We intentionally avoid RealMatrix.equals() and tolerance-based checks.
+    // ASH initialization is deterministic, so bitwise equality is expected
+    // and required for robust hashing semantics.
+    private static boolean matrixEquals(RealMatrix a, RealMatrix b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.getRowDimension() != b.getRowDimension()
+                || a.getColumnDimension() != b.getColumnDimension()) {
+            return false;
+        }
+
+        for (int i = 0; i < a.getRowDimension(); i++) {
+            for (int j = 0; j < a.getColumnDimension(); j++) {
+                if (Double.doubleToLongBits(a.getEntry(i, j))
+                        != Double.doubleToLongBits(b.getEntry(i, j))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Hash code derived from matrix dimensions and raw double bits.
+    // Only the forward projection matrix (W) is hashed; the transpose (A)
+    // is derived and does not need to be hashed separately.
+    private static int matrixHash(RealMatrix m) {
+        if (m == null) return 0;
+        int h = 1;
+        h = 31 * h + m.getRowDimension();
+        h = 31 * h + m.getColumnDimension();
+
+        for (int i = 0; i < m.getRowDimension(); i++) {
+            for (int j = 0; j < m.getColumnDimension(); j++) {
+                long bits = Double.doubleToLongBits(m.getEntry(i, j));
+                h = 31 * h + (int) (bits ^ (bits >>> 32));
+            }
+        }
+        return h;
+    }
+
+    /**
+     * Compares this ASH compressor to another for encoding equivalence.
+     *
+     * <p>
+     * Two compressors are equal if they would produce identical encoded outputs
+     * (including binary codes and auxiliary scalars) for the same input vectors.
+     * </p>
+     *
+     * <p>
+     * Equality therefore requires:
+     * <ul>
+     *   <li>Matching dimensional parameters</li>
+     *   <li>Identical optimizer selection</li>
+     *   <li>Bitwise-equal global mean vectors</li>
+     *   <li>Bitwise-equal Stiefel transform matrices</li>
+     * </ul>
+     *
+     * <p>
+     * Note that this is a <em>strong</em> notion of equality. We deliberately
+     * avoid approximate floating-point comparisons because ASH initialization
+     * and training are deterministic, and weaker equality would break hashing
+     * and cache correctness.
+     * </p>
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        AsymmetricHashing that = (AsymmetricHashing) o;
+        return originalDimension == that.originalDimension
+                && encodedBits == that.encodedBits
+                && quantizedDim == that.quantizedDim
+                && optimizer == that.optimizer
+                && vectorEquals(this.globalMean, that.globalMean)
+                && matrixEquals(
+                this.stiefelTransform == null ? null : this.stiefelTransform.W,
+                that.stiefelTransform == null ? null : that.stiefelTransform.W
+        );
+    }
+
+    /**
+     * Hash code consistent with {@link #equals(Object)}.
+     *
+     * <p>
+     * The hash incorporates all parameters and learned state that affect encoding,
+     * including the contents of the global mean and Stiefel transform. This ensures
+     * safe use of ASH compressors as map keys or cache entries.
+     * </p>
+     */
+    @Override
+    public int hashCode() {
+        int result = Integer.hashCode(originalDimension);
+        result = 31 * result + Integer.hashCode(encodedBits);
+        result = 31 * result + Integer.hashCode(quantizedDim);
+        result = 31 * result + Integer.hashCode(optimizer);
+        result = 31 * result + vectorHash(globalMean);
+        result = 31 * result + matrixHash(
+                stiefelTransform == null ? null : stiefelTransform.W
+        );
+        return result;
+    }
+
+    @Override
+    public String toString() {
+        String optimizerName;
+        switch (optimizer) {
+            case RANDOM:
+                optimizerName = "RANDOM";
+                break;
+            case ITQ:
+                optimizerName = "ITQ";
+                break;
+            case LANDING:
+                optimizerName = "LANDING";
+                break;
+            default:
+                optimizerName = "UNKNOWN(" + optimizer + ")";
+        }
+
+        return String.format(
+                "AsymmetricHashing[origDim=%d, encodedBits=%d, quantizedDim=%d, optimizer=%s, landmarks=1]",
+                originalDimension,
+                encodedBits,
+                quantizedDim,
+                optimizerName
+        );
+    }
+}
