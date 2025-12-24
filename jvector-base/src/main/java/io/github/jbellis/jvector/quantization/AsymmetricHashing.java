@@ -34,7 +34,10 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.Random;
 import java.util.stream.IntStream;
-import org.apache.commons.math3.linear.*;
+import org.apache.commons.math3.linear.Array2DRowRealMatrix;
+import org.apache.commons.math3.linear.MatrixUtils;
+import org.apache.commons.math3.linear.QRDecomposition;
+import org.apache.commons.math3.linear.RealMatrix;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
@@ -47,7 +50,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
     private static final int MAGIC = 0x75EC4012;  // TODO update the magic number?
 
-    private static final int HEADER_BITS = 48; // fixed ASH per-vector header
+    // Physical header size, reflecting actual stored fields:
+    //  - residualNorm: float (32 bits)
+    //  - dotWithLandmark: float (32 bits)
+    //  - landmark id: short (16 bits)
+    private static final int HEADER_BITS =
+            (Float.BYTES + Float.BYTES + Short.BYTES) * 8; // 80 bits currently
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -138,9 +146,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                                int encodedBits) {
 
         final int quantizedDim = encodedBits - HEADER_BITS;
+
         if (quantizedDim < 1) {
             throw new IllegalArgumentException(
-                    "Illegal ASH quantized dimensionality: " + quantizedDim);
+                    "Illegal ASH quantized dimensionality: " + quantizedDim +
+                            " (encodedBits=" + encodedBits +
+                            ", headerBits=" + HEADER_BITS + ")"
+            );
         }
 
         var ravvCopy = ravv.threadLocalSupplier().get();
@@ -293,6 +305,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public interface BinaryQuantizer {
         void quantizeBody(VectorFloat<?> vector,
                           VectorFloat<?> globalMean,
+                          float residualNorm,
                           int quantizedDim,
                           StiefelTransform stiefel,
                           long[] outWords);
@@ -303,12 +316,25 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         @Override
         public void quantizeBody(VectorFloat<?> vector,
                                  VectorFloat<?> globalMean,
+                                 float residualNorm,
                                  int quantizedDim,
                                  StiefelTransform stiefel,
                                  long[] outWords) {
 
-            RealMatrix A = stiefel.A; // quantizedDim × originalDim
-            int originalDim = A.getColumnDimension();
+            final double[][] A = stiefel.AData;     // [quantizedDim][originalDim]
+            final int originalDim = A[0].length;
+
+            // Copy vector and mean once (no virtual calls in inner loop)
+            final float[] x = new float[originalDim];
+            final float[] mu = new float[originalDim];
+
+            for (int d = 0; d < originalDim; d++) {
+                x[d] = vector.get(d);
+                mu[d] = globalMean.get(d);
+            }
+
+            // Eq. 6 normalization
+            final double invNorm = (residualNorm > 0f) ? (1.0 / residualNorm) : 0.0;
 
             final int words = QuantizedVector.wordsForDims(quantizedDim);
 
@@ -320,11 +346,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 for (int j = 0; j < rem; j++) {
                     int bitIndex = base + j;
 
-                    // Compute y_j = dot(A[j], x - μ)
+                    // y_j = dot(A[j], (x − μ) / ||x − μ||)
                     double acc = 0.0;
+                    final double[] Arow = A[bitIndex];
+
                     for (int d = 0; d < originalDim; d++) {
-                        acc += A.getEntry(bitIndex, d)
-                                * (vector.get(d) - globalMean.get(d));
+                        acc += Arow[d] * (x[d] - mu[d]) * invNorm;
                     }
 
                     if (acc > 0.0) {
@@ -341,6 +368,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         @Override
         public void quantizeBody(VectorFloat<?> vector,
                                  VectorFloat<?> globalMean,
+                                 float residualNorm,
                                  int quantizedDim,
                                  StiefelTransform stiefel,
                                  long[] outWords) {
@@ -352,6 +380,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         @Override
         public void quantizeBody(VectorFloat<?> vector,
                                  VectorFloat<?> globalMean,
+                                 float residualNorm,
                                  int quantizedDim,
                                  StiefelTransform stiefel,
                                  long[] outWords) {
@@ -364,10 +393,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // ---------------------------------------------------------------------
 
     public static class QuantizedVector {
-        public float residualNorm;
-        public float dotWithLandmark;
-        public short landmark;
-        public long[] binaryVector;
+        public float residualNorm; // ||x_i - μ_i*||_2
+        public float dotWithLandmark; // <x_i, μ_i*>
+        public short landmark; // c_i*
+        public long[] binaryVector; // bin(x̂_i)
 
         private QuantizedVector(float residualNorm,
                                 float dotWithLandmark,
@@ -414,7 +443,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
 
             Arrays.fill(dest.binaryVector, 0, words, 0L);
-            quantizer.quantizeBody(vector, globalMean, quantizedDim, stiefel, dest.binaryVector);
+            quantizer.quantizeBody(
+                    vector,
+                    globalMean,
+                    residualNorm,
+                    quantizedDim,
+                    stiefel,
+                    dest.binaryVector
+            );
         }
 
         public void write(DataOutput out, int quantizedDim) throws IOException {
@@ -517,24 +553,46 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /**
      * Orthonormal linear transform on the Stiefel manifold.
-     *
      * W  : originalDim × quantizedDim
      * A  : quantizedDim × originalDim, where A = Wᵀ
-     *
      * The transform is applied as:
      *     y = A · (x − μ)
      */
     public static final class StiefelTransform {
-
         /** Forward projection (column-orthonormal). */
         public final RealMatrix W;
 
         /** Transpose of W, used for projection. */
         public final RealMatrix A;
 
+        /**
+         * Cached row-major backing for A when available.
+         * This exists purely to avoid RealMatrix.getEntry() in hot loops.
+         * AData must not be mutated after construction.
+         */
+        public final double[][] AData;
+
+        /** Number of rows in A (i.e., quantizedDim = d). */
+        public final int rows;
+
+        /** Number of columns in A (i.e., originalDim). */
+        public final int cols;
+
         public StiefelTransform(RealMatrix W) {
             this.W = W;
             this.A = W.transpose();
+
+            // Fast path: QRDecomposition + MatrixUtils typically produce Array2DRowRealMatrix
+            // Use getDataRef() to avoid copying and avoid getEntry() calls.
+            if (this.A instanceof Array2DRowRealMatrix) {
+                this.AData = ((Array2DRowRealMatrix) this.A).getDataRef();
+            } else {
+                // Fallback: copy once at construction time (still far faster than getEntry per access)
+                this.AData = this.A.getData();
+            }
+
+            this.rows = AData.length;
+            this.cols = AData.length == 0 ? 0 : AData[0].length;
         }
     }
 
@@ -699,29 +757,28 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return qv;
     }
 
-    // NOTE:
-    // This is the single-landmark baseline configuration.
-    // All vectors are encoded relative to the global mean (landmark 0).
-    // The design intentionally leaves room for multiple landmarks in the future
-    // without changing the on-disk format.
     @Override
     public void encodeTo(VectorFloat<?> vector, QuantizedVector dest) {
-        // Single-landmark baseline: global mean
-        // Landmark index is always 0 in this mode
-        short landmark = 0;
-
-        // Compute dot product with the landmark
-        float dotWithLandmark = VectorUtil.dotProduct(vector, globalMean);
-
-        // Compute residual norm ||x - μ||₂
         // NOTE:
-        // We store the true L2 norm (not squared) to match ASH semantics and the paper.
-        // squareL2Distance is used for efficiency; the sqrt cost is negligible relative
-        // to projection and hashing.
-        float sqDist = VectorUtil.squareL2Distance(vector, globalMean);
-        float residualNorm = (float) Math.sqrt(sqDist);
+        // Single-landmark baseline configuration (Table 2, C = 1).
+        // All vectors are encoded relative to the global mean μ*.
+        // The landmark id is always 0 in this mode.
 
-        // Binary encoding uses sign(A · (x − μ)) internally
+        final short landmark = 0;
+
+        // Table 2 header field: <x_i, μ_i*>
+        final float dotWithLandmark = VectorUtil.dotProduct(vector, globalMean);
+
+        // Table 2 header field: ||x_i − μ_i*||₂
+        // We store the true L2 norm (not squared), matching the paper.
+        final float sqDist = VectorUtil.squareL2Distance(vector, globalMean);
+        final float residualNorm = (float) Math.sqrt(sqDist);
+
+        // Sanity: quantizedDim already accounts for physical header bits (Step 1)
+        // Binary body uses exactly quantizedDim bits.
+        assert quantizedDim > 0;
+
+        // Binary body: sign(A · (x − μ))
         quantizeVector(vector, residualNorm, dotWithLandmark, landmark, dest);
     }
 

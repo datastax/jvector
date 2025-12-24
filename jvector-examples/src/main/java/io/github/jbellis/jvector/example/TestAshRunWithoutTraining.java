@@ -7,17 +7,14 @@ import java.util.Random;
 public class TestAshRunWithoutTraining {
 
     public static void main(String[] args) {
-        int d = 1024;     // input dimension
-        int nDims = 128;  // target dimension
-
-        // Dummy data matrix X only to scrape shape
-        RealMatrix X = MatrixUtils.createRealMatrix(10, d);  // (10 × 1024)
+        int originalDim = 1024;
+        int quantizedDim = 128;
 
         Random rng = new Random(42);
 
         // Method under test
         AsymmetricHashing.StiefelTransform stiefelTransform =
-                AsymmetricHashing.runWithoutTraining(X, nDims, rng);
+                AsymmetricHashing.runWithoutTraining(originalDim, quantizedDim, rng);
 
         // Inspect shapes and a few entries
         RealMatrix A = stiefelTransform.A;

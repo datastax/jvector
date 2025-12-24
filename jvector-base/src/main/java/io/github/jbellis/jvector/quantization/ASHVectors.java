@@ -49,17 +49,12 @@ import java.util.Objects;
  *   <li>Define reranking strategy (likely via full vectors)</li>
  *   <li>Support multi-landmark ASH (this is intentionally deferred)</li>
  * </ul>
- *
- * <p>
- * NOTE:
- * This class avoids PQ/NVQ feature plumbing and graph integration by design.
- * Those concerns belong to the scoring plane and will be addressed after
- * baseline performance is established.
  */
 public class ASHVectors implements CompressedVectors {
 
     final AsymmetricHashing ash;
     final AsymmetricHashing.QuantizedVector[] compressedVectors;
+    final ASHScorer scorer;
 
     /**
      * Initialize ASHVectors with an array of ASH-compressed vectors.
@@ -71,6 +66,7 @@ public class ASHVectors implements CompressedVectors {
                       AsymmetricHashing.QuantizedVector[] compressedVectors) {
         this.ash = ash;
         this.compressedVectors = compressedVectors;
+        this.scorer = new ASHScorer(ash);
     }
 
     @Override
@@ -118,45 +114,16 @@ public class ASHVectors implements CompressedVectors {
         return new ASHVectors(ash, compressedVectors);
     }
 
-    /**
-     * Return an approximate score function for the given query.
-     *
-     * <p>
-     * Baseline implementation:
-     * <ul>
-     *   <li>Encode query once using ASH</li>
-     *   <li>Score candidates using pure Hamming distance</li>
-     * </ul>
-     *
-     * <p>
-     * TODO:
-     * <ul>
-     *   <li>Replace pure Hamming with full ASH scoring</li>
-     *   <li>Incorporate landmark scalars (dotWithLandmark, residualNorm)</li>
-     *   <li>Respect VectorSimilarityFunction semantics where applicable</li>
-     * </ul>
-     */
     @Override
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
 
-        // Encode query once
-        var qv = AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim);
-        ash.encodeTo(query, qv);
-        final long[] queryBits = qv.binaryVector;
+        // Scorer follows ASH paper (single landmark, DOT_PRODUCT only)
+        final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
 
-        return node -> {
-            var v = compressedVectors[node];
-
-            // TODO:
-            //  - Replace with proper ASH scoring.
-            //  - Consider affine scaling or normalization.
-            int hamming = VectorUtil.hammingDistance(queryBits, v.binaryVector);
-
-            // Higher similarity is better
-            return -hamming;
-        };
+        // Wrap QuantizedVector scorer into ordinal-based score function
+        return node -> f.similarityTo(compressedVectors[node]);
     }
 
     /**
@@ -177,11 +144,7 @@ public class ASHVectors implements CompressedVectors {
      * Diversity-aware scoring is not supported for ASH at this stage.
      *
      * <p>
-     * TODO:
-     *  - Define whether diversity should be measured via:
-     *      * Hamming distance
-     *      * Landmark-aware distance
-     *      * Full-vector reranking
+     * TODO: Define how diversity should be measured.
      */
     @Override
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(
