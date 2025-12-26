@@ -321,8 +321,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                  StiefelTransform stiefel,
                                  long[] outWords) {
 
-            final double[][] A = stiefel.AData;     // [quantizedDim][originalDim]
-            final int originalDim = A[0].length;
+            final float[][] A = stiefel.AFloat;
+            final int originalDim = stiefel.cols;
 
             // Copy vector and mean once (no virtual calls in inner loop)
             final float[] x = new float[originalDim];
@@ -333,8 +333,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 mu[d] = globalMean.get(d);
             }
 
-            // Eq. 6 normalization
-            final double invNorm = (residualNorm > 0f) ? (1.0 / residualNorm) : 0.0;
+            // ASH paper, Eq. 6, normalization
+            final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
 
             final int words = QuantizedVector.wordsForDims(quantizedDim);
 
@@ -347,14 +347,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     int bitIndex = base + j;
 
                     // y_j = dot(A[j], (x − μ) / ||x − μ||)
-                    double acc = 0.0;
-                    final double[] Arow = A[bitIndex];
+                    float acc = 0.0f;
+                    final float[] Arow = A[bitIndex];
 
                     for (int d = 0; d < originalDim; d++) {
                         acc += Arow[d] * (x[d] - mu[d]) * invNorm;
                     }
 
-                    if (acc > 0.0) {
+                    if (acc > 0.0f) {
                         bits |= (1L << j);
                     }
                 }
@@ -559,6 +559,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      *     y = A · (x − μ)
      */
     public static final class StiefelTransform {
+
         /** Forward projection (column-orthonormal). */
         public final RealMatrix W;
 
@@ -566,16 +567,25 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         public final RealMatrix A;
 
         /**
-         * Cached row-major backing for A when available.
-         * This exists purely to avoid RealMatrix.getEntry() in hot loops.
+         * Cached row-major backing for A in double precision.
+         * Used for training, reference, and correctness-sensitive math.
+         *
          * AData must not be mutated after construction.
          */
         public final double[][] AData;
 
-        /** Number of rows in A (i.e., quantizedDim = d). */
+        /**
+         * Cached row-major backing for A in float precision.
+         * Used for encoding and scoring fast paths.
+         *
+         * This is derived once from AData and must not be mutated.
+         */
+        public final float[][] AFloat;
+
+        /** Number of rows in A (quantizedDim = d). */
         public final int rows;
 
-        /** Number of columns in A (i.e., originalDim). */
+        /** Number of columns in A (originalDim). */
         public final int cols;
 
         public StiefelTransform(RealMatrix W) {
@@ -592,7 +602,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
 
             this.rows = AData.length;
-            this.cols = AData.length == 0 ? 0 : AData[0].length;
+            this.cols = rows == 0 ? 0 : AData[0].length;
+
+            // Build float copy once for fast encoding / scoring paths
+            this.AFloat = new float[rows][cols];
+            for (int i = 0; i < rows; i++) {
+                double[] src = AData[i];
+                float[] dst = AFloat[i];
+                for (int j = 0; j < cols; j++) {
+                    dst[j] = (float) src[j];
+                }
+            }
         }
     }
 

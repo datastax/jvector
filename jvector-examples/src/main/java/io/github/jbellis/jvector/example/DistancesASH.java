@@ -80,7 +80,7 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = dimension; // sweep later if desired
+        int encodedBits = dimension / 4; // sweep later if desired
 
         System.out.println(
                 "\toriginalDim = " + dimension +
@@ -245,6 +245,22 @@ public class DistancesASH {
         testASHEncodings(baseVectors, queryVectors);
     }
 
+    public static void runGIST() throws IOException {
+        System.out.println("Running GIST");
+
+        var baseVectors = "./fvec/gist/gist_base.fvecs";
+        var queryVectors = "./fvec/gist/gist_query.fvecs";
+        testASHEncodings(baseVectors, queryVectors);
+    }
+
+    public static void runCohere100k() throws IOException {
+        System.out.println("Running Cohere-100k");
+
+        var baseVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec";
+        var queryVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec";
+        testASHEncodings(baseVectors, queryVectors);
+    }
+
     public static void runADA() throws IOException {
         System.out.println("Running ada_002");
 
@@ -261,18 +277,29 @@ public class DistancesASH {
         testASHEncodings(baseVectors, queryVectors);
     }
 
+    public static void runOpenai1536() throws IOException {
+        System.out.println("Running text-embedding-3-large_1536");
+
+        var baseVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec";
+        testASHEncodings(baseVectors, queryVectors);
+    }
+
     public static void runOpenai3072() throws IOException {
         System.out.println("Running text-embedding-3-large_3072");
 
-        var baseVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
+        var baseVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
         testASHEncodings(baseVectors, queryVectors);
     }
 
     public static void main(String[] args) throws IOException {
-        runSIFT();
-//        runADA();
-        runColbert();
-//        runOpenai3072();
+//        runSIFT();
+//        runGIST();
+//        runColbert();
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
     }
 }

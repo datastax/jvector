@@ -53,7 +53,7 @@ public final class ASHScorer {
         // (avoid allocation by doing subtraction on the fly during projection)
         final VectorFloat<?> mu = ash.globalMean;
 
-        final double[][] A = ash.stiefelTransform.AData;  // shape: d × originalDim
+        final float[][] A = ash.stiefelTransform.AFloat;  // shape: d × originalDim
         final int originalDim = ash.stiefelTransform.cols;
         final float[] muArr = new float[originalDim];
         for (int k = 0; k < originalDim; k++) muArr[k] = mu.get(k);
@@ -64,12 +64,12 @@ public final class ASHScorer {
         // Project query: tildeQ[j] = (A (q - μ))[j]
         final float[] tildeQ = new float[d];
         for (int j = 0; j < d; j++) {
-            final double[] Aj = A[j];
-            double acc = 0.0;
+            final float[] Aj = A[j];
+            float acc = 0.0f;
             for (int k = 0; k < originalDim; k++) {
                 acc += Aj[k] * (qArr[k] - muArr[k]);
             }
-            tildeQ[j] = (float) acc;
+            tildeQ[j] = acc;
         }
 
         // <tildeQ, 1> = sum_j tildeQ[j]
