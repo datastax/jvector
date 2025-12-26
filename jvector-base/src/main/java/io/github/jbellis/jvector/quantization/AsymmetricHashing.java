@@ -16,11 +16,14 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.quantization.ash.AshMath;
+import io.github.jbellis.jvector.quantization.ash.DefaultAshMath;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -59,6 +62,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    private static final AshMath ASH_MATH = new DefaultAshMath();
 
     // ---------------------------------------------------------------------
     // Index-wide immutable state
@@ -327,38 +332,36 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             // Copy vector and mean once (no virtual calls in inner loop)
             final float[] x = new float[originalDim];
             final float[] mu = new float[originalDim];
-
             for (int d = 0; d < originalDim; d++) {
                 x[d] = vector.get(d);
                 mu[d] = globalMean.get(d);
             }
 
-            // ASH paper, Eq. 6, normalization
+            // ASH paper Eq. 6 normalization
             final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
 
-            final int words = QuantizedVector.wordsForDims(quantizedDim);
+            // Build normalized residual x̂ = (x − μ) / ||x − μ||
+            final float[] xhat = new float[originalDim];
+            for (int d = 0; d < originalDim; d++) {
+                xhat[d] = (x[d] - mu[d]) * invNorm;
+            }
 
+            // Project once: y = A · x̂
+            final float[] y = new float[quantizedDim];
+            ASH_MATH.project(A, xhat, y);
+
+            // Binarize y into outWords
+            final int words = QuantizedVector.wordsForDims(quantizedDim);
             for (int w = 0; w < words; w++) {
                 long bits = 0L;
                 int base = w << 6;
                 int rem = Math.min(64, quantizedDim - base);
 
                 for (int j = 0; j < rem; j++) {
-                    int bitIndex = base + j;
-
-                    // y_j = dot(A[j], (x − μ) / ||x − μ||)
-                    float acc = 0.0f;
-                    final float[] Arow = A[bitIndex];
-
-                    for (int d = 0; d < originalDim; d++) {
-                        acc += Arow[d] * (x[d] - mu[d]) * invNorm;
-                    }
-
-                    if (acc > 0.0f) {
+                    if (y[base + j] > 0.0f) {
                         bits |= (1L << j);
                     }
                 }
-
                 outWords[w] = bits;
             }
         }
@@ -560,71 +563,86 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      */
     public static final class StiefelTransform {
 
-        /** Forward projection (column-orthonormal). */
+        /** Forward projection (column-orthonormal). Shape: [originalDim × quantizedDim]. */
         public final RealMatrix W;
 
-        /** Transpose of W, used for projection. */
-        public final RealMatrix A;
-
         /**
-         * Cached row-major backing for A in double precision.
+         * Cached row-major backing for A in double precision (A = Wᵀ).
          * Used for training, reference, and correctness-sensitive math.
          *
          * AData must not be mutated after construction.
+         * Shape: [quantizedDim × originalDim].
          */
         public final double[][] AData;
 
         /**
-         * Cached row-major backing for A in float precision.
+         * Cached row-major backing for A in float precision (A = Wᵀ).
          * Used for encoding and scoring fast paths.
-         *
-         * This is derived once from AData and must not be mutated.
+         * AFloat must not be mutated after construction.
+         * Shape: [quantizedDim × originalDim].
          */
         public final float[][] AFloat;
 
         /** Number of rows in A (quantizedDim = d). */
         public final int rows;
 
-        /** Number of columns in A (originalDim). */
+        /** Number of columns in A (originalDim = D). */
         public final int cols;
 
         public StiefelTransform(RealMatrix W) {
-            this.W = W;
-            this.A = W.transpose();
+            this.W = Objects.requireNonNull(W, "W");
 
-            // Fast path: QRDecomposition + MatrixUtils typically produce Array2DRowRealMatrix
-            // Use getDataRef() to avoid copying and avoid getEntry() calls.
-            if (this.A instanceof Array2DRowRealMatrix) {
-                this.AData = ((Array2DRowRealMatrix) this.A).getDataRef();
-            } else {
-                // Fallback: copy once at construction time (still far faster than getEntry per access)
-                this.AData = this.A.getData();
+            // Dimensions: W is [D × d]
+            final int originalDim = W.getRowDimension();     // D
+            final int quantizedDim = W.getColumnDimension(); // d
+
+            this.rows = quantizedDim;
+            this.cols = originalDim;
+
+            // Explicitly materialize A = Wᵀ into row-major arrays.
+            // We do this directly instead of relying on RealMatrix.transpose()+getData(),
+            // because some RealMatrix implementations return views where getData()
+            // can be surprisingly expensive or shaped unexpectedly.
+            this.AData = new double[quantizedDim][originalDim];
+            for (int i = 0; i < quantizedDim; i++) {
+                final double[] row = this.AData[i];
+                for (int j = 0; j < originalDim; j++) {
+                    // A[i][j] = W[j][i]
+                    row[j] = W.getEntry(j, i);
+                }
             }
 
-            this.rows = AData.length;
-            this.cols = rows == 0 ? 0 : AData[0].length;
-
-            // Build float copy once for fast encoding / scoring paths
-            this.AFloat = new float[rows][cols];
-            for (int i = 0; i < rows; i++) {
-                double[] src = AData[i];
-                float[] dst = AFloat[i];
-                for (int j = 0; j < cols; j++) {
+            this.AFloat = new float[quantizedDim][originalDim];
+            for (int i = 0; i < quantizedDim; i++) {
+                final double[] src = this.AData[i];
+                final float[] dst = this.AFloat[i];
+                for (int j = 0; j < originalDim; j++) {
                     dst[j] = (float) src[j];
                 }
+            }
+
+            // Hard invariants: these are programmer-contract checks, not user input checks.
+            if (AFloat.length != rows) {
+                throw new AssertionError("AFloat rows " + AFloat.length + " != quantizedDim " + rows);
+            }
+            if (rows > 0 && AFloat[0].length != cols) {
+                throw new AssertionError("AFloat cols " + AFloat[0].length + " != originalDim " + cols);
+            }
+            if (AData.length != rows) {
+                throw new AssertionError("AData rows " + AData.length + " != quantizedDim " + rows);
+            }
+            if (rows > 0 && AData[0].length != cols) {
+                throw new AssertionError("AData cols " + AData[0].length + " != originalDim " + cols);
             }
         }
     }
 
     /**
      * RANDOM (untrained) Stiefel initialization.
-     *
      * Generates a random orthonormal projection from R^originalDim → R^quantizedDim
      * by sampling a Gaussian matrix and orthonormalizing via QR decomposition.
-     *
      * A deterministic sign normalization is applied so results are reproducible
      * across runs and linear algebra backends.
-     *
      * @param originalDim dimensionality of the input vectors
      * @param quantizedDim dimensionality of the binary embedding
      * @param rng random number generator
@@ -650,13 +668,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         RealMatrix G = MatrixUtils.createRealMatrix(gaussian);
 
-        // Thin QR decomposition: G = Q R
+        // QR decomposition: G = Q R
         QRDecomposition qr = new QRDecomposition(G);
-        RealMatrix Q = qr.getQ();  // originalDim × quantizedDim
-        RealMatrix R = qr.getR();
+
+        // Commons Math returns full Q (m×m). We need thin Q (m×n).
+        RealMatrix Qfull = qr.getQ();  // originalDim × originalDim
+        RealMatrix Q = Qfull.getSubMatrix(0, originalDim - 1, 0, quantizedDim - 1); // originalDim × quantizedDim
+
+        RealMatrix R = qr.getR(); // originalDim × quantizedDim
 
         // Normalize QR sign ambiguity for determinism (RANDOM only)
-        int diag = Math.min(R.getRowDimension(), R.getColumnDimension());
+        int diag = Math.min(R.getRowDimension(), R.getColumnDimension()); // == quantizedDim
         for (int j = 0; j < diag; j++) {
             if (R.getEntry(j, j) < 0.0) {
                 for (int i = 0; i < Q.getRowDimension(); i++) {
@@ -665,6 +687,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
+        // W := Q (originalDim × quantizedDim)
         return new StiefelTransform(Q);
     }
 
@@ -840,10 +863,32 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         if (stiefelTransform != null) {
+            // Authoritative double-precision model
             bytes += estimateMatrixBytes(stiefelTransform.W);
-            bytes += estimateMatrixBytes(stiefelTransform.A);
+
+            // Materialized compute buffers (row-major)
+            bytes += estimateArray2DBytes(stiefelTransform.AData);
+            bytes += estimateArray2DBytes(stiefelTransform.AFloat);
         }
 
+        return bytes;
+    }
+
+    private static long estimateArray2DBytes(double[][] a) {
+        if (a == null) return 0L;
+        long bytes = 0L;
+        for (double[] row : a) {
+            bytes += RamUsageEstimator.sizeOf(row);
+        }
+        return bytes;
+    }
+
+    private static long estimateArray2DBytes(float[][] a) {
+        if (a == null) return 0L;
+        long bytes = 0L;
+        for (float[] row : a) {
+            bytes += RamUsageEstimator.sizeOf(row);
+        }
         return bytes;
     }
 

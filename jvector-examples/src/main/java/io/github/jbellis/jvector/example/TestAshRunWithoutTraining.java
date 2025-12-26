@@ -1,7 +1,9 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
-import org.apache.commons.math3.linear.*;
+import org.apache.commons.math3.linear.MatrixUtils;
+import org.apache.commons.math3.linear.RealMatrix;
+
 import java.util.Random;
 
 public class TestAshRunWithoutTraining {
@@ -16,14 +18,20 @@ public class TestAshRunWithoutTraining {
         AsymmetricHashing.StiefelTransform stiefelTransform =
                 AsymmetricHashing.runWithoutTraining(originalDim, quantizedDim, rng);
 
-        // Inspect shapes and a few entries
-        RealMatrix A = stiefelTransform.A;
+        // Shapes
+        System.out.println("A shape = " +
+                stiefelTransform.rows + " x " + stiefelTransform.cols);
+        System.out.println("W shape = " +
+                stiefelTransform.W.getRowDimension() + " x " +
+                stiefelTransform.W.getColumnDimension());
+
+        // Reconstruct A as a RealMatrix *for testing only*
+        RealMatrix A =
+                MatrixUtils.createRealMatrix(stiefelTransform.AData);
+
         RealMatrix W = stiefelTransform.W;
 
-        System.out.println("A shape = " + A.getRowDimension() + " x " + A.getColumnDimension());
-        System.out.println("W shape = " + W.getRowDimension() + " x " + W.getColumnDimension());
-
-        // Sanity check....
+        // Sanity check: a few entries of A
         System.out.println("First few entries of A:");
         for (int i = 0; i < Math.min(3, A.getRowDimension()); i++) {
             for (int j = 0; j < Math.min(3, A.getColumnDimension()); j++) {
