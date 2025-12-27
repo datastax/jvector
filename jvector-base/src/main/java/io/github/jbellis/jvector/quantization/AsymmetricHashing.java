@@ -16,8 +16,6 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.quantization.ash.AshMath;
-import io.github.jbellis.jvector.quantization.ash.DefaultAshMath;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -62,8 +60,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
-
-    private static final AshMath ASH_MATH = new DefaultAshMath();
 
     // ---------------------------------------------------------------------
     // Index-wide immutable state
@@ -329,6 +325,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             final float[][] A = stiefel.AFloat;
             final int originalDim = stiefel.cols;
 
+            final var vecUtil =
+                    io.github.jbellis.jvector.vector.VectorizationProvider
+                            .getInstance()
+                            .getVectorUtilSupport();
+
             // Copy vector and mean once (no virtual calls in inner loop)
             final float[] x = new float[originalDim];
             final float[] mu = new float[originalDim];
@@ -337,20 +338,16 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 mu[d] = globalMean.get(d);
             }
 
-            // ASH paper Eq. 6 normalization
+            // ASH paper, Eq. 6, normalization
             final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
 
-            // Build normalized residual x̂ = (x − μ) / ||x − μ||
+            // Normalized residual x̂
             final float[] xhat = new float[originalDim];
             for (int d = 0; d < originalDim; d++) {
                 xhat[d] = (x[d] - mu[d]) * invNorm;
             }
 
-            // Project once: y = A · x̂
-            final float[] y = new float[quantizedDim];
-            ASH_MATH.project(A, xhat, y);
-
-            // Binarize y into outWords
+            // Binarize directly from per-row projection
             final int words = QuantizedVector.wordsForDims(quantizedDim);
             for (int w = 0; w < words; w++) {
                 long bits = 0L;
@@ -358,7 +355,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 int rem = Math.min(64, quantizedDim - base);
 
                 for (int j = 0; j < rem; j++) {
-                    if (y[base + j] > 0.0f) {
+                    int bitIndex = base + j;
+                    float acc = vecUtil.ashDotRow(A[bitIndex], xhat);
+                    if (acc > 0.0f) {
                         bits |= (1L << j);
                     }
                 }

@@ -235,4 +235,47 @@ public interface VectorUtilSupport {
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
 
+  // ------------------------------------------------------------------
+  // ASH kernels (default scalar implementations)
+  // ------------------------------------------------------------------
+
+  /**
+   * Dot product between a matrix row and a dense vector.
+   * Used by ASH projection: y_i = <A_i, x>.
+   *
+   * Contract: Arow.length == x.length.
+   * Default is scalar; SIMD backends may override.
+   */
+  default float ashDotRow(float[] Arow, float[] x) {
+    assert Arow.length == x.length : "Arow.length != x.length";
+    float acc = 0.0f;
+    for (int i = 0; i < x.length; i++) {
+      acc += Arow[i] * x[i];
+    }
+    return acc;
+  }
+
+  /**
+   * maskedAdd = <tildeQ, b> for b ∈ {0,1}^d stored as bitpacked longs.
+   *
+   * Contract: d <= tildeQ.length.
+   * Default is scalar; SIMD backends may override.
+   */
+  default float ashMaskedAdd(float[] tildeQ, long[] bits, int d) {
+    assert d <= tildeQ.length : "d must be <= tildeQ.length";
+
+    float sum = 0.0f;
+    int base = 0;
+
+    for (int w = 0; w < bits.length && base < d; w++, base += 64) {
+      long word = bits[w];
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = base + bit;
+        if (idx < d) sum += tildeQ[idx];
+        word &= (word - 1);
+      }
+    }
+    return sum;
+  }
 }

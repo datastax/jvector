@@ -56,6 +56,12 @@ public final class ASHScorer {
         final float[][] A = ash.stiefelTransform.AFloat;  // shape: d × originalDim
         final int originalDim = ash.stiefelTransform.cols;
         final float[] muArr = new float[originalDim];
+
+        final var vecUtil =
+                io.github.jbellis.jvector.vector.VectorizationProvider
+                        .getInstance()
+                        .getVectorUtilSupport();
+
         for (int k = 0; k < originalDim; k++) muArr[k] = mu.get(k);
 
         final float[] qArr = new float[originalDim];

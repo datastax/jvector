@@ -43,7 +43,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset, int[] indices, int indicesOffset) {
-        return FloatVector.fromArray(SPEC, ((ArrayVectorFloat)vector).get(), offset, indices, indicesOffset);
+        return FloatVector.fromArray(SPEC, ((ArrayVectorFloat) vector).get(), offset, indices, indicesOffset);
     }
 
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
@@ -148,8 +148,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length)
-    {
+    public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
         //Common case first
         if (length >= FloatVector.SPECIES_PREFERRED.length())
             return dotProductPreferred(v1, v1offset, v2, v2offset, length);
@@ -251,8 +250,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         // Unrolled vector loop; for dot product from L1 cache, an unroll factor of 2 generally suffices.
         // If we are going to be getting data that's further down the hierarchy but not fetched off disk/network,
         // we might want to unroll further, e.g. to 8 (4 sets of a,b,sum with 3-ahead reads seems to work best).
-        if (length >= vectorLength * 2)
-        {
+        if (length >= vectorLength * 2) {
             length -= vectorLength * 2;
             a0 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, va, vaoffset + vectorLength * 0);
             b0 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, vb, vboffset + vectorLength * 0);
@@ -260,8 +258,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             b1 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, vb, vboffset + vectorLength * 1);
             vaoffset += vectorLength * 2;
             vboffset += vectorLength * 2;
-            while (length >= vectorLength * 2)
-            {
+            while (length >= vectorLength * 2) {
                 // All instructions in the main loop have no dependencies between them and can be executed in parallel.
                 length -= vectorLength * 2;
                 sum0 = a0.fma(b0, sum0);
@@ -393,8 +390,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length)
-    {
+    public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
         //Common case first
         if (length >= FloatVector.SPECIES_PREFERRED.length())
             return squareDistancePreferred(v1, v1offset, v2, v2offset, length);
@@ -550,7 +546,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Process the tail
         for (int i = vectorizedLength; i < v1.length(); i++) {
-            v1.set(i,  v1.get(i) + v2.get(i));
+            v1.set(i, v1.get(i) + v2.get(i));
         }
     }
 
@@ -571,7 +567,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Process the tail
         for (int i = vectorizedLength; i < v1.length(); i++) {
-            v1.set(i,  v1.get(i) + value);
+            v1.set(i, v1.get(i) + value);
         }
     }
 
@@ -592,7 +588,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Process the tail
         for (int i = vectorizedLength; i < v1.length(); i++) {
-            v1.set(i,  v1.get(i) - v2.get(i));
+            v1.set(i, v1.get(i) - v2.get(i));
         }
     }
 
@@ -608,7 +604,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Process the tail
         for (int i = vectorizedLength; i < vector.length(); i++) {
-            vector.set(i,  vector.get(i) - value);
+            vector.set(i, vector.get(i) - value);
         }
     }
 
@@ -679,19 +675,18 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Process the tail
         for (int i = vectorizedLength; i < v1.length(); i++) {
-            v1.set(i,  Math.min(v1.get(i), v2.get(i)));
+            v1.set(i, Math.min(v1.get(i), v2.get(i)));
         }
     }
 
     @Override
     public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets) {
-        return assembleAndSum(data, dataBase,  baseOffsets, 0, baseOffsets.length());
+        return assembleAndSum(data, dataBase, baseOffsets, 0, baseOffsets.length());
     }
 
     @Override
     public float assembleAndSum(VectorFloat<?> data, int dataBase, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength) {
-        return switch (PREFERRED_BIT_SIZE)
-        {
+        return switch (PREFERRED_BIT_SIZE) {
             case 512 -> assembleAndSum512(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
             case 256 -> assembleAndSum256(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
             case 128 -> assembleAndSum128(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
@@ -712,7 +707,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_512)
                     .reinterpretAsInts()
                     .add(scale)
-                    .intoArray(convOffsets,0);
+                    .intoArray(convOffsets, 0);
 
             var offset = i * dataBase;
             sum = sum.add(fromVectorFloat(FloatVector.SPECIES_512, data, offset, convOffsets, 0));
@@ -741,7 +736,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_256)
                     .reinterpretAsInts()
                     .add(scale)
-                    .intoArray(convOffsets,0);
+                    .intoArray(convOffsets, 0);
 
             var offset = i * dataBase;
             sum = sum.add(fromVectorFloat(FloatVector.SPECIES_256, data, offset, convOffsets, 0));
@@ -776,11 +771,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int clusterCount                    // = k
     ) {
         //compute the size of the subvector
-        return switch (PREFERRED_BIT_SIZE)
-        {
-            case 512 -> assembleAndSumPQ_512(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
-            case 256 -> assembleAndSumPQ_256(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
-            case 128 -> assembleAndSumPQ_128(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+        return switch (PREFERRED_BIT_SIZE) {
+            case 512 ->
+                    assembleAndSumPQ_512(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+            case 256 ->
+                    assembleAndSumPQ_256(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
+            case 128 ->
+                    assembleAndSumPQ_128(codebookPartialSums, subspaceCount, vector1Ordinals, vector1OrdinalOffset, vector2Ordinals, vector2OrdinalOffset, clusterCount);
             default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
         };
     }
@@ -794,19 +791,19 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int baseOffsetsOffset2,
             int clusterCount                    // = k
     ) {
-        final int k          = clusterCount;
-        final int blockSize  = k * (k + 1) / 2;
+        final int k = clusterCount;
+        final int blockSize = k * (k + 1) / 2;
         float res = 0f;
 
         for (int i = 0; i < subspaceCount; i++) {
             int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
             int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
-            int r  = Math.min(c1, c2);
-            int c  = Math.max(c1, c2);
+            int r = Math.min(c1, c2);
+            int c = Math.max(c1, c2);
 
-            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int offsetRow = r * k - (r * (r - 1) / 2);
             int idxInBlock = offsetRow + (c - r);
-            int base       = i * blockSize;
+            int base = i * blockSize;
 
             res += data.get(base + idxInBlock);
         }
@@ -824,10 +821,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int clusterCount                    // = k
     ) {
         final VectorSpecies<Float> FSPECIES = FloatVector.SPECIES_256;
-        final int LANES      = FSPECIES.length();
-        final int k          = clusterCount;
-        final int blockSize  = k * (k + 1) / 2;
-        final int M          = subspaceCount;
+        final int LANES = FSPECIES.length();
+        final int k = clusterCount;
+        final int blockSize = k * (k + 1) / 2;
+        final int M = subspaceCount;
 
         int[] convOffsets = scratchInt256.get();
         FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
@@ -856,9 +853,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             var c = c1v.max(c2v);
 
             // c) offsetRow = r*k - (r*(r-1))/2
-            var rk          = r.mul(kvec);
-            var triangular  = r.mul(r.sub(onevec)).mul(twovec);
-            var offsetRow   = rk.sub(triangular);
+            var rk = r.mul(kvec);
+            var triangular = r.mul(r.sub(onevec)).mul(twovec);
+            var offsetRow = rk.sub(triangular);
 
             // d) idxInBlock = offsetRow + (c - r) + (i * blockSize)
             offsetRow.add(c.sub(r)).add(scale)
@@ -881,12 +878,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         for (int i = (M / LANES) * LANES; i < M; i++) {
             int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
             int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
-            int r  = Math.min(c1, c2);
-            int c  = Math.max(c1, c2);
+            int r = Math.min(c1, c2);
+            int c = Math.max(c1, c2);
 
-            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int offsetRow = r * k - (r * (r - 1) / 2);
             int idxInBlock = offsetRow + (c - r);
-            int base       = i * blockSize;
+            int base = i * blockSize;
 
             res += data.get(base + idxInBlock);
         }
@@ -904,10 +901,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int clusterCount                    // = k
     ) {
         final VectorSpecies<Float> FSPECIES = FloatVector.SPECIES_512;
-        final int LANES      = FSPECIES.length();
-        final int k          = clusterCount;
-        final int blockSize  = k * (k + 1) / 2;
-        final int M          = subspaceCount;
+        final int LANES = FSPECIES.length();
+        final int k = clusterCount;
+        final int blockSize = k * (k + 1) / 2;
+        final int M = subspaceCount;
 
         int[] convOffsets = scratchInt512.get();
         FloatVector sum = FloatVector.zero(FloatVector.SPECIES_512);
@@ -934,9 +931,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             var c = c1v.max(c2v);
 
             // c) offsetRow = r*k - (r*(r-1))/2
-            var rk          = r.mul(kvec);
-            var triangular  = r.mul(r.sub(onevec)).mul(twovec);
-            var offsetRow   = rk.sub(triangular);
+            var rk = r.mul(kvec);
+            var triangular = r.mul(r.sub(onevec)).mul(twovec);
+            var offsetRow = rk.sub(triangular);
 
             // d) idxInBlock = offsetRow + (c - r) + (i * blockSize)
             offsetRow.add(c.sub(r)).add(scale)
@@ -959,12 +956,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         for (int i = (M / LANES) * LANES; i < M; i++) {
             int c1 = Byte.toUnsignedInt(baseOffsets1.get(i + baseOffsetsOffset1));
             int c2 = Byte.toUnsignedInt(baseOffsets2.get(i + baseOffsetsOffset2));
-            int r  = Math.min(c1, c2);
-            int c  = Math.max(c1, c2);
+            int r = Math.min(c1, c2);
+            int c = Math.max(c1, c2);
 
-            int offsetRow  = r * k - (r * (r - 1) / 2);
+            int offsetRow = r * k - (r * (r - 1) / 2);
             int idxInBlock = offsetRow + (c - r);
-            int base       = i * blockSize;
+            int base = i * blockSize;
 
             res += data.get(base + idxInBlock);
         }
@@ -1040,7 +1037,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return ((Byte.toUnsignedInt(highByte) << 8) | Byte.toUnsignedInt(lowByte));
     }
 
-    private static float combineBytes(int i, int shuffle,  VectorFloat<?> partials) {
+    private static float combineBytes(int i, int shuffle, VectorFloat<?> partials) {
         return partials.get(i * 256 + shuffle);
     }
 
@@ -1056,9 +1053,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return switch (PREFERRED_BIT_SIZE) {
-            case 512 -> pqDecodedCosineSimilarity512(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
-            case 256 -> pqDecodedCosineSimilarity256(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
-            case 128 -> pqDecodedCosineSimilarity128(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+            case 512 ->
+                    pqDecodedCosineSimilarity512(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+            case 256 ->
+                    pqDecodedCosineSimilarity256(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
+            case 128 ->
+                    pqDecodedCosineSimilarity128(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
             default -> throw new IllegalStateException("Unsupported vector width: " + PREFERRED_BIT_SIZE);
         };
     }
@@ -1080,7 +1080,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_512)
                     .reinterpretAsInts()
                     .add(scale)
-                    .intoArray(convOffsets,0);
+                    .intoArray(convOffsets, 0);
 
             var offset = i * clusterCount;
             sum = sum.add(fromVectorFloat(FloatVector.SPECIES_512, partialSums, offset, convOffsets, 0));
@@ -1116,7 +1116,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     .lanewise(VectorOperators.AND, BYTE_TO_INT_MASK_256)
                     .reinterpretAsInts()
                     .add(scale)
-                    .intoArray(convOffsets,0);
+                    .intoArray(convOffsets, 0);
 
             var offset = i * clusterCount;
             sum = sum.add(fromVectorFloat(FloatVector.SPECIES_256, partialSums, offset, convOffsets, 0));
@@ -1492,7 +1492,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     void transpose(VectorFloat<?> arr, int first, int last, int nRows) {
         final int mn1 = (last - first - 1);
-        final int n   = (last - first) / nRows;
+        final int n = (last - first) / nRows;
         boolean[] visited = new boolean[last - first];
         float temp;
         int cycle = first;
@@ -1500,7 +1500,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             if (visited[cycle - first])
                 continue;
             int a = cycle - first;
-            do  {
+            do {
                 a = a == mn1 ? mn1 : (n * a) % mn1;
                 temp = arr.get(first + a);
                 arr.set(first + a, arr.get(cycle));
@@ -1541,6 +1541,33 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
-        return pqDecodedCosineSimilarity(encoded, 0, encoded.length(),  clusterCount, partialSums, aMagnitude, bMagnitude);
+        return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
+    }
+
+    @Override
+    public float ashDotRow(float[] Arow, float[] x) {
+        assert Arow.length == x.length : "Arow.length != x.length";
+
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int len = x.length;
+        final int upper = SPEC.loopBound(len);
+
+        FloatVector sum = FloatVector.zero(SPEC);
+
+        int i = 0;
+        for (; i < upper; i += SPEC.length()) {
+            FloatVector va = FloatVector.fromArray(SPEC, Arow, i);
+            FloatVector vx = FloatVector.fromArray(SPEC, x, i);
+            sum = va.fma(vx, sum);
+        }
+
+        float acc = sum.reduceLanes(VectorOperators.ADD);
+
+        // scalar tail
+        for (; i < len; i++) {
+            acc += Arow[i] * x[i];
+        }
+
+        return acc;
     }
 }
