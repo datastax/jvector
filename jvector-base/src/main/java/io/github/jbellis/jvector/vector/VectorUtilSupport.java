@@ -240,6 +240,13 @@ public interface VectorUtilSupport {
   // ------------------------------------------------------------------
 
   /**
+   * @return true if this backend provides a SIMD implementation of the masked-load kernel as described in the ASH paper.
+   */
+  default boolean supportsAshMaskedLoad() {
+    return false;
+  }
+
+  /**
    * Dot product between a matrix row and a dense vector.
    * Used by ASH projection: y_i = <A_i, x>.
    *

@@ -40,9 +40,16 @@ import java.util.concurrent.ForkJoinTask;
 import static java.lang.Math.abs;
 
 public class DistancesASH {
+    private static void printScorerInfo(String label, ASHBlockScorer scorer) {
+        System.out.println(
+                "\t[" + label + "] scorer implementation = "
+                        + scorer.getClass().getName()
+        );
+    }
+
     public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -117,7 +124,11 @@ public class DistancesASH {
         VectorFloat<?> q0 = finalQueries.get(0);
 
         ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
-        ASHBlockScorer blk = ashVectors.blockScorerRegisterAccFor(q0, VectorSimilarityFunction.DOT_PRODUCT, 64);
+        printScorerInfo("scalar-ref", ref);
+
+        ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, 64);
+        printScorerInfo("block-reg-acc", blk);
+
 
         float[] a = new float[128];
         float[] b = new float[128];
@@ -262,37 +273,75 @@ public class DistancesASH {
         // Prevent dead-code elimination
         System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
         System.out.println("--");
+
         // ==================================================================
-        // [4] Block scoring timing: block baseline vs register-accumulator
+        // [4] Block scoring timing: block scalar vs block SIMD
         // ==================================================================
         for (int blockSize : BLOCK_SIZES) {
 
             // --------------------------------------------------------------
-            // (A) Block baseline (scalar, block-structured)
+            // Print scorer implementations ONCE (diagnostic)
             // --------------------------------------------------------------
-            List<ForkJoinTask<Double>> baselineTasks = new ArrayList<>();
-            long baselineStart = System.nanoTime();
+            {
+                VectorFloat<?> q = finalQueries.get(0);
+
+                // Scalar block scorer
+                System.setProperty("jvector.ash.blockKernel", "scalar");
+                ASHBlockScorer scalar =
+                        ashVectors.blockScorerFor(
+                                q,
+                                VectorSimilarityFunction.DOT_PRODUCT,
+                                blockSize
+                        );
+                printScorerInfo(
+                        "block-scalar (blockSize=" + blockSize + ")",
+                        scalar
+                );
+
+                // SIMD block scorer
+                System.setProperty("jvector.ash.blockKernel", "simd");
+                ASHBlockScorer simd =
+                        ashVectors.blockScorerFor(
+                                q,
+                                VectorSimilarityFunction.DOT_PRODUCT,
+                                blockSize
+                        );
+                printScorerInfo(
+                        "block-simd (blockSize=" + blockSize + ")",
+                        simd
+                );
+
+                // Restore default
+                System.clearProperty("jvector.ash.blockKernel");
+            }
+
+            // --------------------------------------------------------------
+            // (A) Block scalar timing
+            // --------------------------------------------------------------
+            System.setProperty("jvector.ash.blockKernel", "scalar");
+
+            List<ForkJoinTask<Double>> scalarTasks = new ArrayList<>();
+            long scalarStart = System.nanoTime();
 
             for (int start = 0; start < nQueries; start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, nQueries);
 
-                baselineTasks.add(simdExecutor.submit(() -> {
+                scalarTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
                     final float[] scores = new float[blockSize];
 
-                    for (int i = s; i < e; i++) {
-                        VectorFloat<?> q = finalQueries.get(i);
-
-                        ASHBlockScorer blockScorer =
+                    for (int qi = s; qi < e; qi++) {
+                        ASHBlockScorer scorer =
                                 ashVectors.blockScorerFor(
-                                        q,
+                                        finalQueries.get(qi),
                                         VectorSimilarityFunction.DOT_PRODUCT,
-                                        blockSize);
+                                        blockSize
+                                );
 
                         int j = 0;
                         while (j + blockSize <= nVectors) {
-                            blockScorer.scoreRange(j, blockSize, scores);
+                            scorer.scoreRange(j, blockSize, scores);
                             for (int k = 0; k < blockSize; k++) {
                                 localSum += scores[k];
                             }
@@ -302,7 +351,10 @@ public class DistancesASH {
                         // Tail (scalar fallback)
                         if (j < nVectors) {
                             ScoreFunction.ApproximateScoreFunction f =
-                                    ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                    ashVecs.scoreFunctionFor(
+                                            finalQueries.get(qi),
+                                            VectorSimilarityFunction.DOT_PRODUCT
+                                    );
                             for (; j < nVectors; j++) {
                                 localSum += f.similarityTo(j);
                             }
@@ -312,43 +364,45 @@ public class DistancesASH {
                 }));
             }
 
-            double baselineDummy = 0.0;
-            for (ForkJoinTask<Double> t : baselineTasks) {
-                baselineDummy += t.join();
+            double scalarDummy = 0.0;
+            for (ForkJoinTask<Double> t : scalarTasks) {
+                scalarDummy += t.join();
             }
 
-            long baselineEnd = System.nanoTime();
+            long scalarEnd = System.nanoTime();
 
             System.out.println(
-                    "\tBlock baseline (blockSize=" + blockSize + ") took "
-                            + (baselineEnd - baselineStart) / 1e9 + " seconds");
+                    "\tBlock scalar (blockSize=" + blockSize + ") took "
+                            + (scalarEnd - scalarStart) / 1e9 + " seconds"
+            );
 
             // --------------------------------------------------------------
-            // (B) Block register-accumulator scorer (fast block path)
+            // (B) Block SIMD timing
             // --------------------------------------------------------------
-            List<ForkJoinTask<Double>> regAccTasks = new ArrayList<>();
-            long regAccStart = System.nanoTime();
+            System.setProperty("jvector.ash.blockKernel", "simd");
+
+            List<ForkJoinTask<Double>> simdTasks = new ArrayList<>();
+            long simdStart = System.nanoTime();
 
             for (int start = 0; start < nQueries; start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, nQueries);
 
-                regAccTasks.add(simdExecutor.submit(() -> {
+                simdTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
                     final float[] scores = new float[blockSize];
 
-                    for (int i = s; i < e; i++) {
-                        VectorFloat<?> q = finalQueries.get(i);
-
-                        ASHBlockScorer blockScorer =
-                                ashVectors.blockScorerRegisterAccFor(
-                                        q,
+                    for (int qi = s; qi < e; qi++) {
+                        ASHBlockScorer scorer =
+                                ashVectors.blockScorerFor(
+                                        finalQueries.get(qi),
                                         VectorSimilarityFunction.DOT_PRODUCT,
-                                        blockSize);
+                                        blockSize
+                                );
 
                         int j = 0;
                         while (j + blockSize <= nVectors) {
-                            blockScorer.scoreRange(j, blockSize, scores);
+                            scorer.scoreRange(j, blockSize, scores);
                             for (int k = 0; k < blockSize; k++) {
                                 localSum += scores[k];
                             }
@@ -358,7 +412,10 @@ public class DistancesASH {
                         // Tail (scalar fallback)
                         if (j < nVectors) {
                             ScoreFunction.ApproximateScoreFunction f =
-                                    ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                    ashVecs.scoreFunctionFor(
+                                            finalQueries.get(qi),
+                                            VectorSimilarityFunction.DOT_PRODUCT
+                                    );
                             for (; j < nVectors; j++) {
                                 localSum += f.similarityTo(j);
                             }
@@ -368,19 +425,22 @@ public class DistancesASH {
                 }));
             }
 
-            double regAccDummy = 0.0;
-            for (ForkJoinTask<Double> t : regAccTasks) {
-                regAccDummy += t.join();
+            double simdDummy = 0.0;
+            for (ForkJoinTask<Double> t : simdTasks) {
+                simdDummy += t.join();
             }
 
-            long regAccEnd = System.nanoTime();
+            long simdEnd = System.nanoTime();
 
             System.out.println(
-                    "\tBlock register-acc (blockSize=" + blockSize + ") took "
-                            + (regAccEnd - regAccStart) / 1e9 + " seconds");
+                    "\tBlock SIMD (blockSize=" + blockSize + ") took "
+                            + (simdEnd - simdStart) / 1e9 + " seconds"
+            );
 
-            // Prevent dead-code elimination across variants
-            ashDummy += baselineDummy + regAccDummy;
+            System.clearProperty("jvector.ash.blockKernel");
+
+            // Prevent dead-code elimination
+            ashDummy += scalarDummy + simdDummy;
         }
 
         // Prevent dead-code elimination across all sections
@@ -415,8 +475,8 @@ public class DistancesASH {
     public static void runADA() throws IOException {
         System.out.println("Running ada_002");
 
-        var baseVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_query_vectors_10000.fvec";
+        var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
         testASHEncodings(baseVectors, queryVectors);
     }
 

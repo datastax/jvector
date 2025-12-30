@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.DataOutput;
@@ -54,6 +56,19 @@ public class ASHVectors implements CompressedVectors {
     final AsymmetricHashing ash;
     final AsymmetricHashing.QuantizedVector[] compressedVectors;
     final ASHScorer scorer;
+
+    enum AshBlockKernel {
+        AUTO,
+        SCALAR,
+        SIMD;
+
+        static AshBlockKernel fromProperty() {
+            String v = System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
+            if ("scalar".equals(v)) return SCALAR;
+            if ("simd".equals(v))   return SIMD;
+            return AUTO;
+        }
+    }
 
     // Cached scalar headers (avoid object chasing in blocked scorer)
     private final float[] residualNorms;
@@ -223,67 +238,33 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
-     * Block-structured scalar ASH scorer.
+     * Returns a block-oriented ASH scorer for contiguous vectors.
      *
      * <p>
-     * This scorer reorganizes the computation to operate on contiguous
-     * blocks of vectors while remaining fully scalar.
+     * This factory selects between a portable scalar implementation and a
+     * SIMD implementation of ASH block scoring (ASH paper, Figure 1 / Table 1).
      * </p>
      *
      * <p>
-     * The loop structure is:
+     * Selection is controlled by the JVM property:
      * </p>
+     *
+     * <pre>
+     *   -Djvector.ash.blockKernel=auto|scalar|simd
+     * </pre>
+     *
      * <ul>
-     *   <li>outer loop over blocks of vectors</li>
-     *   <li>outer loop over binary words</li>
-     *   <li>inner loop over vectors within the block</li>
+     *   <li><b>auto</b> (default): the active VectorUtilSupport backend determines whether execution is vectorized or scalar</li>
+     *   <li><b>scalar</b>: force the portable scalar register-accumulating implementation</li>
+     *   <li><b>simd</b>: simd: force the block scorer defined in the ASH paper; execution may still be scalar if the active backend does not support masked-load SIMD</li>
      * </ul>
      *
      * <p>
-     * This improves cache locality and provides a stable structural
-     * foundation for block-oriented evaluation.
+     * In all cases, accumulation of the masked-add term ⟨q̃, b⟩ is performed in
+     * local scalar registers, ensuring numerical equivalence across backends.
      * </p>
      */
     public ASHBlockScorer blockScorerFor(
-            VectorFloat<?> query,
-            VectorSimilarityFunction similarityFunction,
-            int blockSize) {
-
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException(
-                    "ASH block scorer supports DOT_PRODUCT only");
-        }
-        if (blockSize <= 0) {
-            throw new IllegalArgumentException("blockSize must be > 0");
-        }
-
-        return new BlockedScalarASHBlockScorer(ash, compressedVectors, query, blockSize);
-    }
-
-    /**
-     * Block-oriented ASH scorer using register-local accumulation.
-     *
-     * <p>
-     * This implementation evaluates ASH scores for a contiguous block
-     * of vectors while accumulating intermediate values directly into
-     * local scalar variables.
-     * </p>
-     *
-     * <p>
-     * Compared to array-based accumulation, this approach:
-     * </p>
-     * <ul>
-     *   <li>reduces memory traffic</li>
-     *   <li>keeps hot values in registers</li>
-     *   <li>preserves exact ASH scoring semantics</li>
-     * </ul>
-     *
-     * <p>
-     * This scorer is suitable for brute-force scans and graph neighborhood
-     * evaluation where vectors are processed contiguously.
-     * </p>
-     */
-    public ASHBlockScorer blockScorerRegisterAccFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction,
             int blockSize) {
@@ -295,140 +276,68 @@ public class ASHVectors implements CompressedVectors {
             throw new IllegalArgumentException("blockSize must be > 0");
         }
 
-        return new RegisterAccASHBlockScorer(
+        final AshBlockKernel kernel = AshBlockKernel.fromProperty();
+
+        // ------------------------------------------------------------
+        // Forced scalar path (portable register-accumulator)
+        // ------------------------------------------------------------
+        if (kernel == AshBlockKernel.SCALAR) {
+            return new BlockScalarASHBlockScorer(
+                    ash,
+                    compressedVectors,
+                    residualNorms,
+                    dotXMu,
+                    query
+            );
+        }
+
+        // ------------------------------------------------------------
+        // SIMD or AUTO path (paper-faithful block kernel)
+        // ------------------------------------------------------------
+        // AUTO and SIMD intentionally share the same implementation.
+        // VectorUtilSupport decides whether masked-load is vectorized
+        // or falls back to scalar internally.
+        ensurePackedBits(blockSize);
+
+        return new BlockSimdASHBlockScorer(
                 ash,
                 compressedVectors,
                 residualNorms,
                 dotXMu,
+                packedBits,
+                blockSize,
                 query
         );
     }
 
-    /**
-     * Block-structured scalar ASH scorer.
-     *
-     * <p>
-     * This scorer performs scalar bit-walk accumulation for each vector,
-     * but organizes the computation by blocks and binary words.
-     * </p>
-     *
-     * <p>
-     * It preserves exact correctness and serves as a clear baseline
-     * for block-based implementations.
-     * </p>
-     */
-    private static final class BlockedScalarASHBlockScorer implements ASHBlockScorer {
-
-        private final AsymmetricHashing ash;
-        private final AsymmetricHashing.QuantizedVector[] vectors;
-        private final int blockSize;
-
-        private final float[] tildeQ;
-        private final float sumTildeQ;
-        private final float dotQMu;
-        private final float muNormSq;
-        private final float invSqrtD;
-
-        private final int d;
-        private final int words;
-        private final int originalDim;
-
-        BlockedScalarASHBlockScorer(
-                AsymmetricHashing ash,
-                AsymmetricHashing.QuantizedVector[] vectors,
-                VectorFloat<?> query,
-                int blockSize) {
-
-            this.ash = ash;
-            this.vectors = vectors;
-            this.blockSize = blockSize;
-
-            this.d = ash.quantizedDim;
-            this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
-            this.originalDim = ash.originalDimension;
-
-            final VectorFloat<?> mu = ash.globalMean;
-
-            final float[] qArr = new float[originalDim];
-            final float[] muArr = new float[originalDim];
-            for (int i = 0; i < originalDim; i++) {
-                qArr[i] = query.get(i);
-                muArr[i] = mu.get(i);
-            }
-
-            this.tildeQ = new float[d];
-            final float[][] A = ash.stiefelTransform.AFloat;
-            for (int r = 0; r < d; r++) {
-                float acc = 0f;
-                float[] Arow = A[r];
-                for (int j = 0; j < originalDim; j++) {
-                    acc += Arow[j] * (qArr[j] - muArr[j]);
-                }
-                tildeQ[r] = acc;
-            }
-
-            float s = 0f;
-            for (int i = 0; i < d; i++) s += tildeQ[i];
-            this.sumTildeQ = s;
-
-            this.dotQMu = VectorUtil.dotProduct(query, mu);
-            this.muNormSq = VectorUtil.dotProduct(mu, mu);
-            this.invSqrtD = (float) (1.0 / Math.sqrt(d));
+    private void ensurePackedBits(int blockSize) {
+        if (blockSize <= 0) {
+            throw new IllegalArgumentException("blockSize must be > 0");
+        }
+        if (packedBits != null && packedBlockSize == blockSize) {
+            return;
         }
 
-        @Override
-        public void scoreRange(int start, int count, float[] out) {
-            if (count < 0) throw new IllegalArgumentException("count must be >= 0");
-            if (start < 0 || start + count > vectors.length) {
-                throw new IllegalArgumentException(
-                        "Range out of bounds: [" + start + ", " + (start + count) + ")"
-                );
-            }
-            if (out.length < count) {
-                throw new IllegalArgumentException("out.length < count");
-            }
-            if (count == 0) return;
+        final int n = compressedVectors.length;
+        packedBlockSize = blockSize;
+        packedBlockCount = (n + blockSize - 1) / blockSize;
+        packedBits = new long[packedBlockCount * words * blockSize];
 
-            final float[] acc = new float[Math.min(blockSize, count)];
+        for (int b = 0; b < packedBlockCount; b++) {
+            int baseOrd = b * blockSize;
+            int blockLen = Math.min(blockSize, n - baseOrd);
 
-            int baseOrd = start;
-            int remaining = count;
-
-            while (remaining > 0) {
-                final int blockLen = Math.min(blockSize, remaining);
-
-                for (int i = 0; i < blockLen; i++) acc[i] = 0f;
-
-                for (int w = 0; w < words; w++) {
-                    final int baseDim = w * 64;
-
-                    for (int lane = 0; lane < blockLen; lane++) {
-                        long word = vectors[baseOrd + lane].binaryVector[w];
-
-                        while (word != 0L) {
-                            int bit = Long.numberOfTrailingZeros(word);
-                            int idx = baseDim + bit;
-                            if (idx < d) acc[lane] += tildeQ[idx];
-                            word &= (word - 1);
-                        }
-                    }
-                }
-
+            for (int w = 0; w < words; w++) {
+                int dstBase = (b * words + w) * blockSize;
                 for (int lane = 0; lane < blockLen; lane++) {
-                    final AsymmetricHashing.QuantizedVector v = vectors[baseOrd + lane];
-                    final float scale = invSqrtD * v.residualNorm;
-
-                    out[(baseOrd - start) + lane] =
-                            scale * (2f * acc[lane] - sumTildeQ)
-                                    + dotQMu
-                                    + (v.dotWithLandmark - muNormSq);
+                    packedBits[dstBase + lane] =
+                            compressedVectors[baseOrd + lane].binaryVector[w];
                 }
-
-                baseOrd += blockLen;
-                remaining -= blockLen;
+                // remaining lanes default to 0
             }
         }
     }
+
 
     /**
      * Block-oriented ASH scorer using register-local accumulation.
@@ -439,7 +348,7 @@ public class ASHVectors implements CompressedVectors {
      * into scalar registers.
      * </p>
      */
-    private static final class RegisterAccASHBlockScorer implements ASHBlockScorer {
+    private static final class BlockScalarASHBlockScorer implements ASHBlockScorer {
 
         private final AsymmetricHashing ash;
         private final AsymmetricHashing.QuantizedVector[] vectors;
@@ -455,7 +364,7 @@ public class ASHVectors implements CompressedVectors {
         private final int d;
         private final int words;
 
-        RegisterAccASHBlockScorer(
+        BlockScalarASHBlockScorer(
                 AsymmetricHashing ash,
                 AsymmetricHashing.QuantizedVector[] vectors,
                 float[] residualNorms,
@@ -526,6 +435,154 @@ public class ASHVectors implements CompressedVectors {
                         scale * (2f * maskedAdd - sumTildeQ)
                                 + dotQMu
                                 + (dotXMu[idx] - muNormSq);
+            }
+        }
+    }
+
+    /**
+     * Block-oriented ASH scorer using SIMD masked-loads with register-local
+     * accumulation.
+     *
+     * <p>
+     * This scorer is a faithful implementation of Figure 1
+     * and Table 1 kernel from the ASH paper
+     * </p>
+     *
+     * <ul>
+     *   <li>binary codes are stored in block column-major layout</li>
+     *   <li>SIMD lanes correspond to dimensions</li>
+     *   <li>masked loads select active dimensions</li>
+     *   <li>horizontal sums are accumulated per vector</li>
+     * </ul>
+     *
+     * <p>
+     * This implementation accumulates masked-add results directly into scalar registers,
+     * avoiding per-lane memory traffic and restoring performance.
+     * </p>
+     */
+    private static final class BlockSimdASHBlockScorer implements ASHBlockScorer {
+
+        private final AsymmetricHashing ash;
+        private final AsymmetricHashing.QuantizedVector[] vectors;
+
+        private final float[] residualNorms;
+        private final float[] dotXMu;
+
+        private final long[] packedBits;
+        private final int blockSize;
+
+        private final int d;
+        private final int words;
+
+        // Query precompute
+        private final float[] tildeQ;
+        private final float sumTildeQ;
+        private final float dotQMu;
+        private final float muNormSq;
+        private final float invSqrtD;
+
+        // Scratch (one per scorer instance)
+        private final float[] maskedAdds;
+
+        private final VectorUtilSupport vecUtil;
+
+        BlockSimdASHBlockScorer(
+                AsymmetricHashing ash,
+                AsymmetricHashing.QuantizedVector[] vectors,
+                float[] residualNorms,
+                float[] dotXMu,
+                long[] packedBits,
+                int blockSize,
+                VectorFloat<?> query) {
+
+            this.vecUtil =
+                    io.github.jbellis.jvector.vector.VectorizationProvider
+                            .getInstance()
+                            .getVectorUtilSupport();
+            this.ash = ash;
+            this.vectors = vectors;
+            this.residualNorms = residualNorms;
+            this.dotXMu = dotXMu;
+            this.packedBits = packedBits;
+            this.blockSize = blockSize;
+
+            this.d = ash.quantizedDim;
+            this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
+
+            this.maskedAdds = new float[blockSize];
+
+            // ---- Query precompute (identical to ASHScorer) ----
+            final int D = ash.originalDimension;
+            final VectorFloat<?> mu = ash.globalMean;
+
+            final float[] qArr = new float[D];
+            final float[] muArr = new float[D];
+            for (int i = 0; i < D; i++) {
+                qArr[i] = query.get(i);
+                muArr[i] = mu.get(i);
+            }
+
+            this.tildeQ = new float[d];
+            final float[][] A = ash.stiefelTransform.AFloat;
+            for (int r = 0; r < d; r++) {
+                float s = 0f;
+                float[] Arow = A[r];
+                for (int j = 0; j < D; j++) {
+                    s += Arow[j] * (qArr[j] - muArr[j]);
+                }
+                tildeQ[r] = s;
+            }
+
+            float sum = 0f;
+            for (int i = 0; i < d; i++) sum += tildeQ[i];
+            this.sumTildeQ = sum;
+
+            this.dotQMu = VectorUtil.dotProduct(query, mu);
+            this.muNormSq = VectorUtil.dotProduct(mu, mu);
+            this.invSqrtD = (float) (1.0 / Math.sqrt(d));
+        }
+
+        @Override
+        public void scoreRange(int start, int count, float[] out) {
+            if (count == 0) return;
+
+            int ord = start;
+            int end = start + count;
+
+            while (ord < end) {
+                final int blockId = ord / blockSize;
+                final int blockBase = blockId * blockSize;
+                final int laneStart = ord - blockBase;
+                final int blockLen = Math.min(blockSize - laneStart, end - ord);
+
+                final int blockWordBase = blockId * words * blockSize;
+
+                // SIMD masked-add with register accumulation
+                vecUtil.ashMaskedAddBlockAllWords(
+                        tildeQ,
+                        d,
+                        packedBits,
+                        blockWordBase,
+                        words,
+                        blockSize,
+                        laneStart,
+                        blockLen,
+                        maskedAdds
+                );
+
+                // Finish Eq. 11 per vector
+                for (int lane = 0; lane < blockLen; lane++) {
+                    int idx = ord + lane;
+                    float scale = invSqrtD * residualNorms[idx];
+                    float m = maskedAdds[lane];
+
+                    out[idx - start] =
+                            scale * (2f * m - sumTildeQ)
+                                    + dotQMu
+                                    + (dotXMu[idx] - muNormSq);
+                }
+
+                ord += blockLen;
             }
         }
     }
