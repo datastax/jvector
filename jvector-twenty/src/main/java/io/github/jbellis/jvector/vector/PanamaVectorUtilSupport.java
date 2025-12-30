@@ -1574,6 +1574,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
+    public boolean supportsAshMaskedLoad() {
+        return true;
+    }
+
+    @Override
     public void ashMaskedAddBlockAllWords(float[] tildeQ,
                                           int d,
                                           long[] packedBits,
