@@ -49,7 +49,7 @@ public class DistancesASH {
 
     public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {16, 32, 64, 128}; // 16, 32, and/or 64
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -126,8 +126,10 @@ public class DistancesASH {
         ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
         printScorerInfo("scalar-ref", ref);
 
-        ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, 64);
-        printScorerInfo("block-reg-acc", blk);
+        final int sanityBlockSize = BLOCK_SIZES[0];
+        ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, sanityBlockSize);
+        printScorerInfo("block", blk);
+
 
 
         float[] a = new float[128];
@@ -275,59 +277,35 @@ public class DistancesASH {
         System.out.println("--");
 
         // ==================================================================
-        // [4] Block scoring timing: block scalar vs block SIMD
+        // [4] Block scoring timing (single mode per JVM run)
+        // NOTE: Choose the block kernel using:
+        //   -Djvector.ash.blockKernel=scalar|simd|auto
         // ==================================================================
+        final String kernelMode =
+                System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
+
         for (int blockSize : BLOCK_SIZES) {
 
-            // --------------------------------------------------------------
-            // Print scorer implementations ONCE (diagnostic)
-            // --------------------------------------------------------------
+            // Print scorer implementation once per blockSize (diagnostic)
             {
-                VectorFloat<?> q = finalQueries.get(0);
-
-                // Scalar block scorer
-                System.setProperty("jvector.ash.blockKernel", "scalar");
-                ASHBlockScorer scalar =
+                ASHBlockScorer scorer =
                         ashVectors.blockScorerFor(
-                                q,
+                                finalQueries.get(0),
                                 VectorSimilarityFunction.DOT_PRODUCT,
                                 blockSize
                         );
-                printScorerInfo(
-                        "block-scalar (blockSize=" + blockSize + ")",
-                        scalar
-                );
 
-                // SIMD block scorer
-                System.setProperty("jvector.ash.blockKernel", "simd");
-                ASHBlockScorer simd =
-                        ashVectors.blockScorerFor(
-                                q,
-                                VectorSimilarityFunction.DOT_PRODUCT,
-                                blockSize
-                        );
-                printScorerInfo(
-                        "block-simd (blockSize=" + blockSize + ")",
-                        simd
-                );
-
-                // Restore default
-                System.clearProperty("jvector.ash.blockKernel");
+                printScorerInfo(kernelMode + " (blockSize=" + blockSize + ")", scorer);
             }
 
-            // --------------------------------------------------------------
-            // (A) Block scalar timing
-            // --------------------------------------------------------------
-            System.setProperty("jvector.ash.blockKernel", "scalar");
-
-            List<ForkJoinTask<Double>> scalarTasks = new ArrayList<>();
-            long scalarStart = System.nanoTime();
+            List<ForkJoinTask<Double>> blockTasks = new ArrayList<>();
+            long blockStart = System.nanoTime();
 
             for (int start = 0; start < nQueries; start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, nQueries);
 
-                scalarTasks.add(simdExecutor.submit(() -> {
+                blockTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
                     final float[] scores = new float[blockSize];
 
@@ -348,7 +326,7 @@ public class DistancesASH {
                             j += blockSize;
                         }
 
-                        // Tail (scalar fallback)
+                        // Tail uses scalar per-vector scorer (correctness-preserving)
                         if (j < nVectors) {
                             ScoreFunction.ApproximateScoreFunction f =
                                     ashVecs.scoreFunctionFor(
@@ -360,89 +338,25 @@ public class DistancesASH {
                             }
                         }
                     }
+
                     return localSum;
                 }));
             }
 
-            double scalarDummy = 0.0;
-            for (ForkJoinTask<Double> t : scalarTasks) {
-                scalarDummy += t.join();
+            double blockDummy = 0.0;
+            for (ForkJoinTask<Double> t : blockTasks) {
+                blockDummy += t.join();
             }
 
-            long scalarEnd = System.nanoTime();
+            long blockEnd = System.nanoTime();
 
             System.out.println(
-                    "\tBlock scalar (blockSize=" + blockSize + ") took "
-                            + (scalarEnd - scalarStart) / 1e9 + " seconds"
+                    "\tBlock " + kernelMode + " (blockSize=" + blockSize + ") took "
+                            + (blockEnd - blockStart) / 1e9 + " seconds"
             );
 
-            // --------------------------------------------------------------
-            // (B) Block SIMD timing
-            // --------------------------------------------------------------
-            System.setProperty("jvector.ash.blockKernel", "simd");
-
-            List<ForkJoinTask<Double>> simdTasks = new ArrayList<>();
-            long simdStart = System.nanoTime();
-
-            for (int start = 0; start < nQueries; start += chunkSize) {
-                final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
-
-                simdTasks.add(simdExecutor.submit(() -> {
-                    double localSum = 0.0;
-                    final float[] scores = new float[blockSize];
-
-                    for (int qi = s; qi < e; qi++) {
-                        ASHBlockScorer scorer =
-                                ashVectors.blockScorerFor(
-                                        finalQueries.get(qi),
-                                        VectorSimilarityFunction.DOT_PRODUCT,
-                                        blockSize
-                                );
-
-                        int j = 0;
-                        while (j + blockSize <= nVectors) {
-                            scorer.scoreRange(j, blockSize, scores);
-                            for (int k = 0; k < blockSize; k++) {
-                                localSum += scores[k];
-                            }
-                            j += blockSize;
-                        }
-
-                        // Tail (scalar fallback)
-                        if (j < nVectors) {
-                            ScoreFunction.ApproximateScoreFunction f =
-                                    ashVecs.scoreFunctionFor(
-                                            finalQueries.get(qi),
-                                            VectorSimilarityFunction.DOT_PRODUCT
-                                    );
-                            for (; j < nVectors; j++) {
-                                localSum += f.similarityTo(j);
-                            }
-                        }
-                    }
-                    return localSum;
-                }));
-            }
-
-            double simdDummy = 0.0;
-            for (ForkJoinTask<Double> t : simdTasks) {
-                simdDummy += t.join();
-            }
-
-            long simdEnd = System.nanoTime();
-
-            System.out.println(
-                    "\tBlock SIMD (blockSize=" + blockSize + ") took "
-                            + (simdEnd - simdStart) / 1e9 + " seconds"
-            );
-
-            System.clearProperty("jvector.ash.blockKernel");
-
-            // Prevent dead-code elimination
-            ashDummy += scalarDummy + simdDummy;
+            ashDummy += blockDummy;
         }
-
         // Prevent dead-code elimination across all sections
         System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
         System.out.println("--");
