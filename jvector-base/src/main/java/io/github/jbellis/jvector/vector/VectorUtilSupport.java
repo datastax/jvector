@@ -256,26 +256,47 @@ public interface VectorUtilSupport {
   }
 
   /**
-   * maskedAdd = <tildeQ, b> for b ∈ {0,1}^d stored as bitpacked longs.
-   *
-   * Contract: d <= tildeQ.length.
-   * Default is scalar; SIMD backends may override.
+   * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
+   * For each lane in [0, blockLen), writes:
+   *   outMaskedAdd[lane] = <tildeQ, b_lane>
+   * packedBits layout:
+   *   packedBits[blockWordBase + w*blockSize + laneIndex] is 64-bit word w for that lane.
+   * Default implementation is scalar bit-walk with a register accumulator per lane.
+   * SIMD backends may override.
    */
-  default float ashMaskedAdd(float[] tildeQ, long[] bits, int d) {
-    assert d <= tildeQ.length : "d must be <= tildeQ.length";
+  default void ashMaskedAddBlockAllWords(
+          float[] tildeQ,
+          int d,
+          long[] packedBits,
+          int packedBase,  // blockId * nWords * blockSize
+          int nWords,
+          int blockSize,
+          int laneStart,
+          int blockLen,
+          float[] outMaskedAdd
+  ) {
+    assert laneStart >= 0;
+    assert blockLen >= 0;
+    assert laneStart + blockLen <= blockSize;
+    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
 
-    float sum = 0.0f;
-    int base = 0;
+    for (int lane = 0; lane < blockLen; lane++) {
+      float maskedAdd = 0f; // register accumulator (critical!)
+      int laneIndex = laneStart + lane;
 
-    for (int w = 0; w < bits.length && base < d; w++, base += 64) {
-      long word = bits[w];
-      while (word != 0L) {
-        int bit = Long.numberOfTrailingZeros(word);
-        int idx = base + bit;
-        if (idx < d) sum += tildeQ[idx];
-        word &= (word - 1);
+      for (int w = 0; w < nWords; w++) {
+        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
+        int baseDim = w * 64;
+
+        while (word != 0L) {
+          int bit = Long.numberOfTrailingZeros(word);
+          int idx = baseDim + bit;
+          if (idx < d) maskedAdd += tildeQ[idx];
+          word &= (word - 1);
+        }
       }
+
+      outMaskedAdd[lane] = maskedAdd;
     }
-    return sum;
   }
 }

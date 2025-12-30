@@ -19,10 +19,13 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.quantization.ASHBlockScorer;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 
-import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
@@ -34,12 +37,12 @@ import java.util.ArrayList;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 
-
-
 import static java.lang.Math.abs;
 
 public class DistancesASH {
     public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
+        // Block sizes to benchmark
+        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -73,7 +76,7 @@ public class DistancesASH {
         // - Base vectors x are NOT globally normalized.
         // - For encoding, we compute μ on raw x.
         // - The residual (x − μ) is normalized ONCE inside the binarizer,
-        //   producing \hat{x} = (x − μ) / ||x − μ|| (Eq. 6).
+        //   producing \hat{x} = (x − μ) / ||x − μ|| (ASH Paper, Eq. 6).
         // - Queries may be L2-normalized in the benchmark (standard practice),
         //   but are NOT normalized inside the encoder.
         // - No other normalization steps are applied.
@@ -109,6 +112,30 @@ public class DistancesASH {
         CompressedVectors ashVecs = ash.encodeAll(ravv);
         long endTime = System.nanoTime();
         System.out.println("\tEncoding took " + (endTime - startTime) / 1e9 + " seconds");
+
+        ASHVectors ashVectors = (ASHVectors) ashVecs;
+        VectorFloat<?> q0 = finalQueries.get(0);
+
+        ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
+        ASHBlockScorer blk = ashVectors.blockScorerRegisterAccFor(q0, VectorSimilarityFunction.DOT_PRODUCT, 64);
+
+        float[] a = new float[128];
+        float[] b = new float[128];
+        ref.scoreRange(0, 128, a);
+        blk.scoreRange(0, 128, b);
+
+        final float EPS = 1e-6f;
+
+        for (int i = 0; i < 128; i++) {
+            float diff = Math.abs(a[i] - b[i]);
+            if (diff > EPS) {
+                throw new AssertionError(
+                        "Mismatch at " + i +
+                                ": ref=" + a[i] +
+                                ", blk=" + b[i] +
+                                ", diff=" + diff);
+            }
+        }
 
         // ------------------------------------------------------------------
         // Shared parallelization setup (executor-honoring)
@@ -162,7 +189,7 @@ public class DistancesASH {
         System.out.println("\tAverage absolute dot-product error = " + distanceError);
 
         // ==================================================================
-        // [2] ASH distance timing (Eq. 11 only)
+        // [2] Scalar ASH distance timing (reference)
         // ==================================================================
         List<ForkJoinTask<Double>> ashTasks = new ArrayList<>();
 
@@ -195,7 +222,7 @@ public class DistancesASH {
 
         long ashEnd = System.nanoTime();
 
-        System.out.println("\tASH dot-product computations took "
+        System.out.println("\tScalar ASH dot-product computations took "
                 + (ashEnd - ashStart) / 1e9 + " seconds");
 
         // ==================================================================
@@ -233,6 +260,130 @@ public class DistancesASH {
                 + (floatEnd - floatStart) / 1e9 + " seconds");
 
         // Prevent dead-code elimination
+        System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
+        System.out.println("--");
+        // ==================================================================
+        // [4] Block scoring timing: block baseline vs register-accumulator
+        // ==================================================================
+        for (int blockSize : BLOCK_SIZES) {
+
+            // --------------------------------------------------------------
+            // (A) Block baseline (scalar, block-structured)
+            // --------------------------------------------------------------
+            List<ForkJoinTask<Double>> baselineTasks = new ArrayList<>();
+            long baselineStart = System.nanoTime();
+
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
+
+                baselineTasks.add(simdExecutor.submit(() -> {
+                    double localSum = 0.0;
+                    final float[] scores = new float[blockSize];
+
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+
+                        ASHBlockScorer blockScorer =
+                                ashVectors.blockScorerFor(
+                                        q,
+                                        VectorSimilarityFunction.DOT_PRODUCT,
+                                        blockSize);
+
+                        int j = 0;
+                        while (j + blockSize <= nVectors) {
+                            blockScorer.scoreRange(j, blockSize, scores);
+                            for (int k = 0; k < blockSize; k++) {
+                                localSum += scores[k];
+                            }
+                            j += blockSize;
+                        }
+
+                        // Tail (scalar fallback)
+                        if (j < nVectors) {
+                            ScoreFunction.ApproximateScoreFunction f =
+                                    ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                            for (; j < nVectors; j++) {
+                                localSum += f.similarityTo(j);
+                            }
+                        }
+                    }
+                    return localSum;
+                }));
+            }
+
+            double baselineDummy = 0.0;
+            for (ForkJoinTask<Double> t : baselineTasks) {
+                baselineDummy += t.join();
+            }
+
+            long baselineEnd = System.nanoTime();
+
+            System.out.println(
+                    "\tBlock baseline (blockSize=" + blockSize + ") took "
+                            + (baselineEnd - baselineStart) / 1e9 + " seconds");
+
+            // --------------------------------------------------------------
+            // (B) Block register-accumulator scorer (fast block path)
+            // --------------------------------------------------------------
+            List<ForkJoinTask<Double>> regAccTasks = new ArrayList<>();
+            long regAccStart = System.nanoTime();
+
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
+
+                regAccTasks.add(simdExecutor.submit(() -> {
+                    double localSum = 0.0;
+                    final float[] scores = new float[blockSize];
+
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+
+                        ASHBlockScorer blockScorer =
+                                ashVectors.blockScorerRegisterAccFor(
+                                        q,
+                                        VectorSimilarityFunction.DOT_PRODUCT,
+                                        blockSize);
+
+                        int j = 0;
+                        while (j + blockSize <= nVectors) {
+                            blockScorer.scoreRange(j, blockSize, scores);
+                            for (int k = 0; k < blockSize; k++) {
+                                localSum += scores[k];
+                            }
+                            j += blockSize;
+                        }
+
+                        // Tail (scalar fallback)
+                        if (j < nVectors) {
+                            ScoreFunction.ApproximateScoreFunction f =
+                                    ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                            for (; j < nVectors; j++) {
+                                localSum += f.similarityTo(j);
+                            }
+                        }
+                    }
+                    return localSum;
+                }));
+            }
+
+            double regAccDummy = 0.0;
+            for (ForkJoinTask<Double> t : regAccTasks) {
+                regAccDummy += t.join();
+            }
+
+            long regAccEnd = System.nanoTime();
+
+            System.out.println(
+                    "\tBlock register-acc (blockSize=" + blockSize + ") took "
+                            + (regAccEnd - regAccStart) / 1e9 + " seconds");
+
+            // Prevent dead-code elimination across variants
+            ashDummy += baselineDummy + regAccDummy;
+        }
+
+        // Prevent dead-code elimination across all sections
         System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
         System.out.println("--");
     }
@@ -289,7 +440,7 @@ public class DistancesASH {
         System.out.println("Running text-embedding-3-large_3072");
 
         var baseVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec";
         testASHEncodings(baseVectors, queryVectors);
     }
 

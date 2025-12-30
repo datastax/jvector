@@ -30,6 +30,8 @@ import jdk.incubator.vector.VectorSpecies;
 import java.util.List;
 
 class PanamaVectorUtilSupport implements VectorUtilSupport {
+    private static final String ASH_BLOCK_KERNEL =
+            System.getProperty("jvector.ash.blockKernel", "mask"); // "lut" or "mask"
 
     static final int PREFERRED_BIT_SIZE = FloatVector.SPECIES_PREFERRED.vectorBitSize();
     static final IntVector BYTE_TO_INT_MASK_512 = IntVector.broadcast(IntVector.SPECIES_512, 0xff);
@@ -1569,5 +1571,274 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
 
         return acc;
+    }
+
+    @Override
+    public void ashMaskedAddBlockAllWords(float[] tildeQ,
+                                          int d,
+                                          long[] packedBits,
+                                          int blockWordBase,
+                                          int words,
+                                          int blockSize,
+                                          int laneStart,
+                                          int blockLen,
+                                          float[] outMaskedAdd) {
+
+        // Like in the ASH paper, SIMD lanes are dimensions (SPECIES_PREFERRED),
+        // masked load from tildeQ and horizontal sum per neighbor.
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        for (int lane = 0; lane < blockLen; lane++) {
+            float maskedAdd = 0f; // register scalar accumulator
+            int laneIndex = laneStart + lane;
+
+            for (int w = 0; w < words; w++) {
+                long wordBits = packedBits[blockWordBase + (w * blockSize) + laneIndex];
+                int baseDim = w * 64;
+
+                // process this 64-bit word in LANES-bit chunks
+                for (int off = 0; off < 64 && (baseDim + off) < d; off += LANES) {
+                    int qBase = baseDim + off;
+
+                    // Range mask for tail dims beyond d
+                    VectorMask<Float> inRange = SPEC.indexInRange(qBase, d);
+
+                    long maskBits;
+                    if (LANES == 16) {
+                        maskBits = (wordBits >>> off) & 0xFFFFL;
+                    } else if (LANES == 8) {
+                        maskBits = (wordBits >>> off) & 0xFFL;
+                    } else if (LANES == 4) {
+                        maskBits = (wordBits >>> off) & 0xFL;
+                    } else {
+                        // Unusual width; fall back to scalar for this chunk
+                        long m = wordBits >>> off;
+                        float s = 0f;
+                        for (int b = 0; b < LANES; b++) {
+                            if (((m >>> b) & 1L) != 0L) {
+                                int idx = qBase + b;
+                                if (idx < d) s += tildeQ[idx];
+                            }
+                        }
+                        maskedAdd += s;
+                        continue;
+                    }
+
+                    if (maskBits == 0L) continue;
+
+                    VectorMask<Float> bitMask =
+                            VectorMask.fromLong(SPEC, maskBits).and(inRange);
+
+                    // masked load (paper)
+                    FloatVector masked = FloatVector.fromArray(SPEC, tildeQ, qBase, bitMask);
+
+                    // horizontal sum (paper)
+                    maskedAdd += masked.reduceLanes(VectorOperators.ADD);
+                }
+            }
+
+            outMaskedAdd[lane] = maskedAdd;
+        }
+    }
+
+    private static void ashMaskedAddBlockWordLutNibble(float[] tildeQ,
+                                                       int baseDim,
+                                                       int d,
+                                                       long[] packedBits,
+                                                       int packedBase,
+                                                       int laneStart,
+                                                       int blockLen,
+                                                       float[] acc) {
+        for (int off = 0; off < 64 && (baseDim + off) < d; off += 4) {
+            int q0 = baseDim + off;
+
+            float v0 = (q0 + 0 < d) ? tildeQ[q0 + 0] : 0f;
+            float v1 = (q0 + 1 < d) ? tildeQ[q0 + 1] : 0f;
+            float v2 = (q0 + 2 < d) ? tildeQ[q0 + 2] : 0f;
+            float v3 = (q0 + 3 < d) ? tildeQ[q0 + 3] : 0f;
+
+            float lut1  = v0;
+            float lut2  = v1;
+            float lut3  = v0 + v1;
+            float lut4  = v2;
+            float lut5  = v0 + v2;
+            float lut6  = v1 + v2;
+            float lut7  = v0 + v1 + v2;
+            float lut8  = v3;
+            float lut9  = v0 + v3;
+            float lut10 = v1 + v3;
+            float lut11 = v0 + v1 + v3;
+            float lut12 = v2 + v3;
+            float lut13 = v0 + v2 + v3;
+            float lut14 = v1 + v2 + v3;
+            float lut15 = v0 + v1 + v2 + v3;
+
+            for (int lane = 0; lane < blockLen; lane++) {
+                long word = packedBits[packedBase + laneStart + lane];
+                int mask = (int) ((word >>> off) & 0xF);
+                switch (mask) {
+                    case 0:  break;
+                    case 1:  acc[lane] += lut1;  break;
+                    case 2:  acc[lane] += lut2;  break;
+                    case 3:  acc[lane] += lut3;  break;
+                    case 4:  acc[lane] += lut4;  break;
+                    case 5:  acc[lane] += lut5;  break;
+                    case 6:  acc[lane] += lut6;  break;
+                    case 7:  acc[lane] += lut7;  break;
+                    case 8:  acc[lane] += lut8;  break;
+                    case 9:  acc[lane] += lut9;  break;
+                    case 10: acc[lane] += lut10; break;
+                    case 11: acc[lane] += lut11; break;
+                    case 12: acc[lane] += lut12; break;
+                    case 13: acc[lane] += lut13; break;
+                    case 14: acc[lane] += lut14; break;
+                    case 15: acc[lane] += lut15; break;
+                }
+            }
+        }
+    }
+
+    private static void ashMaskedAddBlockWordLutByteTwoNibbles(float[] tildeQ,
+                                                               int baseDim,
+                                                               int d,
+                                                               long[] packedBits,
+                                                               int packedBase,
+                                                               int laneStart,
+                                                               int blockLen,
+                                                               float[] acc) {
+        for (int off = 0; off < 64 && (baseDim + off) < d; off += 8) {
+            int q0 = baseDim + off;
+
+            float v0 = (q0 + 0 < d) ? tildeQ[q0 + 0] : 0f;
+            float v1 = (q0 + 1 < d) ? tildeQ[q0 + 1] : 0f;
+            float v2 = (q0 + 2 < d) ? tildeQ[q0 + 2] : 0f;
+            float v3 = (q0 + 3 < d) ? tildeQ[q0 + 3] : 0f;
+            float v4 = (q0 + 4 < d) ? tildeQ[q0 + 4] : 0f;
+            float v5 = (q0 + 5 < d) ? tildeQ[q0 + 5] : 0f;
+            float v6 = (q0 + 6 < d) ? tildeQ[q0 + 6] : 0f;
+            float v7 = (q0 + 7 < d) ? tildeQ[q0 + 7] : 0f;
+
+            // Low nibble (v0..v3)
+            float lo1  = v0;
+            float lo2  = v1;
+            float lo3  = v0 + v1;
+            float lo4  = v2;
+            float lo5  = v0 + v2;
+            float lo6  = v1 + v2;
+            float lo7  = v0 + v1 + v2;
+            float lo8  = v3;
+            float lo9  = v0 + v3;
+            float lo10 = v1 + v3;
+            float lo11 = v0 + v1 + v3;
+            float lo12 = v2 + v3;
+            float lo13 = v0 + v2 + v3;
+            float lo14 = v1 + v2 + v3;
+            float lo15 = v0 + v1 + v2 + v3;
+
+            // High nibble (v4..v7)
+            float hi1  = v4;
+            float hi2  = v5;
+            float hi3  = v4 + v5;
+            float hi4  = v6;
+            float hi5  = v4 + v6;
+            float hi6  = v5 + v6;
+            float hi7  = v4 + v5 + v6;
+            float hi8  = v7;
+            float hi9  = v4 + v7;
+            float hi10 = v5 + v7;
+            float hi11 = v4 + v5 + v7;
+            float hi12 = v6 + v7;
+            float hi13 = v4 + v6 + v7;
+            float hi14 = v5 + v6 + v7;
+            float hi15 = v4 + v5 + v6 + v7;
+
+            for (int lane = 0; lane < blockLen; lane++) {
+                long word = packedBits[packedBase + laneStart + lane];
+                int mask = (int) ((word >>> off) & 0xFF);
+
+                int lo = mask & 0xF;
+                int hi = (mask >>> 4) & 0xF;
+
+                float addLo = 0f;
+                switch (lo) {
+                    case 0:  break;
+                    case 1:  addLo = lo1;  break;
+                    case 2:  addLo = lo2;  break;
+                    case 3:  addLo = lo3;  break;
+                    case 4:  addLo = lo4;  break;
+                    case 5:  addLo = lo5;  break;
+                    case 6:  addLo = lo6;  break;
+                    case 7:  addLo = lo7;  break;
+                    case 8:  addLo = lo8;  break;
+                    case 9:  addLo = lo9;  break;
+                    case 10: addLo = lo10; break;
+                    case 11: addLo = lo11; break;
+                    case 12: addLo = lo12; break;
+                    case 13: addLo = lo13; break;
+                    case 14: addLo = lo14; break;
+                    case 15: addLo = lo15; break;
+                }
+
+                float addHi = 0f;
+                switch (hi) {
+                    case 0:  break;
+                    case 1:  addHi = hi1;  break;
+                    case 2:  addHi = hi2;  break;
+                    case 3:  addHi = hi3;  break;
+                    case 4:  addHi = hi4;  break;
+                    case 5:  addHi = hi5;  break;
+                    case 6:  addHi = hi6;  break;
+                    case 7:  addHi = hi7;  break;
+                    case 8:  addHi = hi8;  break;
+                    case 9:  addHi = hi9;  break;
+                    case 10: addHi = hi10; break;
+                    case 11: addHi = hi11; break;
+                    case 12: addHi = hi12; break;
+                    case 13: addHi = hi13; break;
+                    case 14: addHi = hi14; break;
+                    case 15: addHi = hi15; break;
+                }
+
+                acc[lane] += (addLo + addHi);
+            }
+        }
+    }
+
+    private static void ashMaskedAddBlockWordMask(float[] tildeQ,
+                                                  int baseDim,
+                                                  int d,
+                                                  long[] packedBits,
+                                                  int packedBase,
+                                                  int laneStart,
+                                                  int blockLen,
+                                                  float[] acc) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int lanes = SPEC.length();
+
+        for (int off = 0; off < 64 && (baseDim + off) < d; off += lanes) {
+            int qBase = baseDim + off;
+
+            VectorMask<Float> inRange = SPEC.indexInRange(qBase, d);
+            FloatVector qVec = FloatVector.fromArray(SPEC, tildeQ, qBase, inRange);
+
+            for (int lane = 0; lane < blockLen; lane++) {
+                long word = packedBits[packedBase + laneStart + lane];
+
+                long maskBits;
+                if (lanes == 16) {
+                    maskBits = (word >>> off) & 0xFFFFL;
+                } else if (lanes == 8) {
+                    maskBits = (word >>> off) & 0xFFL;
+                } else { // NEON 4 lanes
+                    maskBits = (word >>> off) & 0xFL;
+                }
+
+                if (maskBits == 0L) continue;
+
+                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, maskBits).and(inRange);
+                acc[lane] += qVec.reduceLanes(VectorOperators.ADD, bitMask);
+            }
+        }
     }
 }
