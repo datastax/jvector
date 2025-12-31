@@ -1,0 +1,302 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.example;
+
+import io.github.jbellis.jvector.example.util.SiftLoader;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
+
+public class DistancesPQ {
+
+    /**
+     * PQ benchmark aligned with DistancesASH:
+     *
+     *  - Same datasets
+     *  - Same query normalization
+     *  - Same brute-force scan pattern
+     *  - Same parallel executor
+     *  - Same compression budget (≈ d/32 bytes per vector)
+     *
+     * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
+     */
+    public static void testPQEncodings(String filenameBase, String filenameQueries) throws IOException {
+
+        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
+        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+
+        // ------------------------------------------------------------
+        // Remove zero-norm vectors (match DistancesASH)
+        // ------------------------------------------------------------
+        int beforeBase = vectors.size();
+        List<VectorFloat<?>> filteredBase = new ArrayList<>(vectors.size());
+        for (VectorFloat<?> v : vectors) {
+            if (VectorUtil.dotProduct(v, v) > 0f) {
+                filteredBase.add(v);
+            }
+        }
+        vectors = filteredBase;
+
+        int beforeQuery = queries.size();
+        List<VectorFloat<?>> filteredQueries = new ArrayList<>(queries.size());
+        for (VectorFloat<?> q : queries) {
+            if (VectorUtil.dotProduct(q, q) > 0f) {
+                filteredQueries.add(q);
+            }
+        }
+        queries = filteredQueries;
+
+        System.out.println("\tRemoved " + (beforeBase - vectors.size()) + " zero base vectors and "
+                + (beforeQuery - queries.size()) + " zero query vectors");
+
+        // Match ASH: normalize queries only
+        for (VectorFloat<?> q : queries) {
+            VectorUtil.l2normalize(q);
+        }
+
+        int dimension = vectors.get(0).length();
+
+        int nQueries = Math.min(1000, queries.size());
+        int nVectors = Math.min(100_000, vectors.size());
+
+        vectors = vectors.subList(0, nVectors);
+        queries = queries.subList(0, nQueries);
+
+        final List<VectorFloat<?>> finalVectors = vectors;
+        final List<VectorFloat<?>> finalQueries = queries;
+
+        System.out.format("\t%d base and %d query vectors loaded, dimension=%d%n",
+                nVectors, nQueries, dimension);
+
+        // ------------------------------------------------------------
+        // Parallel executor (identical to DistancesASH)
+        // ------------------------------------------------------------
+        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+        int parallelism = simdExecutor.getParallelism();
+        int chunkSize = Math.max(1, (nQueries + parallelism - 1) / parallelism);
+
+        // ------------------------------------------------------------
+        // PQ parameters (compression matched to ASH)
+        // ------------------------------------------------------------
+        // ASH: encodedBits = d / 4  -> bytes = d / 32
+        // PQ: 1 byte per subspace  -> M = d / 32
+        final int M = Math.max(1, dimension / 32);
+        final int K = 256;                 // 1 byte per subspace
+        final boolean globallyCenter = false;
+        final float anisotropicThreshold = 0.0f;
+
+        System.out.println("\tPQ params:");
+        System.out.println("\t  M = " + M + " subspaces");
+        System.out.println("\t  K = " + K + " clusters");
+        System.out.println("\t  Compression ≈ " + (M * 8) + " bits (" + M + " bytes)");
+        System.out.println("\t  ASH reference ≈ " + (dimension / 4) + " bits (" + (dimension / 32) + " bytes)");
+
+        // ------------------------------------------------------------
+        // Train PQ + encode (timed)
+        // ------------------------------------------------------------
+        RandomAccessVectorValues ravv =
+                new ListRandomAccessVectorValues(finalVectors, dimension);
+
+        long pqTrainStart = System.nanoTime();
+        ProductQuantization pq = ProductQuantization.compute(
+                ravv,
+                M,
+                K,
+                globallyCenter,
+                anisotropicThreshold,
+                simdExecutor,
+                ForkJoinPool.commonPool()
+        );
+        long pqTrainEnd = System.nanoTime();
+
+        long pqEncodeStart = System.nanoTime();
+        CompressedVectors pqAny = pq.encodeAll(ravv, simdExecutor);
+        long pqEncodeEnd = System.nanoTime();
+
+        PQVectors pqVecs = (PQVectors) pqAny;
+
+        System.out.println("\tPQ training took " + (pqTrainEnd - pqTrainStart) / 1e9 + " seconds");
+        System.out.println("\tPQ encoding took " + (pqEncodeEnd - pqEncodeStart) / 1e9 + " seconds");
+
+        // ============================================================
+        // [1] Accuracy (NOT timed)
+        //     Compare unscaled dot products:
+        //       PQ returns (1 + dp)/2  -> dp = 2*score - 1
+        // ============================================================
+        List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
+
+        for (int start = 0; start < nQueries; start += chunkSize) {
+            final int s = start;
+            final int e = Math.min(start + chunkSize, nQueries);
+
+            errorTasks.add(simdExecutor.submit(() -> {
+                double localError = 0.0;
+                long localCount = 0;
+
+                for (int i = s; i < e; i++) {
+                    VectorFloat<?> q = finalQueries.get(i);
+                    ScoreFunction.ApproximateScoreFunction f =
+                            pqVecs.precomputedScoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+
+                    for (int j = 0; j < nVectors; j++) {
+                        float trueDot = VectorUtil.dotProduct(q, finalVectors.get(j));
+                        float approxScaled = f.similarityTo(j);
+                        float approxDot = 2.0f * approxScaled - 1.0f;
+
+                        localError += Math.abs(approxDot - trueDot);
+                        localCount++;
+                    }
+                }
+                return new double[]{localError, localCount};
+            }));
+        }
+
+        double totalError = 0.0;
+        long totalCount = 0;
+        for (ForkJoinTask<double[]> t : errorTasks) {
+            double[] r = t.join();
+            totalError += r[0];
+            totalCount += (long) r[1];
+        }
+
+        System.out.println("\tAverage absolute dot-product error = " + (totalError / totalCount));
+
+        // ============================================================
+        // [2] Fast PQ scan timing (PQDecoder / ADC)
+        // ============================================================
+        List<ForkJoinTask<Double>> pqTasks = new ArrayList<>();
+        long pqStart = System.nanoTime();
+
+        for (int start = 0; start < nQueries; start += chunkSize) {
+            final int s = start;
+            final int e = Math.min(start + chunkSize, nQueries);
+
+            pqTasks.add(simdExecutor.submit(() -> {
+                double localSum = 0.0;
+                for (int i = s; i < e; i++) {
+                    ScoreFunction.ApproximateScoreFunction f =
+                            pqVecs.precomputedScoreFunctionFor(
+                                    finalQueries.get(i),
+                                    VectorSimilarityFunction.DOT_PRODUCT
+                            );
+                    for (int j = 0; j < nVectors; j++) {
+                        localSum += f.similarityTo(j);
+                    }
+                }
+                return localSum;
+            }));
+        }
+
+        double pqDummy = 0.0;
+        for (ForkJoinTask<Double> t : pqTasks) {
+            pqDummy += t.join();
+        }
+
+        long pqEnd = System.nanoTime();
+        System.out.println("\tPQDecoder scan took " + (pqEnd - pqStart) / 1e9 + " seconds");
+
+        // ============================================================
+        // [3] Float dot-product baseline
+        // ============================================================
+        List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
+        long floatStart = System.nanoTime();
+
+        for (int start = 0; start < nQueries; start += chunkSize) {
+            final int s = start;
+            final int e = Math.min(start + chunkSize, nQueries);
+
+            floatTasks.add(simdExecutor.submit(() -> {
+                double localSum = 0.0;
+                for (int i = s; i < e; i++) {
+                    VectorFloat<?> q = finalQueries.get(i);
+                    for (int j = 0; j < nVectors; j++) {
+                        localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
+                    }
+                }
+                return localSum;
+            }));
+        }
+
+        double floatDummy = 0.0;
+        for (ForkJoinTask<Double> t : floatTasks) {
+            floatDummy += t.join();
+        }
+
+        long floatEnd = System.nanoTime();
+        System.out.println("\tFloat dot-product scan took " + (floatEnd - floatStart) / 1e9 + " seconds");
+
+        // Prevent dead-code elimination
+        System.out.println("\tdummyAccumulator = " + (float) (pqDummy + floatDummy));
+        System.out.println("--");
+    }
+
+    // ------------------------------------------------------------------
+    // Dataset runners (mirrors DistancesASH)
+    // ------------------------------------------------------------------
+
+    public static void runCohere100k() throws IOException {
+        System.out.println("Running Cohere-100k");
+        testPQEncodings(
+                "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec",
+                "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec"
+        );
+    }
+
+    public static void runADA() throws IOException {
+        System.out.println("Running ada_002");
+        testPQEncodings(
+                "./fvec/ada-002/ada_002_100000_base_vectors.fvec",
+                "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec"
+        );
+    }
+
+    public static void runOpenai1536() throws IOException {
+        System.out.println("Running text-embedding-3-large_1536");
+        testPQEncodings(
+                "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_base_vectors.fvec",
+                "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec"
+        );
+    }
+
+    public static void runOpenai3072() throws IOException {
+        System.out.println("Running text-embedding-3-large_3072");
+        testPQEncodings(
+                "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec",
+                "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec"
+        );
+    }
+
+    public static void main(String[] args) throws IOException {
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
+    }
+}
