@@ -48,8 +48,23 @@ public class DistancesASH {
     }
 
     public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
+        // ------------------------------------------------------------
+        // Benchmark configuration (runtime flags)
+        // ------------------------------------------------------------
+        final boolean RUN_SANITY_CHECK =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
+
+        final boolean RUN_ACCURACY_CHECK =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
+
+        final boolean RUN_SCALAR_SCORING =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
+
+        final boolean RUN_FLOAT_SCORING =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
+
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {16, 32, 64, 128}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {64}; // 16, 32, and/or 64
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -97,8 +112,8 @@ public class DistancesASH {
                         ", encodedBits = " + encodedBits
         );
 
-        int nQueries = Math.min(1000, queries.size());
-        int nVectors = Math.min(100_000, vectors.size());
+        int nQueries = Math.min(10000, queries.size());
+        int nVectors = Math.min(1_000_000, vectors.size());
 
         vectors = vectors.subList(0, nVectors);
         queries = queries.subList(0, nQueries);
@@ -123,37 +138,40 @@ public class DistancesASH {
         ASHVectors ashVectors = (ASHVectors) ashVecs;
         VectorFloat<?> q0 = finalQueries.get(0);
 
-        ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
-        printScorerInfo("scalar-ref", ref);
+        if(RUN_SANITY_CHECK) {
 
-        final int sanityBlockSize = BLOCK_SIZES[0];
-        ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, sanityBlockSize);
-        printScorerInfo("block", blk);
+            ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
+            printScorerInfo("scalar-ref", ref);
+
+            final int sanityBlockSize = BLOCK_SIZES[0];
+            ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, sanityBlockSize);
+            printScorerInfo("block", blk);
 
 
+            float[] a = new float[128];
+            float[] b = new float[128];
+            ref.scoreRange(0, 128, a);
+            blk.scoreRange(0, 128, b);
 
-        float[] a = new float[128];
-        float[] b = new float[128];
-        ref.scoreRange(0, 128, a);
-        blk.scoreRange(0, 128, b);
+            final float EPS = 1e-6f;
 
-        final float EPS = 1e-6f;
-
-        for (int i = 0; i < 128; i++) {
-            float diff = Math.abs(a[i] - b[i]);
-            if (diff > EPS) {
-                throw new AssertionError(
-                        "Mismatch at " + i +
-                                ": ref=" + a[i] +
-                                ", blk=" + b[i] +
-                                ", diff=" + diff);
+            for (int i = 0; i < 128; i++) {
+                float diff = Math.abs(a[i] - b[i]);
+                if (diff > EPS) {
+                    throw new AssertionError(
+                            "Mismatch at " + i +
+                                    ": ref=" + a[i] +
+                                    ", blk=" + b[i] +
+                                    ", diff=" + diff);
+                }
             }
         }
 
         // ------------------------------------------------------------------
         // Shared parallelization setup (executor-honoring)
         // ------------------------------------------------------------------
-        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+        // ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
+        ForkJoinPool simdExecutor = new ForkJoinPool(4); // For profiling
 
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (nQueries + parallelism - 1) / parallelism);
@@ -161,120 +179,128 @@ public class DistancesASH {
         // ==================================================================
         // [1] Accuracy run (NOT timed)
         // ==================================================================
-        List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
+        if(RUN_ACCURACY_CHECK) {
+            List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
-            final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
 
-            errorTasks.add(simdExecutor.submit(() -> {
-                double localError = 0.0;
-                long localCount = 0;
+                errorTasks.add(simdExecutor.submit(() -> {
+                    double localError = 0.0;
+                    long localCount = 0;
 
-                for (int i = s; i < e; i++) {
-                    VectorFloat<?> q = finalQueries.get(i);
-                    ScoreFunction.ApproximateScoreFunction f =
-                            ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        ScoreFunction.ApproximateScoreFunction f =
+                                ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                    for (int j = 0; j < nVectors; j++) {
-                        VectorFloat<?> v = finalVectors.get(j);
-                        float trueDot = VectorUtil.dotProduct(q, v);
-                        float approxDot = f.similarityTo(j);
+                        for (int j = 0; j < nVectors; j++) {
+                            VectorFloat<?> v = finalVectors.get(j);
+                            float trueDot = VectorUtil.dotProduct(q, v);
+                            float approxDot = f.similarityTo(j);
 
-                        localError += Math.abs(approxDot - trueDot);
-                        localCount++;
+                            localError += Math.abs(approxDot - trueDot);
+                            localCount++;
+                        }
                     }
-                }
-                return new double[]{localError, localCount};
-            }));
+                    return new double[]{localError, localCount};
+                }));
+            }
+
+            double distanceError = 0.0;
+            long count = 0;
+
+            for (ForkJoinTask<double[]> t : errorTasks) {
+                double[] r = t.join();
+                distanceError += r[0];
+                count += (long) r[1];
+            }
+
+            distanceError /= count;
+            System.out.println("\tAverage absolute dot-product error = " + distanceError);
         }
 
-        double distanceError = 0.0;
-        long count = 0;
-
-        for (ForkJoinTask<double[]> t : errorTasks) {
-            double[] r = t.join();
-            distanceError += r[0];
-            count += (long) r[1];
-        }
-
-        distanceError /= count;
-        System.out.println("\tAverage absolute dot-product error = " + distanceError);
-
         // ==================================================================
-        // [2] Scalar ASH distance timing (reference)
+        // [2] Scalar ASH scoring timing (reference)
         // ==================================================================
-        List<ForkJoinTask<Double>> ashTasks = new ArrayList<>();
+        if (RUN_SCALAR_SCORING) {
+            List<ForkJoinTask<Double>> ashTasks = new ArrayList<>();
 
-        long ashStart = System.nanoTime();
+            long ashStart = System.nanoTime();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
-            final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
 
-            ashTasks.add(simdExecutor.submit(() -> {
-                double localSum = 0.0;
+                ashTasks.add(simdExecutor.submit(() -> {
+                    double localSum = 0.0;
 
-                for (int i = s; i < e; i++) {
-                    VectorFloat<?> q = finalQueries.get(i);
-                    ScoreFunction.ApproximateScoreFunction f =
-                            ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        ScoreFunction.ApproximateScoreFunction f =
+                                ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                    for (int j = 0; j < nVectors; j++) {
-                        localSum += f.similarityTo(j);
+                        for (int j = 0; j < nVectors; j++) {
+                            localSum += f.similarityTo(j);
+                        }
                     }
-                }
-                return localSum;
-            }));
+                    return localSum;
+                }));
+            }
+
+            double ashDummy = 0.0;
+            for (ForkJoinTask<Double> t : ashTasks) {
+                ashDummy += t.join();
+            }
+
+            long ashEnd = System.nanoTime();
+
+            System.out.println("\tScalar ASH dot-product computations took "
+                    + (ashEnd - ashStart) / 1e9 + " seconds");
+            System.out.println("\tdummyAccumulator = " + (float) (ashDummy));
+            System.out.println("--");
         }
 
-        double ashDummy = 0.0;
-        for (ForkJoinTask<Double> t : ashTasks) {
-            ashDummy += t.join();
-        }
-
-        long ashEnd = System.nanoTime();
-
-        System.out.println("\tScalar ASH dot-product computations took "
-                + (ashEnd - ashStart) / 1e9 + " seconds");
-
         // ==================================================================
-        // [3] Float dot-product timing (ground truth baseline)
+        // [3] Float dot-product scoring (ground truth baseline)
         // ==================================================================
-        List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
+        if (RUN_FLOAT_SCORING) {
+            List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
 
-        long floatStart = System.nanoTime();
+            long floatStart = System.nanoTime();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
-            final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
 
-            floatTasks.add(simdExecutor.submit(() -> {
-                double localSum = 0.0;
+                floatTasks.add(simdExecutor.submit(() -> {
+                    double localSum = 0.0;
 
-                for (int i = s; i < e; i++) {
-                    VectorFloat<?> q = finalQueries.get(i);
-                    for (int j = 0; j < nVectors; j++) {
-                        localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        for (int j = 0; j < nVectors; j++) {
+                            localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
+                        }
                     }
-                }
-                return localSum;
-            }));
+                    return localSum;
+                }));
+            }
+
+            double floatDummy = 0.0;
+            for (ForkJoinTask<Double> t : floatTasks) {
+                floatDummy += t.join();
+            }
+
+            long floatEnd = System.nanoTime();
+
+            System.out.println("\tFloat dot-product computations took "
+                    + (floatEnd - floatStart) / 1e9 + " seconds");
+
+            // Prevent dead-code elimination
+            System.out.println("\tdummyAccumulator = " + (float) (floatDummy));
+            System.out.println("--");
         }
-
-        double floatDummy = 0.0;
-        for (ForkJoinTask<Double> t : floatTasks) {
-            floatDummy += t.join();
-        }
-
-        long floatEnd = System.nanoTime();
-
-        System.out.println("\tFloat dot-product computations took "
-                + (floatEnd - floatStart) / 1e9 + " seconds");
-
-        // Prevent dead-code elimination
-        System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
-        System.out.println("--");
 
         // ==================================================================
         // [4] Block scoring timing (single mode per JVM run)
@@ -355,11 +381,9 @@ public class DistancesASH {
                             + (blockEnd - blockStart) / 1e9 + " seconds"
             );
 
-            ashDummy += blockDummy;
+            System.out.println("\tdummyAccumulator = " + (float) (blockDummy));
+            System.out.println("--");
         }
-        // Prevent dead-code elimination across all sections
-        System.out.println("\tdummyAccumulator = " + (float) (ashDummy + floatDummy));
-        System.out.println("--");
     }
 
     public static void runSIFT() throws IOException {
@@ -418,13 +442,31 @@ public class DistancesASH {
         testASHEncodings(baseVectors, queryVectors);
     }
 
+    public static void runCap6m() throws IOException {
+        System.out.println("Running cap-6m");
+
+        var baseVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs";
+        var queryVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs";
+        testASHEncodings(baseVectors, queryVectors);
+    }
+
+    public static void runCohere10m() throws IOException {
+        System.out.println("Running cohere-10m");
+
+        var baseVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs";
+        var queryVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs";
+        testASHEncodings(baseVectors, queryVectors);
+    }
+
     public static void main(String[] args) throws IOException {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
-        runADA();
-        runOpenai1536();
-        runOpenai3072();
+//        runCohere100k();
+//        runADA();
+//        runOpenai1536();
+//        runOpenai3072();
+//        runCap6m();
+        runCohere10m();
     }
 }
