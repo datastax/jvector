@@ -56,8 +56,19 @@ public class DistancesPQ {
         final boolean RUN_FLOAT_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
-        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
-        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+        // Define the benchmark size
+        int maxQueries = 10_000;
+        int maxVectors = 2_000_000;
+
+        int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
+        int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
+
+        // Will benchmark what was requested or the maximum available vectors (if less)
+        int nQueries = Math.min(maxQueries, queryCountInFile);
+        int nVectors = Math.min(maxVectors, vectorCountInFile);
+
+        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase, nVectors);
+        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries, nQueries);
 
         // ------------------------------------------------------------
         // Remove zero-norm vectors (match DistancesASH)
@@ -83,6 +94,12 @@ public class DistancesPQ {
         System.out.println("\tRemoved " + (beforeBase - vectors.size()) + " zero base vectors and "
                 + (beforeQuery - queries.size()) + " zero query vectors");
 
+        // ------------------------------------------------------------
+        // Update counts after filtering
+        // ------------------------------------------------------------
+        final int finalVectorCount = vectors.size();
+        final int finalQueryCount = queries.size();
+
         // Match ASH: normalize queries only
         for (VectorFloat<?> q : queries) {
             VectorUtil.l2normalize(q);
@@ -90,24 +107,18 @@ public class DistancesPQ {
 
         int dimension = vectors.get(0).length();
 
-        int nQueries = Math.min(10000, queries.size());
-        int nVectors = Math.min(10_000_000, vectors.size());
-
-        vectors = vectors.subList(0, nVectors);
-        queries = queries.subList(0, nQueries);
-
         final List<VectorFloat<?>> finalVectors = vectors;
         final List<VectorFloat<?>> finalQueries = queries;
 
         System.out.format("\t%d base and %d query vectors loaded, dimension=%d%n",
-                nVectors, nQueries, dimension);
+                vectors.size(), queries.size(), dimension);
 
         // ------------------------------------------------------------
         // Parallel executor (identical to DistancesASH)
         // ------------------------------------------------------------
         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
         int parallelism = simdExecutor.getParallelism();
-        int chunkSize = Math.max(1, (nQueries + parallelism - 1) / parallelism);
+        int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
 
         // ------------------------------------------------------------
         // PQ parameters (compression matched to ASH)
@@ -160,9 +171,9 @@ public class DistancesPQ {
         if (RUN_ACCURACY_CHECK) {
             List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 errorTasks.add(simdExecutor.submit(() -> {
                     double localError = 0.0;
@@ -173,7 +184,7 @@ public class DistancesPQ {
                         ScoreFunction.ApproximateScoreFunction f =
                                 pqVecs.precomputedScoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                        for (int j = 0; j < nVectors; j++) {
+                        for (int j = 0; j < finalVectorCount; j++) {
                             float trueDot = VectorUtil.dotProduct(q, finalVectors.get(j));
                             float approxScaled = f.similarityTo(j);
                             float approxDot = 2.0f * approxScaled - 1.0f;
@@ -203,9 +214,9 @@ public class DistancesPQ {
         List<ForkJoinTask<Double>> pqTasks = new ArrayList<>();
         long pqStart = System.nanoTime();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
+        for (int start = 0; start < finalQueryCount; start += chunkSize) {
             final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            final int e = Math.min(start + chunkSize, finalQueryCount);
 
             pqTasks.add(simdExecutor.submit(() -> {
                 double localSum = 0.0;
@@ -215,7 +226,7 @@ public class DistancesPQ {
                                     finalQueries.get(i),
                                     VectorSimilarityFunction.DOT_PRODUCT
                             );
-                    for (int j = 0; j < nVectors; j++) {
+                    for (int j = 0; j < finalVectorCount; j++) {
                         localSum += f.similarityTo(j);
                     }
                 }
@@ -241,15 +252,15 @@ public class DistancesPQ {
             List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
             long floatStart = System.nanoTime();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 floatTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
-                        for (int j = 0; j < nVectors; j++) {
+                        for (int j = 0; j < finalVectorCount; j++) {
                             localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
                         }
                     }
@@ -324,11 +335,11 @@ public class DistancesPQ {
     }
 
     public static void main(String[] args) throws IOException {
-//        runCohere100k();
-//        runADA();
-//        runOpenai1536();
-//        runOpenai3072();
-        runCap6m();
-        runCohere10m();
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
+//        runCap6m();
+//        runCohere10m();
     }
 }
