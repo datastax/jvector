@@ -1591,11 +1591,20 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         // Like in the ASH paper, SIMD lanes are dimensions (SPECIES_PREFERRED),
         // masked load from tildeQ and horizontal sum per neighbor.
+        //
+        // Optimization: amortize horizontal reductions.
+        // Instead of reducing each masked chunk immediately, we accumulate masked
+        // vectors into a vector register accumulator and reduce once per lane.
         final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
         final int LANES = SPEC.length();
 
         for (int lane = 0; lane < blockLen; lane++) {
-            float maskedAdd = 0f; // register scalar accumulator
+            // Vector accumulator: stays in registers (no array accumulation).
+            FloatVector accVec = FloatVector.zero(SPEC);
+
+            // Scalar accumulator for unusual widths fallback only.
+            float scalarAcc = 0f;
+
             int laneIndex = laneStart + lane;
 
             for (int w = 0; w < words; w++) {
@@ -1626,7 +1635,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                                 if (idx < d) s += tildeQ[idx];
                             }
                         }
-                        maskedAdd += s;
+                        scalarAcc += s;
                         continue;
                     }
 
@@ -1638,10 +1647,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                     // masked load (paper)
                     FloatVector masked = FloatVector.fromArray(SPEC, tildeQ, qBase, bitMask);
 
-                    // horizontal sum (paper)
-                    maskedAdd += masked.reduceLanes(VectorOperators.ADD);
+                    // amortized accumulation (register)
+                    accVec = accVec.add(masked);
                 }
             }
+
+            // One horizontal sum per lane (instead of per chunk)
+            float maskedAdd = accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
 
             outMaskedAdd[lane] = maskedAdd;
         }
