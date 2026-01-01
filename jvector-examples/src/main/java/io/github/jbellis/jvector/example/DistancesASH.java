@@ -55,7 +55,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -64,7 +64,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {64}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {16, 32, 64, 128}; // 16, 32, and/or 64
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -112,7 +112,7 @@ public class DistancesASH {
                         ", encodedBits = " + encodedBits
         );
 
-        int nQueries = Math.min(10000, queries.size());
+        int nQueries = Math.min(1000, queries.size());
         int nVectors = Math.min(1_000_000, vectors.size());
 
         vectors = vectors.subList(0, nVectors);
@@ -170,8 +170,8 @@ public class DistancesASH {
         // ------------------------------------------------------------------
         // Shared parallelization setup (executor-honoring)
         // ------------------------------------------------------------------
-        // ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
-        ForkJoinPool simdExecutor = new ForkJoinPool(4); // For profiling
+         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
+        // ForkJoinPool simdExecutor = new ForkJoinPool(4); // For profiling
 
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (nQueries + parallelism - 1) / parallelism);
@@ -462,11 +462,11 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-//        runCohere100k();
-//        runADA();
-//        runOpenai1536();
-//        runOpenai3072();
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
 //        runCap6m();
-        runCohere10m();
+//        runCohere10m();
     }
 }
