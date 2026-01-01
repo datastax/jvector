@@ -48,6 +48,13 @@ public class DistancesPQ {
      * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
      */
     public static void testPQEncodings(String filenameBase, String filenameQueries) throws IOException {
+        // ------------------------------------------------------------
+        // Benchmark configuration (runtime flags)
+        // ------------------------------------------------------------
+        final boolean RUN_ACCURACY_CHECK =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy-check", "true"));
+        final boolean RUN_FLOAT_SCORING =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -83,8 +90,8 @@ public class DistancesPQ {
 
         int dimension = vectors.get(0).length();
 
-        int nQueries = Math.min(1000, queries.size());
-        int nVectors = Math.min(100_000, vectors.size());
+        int nQueries = Math.min(10000, queries.size());
+        int nVectors = Math.min(10_000_000, vectors.size());
 
         vectors = vectors.subList(0, nVectors);
         queries = queries.subList(0, nQueries);
@@ -150,43 +157,45 @@ public class DistancesPQ {
         //     Compare unscaled dot products:
         //       PQ returns (1 + dp)/2  -> dp = 2*score - 1
         // ============================================================
-        List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
+        if (RUN_ACCURACY_CHECK) {
+            List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
-            final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
 
-            errorTasks.add(simdExecutor.submit(() -> {
-                double localError = 0.0;
-                long localCount = 0;
+                errorTasks.add(simdExecutor.submit(() -> {
+                    double localError = 0.0;
+                    long localCount = 0;
 
-                for (int i = s; i < e; i++) {
-                    VectorFloat<?> q = finalQueries.get(i);
-                    ScoreFunction.ApproximateScoreFunction f =
-                            pqVecs.precomputedScoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        ScoreFunction.ApproximateScoreFunction f =
+                                pqVecs.precomputedScoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                    for (int j = 0; j < nVectors; j++) {
-                        float trueDot = VectorUtil.dotProduct(q, finalVectors.get(j));
-                        float approxScaled = f.similarityTo(j);
-                        float approxDot = 2.0f * approxScaled - 1.0f;
+                        for (int j = 0; j < nVectors; j++) {
+                            float trueDot = VectorUtil.dotProduct(q, finalVectors.get(j));
+                            float approxScaled = f.similarityTo(j);
+                            float approxDot = 2.0f * approxScaled - 1.0f;
 
-                        localError += Math.abs(approxDot - trueDot);
-                        localCount++;
+                            localError += Math.abs(approxDot - trueDot);
+                            localCount++;
+                        }
                     }
-                }
-                return new double[]{localError, localCount};
-            }));
-        }
+                    return new double[]{localError, localCount};
+                }));
+            }
 
-        double totalError = 0.0;
-        long totalCount = 0;
-        for (ForkJoinTask<double[]> t : errorTasks) {
-            double[] r = t.join();
-            totalError += r[0];
-            totalCount += (long) r[1];
-        }
+            double totalError = 0.0;
+            long totalCount = 0;
+            for (ForkJoinTask<double[]> t : errorTasks) {
+                double[] r = t.join();
+                totalError += r[0];
+                totalCount += (long) r[1];
+            }
 
-        System.out.println("\tAverage absolute dot-product error = " + (totalError / totalCount));
+            System.out.println("\tAverage absolute dot-product error = " + (totalError / totalCount));
+        }
 
         // ============================================================
         // [2] Fast PQ scan timing (PQDecoder / ADC)
@@ -218,6 +227,9 @@ public class DistancesPQ {
         for (ForkJoinTask<Double> t : pqTasks) {
             pqDummy += t.join();
         }
+        // Prevent dead-code elimination
+        System.out.println("\tdummyAccumulator = " + (float) (pqDummy));
+        System.out.println("--");
 
         long pqEnd = System.nanoTime();
         System.out.println("\tPQDecoder scan took " + (pqEnd - pqStart) / 1e9 + " seconds");
@@ -225,36 +237,38 @@ public class DistancesPQ {
         // ============================================================
         // [3] Float dot-product baseline
         // ============================================================
-        List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
-        long floatStart = System.nanoTime();
+        if (RUN_FLOAT_SCORING) {
+            List<ForkJoinTask<Double>> floatTasks = new ArrayList<>();
+            long floatStart = System.nanoTime();
 
-        for (int start = 0; start < nQueries; start += chunkSize) {
-            final int s = start;
-            final int e = Math.min(start + chunkSize, nQueries);
+            for (int start = 0; start < nQueries; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, nQueries);
 
-            floatTasks.add(simdExecutor.submit(() -> {
-                double localSum = 0.0;
-                for (int i = s; i < e; i++) {
-                    VectorFloat<?> q = finalQueries.get(i);
-                    for (int j = 0; j < nVectors; j++) {
-                        localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
+                floatTasks.add(simdExecutor.submit(() -> {
+                    double localSum = 0.0;
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        for (int j = 0; j < nVectors; j++) {
+                            localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
+                        }
                     }
-                }
-                return localSum;
-            }));
+                    return localSum;
+                }));
+            }
+
+            double floatDummy = 0.0;
+            for (ForkJoinTask<Double> t : floatTasks) {
+                floatDummy += t.join();
+            }
+
+            long floatEnd = System.nanoTime();
+            System.out.println("\tFloat dot-product scan took " + (floatEnd - floatStart) / 1e9 + " seconds");
+
+            // Prevent dead-code elimination
+            System.out.println("\tdummyAccumulator = " + (float) (floatDummy));
+            System.out.println("--");
         }
-
-        double floatDummy = 0.0;
-        for (ForkJoinTask<Double> t : floatTasks) {
-            floatDummy += t.join();
-        }
-
-        long floatEnd = System.nanoTime();
-        System.out.println("\tFloat dot-product scan took " + (floatEnd - floatStart) / 1e9 + " seconds");
-
-        // Prevent dead-code elimination
-        System.out.println("\tdummyAccumulator = " + (float) (pqDummy + floatDummy));
-        System.out.println("--");
     }
 
     // ------------------------------------------------------------------
@@ -293,10 +307,28 @@ public class DistancesPQ {
         );
     }
 
+    public static void runCap6m() throws IOException {
+        System.out.println("Running cap-6m");
+
+        var baseVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs";
+        var queryVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs";
+        testPQEncodings(baseVectors, queryVectors);
+    }
+
+    public static void runCohere10m() throws IOException {
+        System.out.println("Running cohere-10m");
+
+        var baseVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs";
+        var queryVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs";
+        testPQEncodings(baseVectors, queryVectors);
+    }
+
     public static void main(String[] args) throws IOException {
-        runCohere100k();
-        runADA();
-        runOpenai1536();
-        runOpenai3072();
+//        runCohere100k();
+//        runADA();
+//        runOpenai1536();
+//        runOpenai3072();
+        runCap6m();
+        runCohere10m();
     }
 }
