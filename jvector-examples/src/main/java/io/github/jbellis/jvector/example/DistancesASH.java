@@ -32,12 +32,9 @@ import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.stream.Collectors;
 import java.util.ArrayList;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
-
-import static java.lang.Math.abs;
 
 public class DistancesASH {
     private static void printScorerInfo(String label, ASHBlockScorer scorer) {
@@ -64,10 +61,21 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {16, 32, 64, 128}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
 
-        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
-        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+        // Define the benchmark size
+        int maxQueries = 10_000;
+        int maxVectors = 3_000_000;
+
+        int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
+        int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
+
+        // Will benchmark what was requested or the maximum available vectors (if less)
+        int nQueries = Math.min(maxQueries, queryCountInFile);
+        int nVectors = Math.min(maxVectors, vectorCountInFile);
+
+        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase, nVectors);
+        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries, nQueries);
 
         // ------------------------------------------------------------------
         // Remove zero-norm vectors (undefined for ASH / Eq. 11)
@@ -93,6 +101,12 @@ public class DistancesASH {
         System.out.println("\tRemoved " + (beforeBase - vectors.size()) + " zero base vectors and "
                 + (beforeQuery - queries.size()) + " zero query vectors");
 
+        // ------------------------------------------------------------
+        // Update counts after filtering
+        // ------------------------------------------------------------
+        final int finalVectorCount = vectors.size();
+        final int finalQueryCount = queries.size();
+
         // ASH normalization policy:
         //
         // - Base vectors x are NOT globally normalized.
@@ -111,12 +125,6 @@ public class DistancesASH {
                 "\toriginalDim = " + dimension +
                         ", encodedBits = " + encodedBits
         );
-
-        int nQueries = Math.min(1000, queries.size());
-        int nVectors = Math.min(1_000_000, vectors.size());
-
-        vectors = vectors.subList(0, nVectors);
-        queries = queries.subList(0, nQueries);
 
         final List<VectorFloat<?>> finalQueries = queries;
         final List<VectorFloat<?>> finalVectors = vectors;
@@ -174,7 +182,7 @@ public class DistancesASH {
         // ForkJoinPool simdExecutor = new ForkJoinPool(4); // For profiling
 
         int parallelism = simdExecutor.getParallelism();
-        int chunkSize = Math.max(1, (nQueries + parallelism - 1) / parallelism);
+        int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
 
         // ==================================================================
         // [1] Accuracy run (NOT timed)
@@ -182,9 +190,9 @@ public class DistancesASH {
         if(RUN_ACCURACY_CHECK) {
             List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 errorTasks.add(simdExecutor.submit(() -> {
                     double localError = 0.0;
@@ -195,7 +203,7 @@ public class DistancesASH {
                         ScoreFunction.ApproximateScoreFunction f =
                                 ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                        for (int j = 0; j < nVectors; j++) {
+                        for (int j = 0; j < finalVectorCount; j++) {
                             VectorFloat<?> v = finalVectors.get(j);
                             float trueDot = VectorUtil.dotProduct(q, v);
                             float approxDot = f.similarityTo(j);
@@ -229,9 +237,9 @@ public class DistancesASH {
 
             long ashStart = System.nanoTime();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 ashTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
@@ -241,7 +249,7 @@ public class DistancesASH {
                         ScoreFunction.ApproximateScoreFunction f =
                                 ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                        for (int j = 0; j < nVectors; j++) {
+                        for (int j = 0; j < finalVectorCount; j++) {
                             localSum += f.similarityTo(j);
                         }
                     }
@@ -270,16 +278,16 @@ public class DistancesASH {
 
             long floatStart = System.nanoTime();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 floatTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
 
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
-                        for (int j = 0; j < nVectors; j++) {
+                        for (int j = 0; j < finalVectorCount; j++) {
                             localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
                         }
                     }
@@ -327,9 +335,9 @@ public class DistancesASH {
             List<ForkJoinTask<Double>> blockTasks = new ArrayList<>();
             long blockStart = System.nanoTime();
 
-            for (int start = 0; start < nQueries; start += chunkSize) {
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, nQueries);
+                final int e = Math.min(start + chunkSize, finalQueryCount);
 
                 blockTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
@@ -344,7 +352,7 @@ public class DistancesASH {
                                 );
 
                         int j = 0;
-                        while (j + blockSize <= nVectors) {
+                        while (j + blockSize <= finalVectorCount) {
                             scorer.scoreRange(j, blockSize, scores);
                             for (int k = 0; k < blockSize; k++) {
                                 localSum += scores[k];
@@ -353,13 +361,13 @@ public class DistancesASH {
                         }
 
                         // Tail uses scalar per-vector scorer (correctness-preserving)
-                        if (j < nVectors) {
+                        if (j < finalVectorCount) {
                             ScoreFunction.ApproximateScoreFunction f =
                                     ashVecs.scoreFunctionFor(
                                             finalQueries.get(qi),
                                             VectorSimilarityFunction.DOT_PRODUCT
                                     );
-                            for (; j < nVectors; j++) {
+                            for (; j < finalVectorCount; j++) {
                                 localSum += f.similarityTo(j);
                             }
                         }
@@ -462,11 +470,11 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
-        runADA();
-        runOpenai1536();
-        runOpenai3072();
+//        runCohere100k();
+//        runADA();
+//        runOpenai1536();
+//        runOpenai3072();
 //        runCap6m();
-//        runCohere10m();
+        runCohere10m();
     }
 }

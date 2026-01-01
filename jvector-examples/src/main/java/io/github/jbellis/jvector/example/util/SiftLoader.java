@@ -27,43 +27,137 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 
 public class SiftLoader {
-    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    private static final VectorTypeSupport vectorTypeSupport =
+            VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    /**
+     * Read all vectors from an .fvecs file.
+     *
+     * <p>
+     * Reads the entire file and materializes all vectors into memory.
+     * </p>
+     */
     public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
         var vectors = new ArrayList<VectorFloat<?>>();
-        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
-            while (dis.available() > 0) {
-                var dimension = Integer.reverseBytes(dis.readInt());
-                assert dimension > 0 : dimension;
-                var buffer = new byte[dimension * Float.BYTES];
-                dis.readFully(buffer);
-                var byteBuffer = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
+        try (var dis = new DataInputStream(
+                new BufferedInputStream(new FileInputStream(filePath)))) {
 
-                var vector = new float[dimension];
-                var floatBuffer = byteBuffer.asFloatBuffer();
-                floatBuffer.get(vector);
-                vectors.add(vectorTypeSupport.createFloatVector(vector));
+            while (dis.available() > 0) {
+                int dimension = Integer.reverseBytes(dis.readInt());
+                if (dimension <= 0) {
+                    throw new IOException("Invalid vector dimension: " + dimension);
+                }
+
+                byte[] buffer = new byte[dimension * Float.BYTES];
+                dis.readFully(buffer);
+
+                ByteBuffer byteBuffer =
+                        ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
+
+                float[] data = new float[dimension];
+                byteBuffer.asFloatBuffer().get(data);
+
+                vectors.add(vectorTypeSupport.createFloatVector(data));
             }
         }
         return vectors;
     }
 
+    /**
+     * Read at most {@code numVectors} vectors from an .fvecs file.
+     *
+     * <p>
+     * This method stops reading once {@code numVectors} vectors
+     * have been loaded, preventing unnecessary heap usage.
+     * </p>
+     *
+     * <p>
+     * If the file contains fewer than {@code numVectors} vectors, an exception is thrown.
+     * </p>
+     *
+     * @param filePath  path to the .fvecs file
+     * @param numVectors number of vectors to load
+     * @return list of vectors of size {@code numVectors}
+     *
+     * @throws IllegalArgumentException if {@code numVectors <= 0}
+     * @throws IOException if the file ends before {@code numVectors}
+     *                     vectors are read
+     */
+    public static List<VectorFloat<?>> readFvecs(String filePath, int numVectors)
+            throws IOException {
+
+        if (numVectors <= 0) {
+            throw new IllegalArgumentException(
+                    "numVectors must be > 0, got " + numVectors);
+        }
+
+        var vectors = new ArrayList<VectorFloat<?>>(
+                Math.min(numVectors, 1024));
+
+        try (var dis = new DataInputStream(
+                new BufferedInputStream(new FileInputStream(filePath)))) {
+
+            int count = 0;
+
+            while (count < numVectors) {
+                if (dis.available() <= 0) {
+                    throw new IOException(
+                            "File ended early while reading " + filePath +
+                                    ": requested " + numVectors +
+                                    " vectors, but only read " + count);
+                }
+
+                int dimension = Integer.reverseBytes(dis.readInt());
+                if (dimension <= 0) {
+                    throw new IOException("Invalid vector dimension: " + dimension);
+                }
+
+                byte[] buffer = new byte[dimension * Float.BYTES];
+                dis.readFully(buffer);
+
+                ByteBuffer byteBuffer =
+                        ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
+
+                float[] data = new float[dimension];
+                byteBuffer.asFloatBuffer().get(data);
+
+                vectors.add(vectorTypeSupport.createFloatVector(data));
+                count++;
+            }
+        }
+
+        // Defensive sanity check
+        if (vectors.size() != numVectors) {
+            throw new IOException(
+                    "Internal error: requested " + numVectors +
+                            " vectors but read " + vectors.size());
+        }
+
+        return vectors;
+    }
+
+    /**
+     * Read all ground-truth neighbors from an .ivecs file.
+     */
     public static List<List<Integer>> readIvecs(String filename) {
         var groundTruthTopK = new ArrayList<List<Integer>>();
 
         try (var dis = new DataInputStream(new FileInputStream(filename))) {
             while (dis.available() > 0) {
-                var numNeighbors = Integer.reverseBytes(dis.readInt());
+                int numNeighbors = Integer.reverseBytes(dis.readInt());
                 var neighbors = new ArrayList<Integer>(numNeighbors);
 
-                for (var i = 0; i < numNeighbors; i++) {
-                    var neighbor = Integer.reverseBytes(dis.readInt());
-                    neighbors.add(neighbor);
+                for (int i = 0; i < numNeighbors; i++) {
+                    neighbors.add(Integer.reverseBytes(dis.readInt()));
                 }
 
                 groundTruthTopK.add(neighbors);
@@ -73,5 +167,42 @@ public class SiftLoader {
         }
 
         return groundTruthTopK;
+    }
+
+    // Fast, allocation-free scan to count vectors in an .fvecs file
+    public static int countFvecs(String filePath) throws IOException {
+        Path path = Path.of(filePath);
+
+        long fileSize = Files.size(path);
+        if (fileSize < Integer.BYTES) {
+            throw new IOException("File too small to be a valid .fvecs file: " + filePath);
+        }
+
+        // Read dimension from first record
+        int dimension;
+        try (FileChannel fc = FileChannel.open(path, StandardOpenOption.READ)) {
+            ByteBuffer buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+            fc.read(buf);
+            buf.flip();
+            dimension = buf.getInt();
+        }
+
+        if (dimension <= 0) {
+            throw new IOException("Invalid vector dimension: " + dimension);
+        }
+
+        long recordBytes = Integer.BYTES + (long) dimension * Float.BYTES;
+        if (fileSize % recordBytes != 0) {
+            throw new IOException(
+                    "File size not a multiple of record size: " +
+                            "fileSize=" + fileSize + ", recordBytes=" + recordBytes);
+        }
+
+        long count = fileSize / recordBytes;
+        if (count > Integer.MAX_VALUE) {
+            throw new IOException("Vector count exceeds Integer.MAX_VALUE: " + count);
+        }
+
+        return (int) count;
     }
 }
