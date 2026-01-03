@@ -71,8 +71,8 @@ public class ASHVectors implements CompressedVectors {
     }
 
     // Cached scalar headers (avoid object chasing in blocked scorer)
-    private final float[] residualNorms;
-    private final float[] dotXMu;
+    private final float[] scales;   // scale_i = ||x_i − μ|| / sqrt(d)
+    private final float[] offsets;  // offset_i = <x_i, μ> − ||μ||^2
 
     // Quantized dimensions
     private final int d;
@@ -99,12 +99,12 @@ public class ASHVectors implements CompressedVectors {
         this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
 
         int n = compressedVectors.length;
-        this.residualNorms = new float[n];
-        this.dotXMu = new float[n];
+        this.scales = new float[n];
+        this.offsets = new float[n];
         for (int i = 0; i < n; i++) {
             var v = compressedVectors[i];
-            residualNorms[i] = v.residualNorm;
-            dotXMu[i] = v.dotWithLandmark;
+            scales[i] = v.scale;
+            offsets[i] = v.offset;
         }
     }
 
@@ -285,8 +285,8 @@ public class ASHVectors implements CompressedVectors {
             return new BlockScalarASHBlockScorer(
                     ash,
                     compressedVectors,
-                    residualNorms,
-                    dotXMu,
+                    scales,
+                    offsets,
                     query
             );
         }
@@ -302,8 +302,8 @@ public class ASHVectors implements CompressedVectors {
         return new BlockSimdASHBlockScorer(
                 ash,
                 compressedVectors,
-                residualNorms,
-                dotXMu,
+                scales,
+                offsets,
                 packedBits,
                 blockSize,
                 query
@@ -352,14 +352,13 @@ public class ASHVectors implements CompressedVectors {
 
         private final AsymmetricHashing ash;
         private final AsymmetricHashing.QuantizedVector[] vectors;
-        private final float[] residualNorms;
-        private final float[] dotXMu;
+        private final float[] scales;
+        private final float[] offsets;
+
 
         private final float[] tildeQ;
         private final float sumTildeQ;
         private final float dotQMu;
-        private final float muNormSq;
-        private final float invSqrtD;
 
         private final int d;
         private final int words;
@@ -367,14 +366,14 @@ public class ASHVectors implements CompressedVectors {
         BlockScalarASHBlockScorer(
                 AsymmetricHashing ash,
                 AsymmetricHashing.QuantizedVector[] vectors,
-                float[] residualNorms,
-                float[] dotXMu,
+                float[] scales,
+                float[] offsets,
                 VectorFloat<?> query) {
 
             this.ash = ash;
             this.vectors = vectors;
-            this.residualNorms = residualNorms;
-            this.dotXMu = dotXMu;
+            this.scales = scales;
+            this.offsets = offsets;
 
             this.d = ash.quantizedDim;
             this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
@@ -403,10 +402,7 @@ public class ASHVectors implements CompressedVectors {
             float sum = 0f;
             for (int i = 0; i < d; i++) sum += tildeQ[i];
             this.sumTildeQ = sum;
-
             this.dotQMu = VectorUtil.dotProduct(query, mu);
-            this.muNormSq = VectorUtil.dotProduct(mu, mu);
-            this.invSqrtD = (float) (1.0 / Math.sqrt(d));
         }
 
         @Override
@@ -430,11 +426,13 @@ public class ASHVectors implements CompressedVectors {
                     }
                 }
 
-                float scale = invSqrtD * residualNorms[idx];
+                float scale = scales[idx];
+                float offset = offsets[idx];
+
                 out[i] =
                         scale * (2f * maskedAdd - sumTildeQ)
                                 + dotQMu
-                                + (dotXMu[idx] - muNormSq);
+                                + offset;
             }
         }
     }
@@ -465,8 +463,8 @@ public class ASHVectors implements CompressedVectors {
         private final AsymmetricHashing ash;
         private final AsymmetricHashing.QuantizedVector[] vectors;
 
-        private final float[] residualNorms;
-        private final float[] dotXMu;
+        private final float[] scales;
+        private final float[] offsets;
 
         private final long[] packedBits;
         private final int blockSize;
@@ -478,8 +476,6 @@ public class ASHVectors implements CompressedVectors {
         private final float[] tildeQ;
         private final float sumTildeQ;
         private final float dotQMu;
-        private final float muNormSq;
-        private final float invSqrtD;
 
         // Scratch (one per scorer instance)
         private final float[] maskedAdds;
@@ -489,8 +485,8 @@ public class ASHVectors implements CompressedVectors {
         BlockSimdASHBlockScorer(
                 AsymmetricHashing ash,
                 AsymmetricHashing.QuantizedVector[] vectors,
-                float[] residualNorms,
-                float[] dotXMu,
+                float[] scales,
+                float[] offsets,
                 long[] packedBits,
                 int blockSize,
                 VectorFloat<?> query) {
@@ -501,8 +497,8 @@ public class ASHVectors implements CompressedVectors {
                             .getVectorUtilSupport();
             this.ash = ash;
             this.vectors = vectors;
-            this.residualNorms = residualNorms;
-            this.dotXMu = dotXMu;
+            this.scales = scales;
+            this.offsets = offsets;
             this.packedBits = packedBits;
             this.blockSize = blockSize;
 
@@ -536,10 +532,7 @@ public class ASHVectors implements CompressedVectors {
             float sum = 0f;
             for (int i = 0; i < d; i++) sum += tildeQ[i];
             this.sumTildeQ = sum;
-
             this.dotQMu = VectorUtil.dotProduct(query, mu);
-            this.muNormSq = VectorUtil.dotProduct(mu, mu);
-            this.invSqrtD = (float) (1.0 / Math.sqrt(d));
         }
 
         @Override
@@ -573,13 +566,14 @@ public class ASHVectors implements CompressedVectors {
                 // Finish Eq. 11 per vector
                 for (int lane = 0; lane < blockLen; lane++) {
                     int idx = ord + lane;
-                    float scale = invSqrtD * residualNorms[idx];
+                    float scale = scales[idx];
+                    float offset = offsets[idx];
                     float m = maskedAdds[lane];
 
                     out[idx - start] =
                             scale * (2f * m - sumTildeQ)
                                     + dotQMu
-                                    + (dotXMu[idx] - muNormSq);
+                                    + offset;
                 }
 
                 ord += blockLen;
