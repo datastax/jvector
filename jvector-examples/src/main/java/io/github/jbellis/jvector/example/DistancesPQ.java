@@ -121,11 +121,21 @@ public class DistancesPQ {
         int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
 
         // ------------------------------------------------------------
-        // PQ parameters (compression matched to ASH)
+        // PQ parameters (EXACT bit-for-bit match with ASH)
         // ------------------------------------------------------------
-        // ASH: encodedBits = d / 4  -> bytes = d / 32
-        // PQ: 1 byte per subspace  -> M = d / 32
-        final int M = Math.max(1, dimension / 32);
+        // ASH total size = encodedBits (includes header + payload)
+        // PQ total size  = M * 8 bits (1 byte per subspace)
+        //
+        // We REQUIRE exact equality for fair benchmarking.
+        int HEADER_BITS = 72;
+        int encodedBitsASH = (dimension / 4) + HEADER_BITS; // HEADER_BITS = 72
+        if ((encodedBitsASH & 7) != 0) {
+            throw new IllegalArgumentException(
+                    "PQ requires encodedBits to be a multiple of 8 for exact bit matching; got " + encodedBitsASH
+            );
+        }
+
+        final int M = encodedBitsASH / 8;
         final int K = 256;                 // 1 byte per subspace
         final boolean globallyCenter = false;
         final float anisotropicThreshold = 0.0f;
@@ -133,8 +143,9 @@ public class DistancesPQ {
         System.out.println("\tPQ params:");
         System.out.println("\t  M = " + M + " subspaces");
         System.out.println("\t  K = " + K + " clusters");
-        System.out.println("\t  Compression ≈ " + (M * 8) + " bits (" + M + " bytes)");
-        System.out.println("\t  ASH reference ≈ " + (dimension / 4) + " bits (" + (dimension / 32) + " bytes)");
+        System.out.println("\t  Compression = " + (M * 8) + " bits (" + M + " bytes)");
+        System.out.println("\tASH reference = " + encodedBitsASH + " bits (" + (encodedBitsASH / 8) + " bytes)");
+
 
         // ------------------------------------------------------------
         // Train PQ + encode (timed)

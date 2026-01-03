@@ -52,7 +52,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -60,12 +60,15 @@ public class DistancesASH {
         final boolean RUN_FLOAT_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
+        // ASH header bits
+        final int HEADER_BITS = 72;
+
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {64}; // 16, 32, and/or 64
 
         // Define the benchmark size
-        int maxQueries = 1_000;
-        int maxVectors = 100_000;
+        int maxQueries = 10_000;
+        int maxVectors = 10_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -119,7 +122,17 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = dimension / 4; // sweep later if desired
+        int encodedBits = (dimension / 4) + HEADER_BITS;
+        // Payload must be 64-bit aligned for SIMD
+        int payloadBits = encodedBits - HEADER_BITS;
+        if ((payloadBits & 63) != 0) {
+            throw new IllegalArgumentException(
+                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
+                            "Got payloadBits=" + payloadBits +
+                            " (encodedBits=" + encodedBits +
+                            ", HEADER_BITS=" + HEADER_BITS + ")"
+            );
+        }
 
         System.out.println(
                 "\toriginalDim = " + dimension +
@@ -493,11 +506,11 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
-        runADA();
-        runOpenai1536();
-        runOpenai3072();
-//        runCap6m();
-//        runCohere10m();
+//        runCohere100k();
+//        runADA();
+//        runOpenai1536();
+//        runOpenai3072();
+        runCap6m();
+        runCohere10m();
     }
 }
