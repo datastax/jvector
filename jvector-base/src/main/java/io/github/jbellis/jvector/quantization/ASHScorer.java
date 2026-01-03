@@ -88,19 +88,10 @@ public final class ASHScorer {
         // <q, μ>
         final float dotQMu = VectorUtil.dotProduct(query, mu);
 
-        // ||μ||^2
-        final float muNormSq = VectorUtil.dotProduct(mu, mu);
-
-        // Precompute invSqrtD once
-        final float invSqrtD = (float) (1.0 / Math.sqrt(d));
-
         return (AsymmetricHashing.QuantizedVector v) -> {
             // Single landmark baseline: ignore v.landmark for now (assumed 0)
-            final float residualNorm = v.residualNorm;       // ||x - μ||₂
-            final float dotXMu = v.dotWithLandmark;          // <x, μ>
-
-            // scale = d^{-1/2} * ||x - μ||
-            final float scale = invSqrtD * residualNorm;
+            final float scale = v.scale;     // already ||x − μ|| / sqrt(d)
+            final float offset = v.offset;   // already <x, μ> − ||μ||^2
 
             // masked-add term: <tildeQ, bin(xhat)> where bin ∈ {0,1}^d
             // This is sum of tildeQ[j] over set bits in v.binaryVector.
@@ -128,7 +119,7 @@ public final class ASHScorer {
             // - scale = ||x − μ|| / √d  (pure Eq. 11 baseline; no bias correction).
             // - ⟨q, μ⟩ is a query-only offset and MUST NOT be scaled.
             // - Scaling ⟨q, μ⟩ leads to large systematic error (see paper Eq. 11 regrouping).
-            return scale * (2f * maskedAdd - sumTildeQ) + dotQMu + (dotXMu - muNormSq);
+            return scale * (2f * maskedAdd - sumTildeQ) + dotQMu + offset;
 
         };
     }
