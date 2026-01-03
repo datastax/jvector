@@ -380,7 +380,7 @@ public class ASHVectors implements CompressedVectors {
             this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
 
             final int D = ash.originalDimension;
-            final VectorFloat<?> mu = ash.globalMean;
+            final VectorFloat<?> mu = ash.landmarks[0];
 
             final float[] qArr = new float[D];
             final float[] muArr = new float[D];
@@ -513,7 +513,7 @@ public class ASHVectors implements CompressedVectors {
 
             // ---- Query precompute (identical to ASHScorer) ----
             final int D = ash.originalDimension;
-            final VectorFloat<?> mu = ash.globalMean;
+            final VectorFloat<?> mu = ash.landmarks[0];
 
             final float[] qArr = new float[D];
             final float[] muArr = new float[D];
