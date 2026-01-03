@@ -51,7 +51,7 @@ public final class ASHScorer {
 
         // Compute q_centered = q - μ
         // (avoid allocation by doing subtraction on the fly during projection)
-        final VectorFloat<?> mu = ash.globalMean;
+        final VectorFloat<?> mu = ash.landmarks[0];
 
         final float[][] A = ash.stiefelTransform.AFloat;  // shape: d × originalDim
         final int originalDim = ash.stiefelTransform.cols;
@@ -138,4 +138,3 @@ public final class ASHScorer {
         float similarityTo(AsymmetricHashing.QuantizedVector vector2);
     }
 }
-

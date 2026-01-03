@@ -34,8 +34,6 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.Random;
-import java.util.stream.IntStream;
-import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.QRDecomposition;
 import org.apache.commons.math3.linear.RealMatrix;
@@ -65,8 +63,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Index-wide immutable state
     // ---------------------------------------------------------------------
 
-    /** Mean of the dataset; also used as degenerate landmark */
-    public final VectorFloat<?> globalMean;
+    /** Number of landmarks (clusters), C<= 64 */
+    public final int landmarkCount;
+
+    /** Landmark centroids μ_0... μ_{C−1} */
+    public final VectorFloat<?>[] landmarks;
 
     /** Original (uncompressed) dimensionality */
     public final int originalDimension;
@@ -111,25 +112,35 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /**
      * Class constructor.
      * @param originalDim the dimensionality of the vectors to be quantized
-     * @param globalMean the mean of the database (its average vector)
+     * @param landmarks the landmarks using for vectors (up to C in landmarkCount)
      */
     private AsymmetricHashing(int originalDim,
                               int encodedBits,
                               int quantizedDim,
                               int optimizer,
-                              VectorFloat<?> globalMean,
+                              VectorFloat<?>[] landmarks,
                               StiefelTransform stiefelTransform) {
         this.originalDimension = originalDim;
         this.encodedBits = encodedBits;
         this.quantizedDim = quantizedDim;
         this.optimizer = optimizer;
-        this.stiefelTransform = Objects.requireNonNull(stiefelTransform, "stiefelTransform");
-        this.globalMean = Objects.requireNonNull(globalMean, "globalMean");
+        this.stiefelTransform = Objects.requireNonNull(stiefelTransform);
 
-        if (globalMean.length() != originalDimension) {
+        this.landmarks = Objects.requireNonNull(landmarks);
+        this.landmarkCount = landmarks.length;
+
+        if (landmarkCount < 1 || landmarkCount > 64) {
             throw new IllegalArgumentException(
-                    "Global mean length does not match original dimension");
+                    "landmarkCount must be in [1,64], got " + landmarkCount);
         }
+
+        for (VectorFloat<?> mu : landmarks) {
+            if (mu.length() != originalDimension) {
+                throw new IllegalArgumentException(
+                        "Landmark dimensionality does not match original dimensionality");
+            }
+        }
+
         if (quantizedDim < 1) {
             throw new IllegalArgumentException("quantizedDim must be > 0");
         }
@@ -159,12 +170,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         var ravvCopy = ravv.threadLocalSupplier().get();
         int originalDim = ravvCopy.getVector(0).length();
 
-        // Compute global mean
-        var globalMean = vectorTypeSupport.createFloatVector(originalDim);
+        // C=1 landmarks case
+        VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
         for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+            VectorUtil.addInPlace(mu0, ravvCopy.getVector(i));
         }
-        VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
+        VectorUtil.scale(mu0, 1.0f / ravvCopy.size());
+
+        VectorFloat<?>[] landmarks = new VectorFloat<?>[] { mu0 };
 
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
@@ -182,7 +195,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 encodedBits,
                 quantizedDim,
                 optimizer,
-                globalMean,
+                landmarks,
                 stiefelTransform
         );
     }
@@ -210,11 +223,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int quantizedDim = in.readInt();
         int optimizer = in.readInt();
 
-        int globalMeanLength = in.readInt();
-        if (globalMeanLength <= 0) {
-            throw new IOException("ASH header missing globalMean");
+        int landmark0Length = in.readInt();
+        if (landmark0Length <= 0) {
+            throw new IOException("ASH header missing landmark[0]");
         }
-        VectorFloat<?> globalMean = vectorTypeSupport.readFloatVector(in, globalMeanLength);
+        VectorFloat<?> mu0 = vectorTypeSupport.readFloatVector(in, landmark0Length);
+        VectorFloat<?>[] landmarks = new VectorFloat<?>[] { mu0 };
 
         // NOTE: StiefelTransform loading will be added in Step 2.
         // For now, construct a placeholder or re-run the RANDOM initializer.
@@ -238,7 +252,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 encodedBits,
                 quantizedDim,
                 optimizer,
-                globalMean,
+                landmarks,
                 stiefelTransform
         );
     }
@@ -264,8 +278,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         out.writeInt(quantizedDim);
         out.writeInt(optimizer);
 
-        out.writeInt(globalMean.length());
-        vectorTypeSupport.writeFloatVector(out, globalMean);
+        // Step 1: write a single landmark (mu0) in the same slot as legacy globalMean
+        out.writeInt(landmarks[0].length());
+        vectorTypeSupport.writeFloatVector(out, landmarks[0]);
 
         // NOTE: stiefelTransform serialization will be added later
     }
@@ -286,13 +301,20 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                             ") exceeds original dimension (" + originalDimension + ")");
         }
 
+        if ((landmark & 0xFFFF) >= landmarkCount) {
+            throw new IllegalArgumentException("Invalid landmark id " + (landmark & 0xFFFF)
+                    + " for landmarkCount=" + landmarkCount);
+        }
+
+        final VectorFloat<?> mu = landmarks[landmark]; // Step 1 landmark==0 always, but keep correct
+
         QuantizedVector.quantizeTo(
                 vector,
                 residualNorm,
                 dotWithLandmark,
                 landmark,
                 quantizedDim,
-                globalMean,
+                mu,
                 stiefelTransform,
                 quantizer(),
                 dest
@@ -806,14 +828,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // All vectors are encoded relative to the global mean μ*.
         // The landmark id is always 0 in this mode.
 
-        final short landmark = 0;
+        // Landmark assignment (C=1 → always 0)
+        final short landmark = 0;  // placeholder; Step 2 will generalize
 
-        // Table 2 header field: <x_i, μ_i*>
-        final float dotWithLandmark = VectorUtil.dotProduct(vector, globalMean);
+        final VectorFloat<?> mu = landmarks[landmark];
+
+        // ASH paper, Table 2 header field: <x_i, μ_i*>
+        final float dotWithLandmark = VectorUtil.dotProduct(vector, mu);
 
         // Table 2 header field: ||x_i − μ_i*||₂
         // We store the true L2 norm (not squared), matching the paper.
-        final float sqDist = VectorUtil.squareL2Distance(vector, globalMean);
+        final float sqDist = VectorUtil.squareL2Distance(vector, mu);
         final float residualNorm = (float) Math.sqrt(sqDist);
 
         // Sanity: quantizedDim already accounts for physical header bits (Step 1)
@@ -834,8 +859,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         size += Integer.BYTES; // encodedBits
         size += Integer.BYTES; // quantizedDim
         size += Integer.BYTES; // optimizer
-        size += Integer.BYTES; // globalMean length
-        size += Float.BYTES * globalMean.length();
+        size += Integer.BYTES; // landmarks[0] length
+        size += Float.BYTES * landmarks[0].length();
         return size;
     }
 
@@ -857,8 +882,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public long ramBytesUsed() {
         long bytes = 0L;
 
-        if (globalMean != null) {
-            bytes += globalMean.ramBytesUsed();
+        if (landmarks != null) {
+            for (int i = 0; i < landmarks.length; i++) {
+                bytes += (landmarks[i] == null) ? 0L : landmarks[i].ramBytesUsed();
+            }
         }
 
         if (stiefelTransform != null) {
@@ -1001,11 +1028,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 && encodedBits == that.encodedBits
                 && quantizedDim == that.quantizedDim
                 && optimizer == that.optimizer
-                && vectorEquals(this.globalMean, that.globalMean)
+                && landmarksEqual(this.landmarks, that.landmarks)
                 && matrixEquals(
                 this.stiefelTransform == null ? null : this.stiefelTransform.W,
                 that.stiefelTransform == null ? null : that.stiefelTransform.W
         );
+    }
+
+    private static boolean landmarksEqual(VectorFloat<?>[] a, VectorFloat<?>[] b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.length != b.length) return false;
+        for (int i = 0; i < a.length; i++) {
+            if (!vectorEquals(a[i], b[i])) return false;
+        }
+        return true;
     }
 
     /**
@@ -1023,11 +1060,20 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         result = 31 * result + Integer.hashCode(encodedBits);
         result = 31 * result + Integer.hashCode(quantizedDim);
         result = 31 * result + Integer.hashCode(optimizer);
-        result = 31 * result + vectorHash(globalMean);
+        result = 31 * result + landmarksHash(landmarks);
         result = 31 * result + matrixHash(
                 stiefelTransform == null ? null : stiefelTransform.W
         );
         return result;
+    }
+
+    private static int landmarksHash(VectorFloat<?>[] a) {
+        if (a == null) return 0;
+        int h = 1;
+        for (VectorFloat<?> v : a) {
+            h = 31 * h + vectorHash(v);
+        }
+        return h;
     }
 
     @Override
@@ -1048,11 +1094,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         return String.format(
-                "AsymmetricHashing[origDim=%d, encodedBits=%d, quantizedDim=%d, optimizer=%s, landmarks=1]",
+                "AsymmetricHashing[origDim=%d, encodedBits=%d, quantizedDim=%d, optimizer=%s, landmarks=%d]",
                 originalDimension,
                 encodedBits,
                 quantizedDim,
-                optimizerName
+                optimizerName,
+                landmarkCount
         );
     }
 }
