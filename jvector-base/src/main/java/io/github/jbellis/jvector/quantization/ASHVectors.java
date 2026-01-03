@@ -73,6 +73,7 @@ public class ASHVectors implements CompressedVectors {
     // Cached scalar headers (avoid object chasing in blocked scorer)
     private final float[] scales;   // scale_i = ||x_i − μ|| / sqrt(d)
     private final float[] offsets;  // offset_i = <x_i, μ> − ||μ||^2
+    private final byte[] landmarks;
 
     // Quantized dimensions
     private final int d;
@@ -101,11 +102,14 @@ public class ASHVectors implements CompressedVectors {
         int n = compressedVectors.length;
         this.scales = new float[n];
         this.offsets = new float[n];
+        this.landmarks = new byte[n];
         for (int i = 0; i < n; i++) {
             var v = compressedVectors[i];
-            scales[i] = v.scale;
-            offsets[i] = v.offset;
+            scales[i]    = v.scale;
+            offsets[i]   = v.offset;
+            landmarks[i] = v.landmark;
         }
+
     }
 
     @Override

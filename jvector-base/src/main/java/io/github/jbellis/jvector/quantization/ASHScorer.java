@@ -51,6 +51,7 @@ public final class ASHScorer {
 
         // Compute q_centered = q - μ
         // (avoid allocation by doing subtraction on the fly during projection)
+        // Landmark-dependent query projection (C=1 => still index 0)
         final VectorFloat<?> mu = ash.landmarks[0];
 
         final float[][] A = ash.stiefelTransform.AFloat;  // shape: d × originalDim
