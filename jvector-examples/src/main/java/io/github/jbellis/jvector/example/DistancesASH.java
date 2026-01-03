@@ -61,11 +61,11 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
 
         // Define the benchmark size
-        int maxQueries = 10_000;
-        int maxVectors = 3_000_000;
+        int maxQueries = 1_000;
+        int maxVectors = 100_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -142,6 +142,15 @@ public class DistancesASH {
         CompressedVectors ashVecs = ash.encodeAll(ravv);
         long endTime = System.nanoTime();
         System.out.println("\tEncoding took " + (endTime - startTime) / 1e9 + " seconds");
+
+        double encSeconds = (endTime - startTime) / 1e9;
+        double encThroughput = finalVectorCount / encSeconds;
+
+        System.out.println(
+                "\tEncoding throughput = "
+                        + String.format(java.util.Locale.ROOT, "%.3f", encThroughput)
+                        + " vectors/sec"
+        );
 
         ASHVectors ashVectors = (ASHVectors) ashVecs;
         VectorFloat<?> q0 = finalQueries.get(0);
@@ -389,6 +398,20 @@ public class DistancesASH {
                             + (blockEnd - blockStart) / 1e9 + " seconds"
             );
 
+            double blockSeconds = (blockEnd - blockStart) / 1e9;
+            long totalDotProducts = (long) finalQueryCount * (long) finalVectorCount;
+
+            double scoreThroughput = totalDotProducts / blockSeconds;
+
+            System.out.println(
+                    "\tBlock " + kernelMode + " throughput (blockSize=" + blockSize + ") = "
+                            + String.format(java.util.Locale.ROOT, "%.3f", scoreThroughput)
+                            + " dot-products/sec"
+                            + " ("
+                            + String.format(java.util.Locale.ROOT, "%.3f", scoreThroughput / 1e6)
+                            + " Mdot/s)"
+            );
+
             System.out.println("\tdummyAccumulator = " + (float) (blockDummy));
             System.out.println("--");
         }
@@ -470,11 +493,11 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-//        runCohere100k();
-//        runADA();
-//        runOpenai1536();
-//        runOpenai3072();
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
 //        runCap6m();
-        runCohere10m();
+//        runCohere10m();
     }
 }
