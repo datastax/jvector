@@ -57,8 +57,8 @@ public class DistancesPQ {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // Define the benchmark size
-        int maxQueries = 10_000;
-        int maxVectors = 2_000_000;
+        int maxQueries = 1_000;
+        int maxVectors = 100_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -162,6 +162,15 @@ public class DistancesPQ {
 
         System.out.println("\tPQ training took " + (pqTrainEnd - pqTrainStart) / 1e9 + " seconds");
         System.out.println("\tPQ encoding took " + (pqEncodeEnd - pqEncodeStart) / 1e9 + " seconds");
+        double encSeconds = (pqEncodeEnd - pqEncodeStart) / 1e9;
+        double encThroughput = finalVectorCount / encSeconds;
+
+        System.out.println(
+                "\tEncoding throughput = "
+                        + String.format(java.util.Locale.ROOT, "%.3f", encThroughput)
+                        + " vectors/sec"
+        );
+
 
         // ============================================================
         // [1] Accuracy (NOT timed)
@@ -244,6 +253,20 @@ public class DistancesPQ {
 
         long pqEnd = System.nanoTime();
         System.out.println("\tPQDecoder scan took " + (pqEnd - pqStart) / 1e9 + " seconds");
+
+        double blockSeconds = (pqEnd - pqStart) / 1e9;
+        long totalDotProducts = (long) finalQueryCount * (long) finalVectorCount;
+
+        double scoreThroughput = totalDotProducts / blockSeconds;
+
+        System.out.println(
+                "\tDecoder scan throughput = "
+                        + String.format(java.util.Locale.ROOT, "%.3f", scoreThroughput)
+                        + " dot-products/sec"
+                        + " ("
+                        + String.format(java.util.Locale.ROOT, "%.3f", scoreThroughput / 1e6)
+                        + " Mdot/s)"
+        );
 
         // ============================================================
         // [3] Float dot-product baseline
