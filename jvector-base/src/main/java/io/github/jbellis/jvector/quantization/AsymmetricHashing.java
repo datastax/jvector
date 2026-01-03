@@ -52,12 +52,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Physical header size, reflecting actual stored fields:
     //  - scale: float (32 bits), where scale = ||x − μ|| / sqrt(d)
     //  - offset: float (32 bits), where offset = <x, μ> − ||μ||_2^2
-    //  - landmark id: short (16 bits) in [0, C)
+    //  - landmark id: byte (8 bits) in [0, C)
     //
     // NOTE: residualNorm (= ||x − μ||) is still computed during encoding for Eq. 6,
     // but it is not stored explicitly once scale is stored.
     private static final int HEADER_BITS =
-            (Float.BYTES + Float.BYTES + Short.BYTES) * 8; // 80 bits currently
+            (Float.BYTES + Float.BYTES + Byte.BYTES) * 8; // 72 bits currently
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -318,8 +318,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                             ") exceeds original dimension (" + originalDimension + ")");
         }
 
-        if ((landmark & 0xFFFF) >= landmarkCount) {
-            throw new IllegalArgumentException("Invalid landmark id " + (landmark & 0xFFFF)
+        if ((landmark & 0xFF) >= landmarkCount) {
+            throw new IllegalArgumentException("Invalid landmark id " + (landmark & 0xFF)
                     + " for landmarkCount=" + landmarkCount);
         }
 
@@ -435,12 +435,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public static class QuantizedVector {
         public float scale; // d^{-1/2} ||x_i - μ_i*||_2
         public float offset; // offset_i = <x_i, μ_i*> - ||μ_i*||^2
-        public short landmark; // c_i*
+        public byte landmark; // c_i*, unsigned [0, C)
         public long[] binaryVector; // bin(x̂_i)
 
         private QuantizedVector(float scale,
                                 float offset,
-                                short landmark,
+                                byte landmark,
                                 long[] binaryVector) {
             this.scale = scale;
             this.offset = offset;
@@ -456,7 +456,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return new QuantizedVector(
                     Float.NaN,
                     Float.NaN,
-                    (short) 0,
+                    (byte) 0,
                     new long[wordsForDims(quantizedDim)]
             );
         }
@@ -511,7 +511,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         public void write(DataOutput out, int quantizedDim) throws IOException {
             out.writeFloat(scale);
             out.writeFloat(offset);
-            out.writeInt(landmark);
+            out.writeByte(landmark);
 
             int words = wordsForDims(quantizedDim);
             for (int i = 0; i < words; i++) {
@@ -523,7 +523,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                            int quantizedDim) throws IOException {
             float scale = in.readFloat();
             float offset = in.readFloat();
-            short landmark = (short) in.readInt();
+            byte landmark;
+            if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
+                landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
+            } else {
+                throw new IOException("ASH requires ByteReadable reader for landmark");
+            }
 
             int words = wordsForDims(quantizedDim);
             long[] body = new long[words];
@@ -539,7 +544,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                     int quantizedDim) throws IOException {
             dest.scale = in.readFloat();
             dest.offset = in.readFloat();
-            dest.landmark = (short) in.readInt();
+            if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
+                dest.landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
+            } else {
+                throw new IOException("ASH requires ByteReadable reader for landmark");
+            }
 
             int words = wordsForDims(quantizedDim);
             for (int i = 0; i < words; i++) {
@@ -860,7 +869,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // The landmark id is always 0 in this mode.
 
         // Landmark assignment (C=1 --> always 0)
-        final short landmark = 0;  // placeholder; will generalize
+        final byte landmark = 0;  // placeholder; will generalize
 
         final VectorFloat<?> mu = landmarks[landmark];
 
@@ -914,7 +923,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int words = QuantizedVector.wordsForDims(quantizedDim);
         return Float.BYTES           // scale
                 + Float.BYTES           // offset
-                + Integer.BYTES           // landmark
+                + Byte.BYTES           // landmark
                 + words * Long.BYTES;   // binary payload
     }
 
