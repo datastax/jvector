@@ -177,16 +177,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         final int quantizedDim = encodedBits - HEADER_BITS;
 
-        if (quantizedDim < 1) {
-            throw new IllegalArgumentException(
-                    "Illegal ASH quantized dimensionality: " + quantizedDim +
-                            " (encodedBits=" + encodedBits +
-                            ", headerBits=" + HEADER_BITS + ")"
-            );
-        }
-
         var ravvCopy = ravv.threadLocalSupplier().get();
         int originalDim = ravvCopy.getVector(0).length();
+        // payload bits are always 64-bit aligned by validateEncodedBits()
+        validateEncodedBits(encodedBits, HEADER_BITS, originalDim);
 
         // C=1 landmarks case
         VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
@@ -219,6 +213,52 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
+     * Validates that the requested {@code encodedBits} value is compatible with
+     * ASH’s block-SIMD scoring kernel.
+     *
+     * <p>
+     * For performance reasons, the binary payload size
+     * {@code (encodedBits - headerBits)} must be a multiple of 64. Non-aligned
+     * payloads introduce partial-word tails that significantly degrade SIMD
+     * efficiency.
+     * </p>
+     *
+     * @throws IllegalArgumentException if the payload bit count is invalid or
+     *                                  not 64-bit aligned
+     */
+    private static void validateEncodedBits(
+            int encodedBits,
+            int headerBits,
+            int originalDim
+    ) {
+        int payloadBits = encodedBits - headerBits;
+
+        if (payloadBits < 1) {
+            throw new IllegalArgumentException(
+                    "Illegal ASH payload bits: " + payloadBits +
+                            " (encodedBits=" + encodedBits + ", headerBits=" + headerBits + ")"
+            );
+        }
+
+        if ((payloadBits & 63) != 0) {
+            throw new IllegalArgumentException(
+                    "Invalid encodedBits=" + encodedBits +
+                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
+                            "for aligned binary payload. " +
+                            "Got payloadBits=" + payloadBits +
+                            " (headerBits=" + headerBits + ")."
+            );
+        }
+
+        if (payloadBits > originalDim) {
+            throw new IllegalArgumentException(
+                    "Invalid ASH payloadBits=" + payloadBits +
+                            " exceeds originalDim=" + originalDim
+            );
+        }
+    }
+
+    /**
      * Loads an ASH instance from a RandomAccessReader.
      * This must mirror the ASH header writer exactly.
      */
@@ -238,6 +278,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         int originalDimension = in.readInt();
         int encodedBits = in.readInt();
+        validateEncodedBits(encodedBits, HEADER_BITS, originalDimension);
         int quantizedDim = in.readInt();
         int optimizer = in.readInt();
 
