@@ -52,7 +52,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -65,6 +65,9 @@ public class DistancesASH {
 
         // Block sizes to benchmark
         final int[] BLOCK_SIZES = {64}; // 16, 32, and/or 64
+
+        // How many ASH landmarks to use, C = [1, 64]
+        final int landmarkCount = 64;
 
         // Define the benchmark size
         int maxQueries = 10_000;
@@ -149,7 +152,7 @@ public class DistancesASH {
         // Build ASH
         // ------------------------------------------------------------------
         var ravv = new ListRandomAccessVectorValues(vectors, dimension);
-        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM, encodedBits);
+        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM, encodedBits, landmarkCount);
 
         long startTime = System.nanoTime();
         CompressedVectors ashVecs = ash.encodeAll(ravv);

@@ -90,6 +90,22 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Learned or random Stiefel transform */
     public final StiefelTransform stiefelTransform;
 
+    /**
+     * Precomputed landmark projections in the reduced space:
+     *   landmarkProj[c][j] = <A[j], μ_c>  where A is [d][D] and μ_c is length D.
+     *
+     * Shape: [landmarkCount][quantizedDim]
+     */
+    public final float[][] landmarkProj;
+
+    /**
+     * Precomputed sums of the landmark projections:
+     *   landmarkProjSum[c] = Σ_j landmarkProj[c][j]
+     *
+     * Shape: [landmarkCount]
+     */
+    public final float[] landmarkProjSum;
+
     /** Debug hook to disable learning paths */
     @VisibleForTesting
     public boolean learn = true;
@@ -125,10 +141,22 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                               int quantizedDim,
                               int optimizer,
                               VectorFloat<?>[] landmarks,
-                              StiefelTransform stiefelTransform) {
+                              StiefelTransform stiefelTransform,
+                              float[][] landmarkProj,
+                              float[] landmarkProjSum) {
         this.originalDimension = originalDim;
         this.encodedBits = encodedBits;
         this.quantizedDim = quantizedDim;
+
+        // Defensive check for consistency
+        if (encodedBits - HEADER_BITS != quantizedDim) {
+            throw new IllegalArgumentException(
+                    "Invalid ASH configuration: encodedBits=" + encodedBits +
+                            ", quantizedDim=" + quantizedDim +
+                            ", HEADER_BITS=" + HEADER_BITS
+            );
+        }
+
         this.optimizer = optimizer;
         this.stiefelTransform = Objects.requireNonNull(stiefelTransform);
 
@@ -141,6 +169,25 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         for (int c = 0; c < landmarkCount; c++) {
             this.landmarkNormSq[c] =
                     VectorUtil.dotProduct(landmarks[c], landmarks[c]);
+        }
+
+        this.landmarkProj = Objects.requireNonNull(landmarkProj, "landmarkProj");
+        this.landmarkProjSum = Objects.requireNonNull(landmarkProjSum, "landmarkProjSum");
+
+        if (landmarkProj.length != landmarkCount) {
+            throw new IllegalArgumentException("landmarkProj outer dimension mismatch: "
+                    + landmarkProj.length + " != landmarkCount=" + landmarkCount);
+        }
+        if (landmarkProjSum.length != landmarkCount) {
+            throw new IllegalArgumentException("landmarkProjSum length mismatch: "
+                    + landmarkProjSum.length + " != landmarkCount=" + landmarkCount);
+        }
+        for (int c = 0; c < landmarkCount; c++) {
+            if (landmarkProj[c] == null || landmarkProj[c].length != quantizedDim) {
+                throw new IllegalArgumentException("landmarkProj[" + c + "] length mismatch: "
+                        + (landmarkProj[c] == null ? "null" : landmarkProj[c].length)
+                        + " != quantizedDim=" + quantizedDim);
+            }
         }
 
         if (landmarkNormSq.length != landmarkCount) {
@@ -173,23 +220,65 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
                                                int optimizer,
-                                               int encodedBits) {
+                                               int encodedBits,
+                                               int landmarkCount) {
 
         final int quantizedDim = encodedBits - HEADER_BITS;
+
+        if (landmarkCount < 1 || landmarkCount > 64) {
+            throw new IllegalArgumentException(
+                    "landmarkCount must be in [1,64], got " + landmarkCount);
+        }
+
+        System.out.println(
+                "\tASH initialized with landmarkCount=" + landmarkCount +
+                        ", quantizedDim=" + quantizedDim
+        );
 
         var ravvCopy = ravv.threadLocalSupplier().get();
         int originalDim = ravvCopy.getVector(0).length();
         // payload bits are always 64-bit aligned by validateEncodedBits()
         validateEncodedBits(encodedBits, HEADER_BITS, originalDim);
 
-        // C=1 landmarks case
-        VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
+        // NOTE: points are treated as read-only by KMeansPlusPlusClusterer.  Materialize once.
+        VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
         for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorUtil.addInPlace(mu0, ravvCopy.getVector(i));
+            points[i] = ravvCopy.getVector(i);
         }
-        VectorUtil.scale(mu0, 1.0f / ravvCopy.size());
 
-        VectorFloat<?>[] landmarks = new VectorFloat<?>[] { mu0 };
+        VectorFloat<?>[] landmarks;
+        if (landmarkCount == 1) {
+            // Mean centroid
+            VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
+            for (int i = 0; i < points.length; i++) {
+                VectorUtil.addInPlace(mu0, points[i]);
+            }
+            VectorUtil.scale(mu0, 1.0f / points.length);
+            landmarks = new VectorFloat<?>[] { mu0 };
+        } else {
+            long kmStart = System.nanoTime();
+
+            // KMeans++ in JVector returns centroids packed as one big vector [C * D]
+            KMeansPlusPlusClusterer km = new KMeansPlusPlusClusterer(points, landmarkCount);
+            VectorFloat<?> packed = km.cluster(/*unweightedIterations*/ 20, /*anisotropicIterations*/ 0);
+
+            long kmEnd = System.nanoTime();
+
+            System.out.printf(
+                    "\tKMeans++ (C=%d, N=%d, D=%d) took %.3f seconds%n",
+                    landmarkCount,
+                    points.length,
+                    originalDim,
+                    (kmEnd - kmStart) / 1e9
+            );
+
+            landmarks = new VectorFloat<?>[landmarkCount];
+            for (int c = 0; c < landmarkCount; c++) {
+                VectorFloat<?> mu = vectorTypeSupport.createFloatVector(originalDim);
+                mu.copyFrom(packed, c * originalDim, 0, originalDim);
+                landmarks[c] = mu;
+            }
+        }
 
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
@@ -202,13 +291,23 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalArgumentException("Unknown optimizer " + optimizer);
         }
 
+        LandmarkProjections lp =
+                computeLandmarkProjections(
+                        landmarks,
+                        stiefelTransform,
+                        quantizedDim,
+                        originalDim
+                );
+
         return new AsymmetricHashing(
                 originalDim,
                 encodedBits,
                 quantizedDim,
                 optimizer,
                 landmarks,
-                stiefelTransform
+                stiefelTransform,
+                lp.proj,
+                lp.sum
         );
     }
 
@@ -259,6 +358,67 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
+     * Precompute landmark projections in the reduced space:
+     *
+     *   landmarkProj[c][j] = <A[j], μ_c>
+     *   landmarkProjSum[c] = Σ_j landmarkProj[c][j]
+     *
+     * This is used by both initialize() and load() to ensure
+     * identical query-time math regardless of construction path.
+     */
+    private static LandmarkProjections computeLandmarkProjections(
+            VectorFloat<?>[] landmarks,
+            StiefelTransform stiefelTransform,
+            int quantizedDim,
+            int originalDim
+    ) {
+        final int C = landmarks.length;
+        final float[][] A = stiefelTransform.AFloat; // [d][D]
+
+        final var vecUtil =
+                io.github.jbellis.jvector.vector.VectorizationProvider
+                        .getInstance()
+                        .getVectorUtilSupport();
+
+        final float[][] landmarkProj = new float[C][quantizedDim];
+        final float[] landmarkProjSum = new float[C];
+
+        final float[] muArr = new float[originalDim];
+
+        for (int c = 0; c < C; c++) {
+            VectorFloat<?> mu = landmarks[c];
+
+            // materialize μ once
+            for (int i = 0; i < originalDim; i++) {
+                muArr[i] = mu.get(i);
+            }
+
+            float sum = 0f;
+            float[] proj = landmarkProj[c];
+
+            for (int j = 0; j < quantizedDim; j++) {
+                float v = vecUtil.ashDotRow(A[j], muArr);
+                proj[j] = v;
+                sum += v;
+            }
+
+            landmarkProjSum[c] = sum;
+        }
+
+        return new LandmarkProjections(landmarkProj, landmarkProjSum);
+    }
+
+    private static final class LandmarkProjections {
+        final float[][] proj;   // [C][d]
+        final float[] sum;      // [C]
+
+        LandmarkProjections(float[][] proj, float[] sum) {
+            this.proj = proj;
+            this.sum = sum;
+        }
+    }
+
+    /**
      * Loads an ASH instance from a RandomAccessReader.
      * This must mirror the ASH header writer exactly.
      */
@@ -280,14 +440,36 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int encodedBits = in.readInt();
         validateEncodedBits(encodedBits, HEADER_BITS, originalDimension);
         int quantizedDim = in.readInt();
+
+        // HEADER_BITS compatibility check
+        int expectedQuantizedDim = encodedBits - HEADER_BITS;
+        if (quantizedDim != expectedQuantizedDim) {
+            throw new IOException(
+                    "ASH format mismatch: encodedBits=" + encodedBits +
+                            ", quantizedDim=" + quantizedDim +
+                            ", but runtime HEADER_BITS=" + HEADER_BITS +
+                            " implies quantizedDim=" + expectedQuantizedDim
+            );
+        }
+
         int optimizer = in.readInt();
 
-        int landmark0Length = in.readInt();
-        if (landmark0Length <= 0) {
-            throw new IOException("ASH header missing landmark[0]");
+        // Multi-landmark support
+        int landmarkCount = in.readInt();
+        if (landmarkCount < 1 || landmarkCount > 64) {
+            throw new IOException("Invalid landmarkCount=" + landmarkCount);
         }
-        VectorFloat<?> mu0 = vectorTypeSupport.readFloatVector(in, landmark0Length);
-        VectorFloat<?>[] landmarks = new VectorFloat<?>[] { mu0 };
+
+        VectorFloat<?>[] landmarks = new VectorFloat<?>[landmarkCount];
+        for (int c = 0; c < landmarkCount; c++) {
+            int dim = in.readInt();
+            if (dim != originalDimension) {
+                throw new IOException(
+                        "Landmark dimension mismatch: expected " +
+                                originalDimension + ", got " + dim);
+            }
+            landmarks[c] = vectorTypeSupport.readFloatVector(in, dim);
+        }
 
         // NOTE: StiefelTransform loading will be added in Step 2.
         // For now, construct a placeholder or re-run the RANDOM initializer.
@@ -306,13 +488,23 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
+        LandmarkProjections lp =
+                computeLandmarkProjections(
+                        landmarks,
+                        stiefelTransform,
+                        quantizedDim,
+                        originalDimension
+                );
+
         return new AsymmetricHashing(
                 originalDimension,
                 encodedBits,
                 quantizedDim,
                 optimizer,
                 landmarks,
-                stiefelTransform
+                stiefelTransform,
+                lp.proj,
+                lp.sum
         );
     }
 
@@ -337,9 +529,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         out.writeInt(quantizedDim);
         out.writeInt(optimizer);
 
-        // (C=1): write landmark[0] (dataset mean). Multi-landmark serialization TBD.
-        out.writeInt(landmarks[0].length());
-        vectorTypeSupport.writeFloatVector(out, landmarks[0]);
+        // Multi-landmark serialization
+        out.writeInt(landmarkCount);
+
+        for (int c = 0; c < landmarkCount; c++) {
+            out.writeInt(landmarks[c].length());
+            vectorTypeSupport.writeFloatVector(out, landmarks[c]);
+        }
 
         // NOTE: stiefelTransform serialization will be added later
     }
@@ -350,7 +546,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     public void quantizeVector(VectorFloat<?> vector,
                                float residualNorm,
-                               short landmark,
+                               byte landmark,
                                QuantizedVector dest) {
 
         if (quantizedDim > originalDimension) {
@@ -503,7 +699,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         public static int serializedSizeBytes(int quantizedDim) {
-            return Float.BYTES + Float.BYTES + Short.BYTES
+            return Float.BYTES + Float.BYTES + Byte.BYTES
                     + wordsForDims(quantizedDim) * Long.BYTES;
         }
 
@@ -909,10 +1105,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // All vectors are encoded relative to landmark μ_c (C=1 => μ_0 is the dataset mean).
         // The landmark id is always 0 in this mode.
 
-        // Landmark assignment (C=1 --> always 0)
-        final byte landmark = 0;  // placeholder; will generalize
+        // Landmark assignment: nearest centroid by L2 distance
+        byte landmark = 0;
+        float bestDist = Float.POSITIVE_INFINITY;
 
-        final VectorFloat<?> mu = landmarks[landmark];
+        for (int c = 0; c < landmarkCount; c++) {
+            float dist = VectorUtil.squareL2Distance(vector, landmarks[c]);
+            if (dist < bestDist) {
+                bestDist = dist;
+                landmark = (byte) c;
+            }
+        }
+
+        final VectorFloat<?> mu = landmarks[landmark & 0xFF];
 
         // Compute <x, μ>
         final float dotXMu = VectorUtil.dotProduct(vector, mu);
@@ -954,8 +1159,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         size += Integer.BYTES; // encodedBits
         size += Integer.BYTES; // quantizedDim
         size += Integer.BYTES; // optimizer
-        size += Integer.BYTES; // landmarks[0] length
-        size += Float.BYTES * landmarks[0].length();
+        size += Integer.BYTES; // landmarkCount
+        for (int c = 0; c < landmarkCount; c++) {
+            size += Integer.BYTES; // landmark dimension
+            size += Float.BYTES * landmarks[c].length();
+        }
         return size;
     }
 
