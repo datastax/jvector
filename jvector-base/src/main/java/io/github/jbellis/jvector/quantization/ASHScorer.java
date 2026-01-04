@@ -22,7 +22,11 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
  * Query-time scorer for ASH vectors.
- * Single-landmark case (C = 1).
+ *
+ * Multi-landmark scoring (C >= 1) following the paper’s Eq. 11 decomposition:
+ * for each landmark c we form q̃_c = A (q - μ_c) = (Aq) - (Aμ_c) once per query,
+ * then score each vector using its stored landmark id.
+ *
  * NOTE: Only DOT_PRODUCT is supported for now.
  */
 public final class ASHScorer {
@@ -30,6 +34,22 @@ public final class ASHScorer {
 
     public ASHScorer(AsymmetricHashing ash) {
         this.ash = ash;
+
+        final int d = ash.quantizedDim;
+        final int C = ash.landmarkCount;
+
+        assert ash.landmarkProj != null;
+        assert ash.landmarkProjSum != null;
+        assert ash.landmarkProj.length == C :
+                "landmarkProj length mismatch";
+        assert ash.landmarkProjSum.length == C :
+                "landmarkProjSum length mismatch";
+
+        for (int c = 0; c < C; c++) {
+            assert ash.landmarkProj[c].length == d :
+                    "landmarkProj[" + c + "] length != quantizedDim";
+        }
+
         assert ash.stiefelTransform.rows == ash.quantizedDim
                 : "Stiefel rows must equal quantizedDim";
     }
@@ -48,80 +68,89 @@ public final class ASHScorer {
      */
     private ASHScoreFunction dotProductScoreFunctionFor(VectorFloat<?> query) {
         final int d = ash.quantizedDim;
+        final int D = ash.originalDimension;
+        final int C = ash.landmarkCount;
 
-        // Compute q_centered = q - μ
-        // (avoid allocation by doing subtraction on the fly during projection)
-        // Landmark-dependent query projection (C=1 => still index 0)
-        final VectorFloat<?> mu = ash.landmarks[0];
-
-        final float[][] A = ash.stiefelTransform.AFloat;  // shape: d × originalDim
-        final int originalDim = ash.stiefelTransform.cols;
-        final float[] muArr = new float[originalDim];
+        final float[][] A = ash.stiefelTransform.AFloat; // [d][D]
 
         final var vecUtil =
                 io.github.jbellis.jvector.vector.VectorizationProvider
                         .getInstance()
                         .getVectorUtilSupport();
 
-        for (int k = 0; k < originalDim; k++) muArr[k] = mu.get(k);
+        // Materialize query once (avoid VectorFloat.get in inner loops)
+        final float[] qArr = new float[D];
+        for (int k = 0; k < D; k++) qArr[k] = query.get(k);
 
-        final float[] qArr = new float[originalDim];
-        for (int k = 0; k < originalDim; k++) qArr[k] = query.get(k);
-
-        // Project query: tildeQ[j] = (A (q - μ))[j]
-        final float[] tildeQ = new float[d];
+        // Compute Aq once per query:
+        //   qProj[j] = <A[j], q>
+        final float[] qProj = new float[d];
+        float sumQProj = 0f;
         for (int j = 0; j < d; j++) {
-            final float[] Aj = A[j];
-            float acc = 0.0f;
-            for (int k = 0; k < originalDim; k++) {
-                acc += Aj[k] * (qArr[k] - muArr[k]);
+            float v = vecUtil.ashDotRow(A[j], qArr);
+            qProj[j] = v;
+            sumQProj += v;
+        }
+
+        // For each landmark c:
+        //   tildeQ_c   = Aq - Aμ_c
+        //   sumTildeQc = sum(Aq) - sum(Aμ_c)
+        //   dotQMu_c   = <q, μ_c>
+        // Pooled storage for q̃_c vectors:
+        // tildeQPool[c*d + j] == q̃_c[j]
+        final float[] tildeQPool = new float[C * d];
+        final float[] sumTildeQByLandmark = new float[C];
+        final float[] dotQMuByLandmark = new float[C];
+
+        for (int c = 0; c < C; c++) {
+            dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
+            sumTildeQByLandmark[c] = sumQProj - ash.landmarkProjSum[c];
+
+            final int base = c * d;
+            final float[] muProj = ash.landmarkProj[c]; // [d]
+            for (int j = 0; j < d; j++) {
+                tildeQPool[base + j] = qProj[j] - muProj[j];
             }
-            tildeQ[j] = acc;
         }
-
-        // <tildeQ, 1> = sum_j tildeQ[j]
-        float tmpSum = 0f;
-        for (int j = 0; j < d; j++) {
-            tmpSum += tildeQ[j];
-        }
-        final float sumTildeQ = tmpSum;
-
-        // <q, μ>
-        final float dotQMu = VectorUtil.dotProduct(query, mu);
 
         return (AsymmetricHashing.QuantizedVector v) -> {
-            // Single landmark baseline: ignore v.landmark for now (assumed 0)
-            final float scale = v.scale;     // already ||x − μ|| / sqrt(d)
-            final float offset = v.offset;   // already <x, μ> − ||μ||^2
+            final int c = v.landmark & 0xFF; // unsigned [0,C)
+            assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
-            // masked-add term: <tildeQ, bin(xhat)> where bin ∈ {0,1}^d
-            // This is sum of tildeQ[j] over set bits in v.binaryVector.
+            // scale = ||x − μ_c|| / √d  (precomputed at encode-time)
+            final float scale = v.scale;
+
+            // offset = <x, μ_c> − ||μ_c||²  (precomputed at encode-time)
+            final float offset = v.offset;
+
+            // maskedAdd = <q̃_c, b>
+            // b ∈ {0,1}^d stored as packed longs
             float maskedAdd = 0f;
 
-            // v.binaryVector stores bits packed in longs, little-endian per word (bit j corresponds to dimension base+j)
+            final int tildeBase = c * d;
+            final float sumTildeQ = sumTildeQByLandmark[c];
+            final float dotQMu = dotQMuByLandmark[c];
+
             final long[] bits = v.binaryVector;
-            int base = 0;
-            for (int w = 0; w < bits.length && base < d; w++, base += 64) {
+            int dimBase = 0;
+            for (int w = 0; w < bits.length && dimBase < d; w++, dimBase += 64) {
                 long word = bits[w];
                 while (word != 0L) {
                     int bit = Long.numberOfTrailingZeros(word);
-                    int idx = base + bit;
-                    if (idx < d) maskedAdd += tildeQ[idx];
+                    int idx = dimBase + bit;
+                    if (idx < d) {
+                        maskedAdd += tildeQPool[tildeBase + idx];
+                    }
                     word &= (word - 1);
                 }
             }
 
-            // ASH dot-product approximation (single landmark, {0,1} encoding):
+            // ASH dot-product approximation (multi-landmark, {0,1} encoding):
             //
-            //   scale * (2⟨q̃, b⟩ − ⟨q̃, 1⟩) + ⟨q, μ⟩ + (⟨x, μ⟩ − ||μ||²)
+            //   scale * (2⟨q̃_c, b⟩ − ⟨q̃_c, 1⟩) + ⟨q, μ_c⟩ + (⟨x, μ_c⟩ − ||μ_c||²)
             //
-            // Notes:
-            // - b ∈ {0,1}^d is the binary code (converted from the paper’s {−1,+1} form).
-            // - scale = ||x − μ|| / √d  (pure Eq. 11 baseline; no bias correction).
-            // - ⟨q, μ⟩ is a query-only offset and MUST NOT be scaled.
-            // - Scaling ⟨q, μ⟩ leads to large systematic error (see paper Eq. 11 regrouping).
+            // where q̃_c = A(q − μ_c) is precomputed once per query and per landmark c.
             return scale * (2f * maskedAdd - sumTildeQ) + dotQMu + offset;
-
         };
     }
 
