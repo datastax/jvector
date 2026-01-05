@@ -306,4 +306,55 @@ public interface VectorUtilSupport {
       outMaskedAdd[lane] = maskedAdd;
     }
   }
+
+  /**
+   * Computes maskedAdd for a block slice using a pooled landmark-specific query buffer.
+   *
+   * <p>This is identical to {@link #ashMaskedAddBlockAllWords(float[], int, long[], int, int, int, int, int, float[])}
+   * except that the query vector is read from {@code tildeQPool} at offsets {@code tildeBase + j}.</p>
+   *
+   * <p>tildeQPool layout:
+   * <ul>
+   *   <li>{@code tildeQPool[tildeBase + j]} is q̃_c[j] for the caller-selected landmark c</li>
+   * </ul>
+   *
+   * <p>Default implementation is scalar bit-walk with register accumulation, reading from the pool.</p>
+   */
+  default void ashMaskedAddBlockAllWordsPooled(
+          float[] tildeQPool,
+          int tildeBase,   // base offset into tildeQPool for this landmark (e.g., c * d)
+          int d,
+          long[] packedBits,
+          int packedBase,  // blockId * nWords * blockSize
+          int nWords,
+          int blockSize,
+          int laneStart,
+          int blockLen,
+          float[] outMaskedAdd
+  ) {
+    assert tildeBase >= 0;
+    assert laneStart >= 0;
+    assert blockLen >= 0;
+    assert laneStart + blockLen <= blockSize;
+    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
+
+    for (int lane = 0; lane < blockLen; lane++) {
+      float maskedAdd = 0f; // register accumulator
+      int laneIndex = laneStart + lane;
+
+      for (int w = 0; w < nWords; w++) {
+        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
+        int baseDim = w * 64;
+
+        while (word != 0L) {
+          int bit = Long.numberOfTrailingZeros(word);
+          int j = baseDim + bit;
+          if (j < d) maskedAdd += tildeQPool[tildeBase + j];
+          word &= (word - 1);
+        }
+      }
+
+      outMaskedAdd[lane] = maskedAdd;
+    }
+  }
 }
