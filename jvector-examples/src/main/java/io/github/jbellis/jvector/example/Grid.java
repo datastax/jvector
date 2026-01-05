@@ -576,7 +576,8 @@ public class Grid {
                                                             ThroughputBenchmark.createDefault()),
                                                     LatencyBenchmark.createDefault(),
                                                     CountBenchmark.createDefault(),
-                                                    AccuracyBenchmark.createDefault()
+                                                    AccuracyBenchmark.createDefault(),
+                                                    CountBenchmark.createDefault()
                                             );
                                             QueryTester tester = new QueryTester(benchmarks);
                                             for (int topK : topKGrid.keySet()) {
