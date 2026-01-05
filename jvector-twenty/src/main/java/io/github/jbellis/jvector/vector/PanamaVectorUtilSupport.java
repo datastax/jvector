@@ -1659,6 +1659,73 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
     }
 
+    @Override
+    public void ashMaskedAddBlockAllWordsPooled(float[] tildeQPool,
+                                                int tildeBase,
+                                                int d,
+                                                long[] packedBits,
+                                                int blockWordBase,
+                                                int words,
+                                                int blockSize,
+                                                int laneStart,
+                                                int blockLen,
+                                                float[] outMaskedAdd) {
+
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        for (int lane = 0; lane < blockLen; lane++) {
+            FloatVector accVec = FloatVector.zero(SPEC);
+            float scalarAcc = 0f;
+
+            int laneIndex = laneStart + lane;
+
+            for (int w = 0; w < words; w++) {
+                long wordBits = packedBits[blockWordBase + (w * blockSize) + laneIndex];
+                int baseDim = w * 64;
+
+                for (int off = 0; off < 64 && (baseDim + off) < d; off += LANES) {
+                    int qBase = baseDim + off;
+
+                    VectorMask<Float> inRange = SPEC.indexInRange(qBase, d);
+
+                    long maskBits;
+                    if (LANES == 16) {
+                        maskBits = (wordBits >>> off) & 0xFFFFL;
+                    } else if (LANES == 8) {
+                        maskBits = (wordBits >>> off) & 0xFFL;
+                    } else if (LANES == 4) {
+                        maskBits = (wordBits >>> off) & 0xFL;
+                    } else {
+                        long m = wordBits >>> off;
+                        float s = 0f;
+                        for (int b = 0; b < LANES; b++) {
+                            if (((m >>> b) & 1L) != 0L) {
+                                int idx = qBase + b;
+                                if (idx < d) s += tildeQPool[tildeBase + idx];
+                            }
+                        }
+                        scalarAcc += s;
+                        continue;
+                    }
+
+                    if (maskBits == 0L) continue;
+
+                    VectorMask<Float> bitMask =
+                            VectorMask.fromLong(SPEC, maskBits).and(inRange);
+
+                    // pooled masked load: note tildeBase + qBase
+                    FloatVector masked =
+                            FloatVector.fromArray(SPEC, tildeQPool, tildeBase + qBase, bitMask);
+
+                    accVec = accVec.add(masked);
+                }
+            }
+
+            outMaskedAdd[lane] = accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
+        }
+    }
+
     private static void ashMaskedAddBlockWordLutNibble(float[] tildeQ,
                                                        int baseDim,
                                                        int d,
