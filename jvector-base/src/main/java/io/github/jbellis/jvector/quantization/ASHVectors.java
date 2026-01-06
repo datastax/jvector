@@ -470,6 +470,9 @@ public class ASHVectors implements CompressedVectors {
 
         private final VectorUtilSupport vecUtil;
 
+        private static final java.util.concurrent.atomic.AtomicBoolean PRINTED_MIXED_ONCE =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
         BlockSimdASHBlockScorer(
                 AsymmetricHashing.QuantizedVector[] vectors,
                 float[] scales,
@@ -500,7 +503,7 @@ public class ASHVectors implements CompressedVectors {
             this.dotQMu = qp.dotQMu;
         }
 
-        // SIMD kernel assumes homogeneous landmark, caller handles boundaries
+        // SIMD kernel is invoked on homogeneous landmark runs; this method splits mixed ranges into runs.
         @Override
         public void scoreRange(int start, int count, float[] out) {
             if (count < 0) throw new IllegalArgumentException("count must be >= 0");
@@ -533,11 +536,31 @@ public class ASHVectors implements CompressedVectors {
                 }
 
                 // Catch mixed-landmark calls for debug.  TODO remove later
-                assert runLen == maxLen : "Caller passed mixed-landmark range into SIMD scorer";
+                if (runLen != maxLen && PRINTED_MIXED_ONCE.compareAndSet(false, true)) {
+                    int nextLm = (ord + runLen < end) ? (landmarks[ord + runLen] & 0xFF) : -1;
+                    System.out.println(
+                            "\t[ASH SIMD debug] mixed-landmark boundary inside packed-block slice: " +
+                                    "start=" + start +
+                                    " count=" + count +
+                                    " ord=" + ord +
+                                    " blockId=" + blockId +
+                                    " laneStart=" + laneStart +
+                                    " runLen=" + runLen +
+                                    " maxLen=" + maxLen +
+                                    " c=" + c +
+                                    " nextC=" + nextLm
+                    );
+                }
+
+                assert runLen >= 1 && runLen <= maxLen;
+                assert laneStart >= 0 && laneStart + runLen <= blockSize;
 
                 final float runSumTildeQ = sumTildeQ[c];
                 final float runDotQMu = dotQMu[c];
                 final int blockWordBase = blockId * words * blockSize;
+
+                // Load q̃_c into contiguous scratch for the unpooled kernel
+                System.arraycopy(tildeQPool, base, tildeQScratch, 0, d);
 
                 vecUtil.ashMaskedAddBlockAllWords(
                         tildeQScratch,
