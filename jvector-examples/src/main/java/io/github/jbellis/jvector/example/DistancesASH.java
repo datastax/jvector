@@ -64,14 +64,14 @@ public class DistancesASH {
         final int HEADER_BITS = 72;
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {64}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
 
         // How many ASH landmarks to use, C = [1, 64]
-        final int landmarkCount = 64;
+        final int landmarkCount = 1;
 
         // Define the benchmark size
-        int maxQueries = 10_000;
-        int maxVectors = 10_000_000;
+        int maxQueries = 1_000;
+        int maxVectors = 1_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -509,11 +509,11 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-//        runCohere100k();
-//        runADA();
-//        runOpenai1536();
-//        runOpenai3072();
-        runCap6m();
-        runCohere10m();
+        runCohere100k();
+        runADA();
+        runOpenai1536();
+        runOpenai3072();
+//        runCap6m();
+//        runCohere10m();
     }
 }
