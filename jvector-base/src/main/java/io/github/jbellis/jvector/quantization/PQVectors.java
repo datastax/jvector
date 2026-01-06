@@ -17,8 +17,8 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -82,12 +82,12 @@ public abstract class PQVectors implements CompressedVectors {
      *
      * @param pq           the ProductQuantization to use
      * @param vectorCount  the number of vectors to encode
-     * @param ravv         the RandomAccessVectorValues to encode
+     * @param ravr         the RandomAccessVectorRepresentations to encode
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the PQVectors instance
      */
-    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravv, simdExecutor);
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorRepresentations<VectorFloat<?>> ravr, ForkJoinPool simdExecutor) {
+        return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravr, simdExecutor);
     }
 
     /**
@@ -97,11 +97,11 @@ public abstract class PQVectors implements CompressedVectors {
      * @param pq           the ProductQuantization to use
      * @param vectorCount  the number of vectors to encode
      * @param ordinalsMapping the graph ordinals to RAVV mapping, the function should be defined in [0, vectorCount)
-     * @param ravv         the RandomAccessVectorValues to encode
+     * @param ravr         the RandomAccessVectorRepresentations to encode
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the PQVectors instance
      */
-    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorRepresentations<VectorFloat<?>> ravr, ForkJoinPool simdExecutor) {
         int compressedDimension = pq.compressedVectorSize();
         PQLayout layout = new PQLayout(vectorCount, compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
@@ -115,16 +115,16 @@ public abstract class PQVectors implements CompressedVectors {
         // Encode the vectors in parallel into the compressed data chunks
         // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
         // and then we are guaranteed safe publication because we join the thread after completion.
-        var ravvCopy = ravv.threadLocalSupplier();
+        var ravrCopy = ravr.threadLocalSupplier();
         simdExecutor.submit(() -> IntStream.range(0, vectorCount)
                         .parallel()
                         .forEach(ordinal -> {
                             // Retrieve the slice and mutate it.
-                            var localRavv = ravvCopy.get();
+                            var localRavv = ravrCopy.get();
                             var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
                             var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
                             if (vector != null)
-                                pq.encodeTo(vector, slice);
+                                pq.encodeTo(vector.decode(), slice);
                             else
                                 slice.zero();
                         }))
@@ -189,7 +189,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new PQDecoder.DotProductDecoder(this, q);
@@ -202,7 +202,7 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
-    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         VectorFloat<?> centeredQuery = pq.globalCentroid == null ? q : VectorUtil.sub(q, pq.globalCentroid);
 
         final int subspaceCount = pq.getSubspaceCount();
@@ -263,7 +263,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
         final int subspaceCount = pq.getSubspaceCount();
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);

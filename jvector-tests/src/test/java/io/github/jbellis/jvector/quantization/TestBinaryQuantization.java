@@ -21,7 +21,7 @@ import org.junit.Test;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
@@ -34,7 +34,7 @@ public class TestBinaryQuantization extends RandomizedTest
     public void testMutableImmutableBQEquality()
     {
         var vectors = createRandomVectors(512, 64);
-        var ravv = new ListRandomAccessVectorValues(vectors, 64);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 64);
         var bq = new BinaryQuantization(ravv.dimension());
         var immutableCompressedVectors = bq.encodeAll(ravv);
         var mutableCompressedVectors = new MutableBQVectors(bq);

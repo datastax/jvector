@@ -17,9 +17,11 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.graph.GraphIndexView;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -59,13 +61,13 @@ import java.util.function.IntFunction;
  * }
  * </pre>
  */
-class ParallelGraphWriter implements AutoCloseable {
+class ParallelGraphWriter<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements AutoCloseable {
     private final RandomAccessWriter writer;
     private final ImmutableGraphIndex graph;
     private final ExecutorService executor;
-    private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
+    private final ThreadLocal<GraphIndexView<Primary, Secondary>> viewPerThread;
     private final ThreadLocal<ByteBuffer> bufferPerThread;
-    private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<GraphIndexView<Primary, Secondary>> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath;
     private final int taskMultiplier;

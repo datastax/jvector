@@ -72,15 +72,7 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>
     }
 
     @Override
-    public void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length)
-    {
-        ArrayVectorFloat csrc = (ArrayVectorFloat) src;
-        System.arraycopy(csrc.data, srcOffset, data, destOffset, length);
-    }
-
-    @Override
-    public long ramBytesUsed()
-    {
+    public long ramBytesUsed() {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         return OH_BYTES + RamUsageEstimator.sizeOf(data);
     }
@@ -112,9 +104,18 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return this.getHashCode();
+    }
+
+    @Override
+    public boolean isExact() {
+        return true;
+    }
+
+    @Override
+    public VectorFloat<?> decode() {
+        return this;
     }
 }
 

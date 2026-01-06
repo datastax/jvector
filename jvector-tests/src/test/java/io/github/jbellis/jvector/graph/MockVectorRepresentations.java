@@ -24,30 +24,31 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.ArrayUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-public class MockVectorValues implements RandomAccessVectorValues {
+public class MockVectorRepresentations implements RandomAccessVectorRepresentations {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final VectorFloat<?> scratch;
     private final int dimension;
     private final VectorFloat<?>[] denseValues;
 
-    public static MockVectorValues fromValues(VectorFloat<?>[] values) {
-        return new MockVectorValues(values[0].length(), values);
+    public static MockVectorRepresentations fromValues(VectorFloat<?>[] values) {
+        return new MockVectorRepresentations(values[0].length(), values);
     }
 
-    MockVectorValues(int dimension, VectorFloat<?>[] denseValues) {
+    MockVectorRepresentations(int dimension, VectorFloat<?>[] denseValues) {
         this.dimension = dimension;
         this.denseValues = denseValues;
         this.scratch = vectorTypeSupport.createFloatVector(dimension);
     }
 
     @Override
-    public MockVectorValues copy() {
-        return new MockVectorValues(dimension, ArrayUtil.copyOfSubArray(denseValues, 0, denseValues.length));
+    public MockVectorRepresentations copy() {
+        return new MockVectorRepresentations(dimension, ArrayUtil.copyOfSubArray(denseValues, 0, denseValues.length));
     }
 
     @Override

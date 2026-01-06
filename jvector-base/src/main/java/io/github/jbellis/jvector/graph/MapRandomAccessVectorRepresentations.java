@@ -16,9 +16,13 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * RandomAccessValues backed by a Map.  This can be more useful than `ListRandomAccessVectorValues`
@@ -29,11 +33,11 @@ import java.util.Map;
  * <p>
  * This will be as threadsafe as the provided Map.
  */
-public class MapRandomAccessVectorValues implements RandomAccessVectorValues {
-    private final Map<Integer, VectorFloat<?>> map;
+public class MapRandomAccessVectorRepresentations<Vec extends VectorRepresentation> implements RandomAccessVectorRepresentations<Vec> {
+    private final Map<Integer, Vec> map;
     private final int dimension;
 
-    public MapRandomAccessVectorValues(Map<Integer, VectorFloat<?>> map, int dimension) {
+    public MapRandomAccessVectorRepresentations(Map<Integer, Vec> map, int dimension) {
         this.map = map;
         this.dimension = dimension;
     }
@@ -49,7 +53,7 @@ public class MapRandomAccessVectorValues implements RandomAccessVectorValues {
     }
 
     @Override
-    public VectorFloat<?> getVector(int nodeId) {
+    public Vec getVector(int nodeId) {
         return map.get(nodeId);
     }
 
@@ -59,7 +63,16 @@ public class MapRandomAccessVectorValues implements RandomAccessVectorValues {
     }
 
     @Override
-    public RandomAccessVectorValues copy() {
+    public RandomAccessVectorRepresentations<Vec> copy() {
         return this;
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        long bytesUsed = 0;
+        for (Map.Entry<Integer, Vec> entry : map.entrySet()) {
+            bytesUsed += Integer.BYTES + entry.getValue().ramBytesUsed();
+        }
+        return bytesUsed;
     }
 }

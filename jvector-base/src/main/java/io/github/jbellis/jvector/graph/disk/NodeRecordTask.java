@@ -17,9 +17,12 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ByteBufferIndexWriter;
+import io.github.jbellis.jvector.graph.AbstractMutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndexView;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -35,12 +38,12 @@ import java.util.function.IntFunction;
  * owning its own ImmutableGraphIndex.View for thread-safe neighbor iteration.
  * Each task processes a contiguous range of ordinals to reduce task creation overhead.
  */
-class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
+class NodeRecordTask<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements Callable<List<NodeRecordTask.Result>> {
     private final int startOrdinal;  // Inclusive
     private final int endOrdinal;    // Exclusive
     private final OrdinalMapper ordinalMapper;
-    private final ImmutableGraphIndex graph;
-    private final ImmutableGraphIndex.View view;
+    private final AbstractMutableGraphIndex<Primary, Secondary> graph;
+    private final GraphIndexView<Primary, Secondary> view;
     private final List<Feature> inlineFeatures;
     private final Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers;
     private final int recordSize;
@@ -65,8 +68,8 @@ class NodeRecordTask implements Callable<List<NodeRecordTask.Result>> {
     NodeRecordTask(int startOrdinal,
                    int endOrdinal,
                    OrdinalMapper ordinalMapper,
-                   ImmutableGraphIndex graph,
-                   ImmutableGraphIndex.View view,
+                   AbstractMutableGraphIndex<Primary, Secondary> graph,
+                   GraphIndexView<Primary, Secondary> view,
                    List<Feature> inlineFeatures,
                    Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
                    int recordSize,

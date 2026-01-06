@@ -16,29 +16,32 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * A List-backed implementation of the {@link RandomAccessVectorValues} interface.
+ * A List-backed implementation of the {@link RandomAccessVectorRepresentations} interface.
  * <p>
  * It is acceptable to provide this class to a GraphBuilder, and then continue
  * to add vectors to the backing List as you add to the graph.
  * <p>
  * This will be as threadsafe as the provided List.
  */
-public class ListRandomAccessVectorValues implements RandomAccessVectorValues {
-    private final List<VectorFloat<?>> vectors;
+public class ListRandomAccessVectorRepresentations<Vec extends VectorRepresentation> implements RandomAccessVectorRepresentations<Vec> {
+    private final List<Vec> vectors;
     private final int dimension;
 
     /**
-     * Construct a new instance of {@link ListRandomAccessVectorValues}.
+     * Construct a new instance of {@link ListRandomAccessVectorRepresentations}.
      *
      * @param vectors   a (potentially mutable) list of float vectors.
      * @param dimension the dimension of the vectors.
      */
-    public ListRandomAccessVectorValues(List<VectorFloat<?>> vectors, int dimension) {
+    public ListRandomAccessVectorRepresentations(List<Vec> vectors, int dimension) {
         this.vectors = vectors;
         this.dimension = dimension;
     }
@@ -54,7 +57,7 @@ public class ListRandomAccessVectorValues implements RandomAccessVectorValues {
     }
 
     @Override
-    public VectorFloat<?> getVector(int targetOrd) {
+    public Vec getVector(int targetOrd) {
         return vectors.get(targetOrd);
     }
 
@@ -64,7 +67,16 @@ public class ListRandomAccessVectorValues implements RandomAccessVectorValues {
     }
 
     @Override
-    public ListRandomAccessVectorValues copy() {
+    public ListRandomAccessVectorRepresentations copy() {
         return this;
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        long bytesUsed = 0;
+        for (Vec v : vectors) {
+            bytesUsed += Integer.BYTES + v.ramBytesUsed();
+        }
+        return bytesUsed;
     }
 }

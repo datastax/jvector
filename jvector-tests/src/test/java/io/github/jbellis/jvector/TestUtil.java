@@ -20,16 +20,16 @@ import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.Bits;
@@ -56,7 +56,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -151,27 +150,27 @@ public class TestUtil {
         return IntStream.range(0, count).mapToObj(i -> TestUtil.normalRandomVector(getRandom(), dimension)).collect(Collectors.toList());
     }
 
-    public static void writeGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, Path outputPath) throws IOException {
+    public static void writeGraph(ImmutableGraphIndex graph, RandomAccessVectorRepresentations ravv, Path outputPath) throws IOException {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
 
-    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorRepresentations ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
         writeFusedGraph(graph, ravv, pqv, featureId, null, outputPath);
     }
 
-    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
+    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorRepresentations ravv, PQVectors pqv,
                                        FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
                                        Path outputPath) throws IOException {
         var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
-                .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
+                .with(new FusedFeatureImplementation(graph.maxDegree(), pqv.getCompressor()));
 
         if (oldToNewOrdinals != null) {
             builder = builder.withMap(oldToNewOrdinals);
         }
 
         var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
-        suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
+        suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedFeatureImplementation.State(graph.getView(), pqv, ordinal));
 
         if (featureId == FeatureId.INLINE_VECTORS) {
             builder.with(new InlineVectors(ravv.dimension()));
@@ -211,8 +210,8 @@ public class TestUtil {
 
     public static void assertGraphEquals(ImmutableGraphIndex g, ImmutableGraphIndex h) {
         // construct these up front since they call seek which will mess up our test loop
-        String prettyG = ImmutableGraphIndex.prettyPrint(g);
-        String prettyH = ImmutableGraphIndex.prettyPrint(h);
+        String prettyG = g.prettyPrint();
+        String prettyH = g.prettyPrint();
         assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
                                    prettyG,
                                    prettyH),
@@ -255,7 +254,7 @@ public class TestUtil {
         }
     }
 
-    public static ImmutableGraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorValues vectors) {
+    public static ImmutableGraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorRepresentations vectors) {
         for (var i = 0; i < vectors.size(); i++) {
             builder.addGraphNode(i, vectors.getVector(i));
         }
@@ -349,11 +348,11 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -503,11 +502,11 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }

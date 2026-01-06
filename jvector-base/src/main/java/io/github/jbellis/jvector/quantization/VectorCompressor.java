@@ -16,20 +16,15 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.DataOutput;
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 /**
  * Interface for vector compression.  T is the encoded (compressed) vector type;
@@ -37,7 +32,7 @@ import java.util.stream.Stream;
  */
 public interface VectorCompressor<T> {
 
-    default CompressedVectors encodeAll(RandomAccessVectorValues ravv) {
+    default CompressedVectors encodeAll(RandomAccessVectorRepresentations ravv) {
         return encodeAll(ravv, PhysicalCoreExecutor.pool());
     }
 
@@ -48,7 +43,7 @@ public interface VectorCompressor<T> {
      * @param simdExecutor ForkJoinPool to use for SIMD operations
      * @return CompressedVectors containing the encoded vectors
      */
-    CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor);
+    CompressedVectors encodeAll(RandomAccessVectorRepresentations ravv, ForkJoinPool simdExecutor);
 
     T encode(VectorFloat<?> v);
 
@@ -95,7 +90,7 @@ public interface VectorCompressor<T> {
      * @param ravv the vectors to compute the reconstruction error for
      * @return the reconstruction error for each vector
      */
-    default double[] reconstructionErrors(RandomAccessVectorValues ravv)  {
+    default double[] reconstructionErrors(RandomAccessVectorRepresentations ravv)  {
         return IntStream.range(0, ravv.size()).mapToDouble(i -> reconstructionError(ravv.getVector(i))).toArray();
     }
 
@@ -107,7 +102,7 @@ public interface VectorCompressor<T> {
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the reconstruction error for each vector
      */
-    default double[] reconstructionErrors(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    default double[] reconstructionErrors(RandomAccessVectorRepresentations ravv, ForkJoinPool simdExecutor) {
         return simdExecutor.submit(() ->
                 IntStream.range(0, ravv.size()).mapToDouble(i -> reconstructionError(ravv.getVector(i))).toArray()
         ).join();

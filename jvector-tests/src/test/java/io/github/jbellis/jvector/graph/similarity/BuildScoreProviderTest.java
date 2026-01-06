@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -43,7 +43,7 @@ public class BuildScoreProviderTest {
         vectors.add(vts.createFloatVector(new float[]{1.0f, 0.0f}));
         vectors.add(vts.createFloatVector(new float[]{0.0f, 1.0f}));
         vectors.add(vts.createFloatVector(new float[]{-1.0f, 0.0f}));
-        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 2);
 
         // Create non-identity mapping: graph node 0 -> ravv ordinal 2, graph node 1 -> ravv ordinal 0, graph node 2 -> ravv ordinal 1
         int[] graphToRavvOrdMap = {2, 0, 1};

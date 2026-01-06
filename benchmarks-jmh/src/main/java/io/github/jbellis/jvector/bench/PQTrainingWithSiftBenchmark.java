@@ -16,8 +16,8 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.*;
@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class PQTrainingWithSiftBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQTrainingWithSiftBenchmark.class);
-    private RandomAccessVectorValues ravv;
+    private RandomAccessVectorRepresentations ravv;
     private List<VectorFloat<?>> baseVectors;
     private List<VectorFloat<?>> queryVectors;
     private List<List<Integer>> groundTruth;
@@ -56,7 +56,7 @@ public class PQTrainingWithSiftBenchmark {
                 baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
         originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
+        ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
     }
 
     @TearDown

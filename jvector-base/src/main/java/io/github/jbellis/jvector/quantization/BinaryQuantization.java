@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -45,7 +45,7 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
      * Use BQ constructor instead
      */
     @Deprecated
-    public static BinaryQuantization compute(RandomAccessVectorValues ravv) {
+    public static BinaryQuantization compute(RandomAccessVectorRepresentations ravv) {
         return compute(ravv, ForkJoinPool.commonPool());
     }
 
@@ -53,7 +53,7 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
      * Use BQ constructor instead
      */
     @Deprecated
-    public static BinaryQuantization compute(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
+    public static BinaryQuantization compute(RandomAccessVectorRepresentations ravv, ForkJoinPool parallelExecutor) {
         return new BinaryQuantization(ravv.dimension());
     }
 
@@ -63,7 +63,7 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
     }
 
     @Override
-    public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public CompressedVectors encodeAll(RandomAccessVectorRepresentations ravv, ForkJoinPool simdExecutor) {
         var ravvCopy = ravv.threadLocalSupplier();
         var cv = simdExecutor.submit(() -> IntStream.range(0, ravv.size())
                 .parallel()

@@ -16,9 +16,9 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -31,14 +31,14 @@ import org.agrona.collections.Int2ObjectHashMap;
  * Performs similarity comparisons with compressed vectors without decoding them.
  * These decoders use vectors fused into a graph.
  */
-public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFunction {
+public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     protected final ProductQuantization pq;
     Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
     protected final VectorFloat<?> query;
-    protected final ExactScoreFunction esf;
+    protected final Exact esf;
     // connected to the Graph View by caller
-    protected final FusedPQ.PackedNeighbors packedNeighbors;
+    protected final FusedFeatureImplementation.PackedNeighbors packedNeighbors;
     // caller passes this to us for re-use across calls
     protected final ByteSequence<?> neighborCodes;
     // decoder state
@@ -48,8 +48,8 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
 
     protected FusedPQDecoder(ProductQuantization pq,
                              Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-                             VectorFloat<?> query, FusedPQ.PackedNeighbors packedNeighbors,
-                             ByteSequence<?> neighborCodes, VectorFloat<?> results, ExactScoreFunction esf,
+                             VectorFloat<?> query, FusedFeatureImplementation.PackedNeighbors packedNeighbors,
+                             ByteSequence<?> neighborCodes, VectorFloat<?> results, Exact esf,
                              VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.hierarchyCachedFeatures = hierarchyCachedFeatures;
@@ -95,7 +95,7 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
             throw new IllegalArgumentException("Node " + node2 + " is not in the hierarchy");
         }
 
-        var code2 = (FusedPQ.FusedPQInlineSource) hierarchyCachedFeatures.get(node2);
+        var code2 = (FusedFeatureImplementation.FusedPQInlineSource) hierarchyCachedFeatures.get(node2);
         float sim = VectorUtil.assembleAndSum(partialSums, pq.getClusterCount(), code2.getCode());
         return distanceToScore(sim);
     }
@@ -113,10 +113,10 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     protected abstract float distanceToScore(float distance);
 
     static class DotProductDecoder extends FusedPQDecoder {
-        public DotProductDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+        public DotProductDecoder(FusedFeatureImplementation.PackedNeighbors neighbors, ProductQuantization pq,
                                  Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                  VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
-                                 ExactScoreFunction esf) {
+                                 Exact esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
         }
 
@@ -127,10 +127,10 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     }
 
     static class EuclideanDecoder extends FusedPQDecoder {
-        public EuclideanDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+        public EuclideanDecoder(FusedFeatureImplementation.PackedNeighbors neighbors, ProductQuantization pq,
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
-                                ExactScoreFunction esf) {
+                                Exact esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.EUCLIDEAN);
         }
 
@@ -147,10 +147,10 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         private final float queryMagnitudeSquared;
         private final VectorFloat<?> partialSquaredMagnitudes;
 
-        protected CosineDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+        protected CosineDecoder(FusedFeatureImplementation.PackedNeighbors neighbors, ProductQuantization pq,
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
-                                ExactScoreFunction esf) {
+                                Exact esf) {
             super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.COSINE);
 
             // this part is not query-dependent, so we can cache it
@@ -197,7 +197,7 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
                 throw new IllegalArgumentException("Node " + node2 + " is not in the hierarchy");
             }
 
-            var code2 = (FusedPQ.FusedPQInlineSource) hierarchyCachedFeatures.get(node2);
+            var code2 = (FusedFeatureImplementation.FusedPQInlineSource) hierarchyCachedFeatures.get(node2);
             float cos = VectorUtil.pqDecodedCosineSimilarity(code2.getCode(), 0, pq.getSubspaceCount(), pq.getClusterCount(), partialSums, partialSquaredMagnitudes, queryMagnitudeSquared);
             return distanceToScore(cos);
         }
@@ -218,10 +218,10 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         };
     }
 
-    public static FusedPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+    public static FusedPQDecoder newDecoder(FusedFeatureImplementation.PackedNeighbors neighbors, ProductQuantization pq,
                                             Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
                                             ByteSequence<?> reusableNeighborCodes, VectorFloat<?> results,
-                                            VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
+                                            VectorSimilarityFunction similarityFunction, Exact esf) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new DotProductDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);

@@ -16,10 +16,8 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
@@ -48,7 +46,7 @@ import java.util.concurrent.TimeUnit;
 public class RecallWithRandomVectorsBenchmark {
     private static final Logger log = LoggerFactory.getLogger(RecallWithRandomVectorsBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private RandomAccessVectorValues ravv;
+    private RandomAccessVectorRepresentations ravv;
     private ArrayList<VectorFloat<?>> baseVectors;
     private ArrayList<VectorFloat<?>> queryVectors;
     private GraphIndexBuilder graphIndexBuilder;
@@ -87,7 +85,7 @@ public class RecallWithRandomVectorsBenchmark {
         }
 
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
+        ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
         final BuildScoreProvider buildScoreProvider;
         if (numberOfPQSubspaces > 0) {
             ProductQuantization productQuantization = ProductQuantization.compute(ravv, numberOfPQSubspaces, 256, true);
@@ -176,11 +174,11 @@ public class RecallWithRandomVectorsBenchmark {
                 if (pqVectors != null) { // Quantized, use the precomputed score function
                     // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
                     // then reranks with the exact vectors that are stored on disk in the index
-                    ScoreFunction.ApproximateScoreFunction asf = pqVectors.precomputedScoreFunctionFor(
+                    SimilarityFunction.Approximate asf = pqVectors.precomputedScoreFunctionFor(
                             queryVector,
                             VectorSimilarityFunction.EUCLIDEAN
                     );
-                    ScoreFunction.ExactScoreFunction reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
+                    SimilarityFunction.Exact reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
                     ssp = new DefaultSearchScoreProvider(asf, reranker);
                     searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL);
                 } else { // Not quantized, used typical searcher

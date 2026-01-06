@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import com.indeed.util.mmap.MMapBuffer;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -29,7 +29,7 @@ import java.io.IOException;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 
-public class MMapRandomAccessVectorValues implements RandomAccessVectorValues, Closeable {
+public class MMapRandomAccessVectorRepresentations implements RandomAccessVectorRepresentations, Closeable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final int dimension;
     final int rows;
@@ -38,7 +38,7 @@ public class MMapRandomAccessVectorValues implements RandomAccessVectorValues, C
 
     final MMapBuffer fileReader;
 
-    public MMapRandomAccessVectorValues(File f, int dimension) {
+    public MMapRandomAccessVectorRepresentations(File f, int dimension) {
         assert f != null && f.exists() && f.canRead();
         assert f.length() % ((long) dimension * Float.BYTES) == 0;
 
@@ -79,8 +79,8 @@ public class MMapRandomAccessVectorValues implements RandomAccessVectorValues, C
     }
 
     @Override
-    public RandomAccessVectorValues copy() {
-        return new MMapRandomAccessVectorValues(file, dimension);
+    public RandomAccessVectorRepresentations copy() {
+        return new MMapRandomAccessVectorRepresentations(file, dimension);
     }
 
     @Override

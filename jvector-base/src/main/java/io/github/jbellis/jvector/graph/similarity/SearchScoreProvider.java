@@ -16,12 +16,23 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
-/** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
-public interface SearchScoreProvider {
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
-    ScoreFunction scoreFunction();
+public interface SearchScoreProvider<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> {
 
-    ScoreFunction.ExactScoreFunction reranker();
+    SimilarityFunction<Primary> primaryScoreFunction();
 
-    ScoreFunction.ExactScoreFunction exactScoreFunction();
+    SimilarityFunction<Secondary> secondaryScoreFunction();
+
+    /**
+     * Convenience function to avoid instantiating a ScoreFunction<Primary>
+     * @return true if the primary representations are exact
+     */
+    boolean isPrimaryExact();
+
+    /**
+     * Convenience function to avoid instantiating a ScoreFunction<Secondary>
+     * @return true if the secondary representations are exact
+     */
+    boolean isSecondaryExact();
 }

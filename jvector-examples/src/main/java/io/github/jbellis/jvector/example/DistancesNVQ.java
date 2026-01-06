@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -44,7 +44,7 @@ public class DistancesNVQ {
                 vectors.size(), queries.size(), vectors.get(0).length());
 
         // Generate a NVQ for random vectors
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
         var nvq = NVQuantization.compute(ravv, 2);
 
         // Compress the vectors

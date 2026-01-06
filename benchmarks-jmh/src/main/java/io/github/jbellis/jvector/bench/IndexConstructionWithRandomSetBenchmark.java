@@ -16,12 +16,10 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -32,7 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -48,7 +45,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 public class IndexConstructionWithRandomSetBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IndexConstructionWithRandomSetBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private RandomAccessVectorValues ravv;
+    private RandomAccessVectorRepresentations ravv;
     private BuildScoreProvider buildScoreProvider;
     private int M = 32; // graph degree
     private int beamWidth = 100;
@@ -68,7 +65,7 @@ public class IndexConstructionWithRandomSetBenchmark {
             baseVectors.add(vector);
         }
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
+        ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
         if (numberOfPQSubspaces > 0) {
             log.info("Using PQ build score provider with original dimension: {}, M: {}, beam width: {}", originalDimension, M, beamWidth);

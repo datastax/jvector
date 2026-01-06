@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -30,13 +30,10 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.vector.VectorUtil.sub;
 
 
@@ -147,7 +144,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * @param ravv the vectors to quantize
      * @param nSubVectors number of subvectors
      */
-    public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
+    public static NVQuantization compute(RandomAccessVectorRepresentations ravv, int nSubVectors) {
         var ravvCopy = ravv.threadLocalSupplier().get();
         var dim = ravvCopy.getVector(0).length();
         var globalMean = vectorTypeSupport.createFloatVector(dim);
@@ -179,7 +176,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * Encodes the given vectors in parallel using NVQ.
      */
     @Override
-    public NVQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
+    public NVQVectors encodeAll(RandomAccessVectorRepresentations ravv, ForkJoinPool parallelExecutor) {
         var ravvCopy = ravv.threadLocalSupplier();
         return new NVQVectors(this,
                 parallelExecutor.submit(() -> IntStream.range(0, ravv.size())

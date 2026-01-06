@@ -24,7 +24,7 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.AbstractLongHeap;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
@@ -157,7 +157,7 @@ public class NodeQueue {
      * <p>
      * Only the best result or results whose approximate score is at least `rerankFloor` will be reranked.
      */
-    public float rerank(int topK, ScoreFunction.ExactScoreFunction reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
+    public float rerank(int topK, SimilarityFunction.Exact reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
         // Rescore the nodes whose approximate score meets the floor.  Nodes that do not will be marked as -1
         int[] ids = new int[size()];
         float[] exactScores = new float[size()];

@@ -18,9 +18,11 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.graph.AbstractMutableGraphIndex;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.io.Closeable;
 import java.io.FileNotFoundException;
@@ -71,8 +73,9 @@ public interface GraphIndexWriter extends Closeable {
      * @return a builder for the specified writer type
      * @throws IllegalArgumentException if the type requires a specific writer type that wasn't provided
      */
-    static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
-            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
+    static <Primary extends VectorRepresentation, Secondary extends VectorRepresentation>
+    AbstractGraphIndexWriter.Builder<? extends IndexWriter>
+    getBuilderFor(GraphIndexWriterTypes type, AbstractMutableGraphIndex<Primary, Secondary> graphIndex, IndexWriter out) {
         switch (type) {
             case ON_DISK_PARALLEL:
                 if (!(out instanceof RandomAccessWriter)) {
@@ -103,7 +106,8 @@ public interface GraphIndexWriter extends Closeable {
      * @throws FileNotFoundException if the file cannot be created or opened
      * @throws IllegalArgumentException if the type is not supported via this method
      */
-    static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
+    static <Primary extends VectorRepresentation, Secondary extends VectorRepresentation>
+    AbstractGraphIndexWriter.Builder<? extends IndexWriter>
     getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, Path out) throws FileNotFoundException {
         switch (type) {
             case ON_DISK_PARALLEL:

@@ -19,19 +19,23 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
+import io.github.jbellis.jvector.graph.GraphIndexPrinter;
+import io.github.jbellis.jvector.graph.GraphIndexView;
+import io.github.jbellis.jvector.graph.Viewable;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
@@ -50,7 +54,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,7 +69,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
-public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
+public class OnDiskGraphIndex<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements ImmutableGraphIndex, AutoCloseable, Accountable, Viewable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
     public static final int CURRENT_VERSION = 6;
@@ -436,12 +439,17 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     // re-declared to specify type
     @Override
-    public View getView() {
+    public GraphIndexView<Primary, Secondary> getView() {
         try {
             return new View(readerSupplier.get());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    @Override
+    public String prettyPrint() {
+        return GraphIndexPrinter.prettyPrint(this);
     }
 
     @Override
@@ -456,7 +464,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return (double) sum / it.size();
     }
 
-    public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
+    public class View implements FeatureSource, RandomAccessVectorRepresentations {
         protected final RandomAccessReader reader;
         private final int[] neighbors;
         private int nodeDegree;
@@ -478,7 +486,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
-        public RandomAccessVectorValues copy() {
+        public RandomAccessVectorRepresentations copy() {
             throw new UnsupportedOperationException(); // need to copy reader
         }
 
@@ -606,15 +614,15 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
-        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
-            var useEdgeLoading = scoreFunction.supportsSimilarityToNeighbors();
+        public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, GraphIndexView.IntMarker visited, GraphIndexView.NeighborProcessor neighborProcessor) {
+            var useEdgeLoading = similarityFunction.supportsSimilarityToNeighbors();
             if (useEdgeLoading && level == 0) {
-                scoreFunction.enableSimilarityToNeighbors(node);
+                similarityFunction.enableSimilarityToNeighbors(node);
 
                 for (int i = 0; i < nodeDegree; i++) {
                     var friendOrd = neighbors[i];
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = scoreFunction.similarityToNeighbor(node, i);
+                        float friendSimilarity = similarityFunction.similarityToNeighbor(node, i);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -623,7 +631,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 while (it.hasNext()) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -672,9 +680,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
-        public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        public SimilarityFunction.Exact rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
-                return RandomAccessVectorValues.super.rerankerFor(queryVector, vsf);
+                return RandomAccessVectorRepresentations.super.rerankerFor(queryVector, vsf);
             } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
                 return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).rerankerFor(queryVector, vsf, this);
             } else {
@@ -683,9 +691,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
-        public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        public SimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.FUSED_PQ)) {
-                return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
+                return ((FusedFeatureImplementation) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else {
                 throw new UnsupportedOperationException("No approximate score function available for this graph");
             }
@@ -693,13 +701,13 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
+    public static void write(ImmutableGraphIndex graph, RandomAccessVectorRepresentations vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
     public static void write(ImmutableGraphIndex graph,
-                             RandomAccessVectorValues vectors,
+                             RandomAccessVectorRepresentations vectors,
                              Map<Integer, Integer> oldToNewOrdinals,
                              Path path)
             throws IOException

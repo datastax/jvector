@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -70,7 +70,7 @@ public class TestProductQuantization extends RandomizedTest {
     }
 
     private static void assertPerfectQuantization(List<VectorFloat<?>> vectors) {
-        var ravv = new ListRandomAccessVectorValues(vectors, 3);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 3);
         var pq = ProductQuantization.compute(ravv, 2, DEFAULT_CLUSTERS, false);
         var cv = (PQVectors) pq.encodeAll(ravv);
         var decodedScratch = vectorTypeSupport.createFloatVector(3);
@@ -113,14 +113,14 @@ public class TestProductQuantization extends RandomizedTest {
 
         // generate PQ codebooks from half of the dataset
         var half1 = Arrays.copyOf(vectors, vectors.length / 2);
-        var ravv1 = new ListRandomAccessVectorValues(List.of(half1), vectors[0].length());
+        var ravv1 = new ListRandomAccessVectorRepresentations(List.of(half1), vectors[0].length());
         var pq1 = ProductQuantization.compute(ravv1, 1, DEFAULT_CLUSTERS, false);
 
         // refine the codebooks with the other half (so, drawn from the same distribution)
         int remaining = vectors.length - vectors.length / 2;
         var half2 = new VectorFloat<?>[remaining];
         System.arraycopy(vectors, vectors.length / 2, half2, 0, remaining);
-        var ravv2 = new ListRandomAccessVectorValues(List.of(half2), vectors[0].length());
+        var ravv2 = new ListRandomAccessVectorRepresentations(List.of(half2), vectors[0].length());
         var pq2 = pq1.refine(ravv2);
 
         // the refined version should work better
@@ -164,7 +164,7 @@ public class TestProductQuantization extends RandomizedTest {
                                          getSubvectorSizesAndOffsets(vectors[0].length(), 1),
                                          null,
                                          UNWEIGHTED);
-        var ravv = new ListRandomAccessVectorValues(List.of(vectors), vectors[0].length());
+        var ravv = new ListRandomAccessVectorRepresentations(List.of(vectors), vectors[0].length());
         var cv = (PQVectors) pq.encodeAll(ravv);
         var loss = 0.0;
         var decodedScratch = vectorTypeSupport.createFloatVector(vectors[0].length());
@@ -199,7 +199,7 @@ public class TestProductQuantization extends RandomizedTest {
     public void testSaveLoad() throws Exception {
         // Generate a PQ for random 2D vectors
         var vectors = createRandomVectors(512, 2);
-        var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, 2), 1, 256, false, 0.2f);
+        var pq = ProductQuantization.compute(new ListRandomAccessVectorRepresentations(vectors, 2), 1, 256, false, 0.2f);
 
         // Write
         var file = File.createTempFile("pqtest", ".pq");
@@ -411,7 +411,7 @@ public class TestProductQuantization extends RandomizedTest {
     public void testPQCodebookSums() {
         // Generate a PQ for random 2D vectors
         var vectors = createRandomVectors(10000, 384);
-        var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, 384), 48, 256, false);
+        var pq = ProductQuantization.compute(new ListRandomAccessVectorRepresentations(vectors, 384), 48, 256, false);
 
         MutablePQVectors pqm = new MutablePQVectors(pq);
 
@@ -426,7 +426,7 @@ public class TestProductQuantization extends RandomizedTest {
         for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
             var sf = pqm.diversityFunctionFor(10, vsf);
 
-            ImmutablePQVectors pqi = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), new ListRandomAccessVectorValues(vectors, 384), ForkJoinPool.commonPool());
+            ImmutablePQVectors pqi = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), new ListRandomAccessVectorRepresentations(vectors, 384), ForkJoinPool.commonPool());
             var sf2 = pqi.diversityFunctionFor(10, vsf);
 
             for (int i = 0; i < vectors.size(); i++) {

@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.microbench;
 
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -48,7 +48,7 @@ public class GraphIndexBench {
         return vectors;
     }
 
-    static class TestRandomAccessReader implements RandomAccessVectorValues {
+    static class TestRandomAccessReader implements RandomAccessVectorRepresentations {
         private final VectorFloat<?>[] values;
 
         TestRandomAccessReader(VectorFloat<?>[] values) {
@@ -76,7 +76,7 @@ public class GraphIndexBench {
         }
 
         @Override
-        public RandomAccessVectorValues copy() {
+        public RandomAccessVectorRepresentations copy() {
             return new TestRandomAccessReader(values);
         }
     }

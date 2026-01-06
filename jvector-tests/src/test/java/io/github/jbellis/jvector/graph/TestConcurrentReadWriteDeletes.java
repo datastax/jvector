@@ -18,9 +18,7 @@ package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -64,7 +62,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private List<Integer> keysRemoved = new CopyOnWriteArrayList();
 
     private List<VectorFloat<?>> vectors = createRandomVectors(nVectors, dimension);
-    private RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
+    private RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
 
     private VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
 

@@ -16,17 +16,17 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class UpdatableRandomAccessVectorValues implements RandomAccessVectorValues {
+public class UpdatableRandomAccessVectorRepresentations implements RandomAccessVectorRepresentations {
     private final List<VectorFloat<?>> data;
     private final int dimensions;
 
-    public UpdatableRandomAccessVectorValues(int dimensions) {
+    public UpdatableRandomAccessVectorRepresentations(int dimensions) {
         this.data = new ArrayList<>(1024);
         this.dimensions = dimensions;
     }
@@ -56,7 +56,7 @@ public class UpdatableRandomAccessVectorValues implements RandomAccessVectorValu
     }
 
     @Override
-    public RandomAccessVectorValues copy() {
+    public RandomAccessVectorRepresentations copy() {
         return this;
     }
 }

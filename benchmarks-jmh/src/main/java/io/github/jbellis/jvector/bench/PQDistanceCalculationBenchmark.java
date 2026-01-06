@@ -15,17 +15,13 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.openjdk.jmh.annotations.*;
@@ -88,7 +84,7 @@ public class PQDistanceCalculationBenchmark {
             queryVectors.add(createRandomVector(dimension));
         }
         
-        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
         if (M == 0) {
             buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
         } else {
@@ -107,7 +103,7 @@ public class PQDistanceCalculationBenchmark {
         for (VectorFloat<?> query : queryVectors) {
             final SearchScoreProvider searchScoreProvider = buildScoreProvider.searchProviderFor(query);
             for (int i = 0; i < vectorCount; i++) {
-                float similarity = searchScoreProvider.scoreFunction().similarityTo(i);
+                float similarity = searchScoreProvider.primaryScoreFunction().similarityTo(i);
                 totalSimilarity += similarity;
             }
         }
@@ -121,7 +117,7 @@ public class PQDistanceCalculationBenchmark {
 
         for (int q = 0; q < queryCount; q++) {
             for (int i = 0; i < vectorCount; i++) {
-                final ScoreFunction sf = buildScoreProvider.diversityProviderFor(i).scoreFunction();
+                final SimilarityFunction sf = buildScoreProvider.diversityProviderFor(i).primaryScoreFunction();
                 float similarity = sf.similarityTo(q);
                 totalSimilarity += similarity;
             }

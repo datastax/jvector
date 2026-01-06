@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.microbench;
 import io.github.jbellis.jvector.example.util.DataSet;
 import io.github.jbellis.jvector.example.util.Hdf5Loader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -41,11 +41,11 @@ public class GraphBuildBench {
     @State(Scope.Benchmark)
     public static class Parameters {
         final DataSet ds;
-        final ListRandomAccessVectorValues ravv;
+        final ListRandomAccessVectorRepresentations ravv;
 
         public Parameters() {
             this.ds = Hdf5Loader.load("hdf5/glove-100-angular.hdf5");
-            this.ravv = new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
+            this.ravv = new ListRandomAccessVectorRepresentations(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
         }
     }
 

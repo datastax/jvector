@@ -16,16 +16,15 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorValues;
-import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
+import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
@@ -69,7 +68,7 @@ public class IPCService
         boolean addHierarchy;
         boolean refineFinalGraph;
         VectorSimilarityFunction similarityFunction;
-        RandomAccessVectorValues ravv;
+        RandomAccessVectorRepresentations ravv;
         CompressedVectors cv;
         GraphIndexBuilder indexBuilder;
         ImmutableGraphIndex index;
@@ -114,7 +113,7 @@ public class IPCService
         boolean addHierarchy = Boolean.parseBoolean(args[5]);
         boolean refineFinalGraph = Boolean.parseBoolean(args[6]);
 
-        ctx.ravv = new UpdatableRandomAccessVectorValues(dimensions);
+        ctx.ravv = new UpdatableRandomAccessVectorRepresentations(dimensions);
         ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, neighborOverflow, 1.4f, addHierarchy, refineFinalGraph);
         ctx.M = M;
         ctx.dimension = dimensions;
@@ -143,7 +142,7 @@ public class IPCService
             for (int k = 0; k < vector.length(); k++)
                 vector.set(k, Float.parseFloat(values[k]));
 
-            ((UpdatableRandomAccessVectorValues)ctx.ravv).add(vector);
+            ((UpdatableRandomAccessVectorRepresentations)ctx.ravv).add(vector);
             var node = ctx.ravv.size() - 1;
             ctx.indexBuilder.addGraphNode(node, ctx.ravv.getVector(node));
         }
@@ -167,7 +166,7 @@ public class IPCService
         ctx.indexBuilder = null;
         ctx.isBulkLoad = true;
 
-        var ravv = new MMapRandomAccessVectorValues(f, ctx.dimension);
+        var ravv = new MMapRandomAccessVectorRepresentations(f, ctx.dimension);
         var indexBuilder = new GraphIndexBuilder(ravv, ctx.similarityFunction, ctx.M, ctx.efConstruction, ctx.neighborOverflow, 1.4f, ctx.addHierarchy, ctx.refineFinalGraph);
         System.out.println("BulkIndexing " + ravv.size());
         ctx.index = flushGraphIndex(indexBuilder.build(ravv), ravv);
@@ -178,7 +177,7 @@ public class IPCService
         ctx.searcher = new GraphSearcher(ctx.index);
     }
 
-    private CompressedVectors pqIndex(RandomAccessVectorValues ravv, SessionContext ctx) {
+    private CompressedVectors pqIndex(RandomAccessVectorRepresentations ravv, SessionContext ctx) {
         var pqDims = ctx.dimension > 10 ? Math.max(ctx.dimension / 4, 10) : ctx.dimension;
         long start = System.nanoTime();
         ProductQuantization pq = ProductQuantization.compute(ravv, pqDims, 256, ctx.similarityFunction == VectorSimilarityFunction.EUCLIDEAN);
@@ -189,7 +188,7 @@ public class IPCService
         return cv;
     }
 
-    private static ImmutableGraphIndex flushGraphIndex(ImmutableGraphIndex index, RandomAccessVectorValues ravv) {
+    private static ImmutableGraphIndex flushGraphIndex(ImmutableGraphIndex index, RandomAccessVectorRepresentations ravv) {
         try {
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
@@ -259,7 +258,7 @@ public class IPCService
 
             SearchResult r;
             if (ctx.cv != null) {
-                ScoreFunction.ApproximateScoreFunction sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
+                SimilarityFunction.Approximate sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
                 try (var view = ctx.index.getView()) {
                     var rr = view instanceof ImmutableGraphIndex.ScoringView
                             ? ((ImmutableGraphIndex.ScoringView) view).rerankerFor(queryVector, ctx.similarityFunction)

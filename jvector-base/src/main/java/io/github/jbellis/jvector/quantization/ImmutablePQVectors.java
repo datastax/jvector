@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -59,7 +59,7 @@ public class ImmutablePQVectors extends PQVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
         final int subspaceCount = pq.getSubspaceCount();
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);

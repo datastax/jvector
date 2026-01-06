@@ -17,22 +17,16 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.GraphIndexView;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
-import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
 
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntFunction;
@@ -42,7 +36,7 @@ import java.util.stream.Collectors;
  * Abstract base class for writing graph indexes to disk.
  * @param <T> the type of the output writer
  */
-public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
+public abstract class AbstractGraphIndexWriter<Primary extends VectorRepresentation, Secondary extends VectorRepresentation, T extends IndexWriter> implements  GraphIndexWriter {
     /** A magic number to indicate the file footer */
     public static final int FOOTER_MAGIC = 0x4a564244;
     /** The size of the offset in the footer. */
@@ -54,54 +48,34 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final int version;
     final ImmutableGraphIndex graph;
     final OrdinalMapper ordinalMapper;
-    final int dimension;
-    final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
+    final PersistenceType primaryPersistenceType;
     final int headerSize;
     volatile int maxOrdinalWritten = -1;
-    final List<Feature> inlineFeatures;
+
 
     AbstractGraphIndexWriter(T out,
                              int version,
                              ImmutableGraphIndex graph,
                              OrdinalMapper oldToNewOrdinals,
-                             int dimension,
-                             EnumMap<FeatureId, Feature> features)
+                             PersistenceType primaryPersistenceType,
+                             PersistenceType secondaryPersistenceType)
     {
+        if (secondaryPersistenceType == PersistenceType.FUSED) {
+            throw new IllegalArgumentException("Secondary persistence type cannot be FUSED");
+        }
         if (graph.getMaxLevel() > 0 && version < 4) {
             throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
         }
         this.version = version;
         this.graph = graph;
         this.ordinalMapper = oldToNewOrdinals;
-        this.dimension = dimension;
-
-        if (version <= 5) {
-            // Versions <= 5 use the old feature ordering, simply provided by the FeatureId
-            this.featureMap = features;
-            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
-        } else {
-            // Version 6 uses the new feature ordering to place fused features last in the list
-            var sortedFeatures = features.values().stream().sorted().collect(Collectors.toList());
-            this.featureMap = new LinkedHashMap<>();
-            for (var feature : sortedFeatures) {
-                this.featureMap.put(feature.id(), feature);
-            }
-            this.inlineFeatures = sortedFeatures.stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
-        }
-
-        long fusedFeaturesCount = this.inlineFeatures.stream().filter(Feature::isFused).count();
-        if (fusedFeaturesCount > 1) {
-            throw new IllegalArgumentException("At most one fused feature is allowed");
-        }
-        if (fusedFeaturesCount == 1 && version < 6) {
-            throw new IllegalArgumentException("Fused features require version 6 or higher");
-        }
+        this.primaryPersistenceType = primaryPersistenceType;
         this.out = out;
 
         // create a mock Header to determine the correct size
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
-        var ch = new CommonHeader(version, dimension, 0, layerInfo, 0);
+        var ch = new CommonHeader(version, graph.getDimension(), 0, layerInfo, 0);
         var placeholderHeader = new Header(ch, featureMap);
         this.headerSize = placeholderHeader.size();
     }
@@ -114,14 +88,6 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         return maxOrdinalWritten;
     }
 
-    /**
-     * Gets the set of features.
-     * @return the feature set
-     */
-    public Set<FeatureId> getFeatureSet() {
-        return featureMap.keySet();
-    }
-
     long featureOffsetForOrdinal(long startOffset, int ordinal) {
         int edgeSize = Integer.BYTES * (1 + graph.getDegree(0));
         long inlineBytes = ordinal * (long) (Integer.BYTES + inlineFeatures.stream().mapToInt(Feature::featureSize).sum() + edgeSize);
@@ -129,10 +95,6 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                 + headerSize
                 + inlineBytes // previous nodes
                 + Integer.BYTES; // the ordinal of the node whose features we're about to write
-    }
-
-    boolean isSeparated(Feature feature) {
-        return feature instanceof SeparatedFeature;
     }
 
     /**
@@ -171,11 +133,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
+    void writeFooter(ImmutableGraphIndex index, long headerOffset) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
-                dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
+                graph.getDimension(),
+                ordinalMapper.oldToNew(index.entryNode().node),
                 layerInfo,
                 ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, featureMap);
@@ -193,7 +155,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param startOffset the start offset
      * @throws IOException if an I/O error occurs
      */
-    protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
+    protected synchronized void writeHeader(GraphIndexView view, long startOffset) throws IOException {
         // graph-level properties
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
@@ -206,7 +168,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
     }
 
-    void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+    void writeSparseLevels(GraphIndexView view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // write sparse levels
         for (int level = 1; level <= graph.getMaxLevel(); level++) {
             int layerSize = graph.size(level);
@@ -320,7 +282,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param <K> the type of the writer to build
      * @param <T> the type of the output stream
      */
-    public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> {
+    public abstract static class Builder<T extends IndexWriter> {
         final ImmutableGraphIndex graphIndex;
         final EnumMap<FeatureId, Feature> features;
         final T out;
@@ -344,7 +306,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param version the version
          * @return this builder
          */
-        public Builder<K, T> withVersion(int version) {
+        public Builder<T> withVersion(int version) {
             if (version > OnDiskGraphIndex.CURRENT_VERSION) {
                 throw new IllegalArgumentException("Unsupported version: " + version);
             }
@@ -358,7 +320,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param feature the feature
          * @return this builder
          */
-        public Builder<K, T> with(Feature feature) {
+        public Builder<T> with(Feature feature) {
             features.put(feature.id(), feature);
             return this;
         }
@@ -368,7 +330,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param ordinalMapper the ordinal mapper
          * @return this builder
          */
-        public Builder<K, T> withMapper(OrdinalMapper ordinalMapper) {
+        public Builder<T> withMapper(OrdinalMapper ordinalMapper) {
             this.ordinalMapper = ordinalMapper;
             return this;
         }
@@ -378,7 +340,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @return the writer
          * @throws IOException if an I/O error occurs
          */
-        public K build() throws IOException {
+        public GraphIndexWriter build() throws IOException {
             if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
                 throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
             }
@@ -408,14 +370,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @return the writer
          * @throws IOException if an I/O error occurs
          */
-        protected abstract K reallyBuild(int dimension) throws IOException;
+        protected abstract GraphIndexWriter reallyBuild(int dimension) throws IOException;
 
         /**
          * Sets the ordinal mapping.
          * @param oldToNewOrdinals the old to new ordinals map
          * @return this builder
          */
-        public Builder<K, T> withMap(Map<Integer, Integer> oldToNewOrdinals) {
+        public Builder<T> withMap(Map<Integer, Integer> oldToNewOrdinals) {
             return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
         }
 

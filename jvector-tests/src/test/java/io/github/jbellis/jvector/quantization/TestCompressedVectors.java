@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -44,7 +44,7 @@ public class TestCompressedVectors extends RandomizedTest {
     public void testSaveLoadPQ() throws Exception {
         // Generate a PQ for random 2D vectors
         var vectors = createRandomVectors(512, 2);
-        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 2);
         var pq = ProductQuantization.compute(ravv, 1, 256, false);
 
         // Compress the vectors
@@ -69,7 +69,7 @@ public class TestCompressedVectors extends RandomizedTest {
     public void testSaveLoadBQ() throws Exception {
         // Generate a PQ for random vectors
         var vectors = createRandomVectors(512, 64);
-        var ravv = new ListRandomAccessVectorValues(vectors, 64);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 64);
         var bq = new BinaryQuantization(ravv.dimension());
 
         // Compress the vectors
@@ -106,7 +106,7 @@ public class TestCompressedVectors extends RandomizedTest {
 
             // Generate an NVQ for random vectors
             var vectors = createRandomVectors(512, nDimensions);
-            var ravv = new ListRandomAccessVectorValues(vectors, nDimensions);
+            var ravv = new ListRandomAccessVectorRepresentations(vectors, nDimensions);
 
             var nvq = NVQuantization.compute(ravv, nSubvectors);
 
@@ -132,7 +132,7 @@ public class TestCompressedVectors extends RandomizedTest {
     private void testPQEncodings(int dimension, int codebooks) {
         // Generate a PQ for random vectors
         var vectors = createRandomVectors(512, dimension);
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
         var pq = ProductQuantization.compute(ravv, codebooks, 256, false);
 
         // Compress the vectors
@@ -175,7 +175,7 @@ public class TestCompressedVectors extends RandomizedTest {
         int nQueries = queries.size();
 
         // Generate a NVQ for random vectors
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
         var nvq = NVQuantization.compute(ravv, nSubvectors);
         nvq.learn = learn;
 
@@ -234,7 +234,7 @@ public class TestCompressedVectors extends RandomizedTest {
         int dimension = nextInt(getRandom(), 4, 2048);
         int codebooks = nextInt(getRandom(), 1, dimension / 2);
         var vectors = createRandomVectors(512, dimension);
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
         for (boolean center : new boolean[] {true, false}) {
             var pq = ProductQuantization.compute(ravv, codebooks, 256, center);
 

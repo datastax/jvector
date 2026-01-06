@@ -22,12 +22,12 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.graph;
+package io.github.jbellis.jvector.graph.representations;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.disk.PersistenceType;
+import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.util.function.Supplier;
 import java.util.logging.Logger;
@@ -36,8 +36,8 @@ import java.util.logging.Logger;
  * Provides random access to vectors by dense ordinal. This interface is used by graph-based
  * implementations of KNN search.
  */
-public interface RandomAccessVectorValues {
-    Logger LOG = Logger.getLogger(RandomAccessVectorValues.class.getName());
+public interface RandomAccessVectorRepresentations<Vec extends VectorRepresentation> extends Accountable {
+    Logger LOG = Logger.getLogger(RandomAccessVectorRepresentations.class.getName());
 
     /**
      * Return the number of vector values.
@@ -61,22 +61,7 @@ public interface RandomAccessVectorValues {
      *
      * @param nodeId a valid ordinal, &ge; 0 and &lt; {@link #size()}.
      */
-    VectorFloat<?> getVector(int nodeId);
-
-    @Deprecated
-    default VectorFloat<?> vectorValue(int targetOrd) {
-        return getVector(targetOrd);
-    }
-
-    /**
-     * Retrieve the vector associated with a given node, and store it in the destination vector at the given offset.
-     * @param node the node to retrieve
-     * @param destinationVector the vector to store the result in
-     * @param offset the offset in the destination vector to store the result
-     */
-    default void getVectorInto(int node, VectorFloat<?> destinationVector, int offset) {
-        destinationVector.copyFrom(getVector(node), 0, offset, dimension());
-    }
+    Vec getVector(int nodeId);
 
     /**
      * @return true iff the vector returned by `getVector` is shared.  A shared vector will
@@ -85,18 +70,20 @@ public interface RandomAccessVectorValues {
     boolean isValueShared();
 
     /**
-     * Creates a new copy of this {@link RandomAccessVectorValues}. This is helpful when you need to
+     * Creates a new copy of this {@link RandomAccessVectorRepresentations}. This is helpful when you need to
      * access different values at once, to avoid overwriting the underlying float vector returned by
-     * a shared {@link RandomAccessVectorValues#getVector}.
+     * a shared {@link RandomAccessVectorRepresentations#getVector}.
      * <p>
      * Un-shared implementations may simply return `this`.
      */
-    RandomAccessVectorValues copy();
+    RandomAccessVectorRepresentations copy();
+
+    void getWriter(PersistenceType persistenceType);
 
     /**
      * Returns a supplier of thread-local copies of the RAVV.
      */
-    default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+    default Supplier<RandomAccessVectorRepresentations> threadLocalSupplier() {
         if (!isValueShared()) {
             return () -> this;
         }
@@ -106,20 +93,5 @@ public interface RandomAccessVectorValues {
         }
         var tl = ExplicitThreadLocal.withInitial(this::copy);
         return tl::get;
-    }
-
-    /**
-     * Convenience method to create an ExactScoreFunction for reranking.  The resulting function is NOT thread-safe.
-     */
-    default ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
-        return new ScoreFunction.ExactScoreFunction() {
-            private final VectorFloat<?> scratch = vts.createFloatVector(dimension());
-
-            @Override
-            public float similarityTo(int node2) {
-                getVectorInto(node2, scratch, 0);
-                return vsf.compare(queryVector, scratch);
-            }
-        };
     }
 }

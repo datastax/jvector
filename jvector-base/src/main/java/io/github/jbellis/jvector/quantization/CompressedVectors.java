@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -50,17 +50,17 @@ public interface CompressedVectors extends Accountable {
     VectorCompressor<?> getCompressor();
 
     /** precomputes partial scores for the given query with every centroid; suitable for most searches */
-    ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
+    SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
 
     /** no precomputation; suitable when just a handful of score computations are performed */
-    ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int nodeId, VectorSimilarityFunction similarityFunction);
+    SimilarityFunction.Approximate diversityFunctionFor(int nodeId, VectorSimilarityFunction similarityFunction);
 
     /** no precomputation; suitable when just a handful of score computations are performed */
-    ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
+    SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
 
 
     @Deprecated
-    default ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    default SimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         return precomputedScoreFunctionFor(q, similarityFunction);
     }
 

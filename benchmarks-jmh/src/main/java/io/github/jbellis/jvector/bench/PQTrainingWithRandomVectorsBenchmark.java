@@ -15,8 +15,8 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -29,10 +29,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
-
-import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -44,7 +41,7 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class PQTrainingWithRandomVectorsBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQTrainingWithRandomVectorsBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private RandomAccessVectorValues ravv;
+    private RandomAccessVectorRepresentations ravv;
     @Param({"16", "32", "64"})
     private int M; // Number of subspaces
     @Param({"768"})
@@ -65,7 +62,7 @@ public class PQTrainingWithRandomVectorsBenchmark {
             vectors.add(floatVector);
         }
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(vectors, originalDimension);
+        ravv = new ListRandomAccessVectorRepresentations(vectors, originalDimension);
         log.info("Pre-created vector dataset with original dimension: {}, vector count: {}", originalDimension, vectorCount);
     }
 

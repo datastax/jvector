@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
@@ -37,12 +37,9 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
@@ -84,11 +81,11 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * @param globallyCenter whether to center the vectors globally before quantization
      *                       (not recommended when using the quantization for dot product)
      */
-    public static ProductQuantization compute(RandomAccessVectorValues ravv, int M, int clusterCount, boolean globallyCenter) {
+    public static ProductQuantization compute(RandomAccessVectorRepresentations ravv, int M, int clusterCount, boolean globallyCenter) {
         return compute(ravv, M, clusterCount, globallyCenter, UNWEIGHTED, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
-    public static ProductQuantization compute(RandomAccessVectorValues ravv, int M, int clusterCount, boolean globallyCenter, float anisotropicThreshold) {
+    public static ProductQuantization compute(RandomAccessVectorRepresentations ravv, int M, int clusterCount, boolean globallyCenter, float anisotropicThreshold) {
         return compute(ravv, M, clusterCount, globallyCenter, anisotropicThreshold, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
@@ -108,7 +105,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
      */
-    public static ProductQuantization compute(RandomAccessVectorValues ravv,
+    public static ProductQuantization compute(RandomAccessVectorRepresentations ravv,
                                               int M,
                                               int clusterCount,
                                               boolean globallyCenter,
@@ -137,7 +134,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return new ProductQuantization(codebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
 
-    static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
+    static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorRepresentations ravv, ForkJoinPool parallelExecutor) {
         // limit the number of vectors we train on
         var P = min(1.0f, MAX_PQ_TRAINING_SET_SIZE / (float) ravv.size());
         var ravvCopy = ravv.threadLocalSupplier();
@@ -155,7 +152,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     /**
      * Create a new PQ by fine-tuning this one with the data in `ravv`
      */
-    public ProductQuantization refine(RandomAccessVectorValues ravv) {
+    public ProductQuantization refine(RandomAccessVectorRepresentations ravv) {
         return refine(ravv, 1, UNWEIGHTED, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
@@ -165,7 +162,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * @param lloydsRounds number of Lloyd's iterations to run against
      *                     the new data.  Suggested values are 1 or 2.
      */
-    public ProductQuantization refine(RandomAccessVectorValues ravv,
+    public ProductQuantization refine(RandomAccessVectorRepresentations ravv,
                                       int lloydsRounds,
                                       float anisotropicThreshold,
                                       ForkJoinPool simdExecutor,
@@ -231,7 +228,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * as a zero vector.
      */
     @Override
-    public PQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public PQVectors encodeAll(RandomAccessVectorRepresentations ravv, ForkJoinPool simdExecutor) {
         return PQVectors.encodeAndBuild(this, ravv.size(), ravv, simdExecutor);
     }
 

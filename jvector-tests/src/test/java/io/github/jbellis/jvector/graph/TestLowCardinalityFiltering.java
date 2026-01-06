@@ -27,7 +27,7 @@ package io.github.jbellis.jvector.graph;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
@@ -66,7 +66,7 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
 
         // build index
         VectorFloat<?>[] vectors = TestVectorGraph.createRandomFloatVectors(nVectors, dimensions, R);
-        var ravv = new ListRandomAccessVectorValues(List.of(vectors), dimensions);
+        var ravv = new ListRandomAccessVectorRepresentations(List.of(vectors), dimensions);
         var builder = new GraphIndexBuilder(ravv, similarityFunction, maxDegree, 2 * maxDegree, 1.2f, 1.2f, addHierarchy);
         var onHeapGraph = builder.build(ravv);
 
@@ -108,7 +108,7 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
      * Create "interesting" test parameters -- shouldn't match too many (we want to validate
      * that threshold code doesn't just crawl the entire graph) or too few (we might not find them)
      */
-    private float getRecall(RandomAccessVectorValues ravv, Map<Boolean, BitSet> bitSets, VectorSimilarityFunction similarityFunction, VectorFloat<?> query, boolean queryClass, int topK, SearchResult result) {
+    private float getRecall(RandomAccessVectorRepresentations ravv, Map<Boolean, BitSet> bitSets, VectorSimilarityFunction similarityFunction, VectorFloat<?> query, boolean queryClass, int topK, SearchResult result) {
         var resultNodes = result.getNodes();
         assertEquals(topK, resultNodes.length);
 

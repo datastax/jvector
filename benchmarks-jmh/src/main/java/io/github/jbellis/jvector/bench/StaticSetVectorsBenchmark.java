@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.bench;
 import io.github.jbellis.jvector.example.SiftSmall;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit;
 @Threads(1)
 public class StaticSetVectorsBenchmark {
     private static final Logger log = LoggerFactory.getLogger(StaticSetVectorsBenchmark.class);
-    private RandomAccessVectorValues ravv;
+    private RandomAccessVectorRepresentations ravv;
     private List<VectorFloat<?>> baseVectors;
     private List<VectorFloat<?>> queryVectors;
     private List<List<Integer>> groundTruth;
@@ -58,7 +58,7 @@ public class StaticSetVectorsBenchmark {
                 baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
         originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
-        ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
+        ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
         // score provider using the raw, in-memory vectors
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);

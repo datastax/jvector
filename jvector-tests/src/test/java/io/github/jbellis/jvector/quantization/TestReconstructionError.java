@@ -19,8 +19,8 @@ package io.github.jbellis.jvector.quantization;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,9 +29,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.List;
-import java.util.NoSuchElementException;
-import java.util.OptionalDouble;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.Assert.assertEquals;
@@ -58,8 +55,8 @@ public class TestReconstructionError extends RandomizedTest {
 
     public void testReconstructionError_withProductQuantization(int nVectors, double toleranceAvg, double toleranceSTD) {
         int dimensions = 32;
-        var ravv = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
-        var ravvTest = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravv = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravvTest = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
 
         ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true);
 
@@ -74,8 +71,8 @@ public class TestReconstructionError extends RandomizedTest {
 
     public void testReconstructionError_withBinaryQuantization(int nVectors, double toleranceAvg, double toleranceSTD) {
         int dimensions = 32;
-        var ravv = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
-        var ravvTest = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravv = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravvTest = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
 
         BinaryQuantization bq = new BinaryQuantization(dimensions);
 
@@ -90,15 +87,15 @@ public class TestReconstructionError extends RandomizedTest {
 
     public void testReconstructionError_withNVQuantization(int nVectors, double toleranceAvg, double toleranceSTD) {
         int dimensions = 32;
-        var ravv = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
-        var ravvTest = new ListRandomAccessVectorValues(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravv = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
+        var ravvTest = new ListRandomAccessVectorRepresentations(createRandomVectors(nVectors,  dimensions), dimensions);
 
         NVQuantization nvq = NVQuantization.compute(ravv, 2);
 
         compareErrors(nvq, ravv, ravvTest, toleranceAvg, toleranceSTD);
     }
 
-    void compareErrors(VectorCompressor<?> compressor, RandomAccessVectorValues sample1, RandomAccessVectorValues sample2, double toleranceAvg, double toleranceSTD) {
+    void compareErrors(VectorCompressor<?> compressor, RandomAccessVectorRepresentations sample1, RandomAccessVectorRepresentations sample2, double toleranceAvg, double toleranceSTD) {
         double[] errors1 = compressor.reconstructionErrors(sample1);
         double averageError1 = Arrays.stream(errors1).average().getAsDouble();
         double varError1 = Arrays.stream(errors1).map(x -> (x - averageError1) * (x - averageError1)).average().getAsDouble();

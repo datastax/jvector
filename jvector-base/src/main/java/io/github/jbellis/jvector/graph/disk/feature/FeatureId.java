@@ -30,7 +30,7 @@ import java.util.function.BiFunction;
  */
 public enum FeatureId {
     INLINE_VECTORS(InlineVectors::load),
-    FUSED_PQ(FusedPQ::load),
+    FUSED_PQ(FusedFeatureImplementation::load),
     NVQ_VECTORS(NVQ::load),
     SEPARATED_VECTORS(SeparatedVectors::load),
     SEPARATED_NVQ(SeparatedNVQ::load);

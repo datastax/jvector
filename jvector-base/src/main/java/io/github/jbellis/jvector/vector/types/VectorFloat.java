@@ -16,24 +16,23 @@
 
 package io.github.jbellis.jvector.vector.types;
 
-import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
-public interface VectorFloat<T> extends Accountable
-{
+public interface VectorFloat<T> extends VectorRepresentation {
     /**
      * @return entire vector backing storage
      */
     T get();
 
-    int length();
+    int dimension();
+
+    default int getCompressedSize() {
+        return dimension() * Float.BYTES;
+    }
 
     default int offset(int i) {
         return i;
     }
-
-    VectorFloat<T> copy();
-
-    void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length);
 
     float get(int i);
 
@@ -43,7 +42,7 @@ public interface VectorFloat<T> extends Accountable
 
     default int getHashCode() {
         int result = 1;
-        for (int i = 0; i < length(); i++) {
+        for (int i = 0; i < dimension(); i++) {
             if (get(i) != 0) {
                 result = 31 * result + Float.hashCode(get(i));
             }

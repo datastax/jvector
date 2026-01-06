@@ -17,8 +17,7 @@
 package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
-import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.Test;
 
@@ -33,7 +32,7 @@ public class TestNeighbors extends RandomizedTest {
   public void testInsertDiverse() {
     // set up BSP
     var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
-    var vectors = new TestVectorGraph.CircularFloatVectorValues(10);
+    var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
     var candidates = new NodeArray(10);
     var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarityFunction);
     // fill candidates with all the nodes except 7
@@ -43,7 +42,7 @@ public class TestNeighbors extends RandomizedTest {
     assert candidates.size() == 9;
 
     // only nodes 6 and 8 are diverse wrt 7
-    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityPruner(bsp, 1.0f), 10, 10);
     cnm.addNode(7);
     var neighbors = cnm.insertDiverse(7, candidates);
     assertEquals(2, neighbors.size());
@@ -60,7 +59,7 @@ public class TestNeighbors extends RandomizedTest {
   public void testInsertDiverseConcurrent() {
     // set up BSP
     var sf = VectorSimilarityFunction.DOT_PRODUCT;
-    var vectors = new TestVectorGraph.CircularFloatVectorValues(10);
+    var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
     var natural = new NodeArray(10);
     var concurrent = new NodeArray(10);
     var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, sf);
@@ -72,7 +71,7 @@ public class TestNeighbors extends RandomizedTest {
             i -> concurrent.insertSorted(i, scoreBetween(bsp, 7, i)));
 
     // only nodes 6 and 8 are diverse wrt 7
-    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityPruner(bsp, 1.0f), 10, 10);
     cnm.addNode(7);
     var neighbors = cnm.insertDiverse(7, NodeArray.merge(natural, concurrent));
     assertEquals(2, neighbors.size());
@@ -84,7 +83,7 @@ public class TestNeighbors extends RandomizedTest {
   @Test
   public void testInsertDiverseRetainsNatural() {
     // set up BSP
-    var vectors = new TestVectorGraph.CircularFloatVectorValues(10);
+    var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
     var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
     var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarityFunction);
 
@@ -95,7 +94,7 @@ public class TestNeighbors extends RandomizedTest {
     var cna2 = new NodeArray(1);
     cna2.addInOrder(8, scoreBetween(bsp, 7, 8));
 
-    var cnm = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.0f), 10, 10);
+    var cnm = new ConcurrentNeighborMap(new VamanaDiversityPruner(bsp, 1.0f), 10, 10);
     cnm.addNode(7, cna);
     var neighbors = cnm.insertDiverse(7, cna2);
     assertEquals(2, neighbors.size());

@@ -19,10 +19,13 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.graph.AbstractMutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndexView;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -65,7 +68,7 @@ import java.util.function.IntFunction;
  * The class supports incremental writing through the writeInline method, which
  * allows writing features for individual nodes without writing the entire graph.
  */
-public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
+public class OnDiskGraphIndexWriter<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> extends AbstractGraphIndexWriter<Primary, Secondary, RandomAccessWriter> {
     private final long startOffset;
     private volatile boolean useParallelWrites = false;
     private final Path filePath; // Required for parallel writes
@@ -88,15 +91,15 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * @param parallelUseDirectBuffers whether to use direct ByteBuffers for parallel writes
      */
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
-                                   int version,
-                                   long startOffset,
-                                   ImmutableGraphIndex graph,
-                                   OrdinalMapper oldToNewOrdinals,
-                                   int dimension,
-                                   EnumMap<FeatureId, Feature> features,
-                                   Path filePath,
-                                   int parallelWorkerThreads,
-                                   boolean parallelUseDirectBuffers)
+                           int version,
+                           long startOffset,
+                           AbstractMutableGraphIndex<Primary, Secondary> graph,
+                           OrdinalMapper oldToNewOrdinals,
+                           int dimension,
+                           EnumMap<FeatureId, Feature> features,
+                           Path filePath,
+                           int parallelWorkerThreads,
+                           boolean parallelUseDirectBuffers)
     {
         super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
         this.startOffset = startOffset;
@@ -285,7 +288,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     /**
      * Writes L0 records sequentially (original implementation).
      */
-    private void writeL0RecordsSequential(ImmutableGraphIndex.View view,
+    private void writeL0RecordsSequential(GraphIndexView view,
                                           Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -351,7 +354,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * seek to the startOffset and re-write the header.
      * @throws IOException if there is an error writing the header
      */
-    public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
+    public synchronized void writeHeader(GraphIndexView<Primary, Secondary> view) throws IOException {
         // graph-level properties
         out.seek(startOffset);
         super.writeHeader(view, startOffset);
@@ -384,7 +387,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     /**
      * Builder for {@link OnDiskGraphIndexWriter}, with optional features.
      */
-    public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
+    public static class Builder extends AbstractGraphIndexWriter.Builder<RandomAccessWriter> {
         private long startOffset = 0L;
         private boolean useParallelWrites = false;
         /**

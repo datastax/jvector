@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -63,7 +63,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         vectors.add(vts.createFloatVector(new float[] {0, 0}));
         vectors.add(vts.createFloatVector(new float[] {0, 1}));
         vectors.add(vts.createFloatVector(new float[] {2, 0}));
-        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 2);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
             var bytesUsed = builder.addGraphNode(0, ravv.getVector(0));
@@ -84,7 +84,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         vectors.add(vts.createFloatVector(new float[] {0, 0}));
         vectors.add(vts.createFloatVector(new float[] {0, 1}));
         vectors.add(vts.createFloatVector(new float[] {2, 0}));
-        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 2);
         
         // Initial score provider uses dot product, so scores will equal node IDs
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
@@ -131,7 +131,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
         int size = randomIntBetween(10, 100);
-        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
+        var ravv = MockVectorRepresentations.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
 
         Supplier<GraphIndexBuilder> newBuilder = () ->
             new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true);
@@ -163,7 +163,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     public void testAddNodesToVectorValuesIteratively() throws IOException {
         int dimension = randomIntBetween(2, 32);
         var mutableVectors = new ArrayList<VectorFloat<?>>();
-        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(mutableVectors, dimension);
+        RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(mutableVectors, dimension);
         try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true)) {
             for (int i = 0; i < 10; i++) {
                 mutableVectors.add(TestUtil.randomVector(random(), dimension));

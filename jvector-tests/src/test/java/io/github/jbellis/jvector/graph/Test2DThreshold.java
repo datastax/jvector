@@ -19,8 +19,6 @@ package io.github.jbellis.jvector.graph;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -53,7 +51,7 @@ public class Test2DThreshold extends LuceneTestCase {
 
         // build index
         VectorFloat<?>[] vectors = TestVectorGraph.createRandomFloatVectors(graphSize, 2, R);
-        var ravv = new ListRandomAccessVectorValues(List.of(vectors), 2);
+        var ravv = new ListRandomAccessVectorRepresentations(List.of(vectors), 2);
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, maxDegree, 2 * maxDegree, 1.2f, 1.4f, addHierarchy);
         var onHeapGraph = builder.build(ravv);
 

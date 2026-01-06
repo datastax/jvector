@@ -22,13 +22,13 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.TestVectorGraph;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
@@ -78,7 +78,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph))
         {
             var outputPath = testDirectory.resolve("test_graph_" + graph.getClass().getSimpleName());
-            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+            var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(graph.size(0));
             TestUtil.writeGraph(graph, ravv, outputPath);
             try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
                  var onDiskGraph = OnDiskGraphIndex.load(readerSupplier))
@@ -99,7 +99,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     public void testRenumberingOnDelete(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(3);
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
@@ -150,7 +150,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     public void testReorderingRenumbering(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(3);
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
@@ -184,7 +184,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     public void testReorderingWithHoles(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(3);
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
@@ -218,14 +218,14 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         }
     }
 
-    public static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorValues ravv) {
+    public static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorRepresentations ravv) {
         for (int i = 0; i < view.size(); i++) {
             assertEquals("Incorrect vector at " + i, ravv.getVector(i), view.getVector(i));
         }
     }
 
     private static void validateSeparatedNVQ(OnDiskGraphIndex.View view,
-                                             RandomAccessVectorValues ravv,
+                                             RandomAccessVectorRepresentations ravv,
                                              NVQuantization nvq) throws IOException
     {
         assertEquals("Sizes differ", ravv.size(), view.size());
@@ -244,7 +244,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testSimpleGraphSeparated() throws Exception {
         for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph)) {
             var outputPath = testDirectory.resolve("test_graph_separated_" + graph.getClass().getSimpleName());
-            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+            var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(graph.size(0));
 
             // Write graph with SEPARATED_VECTORS
             try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
@@ -279,7 +279,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         // Create random vectors
         var dimension = 64;
         var vectors = TestUtil.createRandomVectors(nodeCount, dimension);
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
 
         // Compute NVQ and build a SeparatedNVQ feature
         var nvq = NVQuantization.compute(ravv, /* e.g. subquantizers=2 */ 2);
@@ -315,7 +315,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     {
         var graph = new TestUtil.RandomlyConnectedGraphIndex(1_000_000, 32, getRandom());
         var outputPath = testDirectory.resolve("large_graph");
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(graph.size(0));
         TestUtil.writeGraph(graph, ravv, outputPath);
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
@@ -377,7 +377,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testMultiLayerFullyConnected() throws Exception {
         // Suppose we have 3 layers of sizes 5, 4, 3
         var graph = new TestUtil.FullyConnectedGraphIndex(1, List.of(5, 4, 3));
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(graph.size(0));
         var outputPath = testDirectory.resolve("fully_connected_multilayer");
         TestUtil.writeGraph(graph, ravv, outputPath);
 
@@ -408,7 +408,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             new CommonHeader.LayerInfo(5, 2)
         );
         var graph = new TestUtil.RandomlyConnectedGraphIndex(layerInfo, getRandom());
-        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+        var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(graph.size(0));
         var outputPath = testDirectory.resolve("random_multilayer");
 
         TestUtil.writeGraph(graph, ravv, outputPath);
@@ -464,7 +464,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         // generate 1000 node random graph
         var graph = new TestUtil.RandomlyConnectedGraphIndex(1000, 32, getRandom());
         var vectors = TestUtil.createRandomVectors(1000, 256);
-        var ravv = new ListRandomAccessVectorValues(vectors, 256);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 256);
 
         // write out graph all at once
         var bulkPath = testDirectory.resolve("bulk_graph");
@@ -497,7 +497,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         var pqv = (PQVectors) pq.encodeAll(ravv);
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, incrementalFadcPath)
                 .with(new InlineVectors(ravv.dimension()))
-                .with(new FusedPQ(graph.getDegree(0), pq))
+                .with(new FusedFeatureImplementation(graph.getDegree(0), pq))
                 .build())
         {
             // write inline vectors incrementally
@@ -506,8 +506,8 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
                 writer.writeInline(i, state);
             }
             // write graph structure, fused ADC
-            writer.write(Feature.singleStateFactory(FeatureId.FUSED_PQ, i -> new FusedPQ.State(graph.getView(), pqv, i)));
-            writer.write(Map.of(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal)));
+            writer.write(Feature.singleStateFactory(FeatureId.FUSED_PQ, i -> new FusedFeatureImplementation.State(graph.getView(), pqv, i)));
+            writer.write(Map.of(FeatureId.FUSED_PQ, ordinal -> new FusedFeatureImplementation.State(graph.getView(), pqv, ordinal)));
         }
 
         // graph and vectors should be identical

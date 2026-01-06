@@ -15,7 +15,7 @@
  */
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -26,7 +26,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 /**
  * Performs similarity comparisons with compressed vectors without decoding them
  */
-abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
+abstract class PQDecoder implements SimilarityFunction.Approximate {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     protected final PQVectors cv;

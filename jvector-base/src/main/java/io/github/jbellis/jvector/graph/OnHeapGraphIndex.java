@@ -24,32 +24,28 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
-import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.representations.MutableRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -59,9 +55,11 @@ import java.util.stream.IntStream;
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-public class OnHeapGraphIndex implements MutableGraphIndex {
+public class OnHeapGraphIndex<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> extends AbstractMutableGraphIndex<Primary, Secondary> {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
+
+    private final SearchScoreProvider<Primary, Secondary> searchScoreProvider;
 
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
@@ -75,29 +73,31 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     // Maximum number of neighbors (edges) per node per layer
     final List<Integer> maxDegrees;
-    private final int dimension;
-    // The ratio by which we can overflow the neighborhood of a node during construction. Since it is a multiplicative
-    // ratio, i.e., the maximum allowable degree if maxDegree * overflowRatio, it should be higher than 1.
-    private final double overflowRatio;
+    final List<Integer> capacities;
 
     private volatile boolean allMutationsCompleted = false;
 
     private final boolean isHierarchical;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
-        this.overflowRatio = overflowRatio;
+    OnHeapGraphIndex(MutableRandomAccessVectorRepresentations<Primary> primaries,
+                     MutableRandomAccessVectorRepresentations<Secondary> secondaries,
+                     SearchScoreProvider<Primary, Secondary> searchScoreProvider,
+                     List<Integer> maxDegrees,
+                     double overflowRatio, boolean isHierarchical) {
+        super(primaries, secondaries);
+        this.searchScoreProvider = searchScoreProvider;
         this.maxDegrees = new IntArrayList();
-        this.dimension = dimension;
+
         setDegrees(maxDegrees);
+        capacities = new ArrayList<>();
+        for (Integer maxDegree : maxDegrees) {
+            capacities.add((int) (maxDegree * overflowRatio + 1));
+        }
+
         entryPoint = new AtomicReference<>();
         this.completions = new CompletionTracker(1024);
         // Initialize the base layer (layer 0) with a dense map.
-        this.layers.add(new ConcurrentNeighborMap(
-                new DenseIntMap<>(1024),
-                diversityProvider,
-                getDegree(0),
-                (int) (getDegree(0) * overflowRatio))
-        );
+        this.layers.add(new ConcurrentNeighborMap());
         this.isHierarchical = isHierarchical;
     }
 
@@ -183,11 +183,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         for (int i = layers.size(); i <= level; i++) {
             synchronized (layers) {
                 if (i == layers.size()) { // doublecheck after locking
-                    var denseMap = layers.get(0);
-                    var map = new ConcurrentNeighborMap(new SparseIntMap<>(),
-                                                        denseMap.diversityProvider,
-                                                        getDegree(level),
-                                                        (int) (getDegree(level) * overflowRatio));
+                    var map = new ConcurrentNeighborMap(new SparseIntMap<>());
                     layers.add(map);
                 }
             }
@@ -251,6 +247,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public long ramBytesUsed() {
         var graphBytesUsed = IntStream.range(0, layers.size()).mapToLong(this::ramBytesUsedOneLayer).sum();
+        graphBytesUsed += (long) maxDegrees.size() * Integer.BYTES;
+        graphBytesUsed += (long) capacities.size() * Integer.BYTES;
         return graphBytesUsed + completions.ramBytesUsed();
     }
 
@@ -266,25 +264,17 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public long ramBytesUsedOneNode(int level) {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(level).nodeArrayLength());
+        return REF_BYTES + Neighbors.ramBytesUsed(capacities.get(level));
     }
 
     @Override
-    public void enforceDegree(int node) {
-        for (int level = 0; level <= getMaxLevel(); level++) {
-            layers.get(level).enforceDegree(node);
+    public boolean setEdges(int level, int node, NodeArray candidates) {
+        if (candidates.size() >= capacities.get(level)) {
+            return false;
+        } else {
+            layers.get(level).update(node, candidates);
+            return true;
         }
-    }
-
-    @Override
-    public void addEdges(int level, int node, NodeArray candidates, float overflowRatio) {
-        var newNeighbors = layers.get(level).insertDiverse(node, candidates);
-        layers.get(level).backlink(newNeighbors, node, overflowRatio);
-    }
-
-    @Override
-    public void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates) {
-        layers.get(level).replaceDeletedNeighbors(node, toDelete, candidates);
     }
 
     @Override
@@ -298,7 +288,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
-    public View getView() {
+    public GraphIndexView<Primary, Secondary> getView() {
         // Before all completions are completed, we need a View that is thread-safe and allows concurrent mutations in the graph.
         // Once all completions are completed, we can freeze the graph and just need  a View that is thread-safe.
         if (allMutationsCompleted) {
@@ -306,6 +296,16 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         } else {
             return new ConcurrentGraphIndexView();
         }
+    }
+
+    @Override
+    public GraphSearcher getSearcher() {
+        return new GraphSearcherImplementation<>(this.getView(), this.searchScoreProvider);
+    }
+
+    @Override
+    public String prettyPrint() {
+        return GraphIndexPrinter.prettyPrint(this);
     }
 
     public ThreadSafeGrowableBitSet getDeletedNodes() {
@@ -383,7 +383,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public int getDimension() {
-        return dimension;
+        return getSecondaryRepresentations().dimension();
     }
 
     @Override
@@ -394,6 +394,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public boolean allMutationsCompleted() {
         return allMutationsCompleted;
+    }
+
+    @Override
+    public VectorRepresentation getVector(int node) {
+        return null;
     }
 
     /**
@@ -465,7 +470,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
     }
 
-    private class FrozenView implements View {
+    private class FrozenView implements GraphIndexView<Primary, Secondary> {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -473,11 +478,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         @Override
-        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+        public void processNeighbors(int level, int node, SimilarityFunction<Primary> similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
             for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                 var friendOrd = it.nextInt();
                 if (visited.mark(friendOrd)) {
-                    float friendSimilarity = scoreFunction.similarityTo(friendOrd);
+                    var vr = getPrimaryRepresentations().getVector(friendOrd);
+                    float friendSimilarity = similarityFunction.similarityTo(vr);
                     neighborProcessor.process(friendOrd, friendSimilarity);
                 }
             }
@@ -506,11 +512,6 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         @Override
-        public boolean contains(int level, int node) {
-            return OnHeapGraphIndex.this.contains(level, node);
-        }
-
-        @Override
         public void close() {
             // No resources to close
         }
@@ -520,107 +521,34 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
             NodeAtLevel entry = entryNode();
             return String.format("%s(size=%d, entryNode=%s)", getClass().getSimpleName(), size(), entry);
         }
+
+        @Override
+        public Primary getPrimaryRepresentation(int node) {
+            return getPrimaryRepresentations().getVector(node);
+        }
+
+        @Override
+        public Secondary getSecondaryRepresentation(int node) {
+            return getSecondaryRepresentations().getVector(node);
+        }
+
+        @Override
+        public void refresh() {}
     }
 
     /**
      * Saves the graph to the given DataOutput for reloading into memory later
      */
-    @Experimental
-    @Deprecated
     public void save(DataOutput out) throws IOException {
-        if (!allMutationsCompleted()) {
-            throw new IllegalStateException("Cannot save a graph with pending mutations. Call cleanup() first");
-        }
-
-        out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
-        out.writeInt(4); // The version
-
-        // Write graph-level properties.
-        out.writeInt(layers.size());
-        for (int level = 0; level < layers.size(); level++) {
-            out.writeInt(getDegree(level));
-        }
-
-        var entryNode = entryPoint.get();
-        assert entryNode.level == getMaxLevel();
-        out.writeInt(entryNode.node);
-
-        for (int level = 0; level < layers.size(); level++) {
-            out.writeInt(size(level));
-
-            // Save neighbors from the layer.
-            var it = nodeStream(level).iterator();
-            while (it.hasNext()) {
-                int nodeId = it.nextInt();
-                var neighbors = layers.get(level).get(nodeId);
-                out.writeInt(nodeId);
-                out.writeInt(neighbors.size());
-
-                for (int n = 0; n < neighbors.size(); n++) {
-                    out.writeInt(neighbors.getNode(n));
-                    out.writeFloat(neighbors.getScore(n));
-                }
-            }
-        }
+        // TODO finish the implementation
     }
 
     /**
-     * Saves the graph to the given DataOutput for reloading into memory later
+     * Loads the graph from the given RandomAccessReader
      */
-    @Experimental
-    @Deprecated
-    public static OnHeapGraphIndex load(RandomAccessReader in, int dimension, double overflowRatio, DiversityProvider diversityProvider) throws IOException {
-        int magic = in.readInt(); // the magic number
-        if (magic != OnHeapGraphIndex.MAGIC) {
-            throw new IOException("Unsupported magic number: " + magic);
-        }
-
-        int version = in.readInt(); // The version
-        if (version != 4) {
-            throw new IOException("Unsupported version: " + version);
-        }
-
-        // Write graph-level properties.
-        int layerCount = in.readInt();
-        var layerDegrees = new ArrayList<Integer>(layerCount);
-        for (int level = 0; level < layerCount; level++) {
-            layerDegrees.add(in.readInt());
-        }
-
-        int entryNode = in.readInt();
-
-        boolean isHierarchical = layerCount > 1;
-        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider, isHierarchical);
-
-        Map<Integer, Integer> nodeLevelMap = new HashMap<>();
-
-        for (int level = 0; level < layerCount; level++) {
-            int layerSize = in.readInt();
-
-            for (int i = 0; i < layerSize; i++) {
-                int nodeId = in.readInt();
-                int nNeighbors = in.readInt();
-
-                var ca = new NodeArray(nNeighbors);
-                for (int j = 0; j < nNeighbors; j++) {
-                    int neighbor = in.readInt();
-                    float score = in.readFloat();
-                    ca.addInOrder(neighbor, score);
-                }
-                graph.connectNode(level, nodeId, ca);
-                nodeLevelMap.put(nodeId, level);
-            }
-        }
-
-        for (var k : nodeLevelMap.keySet()) {
-            NodeAtLevel nal = new NodeAtLevel(nodeLevelMap.get(k), k);
-            graph.markComplete(nal);
-        }
-
-        graph.setDegrees(layerDegrees);
-        graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
-
-        return graph;
+    public static OnHeapGraphIndex load(RandomAccessReader in) throws IOException {
+        // TODO finish the implementation
+        return null;
     }
 
     /**

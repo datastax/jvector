@@ -23,15 +23,13 @@ import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.MockVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.MockVectorRepresentations;
 import io.github.jbellis.jvector.graph.NodeQueue;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -77,7 +75,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
         var graph = new TestUtil.RandomlyConnectedGraphIndex(1000, 32, random);
         var outputPath = testDirectory.resolve("large_graph");
         var vectors = createRandomVectors(1000,  512);
-        var ravv = new ListRandomAccessVectorValues(vectors, 512);
+        var ravv = new ListRandomAccessVectorRepresentations(vectors, 512);
         var pq = ProductQuantization.compute(ravv, 8, 256, false);
         var pqv = (PQVectors) pq.encodeAll(ravv);
 
@@ -131,7 +129,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
 
         int size = 1_000;
         int dim = 32;
-        MockVectorValues vectors = vectorValues(size, dim);
+        MockVectorRepresentations vectors = vectorValues(size, dim);
 
         int topK = 5;
         int efSearch = 20;
@@ -195,7 +193,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
 
         int size = 1_000;
         int dim = 32;
-        MockVectorValues vectors = vectorValues(size, dim);
+        MockVectorRepresentations vectors = vectorValues(size, dim);
 
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 32, 1.2f, 1.2f, addHierarchy);
         var tempGraph = builder.build(vectors);
@@ -211,8 +209,8 @@ public class TestFusedGraphIndex extends RandomizedTest {
             for (int iQuery = 0; iQuery < 10; iQuery++) {
                 VectorFloat<?> query = randomVector(dim);
 
-                var scoreFunction = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv).scoreFunction();
-                var fusedScoreFunction = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv).scoreFunction();
+                var scoreFunction = scoreProviderFor(false, query, similarityFunction, graph.getView(), pqv).primaryScoreFunction();
+                var fusedScoreFunction = scoreProviderFor(true, query, similarityFunction, graph.getView(), pqv).primaryScoreFunction();
 
                 for (int node = 0; node < size; node++) {
                     fusedScoreFunction.enableSimilarityToNeighbors(node);
@@ -244,7 +242,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
         // graph of 3 vectors
         int size = 1_000;
         int dim = 32;
-        MockVectorValues ravv = vectorValues(size, dim);
+        MockVectorRepresentations ravv = vectorValues(size, dim);
 
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 32, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
@@ -288,7 +286,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
 
         int size = 1_000;
         int dim = 32;
-        MockVectorValues vectors = vectorValues(size, dim);
+        MockVectorRepresentations vectors = vectorValues(size, dim);
 
         int topK = 5;
         int efSearch = 20;
@@ -343,7 +341,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
 
     public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex.View view, CompressedVectors cv) {
         var scoringView = (ImmutableGraphIndex.ScoringView) view;
-        ScoreFunction.ApproximateScoreFunction asf;
+        SimilarityFunction.Approximate asf;
         if (fused) {
             asf = scoringView.approximateScoreFunctionFor(queryVector, similarityFunction);
         } else {
@@ -353,8 +351,8 @@ public class TestFusedGraphIndex extends RandomizedTest {
         return new DefaultSearchScoreProvider(asf, rr);
     }
 
-    MockVectorValues vectorValues(int size, int dimension) {
-        return MockVectorValues.fromValues(createRandomFloatVectors(size, dimension, random));
+    MockVectorRepresentations vectorValues(int size, int dimension) {
+        return MockVectorRepresentations.fromValues(createRandomFloatVectors(size, dimension, random));
     }
 
     VectorFloat<?> randomVector(int dim) {

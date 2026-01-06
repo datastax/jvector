@@ -24,18 +24,13 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.util.List;
 import java.util.Objects;
 
-import java.io.Closeable;
 import java.io.IOException;
-import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
@@ -63,16 +58,10 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     NodesIterator getNodes(int level);
 
     /**
-     * Return a View with which to navigate the graph.  Views are not threadsafe -- that is,
-     * only one search at a time should be run per View.
-     * <p>
-     * Additionally, the View represents a point of consistency in the graph, and in-use
-     * Views prevent the removal of marked-deleted nodes from graphs that are being
-     * concurrently modified.  Thus, it is good (and encouraged) to re-use Views for
-     * on-disk, read-only graphs, but for in-memory graphs, it is better to create a new
-     * View per search.
+     * Return a GraphSearcher with which to navigate the graph. A GraphSearcher is not threadsafe -- that is,
+     * only one search at a time should be run per GraphSearcher.
      */
-    View getView();
+    GraphSearcher getSearcher();
 
     /**
      * @return the maximum number of edges per node across any layer
@@ -102,9 +91,13 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         return nodeId >= 0 && nodeId < size();
     }
 
+    /**
+     * @return the vector representation corresponding to the specified ordinal
+     */
+    VectorRepresentation getVector(int node);
+
     @Override
     void close() throws IOException;
-
 
     /**
      * Returns true if this graph is hierarchical, false otherwise.
@@ -141,107 +134,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      */
     int size(int level);
 
-    /**
-     * The steps needed to process a neighbor during a search. That is, adding it to the priority queue, etc.
-     */
-    interface NeighborProcessor {
-        void process(int friendOrd, float similarity);
-    }
-
-    /**
-     * Serves as an abstract interface for marking nodes as visited
-     */
-    @FunctionalInterface
-    interface IntMarker {
-        /**
-         * Marks the node and returns true if it was not marked previously. Returns false otherwise
-         */
-        boolean mark(int value);
-    }
-
-    /**
-     * Encapsulates the state of a graph for searching.  Re-usable across search calls,
-     * but each thread needs its own.
-     */
-    interface View extends Closeable {
-        /**
-         * Iterator over the neighbors of a given node.  Only the most recently instantiated iterator
-         * is guaranteed to be valid.
-         */
-        NodesIterator getNeighborsIterator(int level, int node);
-
-        /**
-         * Iterates over the neighbors of a given node if they have not been visited yet.
-         * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
-         */
-        void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
-
-        /**
-         * This method is deprecated as most View usages should not need size.
-         * Where they do, they could access the graph.
-         * @return the number of nodes in the graph
-         */
-        @Deprecated
-        int size();
-
-        /**
-         * @return the node of the graph to start searches at
-         */
-        NodeAtLevel entryNode();
-
-        /**
-         * Return a Bits instance indicating which nodes are live.  The result is undefined for
-         * ordinals that do not correspond to nodes in the graph.
-         */
-        Bits liveNodes();
-
-        /**
-         * @return the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
-         */
-        default int getIdUpperBound() {
-            return size();
-        }
-
-        /**
-         * Whether the given node is present in the given layer of the graph.
-         */
-        boolean contains(int level, int node);
-    }
-
-    /**
-     * A View that knows how to compute scores against a query vector.  (This is all Views
-     * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
-     */
-    interface ScoringView extends View {
-        ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
-        ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
-    }
-
-    static String prettyPrint(ImmutableGraphIndex graph) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(graph);
-        sb.append("\n");
-
-        try (var view = graph.getView()) {
-            for (int level = 0; level <= graph.getMaxLevel(); level++) {
-                sb.append(String.format("# Level %d\n", level));
-                NodesIterator it = graph.getNodes(level);
-                while (it.hasNext()) {
-                    int node = it.nextInt();
-                    sb.append("  ").append(node).append(" -> ");
-                    for (var neighbors = view.getNeighborsIterator(level, node); neighbors.hasNext(); ) {
-                        sb.append(" ").append(neighbors.nextInt());
-                    }
-                    sb.append("\n");
-                }
-                sb.append("\n");
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        return sb.toString();
-    }
+    String prettyPrint();
 
     // Comparable b/c it gets used in ConcurrentSkipListMap
     final class NodeAtLevel implements Comparable<NodeAtLevel> {

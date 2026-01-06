@@ -16,26 +16,26 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
-public final class DefaultSearchScoreProvider implements SearchScoreProvider {
-    private final ScoreFunction scoreFunction;
-    private final ScoreFunction.ExactScoreFunction reranker;
+public final class DefaultSearchScoreProvider<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements SearchScoreProvider {
+    private final SimilarityFunction<Primary> similarityFunction;
+    private final SimilarityFunction<Secondary> reranker;
 
     /**
-     * @param scoreFunction the primary, fast scoring function
+     * @param similarityFunction the primary, fast scoring function
      * <p>
      * No reranking is performed.
      */
-    public DefaultSearchScoreProvider(ScoreFunction scoreFunction) {
-        this(scoreFunction, null);
+    public DefaultSearchScoreProvider(SimilarityFunction<Primary> similarityFunction) {
+        this(similarityFunction, null);
     }
 
     /**
-     * @param scoreFunction the primary, fast scoring function
+     * @param similarityFunction the primary, fast scoring function
      * @param reranker optional reranking function
      * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction.  However,
      * it is allowed, and sometimes useful, to only perform approximate scoring without reranking.
@@ -43,24 +43,36 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
      * or `ScoringView.rerankerFor`.
      */
-    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
-        assert scoreFunction != null;
-        this.scoreFunction = scoreFunction;
+    public DefaultSearchScoreProvider(SimilarityFunction<Primary> similarityFunction, SimilarityFunction<Secondary> reranker) {
+        assert similarityFunction != null;
+        if (!similarityFunction.compatible(reranker)) {
+            throw new IllegalArgumentException("reranker is not compatible with scoreFunction");
+        }
+        this.similarityFunction = similarityFunction;
         this.reranker = reranker;
     }
 
-    public ScoreFunction scoreFunction() {
-        return scoreFunction;
+    @Override
+    public SimilarityFunction<Primary> primaryScoreFunction() {
+        return similarityFunction;
     }
 
-    public ScoreFunction.ExactScoreFunction reranker() {
+    @Override
+    public SimilarityFunction<Secondary> secondaryScoreFunction() {
         return reranker;
     }
 
-    public ScoreFunction.ExactScoreFunction exactScoreFunction() {
-        return scoreFunction.isExact()
-                ? (ScoreFunction.ExactScoreFunction) scoreFunction
-                : reranker;
+    @Override
+    public boolean isPrimaryExact() {
+        return similarityFunction.isExact();
+    }
+
+    @Override
+    public boolean isSecondaryExact() {
+        if (reranker == null) {
+            return false;
+        }
+        return reranker.isExact();
     }
 
     /**
@@ -68,30 +80,8 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */
-    public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
-        // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(node2));
-            }
-        };
-        return new DefaultSearchScoreProvider(sf);
+    public static DefaultSearchScoreProvider<VectorFloat<?>, VectorFloat<?>> exact(VectorSimilarityFunction vsf) {
+        return new DefaultSearchScoreProvider<VectorFloat<?>, VectorFloat<?>>(new DefaultScoreFunction(vsf));
     }
 
-    /**
-     * A SearchScoreProvider for a single-pass search based on exact similarity.
-     * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
-     * e.g. during construction.
-     */
-    public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
-        // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
-            }
-        };
-        return new DefaultSearchScoreProvider(sf);
-    }
 }

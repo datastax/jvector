@@ -89,11 +89,6 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     void connectNode(int level, int node, NodeArray nodes);
 
     /**
-     * Use with extreme caution. Used by Builder to load a saved graph and for rescoring.
-     */
-    void connectNode(NodeAtLevel nodeLevel, NodeArray nodes);
-
-    /**
      * Mark the given node deleted.  Does NOT remove the node from the graph.
      */
     void markDeleted(int node);
@@ -111,11 +106,6 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     ThreadSafeGrowableBitSet getDeletedNodes();
 
     void setDegrees(List<Integer> layerDegrees);
-
-    /**
-     * Enforce the degree of the given node in all layers.
-     */
-    void enforceDegree(int node);
 
     /**
      * Returns an iterator over the neighbors for the given node at the specified level, which can be empty if the node does not belong to that layer.
@@ -151,16 +141,11 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     NodeAtLevel entryNode();
 
     /**
-     * Add the given neighbors to the given node at the specified level, maintaining diversity
-     * It also adds backlinks from the neighbors to the given node.
+     * Set the given neighbors to the given node at the specified level.
      * The edges will only be added if the out-degree of the node is less than overflowRatio times the max degree.
+     * @return true if the edges where added, false otherwise
      */
-    void addEdges(int level, int node, NodeArray candidates, float overflowRatio);
-
-    /**
-     * Remove edges to deleted nodes and add the new connections, maintaining diversity
-     */
-    void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
+    boolean setEdges(int level, int node, NodeArray candidates);
 
     /**
      * Signals that all mutations have been completed and the graph will not be mutated any further.

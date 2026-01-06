@@ -20,10 +20,12 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.io.IOException;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.PrimitiveIterator;
 import java.util.function.IntFunction;
 
 /**
@@ -53,7 +55,7 @@ import java.util.function.IntFunction;
  * <li> When we embed jVector in frameworks such as Lucene that rely on sequential writes for performance and correctness
  * </ul>
  */
-public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
+public class OnDiskSequentialGraphIndexWriter<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> extends AbstractGraphIndexWriter<Primary, Secondary, IndexWriter> {
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
@@ -166,7 +168,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     /**
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
-    public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
+    public static class Builder extends AbstractGraphIndexWriter.Builder<IndexWriter> {
         public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }

@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -87,7 +87,7 @@ public abstract class BQVectors implements CompressedVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         return scoreFunctionFor(q, similarityFunction);
     }
 
@@ -96,8 +96,9 @@ public abstract class BQVectors implements CompressedVectors {
      * is a useful approximation for cosine distance and not really anything else.
      */
     @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
         var qBQ = compressedVectors[node1];
+
         return node2 -> {
             var vBQ = compressedVectors[node2];
             return similarityBetween(qBQ, vBQ);
@@ -105,7 +106,7 @@ public abstract class BQVectors implements CompressedVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         var qBQ = bq.encode(q);
         return node2 -> {
             var vBQ = compressedVectors[node2];

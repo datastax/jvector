@@ -28,7 +28,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
@@ -70,16 +70,16 @@ public class TestVectorGraph extends LuceneTestCase {
         return TestUtil.randomVector(getRandom(), dim);
     }
 
-    MockVectorValues vectorValues(int size, int dimension) {
-        return MockVectorValues.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
+    MockVectorRepresentations vectorValues(int size, int dimension) {
+        return MockVectorRepresentations.fromValues(createRandomFloatVectors(size, dimension, getRandom()));
     }
 
-    MockVectorValues vectorValues(VectorFloat<?>[] values) {
-        return MockVectorValues.fromValues(values);
+    MockVectorRepresentations vectorValues(VectorFloat<?>[] values) {
+        return MockVectorRepresentations.fromValues(values);
     }
 
-    RandomAccessVectorValues circularVectorValues(int nDoc) {
-        return new CircularFloatVectorValues(nDoc);
+    RandomAccessVectorRepresentations circularVectorValues(int nDoc) {
+        return new CircularFloatVectorRepresentations(nDoc);
     }
 
     VectorFloat<?> getTargetVector() {
@@ -95,7 +95,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testSearchWithSkewedAcceptOrds(boolean addHierarchy) {
         int nDoc = 1000;
         similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
-        RandomAccessVectorValues vectors = circularVectorValues(nDoc);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         getRandom().nextInt();
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.0f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
@@ -221,18 +221,18 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testExceptionalTermination(boolean addHierarchy) {
         int nDoc = 100;
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
-        RandomAccessVectorValues vectors = circularVectorValues(nDoc);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
         validateIndex(graph);
 
         // wrap vectors so that the second access to a vector throws an exception
-        var wrappedVectors = new RandomAccessVectorValues() {
+        var wrappedVectors = new RandomAccessVectorRepresentations() {
             private int count = 0;
 
             @Override
-            public RandomAccessVectorValues copy() {
+            public RandomAccessVectorRepresentations copy() {
                 return this;
             }
 
@@ -277,7 +277,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + builder.graph.prettyPrint(), sum < 75);
     }
 
     private static void validateIndex(ImmutableGraphIndex graph) {
@@ -322,7 +322,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testAknnDiverse(boolean addHierarchy) {
         int nDoc = 100;
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
-        RandomAccessVectorValues vectors = circularVectorValues(nDoc);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
@@ -343,7 +343,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + builder.graph.prettyPrint(), sum < 75);
     }
 
     @Test
@@ -354,7 +354,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     public void testSearchWithAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
-        RandomAccessVectorValues vectors = circularVectorValues(nDoc);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
@@ -378,7 +378,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + builder.graph.prettyPrint(), sum < 75);
     }
 
     @Test
@@ -389,7 +389,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     public void testSearchWithSelectiveAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
-        RandomAccessVectorValues vectors = circularVectorValues(nDoc);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
@@ -414,13 +414,13 @@ public class TestVectorGraph extends LuceneTestCase {
         int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
         for (int node : nodes) {
             assertTrue(String.format("the results include a deleted document: %d for %s",
-                    node, ImmutableGraphIndex.prettyPrint(builder.graph)), acceptOrds.get(node));
+                    node, builder.graph.prettyPrint()), acceptOrds.get(node));
         }
         for (int i = 0; i < acceptOrds.length(); i++) {
             if (acceptOrds.get(i)) {
                 int finalI = i;
                 assertTrue(String.format("the results do not include an accepted document: %d for %s",
-                        i, ImmutableGraphIndex.prettyPrint(builder.graph)), Arrays.stream(nodes).anyMatch(j -> j == finalI));
+                        i, builder.graph.prettyPrint()), Arrays.stream(nodes).anyMatch(j -> j == finalI));
             }
         }
     }
@@ -437,13 +437,13 @@ public class TestVectorGraph extends LuceneTestCase {
         // M must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
-                    RandomAccessVectorValues vectors = vectorValues(1, 1);
+                    RandomAccessVectorRepresentations vectors = vectorValues(1, 1);
                     new GraphIndexBuilder(vectors, similarityFunction, 0, 10, 1.0f, 1.0f, addHierarchy);
                 });
         // beamWidth must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
-                    RandomAccessVectorValues vectors = vectorValues(1, 1);
+                    RandomAccessVectorRepresentations vectors = vectorValues(1, 1);
                     new GraphIndexBuilder(vectors, similarityFunction, 10, 0, 1.0f, 1.0f, addHierarchy);
                 });
     }
@@ -471,7 +471,7 @@ public class TestVectorGraph extends LuceneTestCase {
                 unitVector2d(0.77),
                 unitVector2d(0.6)
         };
-        MockVectorValues vectors = vectorValues(values);
+        MockVectorRepresentations vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 4, 10, 1.0f, 1.0f, addHierarchy);
@@ -543,7 +543,7 @@ public class TestVectorGraph extends LuceneTestCase {
                 vectorTypeSupport.createFloatVector(new float[]{10, 0, 0}),
                 vectorTypeSupport.createFloatVector(new float[]{0, 4, 0})
         };
-        MockVectorValues vectors = vectorValues(values);
+        MockVectorRepresentations vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f, addHierarchy);
@@ -585,7 +585,7 @@ public class TestVectorGraph extends LuceneTestCase {
                 vectorTypeSupport.createFloatVector(new float[]{0, 0, 20}),
                 vectorTypeSupport.createFloatVector(new float[]{0, 9, 0})
         };
-        MockVectorValues vectors = vectorValues(values);
+        MockVectorRepresentations vectors = vectorValues(values);
         // First add nodes until everybody gets a full neighbor list
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 2, 10, 1.0f, 1.0f, addHierarchy);
@@ -634,7 +634,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testRandom(boolean addHierarchy) {
         int size = between(100, 150);
         int dim = between(2, 15);
-        MockVectorValues vectors = vectorValues(size, dim);
+        MockVectorRepresentations vectors = vectorValues(size, dim);
         int topK = 5;
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
@@ -697,7 +697,7 @@ public class TestVectorGraph extends LuceneTestCase {
     }
 
     public void testConcurrentNeighbors(boolean addHierarchy) {
-        RandomAccessVectorValues vectors = circularVectorValues(100);
+        RandomAccessVectorRepresentations vectors = circularVectorValues(100);
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 2, 30, 1.0f, 1.4f, addHierarchy);
         var graph = builder.build(vectors);
         validateIndex(graph);
@@ -716,7 +716,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testZeroCentroid(boolean addHierarchy) {
         var rawVectors = List.of(vectorTypeSupport.createFloatVector(new float[] {-1, -1}),
                                  vectorTypeSupport.createFloatVector(new float[] {1, 1}));
-        var vectors = new ListRandomAccessVectorValues(rawVectors, 2);
+        var vectors = new ListRandomAccessVectorRepresentations(rawVectors, 2);
         var builder = new GraphIndexBuilder(vectors, VectorSimilarityFunction.COSINE, 2, 2, 1.0f, 1.0f, addHierarchy);
         try (var graph = builder.build(vectors)) {
             validateIndex(graph);
@@ -732,16 +732,16 @@ public class TestVectorGraph extends LuceneTestCase {
     /**
      * Returns vectors evenly distributed around the upper unit semicircle.
      */
-    public static class CircularFloatVectorValues implements RandomAccessVectorValues {
+    public static class CircularFloatVectorRepresentations implements RandomAccessVectorRepresentations {
         private final int size;
 
-        public CircularFloatVectorValues(int size) {
+        public CircularFloatVectorRepresentations(int size) {
             this.size = size;
         }
 
         @Override
-        public CircularFloatVectorValues copy() {
-            return new CircularFloatVectorValues(size);
+        public CircularFloatVectorRepresentations copy() {
+            return new CircularFloatVectorRepresentations(size);
         }
 
         @Override

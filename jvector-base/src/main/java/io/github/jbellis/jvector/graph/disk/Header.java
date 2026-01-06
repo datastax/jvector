@@ -18,8 +18,6 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.util.EnumMap;

@@ -47,7 +47,7 @@ public class TestDeletions extends LuceneTestCase {
     public void testMarkDeleted(boolean addHierarchy) {
         // graph of 10 vectors
         int dimension = 2;
-        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
+        var ravv = MockVectorRepresentations.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 4, 10, 1.0f, 1.0f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, ravv);
 
@@ -65,7 +65,7 @@ public class TestDeletions extends LuceneTestCase {
         // check that asking for the entire graph back still doesn't surface the deleted one
         var v = ravv.getVector(n).copy();
         var results = GraphSearcher.search(v, ravv.size(), ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
-        assertEquals(ImmutableGraphIndex.prettyPrint(graph), ravv.size() - 1, results.getNodes().length);
+        assertEquals(graph.prettyPrint(), ravv.size() - 1, results.getNodes().length);
         for (var ns : results.getNodes()) {
             assertNotEquals(n, ns.node);
         }
@@ -80,7 +80,7 @@ public class TestDeletions extends LuceneTestCase {
     public void testCleanup(boolean addHierarchy) throws IOException {
         // graph of 10 vectors
         int dimension = 2;
-        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
+        var ravv = MockVectorRepresentations.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 4, 10, 1.0f, 1.0f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, ravv);
 
@@ -135,7 +135,7 @@ public class TestDeletions extends LuceneTestCase {
     public void testMarkingAllNodesAsDeleted(boolean addHierarchy) {
         // build graph
         int dimension = 2;
-        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
+        var ravv = MockVectorRepresentations.fromValues(createRandomFloatVectors(10, dimension, getRandom()));
         var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, ravv);
 
@@ -160,7 +160,7 @@ public class TestDeletions extends LuceneTestCase {
         var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
         var random = getRandom();
         // generate two clusters of vectors
-        var ravv = MockVectorValues.fromValues(
+        var ravv = MockVectorRepresentations.fromValues(
                 IntStream.range(0, 1100).mapToObj(i -> {
                     if (i < 1000) {
                         return vts.createFloatVector(new float[]{0.01f + 100 * random.nextFloat(), 0.01f + 100 * random.nextFloat()});

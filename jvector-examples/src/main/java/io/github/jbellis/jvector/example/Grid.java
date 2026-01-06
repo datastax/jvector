@@ -32,19 +32,16 @@ import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -270,7 +267,7 @@ public class Grid {
             if (features.contains(FeatureId.FUSED_PQ)) {
                 writeSuppliers = new EnumMap<>(FeatureId.class);
                 var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pq, ordinal));
+                writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedFeatureImplementation.State(view, pq, ordinal));
             } else {
                 writeSuppliers = Map.of();
             }
@@ -300,7 +297,7 @@ public class Grid {
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
                                                              ImmutableGraphIndex onHeapGraph,
                                                              Path outPath,
-                                                             RandomAccessVectorValues floatVectors,
+                                                             RandomAccessVectorRepresentations floatVectors,
                                                              ProductQuantization pq)
             throws FileNotFoundException
     {
@@ -321,7 +318,7 @@ public class Grid {
                         continue;
                     }
                     // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
-                    builder.with(new FusedPQ(onHeapGraph.maxDegree(), pq));
+                    builder.with(new FusedFeatureImplementation(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
                     int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
@@ -682,7 +679,7 @@ public class Grid {
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
-            ScoreFunction.ApproximateScoreFunction asf;
+            SimilarityFunction.Approximate asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             } else {

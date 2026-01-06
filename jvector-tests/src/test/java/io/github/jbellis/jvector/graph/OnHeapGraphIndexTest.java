@@ -22,9 +22,8 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
+import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -71,9 +70,9 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private ArrayList<VectorFloat<?>> baseVectors;
     private ArrayList<VectorFloat<?>> newVectors;
     private ArrayList<VectorFloat<?>> allVectors;
-    private RandomAccessVectorValues baseVectorsRavv;
-    private RandomAccessVectorValues newVectorsRavv;
-    private RandomAccessVectorValues allVectorsRavv;
+    private RandomAccessVectorRepresentations baseVectorsRavv;
+    private RandomAccessVectorRepresentations newVectorsRavv;
+    private RandomAccessVectorRepresentations allVectorsRavv;
     private ArrayList<VectorFloat<?>> queryVectors;
     private ArrayList<int[]> groundTruthBaseVectors;
     private ArrayList<int[]> groundTruthAllVectors;
@@ -100,9 +99,9 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         }
 
         // wrap the raw vectors in a RandomAccessVectorValues
-        baseVectorsRavv = new ListRandomAccessVectorValues(baseVectors, DIMENSION);
-        newVectorsRavv = new ListRandomAccessVectorValues(newVectors, DIMENSION);
-        allVectorsRavv = new ListRandomAccessVectorValues(allVectors, DIMENSION);
+        baseVectorsRavv = new ListRandomAccessVectorRepresentations(baseVectors, DIMENSION);
+        newVectorsRavv = new ListRandomAccessVectorRepresentations(newVectors, DIMENSION);
+        allVectorsRavv = new ListRandomAccessVectorRepresentations(allVectors, DIMENSION);
 
         // Create multiple query vectors for more stable recall measurements
         queryVectors = new ArrayList<>(NUM_QUERY_VECTORS);
@@ -151,7 +150,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     public void testGraphConstructionWithNonIdentityOrdinalMapping() throws IOException {
         // create reversed mapping from graph node id to ravv ordinal
         int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        final RemappedRandomAccessVectorValues remappedBaseVectorsRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
+        final RemappedRandomAccessVectorRepresentations remappedBaseVectorsRavv = new RemappedRandomAccessVectorRepresentations(baseVectorsRavv, graphToRavvOrdMap);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(remappedBaseVectorsRavv, SIMILARITY_FUNCTION);
         try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
                 baseVectorsRavv.dimension(),
@@ -189,7 +188,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         log.info("Reading on-heap graph from {}", heapGraphOutputPath);
         MutableGraphIndex reconstructedOnHeapGraphIndex;
         try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
-            reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(baseBuildScoreProvider, ALPHA));
+            reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityPruner(baseBuildScoreProvider, ALPHA));
         }
 
         try (var readerSupplier = new SimpleMappedReader.Supplier(graphOutputPath.toAbsolutePath());
@@ -217,7 +216,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
         // create reversed mapping from graph node id to ravv ordinal
         int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        final RemappedRandomAccessVectorValues remmappedRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
+        final RemappedRandomAccessVectorRepresentations remmappedRavv = new RemappedRandomAccessVectorRepresentations(baseVectorsRavv, graphToRavvOrdMap);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(remmappedRavv, SIMILARITY_FUNCTION);
         try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
                 baseVectorsRavv.dimension(),
@@ -237,7 +236,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
             log.info("Reading on-heap graph from {}", heapGraphOutputPath);
             try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
-                MutableGraphIndex reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(bsp, ALPHA));
+                MutableGraphIndex reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityPruner(bsp, ALPHA));
                 TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
             }
         }
@@ -264,7 +263,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
-            final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, graphToRavvOrdMap);
+            final RemappedRandomAccessVectorRepresentations remappedAllVectorsRavv = new RemappedRandomAccessVectorRepresentations(allVectorsRavv, graphToRavvOrdMap);
             ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
 
             // Verify that the recall is similar across multiple queries
@@ -288,7 +287,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
         // Create reversed mapping from graph node id to ravv ordinal for base vectors
         int[] baseGraphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        final RemappedRandomAccessVectorValues remappedBaseVectorsRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, baseGraphToRavvOrdMap);
+        final RemappedRandomAccessVectorRepresentations remappedBaseVectorsRavv = new RemappedRandomAccessVectorRepresentations(baseVectorsRavv, baseGraphToRavvOrdMap);
         var baseBsp = BuildScoreProvider.randomAccessScoreProvider(remappedBaseVectorsRavv, SIMILARITY_FUNCTION);
 
         // Build base graph with non-identity mapping
@@ -313,7 +312,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
             try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
                 // Create reversed mapping for all vectors (base + new)
                 final int[] allGraphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).map(i -> allVectorsRavv.size() - 1 - i).toArray();
-                final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, allGraphToRavvOrdMap);
+                final RemappedRandomAccessVectorRepresentations remappedAllVectorsRavv = new RemappedRandomAccessVectorRepresentations(allVectorsRavv, allGraphToRavvOrdMap);
                 var allBsp = BuildScoreProvider.randomAccessScoreProvider(remappedAllVectorsRavv, SIMILARITY_FUNCTION);
                 ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
 
@@ -326,7 +325,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         }
     }
 
-    public static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorValues ravv) {
+    public static void validateVectors(OnDiskGraphIndex.View view, RandomAccessVectorRepresentations ravv) {
         for (int i = 0; i < view.size(); i++) {
             assertEquals("Incorrect vector at " + i, ravv.getVector(i), view.getVector(i));
         }
@@ -349,7 +348,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
      * @return the ground truth
      */
-    private static int[] getGroundTruth(RandomAccessVectorValues ravv, VectorFloat<?> queryVector, int topK, VectorSimilarityFunction similarityFunction) {
+    private static int[] getGroundTruth(RandomAccessVectorRepresentations ravv, VectorFloat<?> queryVector, int topK, VectorSimilarityFunction similarityFunction) {
         var exactResults = new ArrayList<SearchResult.NodeScore>();
         for (int i = 0; i < ravv.size(); i++) {
             float similarityScore = similarityFunction.compare(queryVector, ravv.getVector(i));

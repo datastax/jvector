@@ -87,19 +87,28 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     }
 
     @Override
+    public boolean isExact() {
+        return true;
+    }
+
+    @Override
     public VectorFloat<MemorySegment> copy()
     {
         MemorySegmentVectorFloat copy = new MemorySegmentVectorFloat(length());
-        copy.copyFrom(this, 0, 0, length());
+        copy.copyFrom(this, length());
         return copy;
     }
 
     @Override
-    public void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length)
+    public VectorFloat<?> decode() {
+        return this;
+    }
+
+    private void copyFrom(VectorFloat<?> src, int length)
     {
         MemorySegmentVectorFloat csrc = (MemorySegmentVectorFloat) src;
-        segment.asSlice((long) destOffset * Float.BYTES, (long) length * Float.BYTES)
-                .copyFrom(csrc.segment.asSlice((long) srcOffset * Float.BYTES, (long) length * Float.BYTES));
+        segment.asSlice(0, (long) length * Float.BYTES)
+                .copyFrom(csrc.segment.asSlice(0, (long) length * Float.BYTES));
     }
 
     @Override
