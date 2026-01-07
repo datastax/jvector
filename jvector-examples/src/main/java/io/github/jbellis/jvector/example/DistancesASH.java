@@ -52,7 +52,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -171,6 +171,49 @@ public class DistancesASH {
         ASHVectors ashVectors = (ASHVectors) ashVecs;
         VectorFloat<?> q0 = finalQueries.get(0);
 
+        // ------------------------------------------------------------------
+        // Landmark reorder (debug + timing)
+        // ------------------------------------------------------------------
+        final boolean REORDER_BY_LANDMARK =
+                Boolean.parseBoolean(System.getProperty("jvector.ash.reorderByLandmark", "true"));
+
+        final ASHVectors ashVectorsFinal;
+        final CompressedVectors ashVecsFinal;
+        final int[] newToOldFinal;
+
+        if (REORDER_BY_LANDMARK) {
+            long stat0 = System.nanoTime();
+            var beforeStats = ashVectors.landmarkRunStats();
+            long stat1 = System.nanoTime();
+
+            System.out.println("\tLandmark run stats BEFORE reorder: " + beforeStats
+                    + " (computed in " + (stat1 - stat0) / 1e9 + " s)");
+
+            long t0 = System.nanoTime();
+            ASHVectors.LandmarkOrder order = ashVectors.reorderByLandmarkFast();
+            long t1 = System.nanoTime();
+
+            ASHVectors reordered = order.vectors;
+
+            long stat2 = System.nanoTime();
+            var afterStats = reordered.landmarkRunStats();
+            long stat3 = System.nanoTime();
+
+            System.out.println("\tLandmark reorder took " + (t1 - t0) / 1e9 + " s");
+            System.out.println("\tLandmark run stats AFTER  reorder: " + afterStats
+                    + " (computed in " + (stat3 - stat2) / 1e9 + " s)");
+            System.out.println("--");
+
+            ashVectorsFinal = reordered;
+            ashVecsFinal = reordered;         // CompressedVectors view used by scoreFunctionFor
+            newToOldFinal = order.newToOld;   // map reordered ordinal -> original base ordinal
+        } else {
+            System.out.println("\tLandmark reorder disabled (-Djvector.ash.reorderByLandmark=false)");
+            ashVectorsFinal = ashVectors;
+            ashVecsFinal = ashVectors;
+            newToOldFinal = null;
+        }
+
         if(RUN_SANITY_CHECK) {
 
             ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
@@ -226,16 +269,19 @@ public class DistancesASH {
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
                         ScoreFunction.ApproximateScoreFunction f =
-                                ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
                         for (int j = 0; j < finalVectorCount; j++) {
-                            VectorFloat<?> v = finalVectors.get(j);
+                            final int baseOrd = (newToOldFinal == null) ? j : newToOldFinal[j];
+                            VectorFloat<?> v = finalVectors.get(baseOrd);
+
                             float trueDot = VectorUtil.dotProduct(q, v);
                             float approxDot = f.similarityTo(j);
 
                             localError += Math.abs(approxDot - trueDot);
                             localCount++;
                         }
+
                     }
                     return new double[]{localError, localCount};
                 }));
@@ -348,7 +394,7 @@ public class DistancesASH {
             // Print scorer implementation once per blockSize (diagnostic)
             {
                 ASHBlockScorer scorer =
-                        ashVectors.blockScorerFor(
+                        ashVectorsFinal.blockScorerFor(
                                 finalQueries.get(0),
                                 VectorSimilarityFunction.DOT_PRODUCT,
                                 blockSize
@@ -370,7 +416,7 @@ public class DistancesASH {
 
                     for (int qi = s; qi < e; qi++) {
                         ASHBlockScorer scorer =
-                                ashVectors.blockScorerFor(
+                                ashVectorsFinal.blockScorerFor(
                                         finalQueries.get(qi),
                                         VectorSimilarityFunction.DOT_PRODUCT,
                                         blockSize
@@ -388,10 +434,11 @@ public class DistancesASH {
                         // Tail uses scalar per-vector scorer (correctness-preserving)
                         if (j < finalVectorCount) {
                             ScoreFunction.ApproximateScoreFunction f =
-                                    ashVecs.scoreFunctionFor(
+                                    ashVecsFinal.scoreFunctionFor(
                                             finalQueries.get(qi),
                                             VectorSimilarityFunction.DOT_PRODUCT
                                     );
+
                             for (; j < finalVectorCount; j++) {
                                 localSum += f.similarityTo(j);
                             }
