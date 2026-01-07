@@ -112,6 +112,36 @@ public class ASHVectors implements CompressedVectors {
 
     }
 
+    // Private constructor that trusts prebuilt arrays (for vector landmark sorting)
+    private ASHVectors(AsymmetricHashing ash,
+                       AsymmetricHashing.QuantizedVector[] compressedVectors,
+                       float[] scales,
+                       float[] offsets,
+                       byte[] landmarks) {
+        this.ash = ash;
+        this.compressedVectors = compressedVectors;
+        this.scorer = new ASHScorer(ash);
+
+        this.d = ash.quantizedDim;
+        this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
+
+        // Defensive sanity checks (cheap)
+        if (scales.length != compressedVectors.length ||
+                offsets.length != compressedVectors.length ||
+                landmarks.length != compressedVectors.length) {
+            throw new IllegalArgumentException("Header arrays must match compressedVectors length");
+        }
+
+        this.scales = scales;
+        this.offsets = offsets;
+        this.landmarks = landmarks;
+
+        // packedBits cache starts empty (as usual)
+        this.packedBlockSize = -1;
+        this.packedBits = null;
+        this.packedBlockCount = 0;
+    }
+
     @Override
     public int count() {
         return compressedVectors.length;
@@ -468,6 +498,9 @@ public class ASHVectors implements CompressedVectors {
         private final float[] sumTildeQ;      // qp.sumTildeQ [C]
         private final float[] dotQMu;         // qp.dotQMu [C]
 
+        // Cache which landmark's q̃ is currently loaded into tildeQScratch
+        private int lastC = -1;
+
         private final VectorUtilSupport vecUtil;
 
         private static final java.util.concurrent.atomic.AtomicBoolean PRINTED_MIXED_ONCE =
@@ -536,21 +569,21 @@ public class ASHVectors implements CompressedVectors {
                 }
 
                 // Catch mixed-landmark calls for debug.  TODO remove later
-                if (runLen != maxLen && PRINTED_MIXED_ONCE.compareAndSet(false, true)) {
-                    int nextLm = (ord + runLen < end) ? (landmarks[ord + runLen] & 0xFF) : -1;
-                    System.out.println(
-                            "\t[ASH SIMD debug] mixed-landmark boundary inside packed-block slice: " +
-                                    "start=" + start +
-                                    " count=" + count +
-                                    " ord=" + ord +
-                                    " blockId=" + blockId +
-                                    " laneStart=" + laneStart +
-                                    " runLen=" + runLen +
-                                    " maxLen=" + maxLen +
-                                    " c=" + c +
-                                    " nextC=" + nextLm
-                    );
-                }
+//                if (runLen != maxLen && PRINTED_MIXED_ONCE.compareAndSet(false, true)) {
+//                    int nextLm = (ord + runLen < end) ? (landmarks[ord + runLen] & 0xFF) : -1;
+//                    System.out.println(
+//                            "\t[ASH SIMD debug] mixed-landmark boundary inside packed-block slice: " +
+//                                    "start=" + start +
+//                                    " count=" + count +
+//                                    " ord=" + ord +
+//                                    " blockId=" + blockId +
+//                                    " laneStart=" + laneStart +
+//                                    " runLen=" + runLen +
+//                                    " maxLen=" + maxLen +
+//                                    " c=" + c +
+//                                    " nextC=" + nextLm
+//                    );
+//                }
 
                 assert runLen >= 1 && runLen <= maxLen;
                 assert laneStart >= 0 && laneStart + runLen <= blockSize;
@@ -560,7 +593,13 @@ public class ASHVectors implements CompressedVectors {
                 final int blockWordBase = blockId * words * blockSize;
 
                 // Load q̃_c into contiguous scratch for the unpooled kernel
+                if (c != lastC) {
+                    System.arraycopy(tildeQPool, base, tildeQScratch, 0, d);
+                    lastC = c;
+                }
+
                 System.arraycopy(tildeQPool, base, tildeQScratch, 0, d);
+                lastC = c;
 
                 vecUtil.ashMaskedAddBlockAllWords(
                         tildeQScratch,
@@ -573,6 +612,8 @@ public class ASHVectors implements CompressedVectors {
                         runLen,
                         maskedAdds
                 );
+
+
 
 
                 for (int lane = 0; lane < runLen; lane++) {
@@ -649,6 +690,141 @@ public class ASHVectors implements CompressedVectors {
             this.sumTildeQ = sumTildeQ;
             this.dotQMu = dotQMu;
         }
+    }
+
+    public static final class LandmarkOrder {
+        public final ASHVectors vectors;
+        public final int[] newToOld;
+        public final int[] oldToNew;
+        public final int[] landmarkOffsets; // length C+1, last == n
+
+        LandmarkOrder(ASHVectors vectors, int[] newToOld, int[] oldToNew, int[] landmarkOffsets) {
+            this.vectors = vectors;
+            this.newToOld = newToOld;
+            this.oldToNew = oldToNew;
+            this.landmarkOffsets = landmarkOffsets;
+        }
+    }
+
+    /**
+     * Stable, linear-time reorder by landmark id (C <= 64).
+     * Fills reordered header arrays in the same pass (no second constructor scan).
+     */
+    public LandmarkOrder reorderByLandmarkFast() {
+        final int n = compressedVectors.length;
+        final int C = ash.landmarkCount;
+
+        // Count per landmark
+        final int[] counts = new int[C];
+        for (int i = 0; i < n; i++) {
+            int c = this.landmarks[i] & 0xFF;
+            if (c >= C) {
+                throw new IllegalStateException("Invalid landmark id " + c + " at ordinal " + i + " (C=" + C + ")");
+            }
+            counts[c]++;
+        }
+
+        // Prefix sums: landmarkOffsets[c] is start of landmark c, length C+1
+        final int[] landmarkOffsets = new int[C + 1];
+        landmarkOffsets[0] = 0;
+        for (int c = 0; c < C; c++) {
+            landmarkOffsets[c + 1] = landmarkOffsets[c] + counts[c];
+        }
+        if (landmarkOffsets[C] != n) {
+            throw new IllegalStateException("landmarkOffsets[C] != n: " + landmarkOffsets[C] + " != " + n);
+        }
+
+        final int[] writePos = landmarkOffsets.clone();
+
+        final AsymmetricHashing.QuantizedVector[] newVecs = new AsymmetricHashing.QuantizedVector[n];
+        final float[] newScales = new float[n];
+        final float[] newOffsets = new float[n];
+        final byte[] newLandmarks = new byte[n];
+        final int[] newToOld = new int[n];
+
+        // Preserve an ordinal map so we can go back and forth
+        for (int oldOrd = 0; oldOrd < n; oldOrd++) {
+            final int c = this.landmarks[oldOrd] & 0xFF;
+            final int newOrd = writePos[c]++;
+
+            newVecs[newOrd] = this.compressedVectors[oldOrd];
+            newScales[newOrd] = this.scales[oldOrd];
+            newOffsets[newOrd] = this.offsets[oldOrd];
+            newLandmarks[newOrd] = this.landmarks[oldOrd];
+
+            newToOld[newOrd] = oldOrd;
+        }
+
+        final int[] oldToNew = new int[n];
+        for (int newOrd = 0; newOrd < n; newOrd++) {
+            oldToNew[newToOld[newOrd]] = newOrd;
+        }
+
+        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks);
+        return new LandmarkOrder(reordered, newToOld, oldToNew, landmarkOffsets);
+    }
+
+    public static final class LandmarkRunStats {
+        public final int n;
+        public final int runCount;
+        public final double avgRunLength;
+        public final int maxRunLength;
+        public final double stddevRunLength;
+
+        LandmarkRunStats(int n, int runCount, double avgRunLength, int maxRunLength, double stddevRunLength) {
+            this.n = n;
+            this.runCount = runCount;
+            this.avgRunLength = avgRunLength;
+            this.maxRunLength = maxRunLength;
+            this.stddevRunLength = stddevRunLength;
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    java.util.Locale.ROOT,
+                    "runs=%d, avgRun=%.2f, maxRun=%d, stddev=%.2f (n=%d)",
+                    runCount, avgRunLength, maxRunLength, stddevRunLength, n
+            );
+        }
+    }
+
+    public LandmarkRunStats landmarkRunStats() {
+        return computeLandmarkRunStats(this.landmarks);
+    }
+
+    public static LandmarkRunStats computeLandmarkRunStats(byte[] landmarks) {
+        final int n = landmarks.length;
+        if (n == 0) {
+            return new LandmarkRunStats(0, 0, 0.0, 0, 0.0);
+        }
+
+        int runCount = 0;
+        long sum = 0;
+        long sumSq = 0;
+        int max = 0;
+
+        int i = 0;
+        while (i < n) {
+            final byte c = landmarks[i];
+            int j = i + 1;
+            while (j < n && landmarks[j] == c) j++;
+            final int len = j - i;
+
+            runCount++;
+            sum += len;
+            sumSq += (long) len * (long) len;
+            if (len > max) max = len;
+
+            i = j;
+        }
+
+        final double avg = (double) sum / (double) runCount;
+        final double meanSq = (double) sumSq / (double) runCount;
+        final double var = Math.max(0.0, meanSq - avg * avg);
+        final double stddev = Math.sqrt(var);
+
+        return new LandmarkRunStats(n, runCount, avg, max, stddev);
     }
 
     /**
