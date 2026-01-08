@@ -72,7 +72,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static final int LANDING_BATCH_SIZE = 256;
 
     /** Final setting TBD. */
-    private static final int TRAINING_ITERS = 20;
+    private static final int TRAINING_ITERS = 25;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: float (32 bits), where scale = ||x − μ|| / sqrt(d)
