@@ -27,7 +27,7 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.GrowableLongHeap;
@@ -46,7 +46,7 @@ import java.io.IOException;
  */
 public class GraphSearcherImplementation<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements GraphSearcher {
     final private GraphIndexView<Primary, Secondary> view;
-    final private SearchScoreProvider<Primary, Secondary> scoreProvider;
+    final private SearchScoreBundle<Primary, Secondary> scoreProvider;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
@@ -71,7 +71,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
-    protected GraphSearcherImplementation(GraphIndexView<Primary, Secondary> view, SearchScoreProvider<Primary, Secondary> scoreProvider) {
+    protected GraphSearcherImplementation(GraphIndexView<Primary, Secondary> view, SearchScoreBundle<Primary, Secondary> scoreProvider) {
         this.view = view;
         this.scoreProvider = scoreProvider;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
@@ -254,7 +254,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
+    void searchOneLayer(SearchScoreBundle scoreProvider,
                         int rerankK,
                         float threshold,
                         int level,
@@ -397,10 +397,10 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
         // this cache never gets cleared out (until a new search reinitializes it),
         // but we expect resume() to be called at most a few times so it's fine
         private final Int2ObjectHashMap<Float> cachedScores;
-        private final SearchScoreProvider scoreProvider;
+        private final SearchScoreBundle scoreProvider;
         private int rerankCalls;
 
-        public CachingReranker(SearchScoreProvider scoreProvider) {
+        public CachingReranker(SearchScoreBundle scoreProvider) {
             this.scoreProvider = scoreProvider;
             cachedScores = new Int2ObjectHashMap<>();
             rerankCalls = 0;

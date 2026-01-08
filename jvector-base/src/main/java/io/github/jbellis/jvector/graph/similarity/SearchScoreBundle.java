@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 
-public interface SearchScoreProvider<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> {
+public interface SearchScoreBundle<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> {
 
     SimilarityFunction<Primary> primaryScoreFunction();
 

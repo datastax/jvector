@@ -17,20 +17,18 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.AbstractMutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexView;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.IntFunction;
-import java.util.stream.Collectors;
 
 /**
  * Abstract base class for writing graph indexes to disk.
@@ -46,38 +44,31 @@ public abstract class AbstractGraphIndexWriter<Primary extends VectorRepresentat
     /** The total size of the footer. */
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
     final int version;
-    final ImmutableGraphIndex graph;
+    final AbstractMutableGraphIndex<Primary, Secondary> graph;
     final OrdinalMapper ordinalMapper;
     final T out; /* output for graph nodes and inline features */
-    final PersistenceType primaryPersistenceType;
-    final int headerSize;
+    final long headerSize;
     volatile int maxOrdinalWritten = -1;
 
 
     AbstractGraphIndexWriter(T out,
                              int version,
-                             ImmutableGraphIndex graph,
-                             OrdinalMapper oldToNewOrdinals,
-                             PersistenceType primaryPersistenceType,
-                             PersistenceType secondaryPersistenceType)
+                             AbstractMutableGraphIndex<Primary, Secondary> graph,
+                             OrdinalMapper oldToNewOrdinals)
     {
-        if (secondaryPersistenceType == PersistenceType.FUSED) {
-            throw new IllegalArgumentException("Secondary persistence type cannot be FUSED");
-        }
         if (graph.getMaxLevel() > 0 && version < 4) {
             throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
         }
         this.version = version;
         this.graph = graph;
         this.ordinalMapper = oldToNewOrdinals;
-        this.primaryPersistenceType = primaryPersistenceType;
         this.out = out;
 
         // create a mock Header to determine the correct size
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var ch = new CommonHeader(version, graph.getDimension(), 0, layerInfo, 0);
-        var placeholderHeader = new Header(ch, featureMap);
-        this.headerSize = placeholderHeader.size();
+        var placeholderHeader = new Header<>(ch, this.graph);
+        this.headerSize = placeholderHeader.ramBytesUsed();
     }
 
     /**
@@ -106,18 +97,14 @@ public abstract class AbstractGraphIndexWriter<Primary extends VectorRepresentat
      * deleted nodes are filled in by shifting down the new ordinals.
      */
     public static Map<Integer, Integer> sequentialRenumbering(ImmutableGraphIndex graph) {
-        try (var view = graph.getView()) {
-            Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
-            int nextOrdinal = 0;
-            for (int i = 0; i < view.getIdUpperBound(); i++) {
-                if (graph.containsNode(i)) {
-                    oldToNewMap.put(i, nextOrdinal++);
-                }
+        Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
+        int nextOrdinal = 0;
+        for (int i = 0; i < graph.getIdUpperBound(); i++) {
+            if (graph.containsNode(i)) {
+                oldToNewMap.put(i, nextOrdinal++);
             }
-            return oldToNewMap;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
         }
+        return oldToNewMap;
     }
 
     /**
@@ -133,14 +120,14 @@ public abstract class AbstractGraphIndexWriter<Primary extends VectorRepresentat
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex index, long headerOffset) throws IOException {
+    void writeFooter(long headerOffset) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 graph.getDimension(),
-                ordinalMapper.oldToNew(index.entryNode().node),
+                ordinalMapper.oldToNew(graph.entryNode().node),
                 layerInfo,
                 ordinalMapper.maxOrdinal() + 1);
-        var header = new Header(commonHeader, featureMap);
+        var header = new Header<>(commonHeader, graph);
         header.write(out); // write the header
         out.writeLong(headerOffset); // We write the offset of the header at the end of the file
         out.writeInt(FOOTER_MAGIC);
@@ -159,16 +146,16 @@ public abstract class AbstractGraphIndexWriter<Primary extends VectorRepresentat
         // graph-level properties
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
-                dimension,
+                graph.getDimension(),
                 ordinalMapper.oldToNew(view.entryNode().node),
                 layerInfo,
                 ordinalMapper.maxOrdinal() + 1);
-        var header = new Header(commonHeader, featureMap);
+        var header = new Header<>(commonHeader, graph);
         header.write(out);
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
     }
 
-    void writeSparseLevels(GraphIndexView view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+    void writeSparseLevels(GraphIndexView view) throws IOException {
         // write sparse levels
         for (int level = 1; level <= graph.getMaxLevel(); level++) {
             int layerSize = graph.size(level);

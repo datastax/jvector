@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.util.Accountable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +57,7 @@ import java.util.stream.IntStream;
  * - Number of layers
  * - Layer info (size and degree for each layer)
  */
-public class CommonHeader {
+public class CommonHeader implements Accountable  {
     private static final Logger logger = LoggerFactory.getLogger(CommonHeader.class);
 
     private static final int V4_MAX_LAYERS = 32;
@@ -151,7 +152,8 @@ public class CommonHeader {
         return new CommonHeader(version, dimension, entryNode, layerInfo, idUpperBound);
     }
 
-    int size() {
+    @Override
+    public long ramBytesUsed() {
         int size = 4;
         if (version >= 3) {
             size += 2;

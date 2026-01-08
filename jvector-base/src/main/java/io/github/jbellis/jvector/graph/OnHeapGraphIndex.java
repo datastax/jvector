@@ -28,7 +28,7 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.representations.MutableRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
@@ -59,8 +59,6 @@ public class OnHeapGraphIndex<Primary extends VectorRepresentation, Secondary ex
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
-    private final SearchScoreProvider<Primary, Secondary> searchScoreProvider;
-
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
 
@@ -81,11 +79,10 @@ public class OnHeapGraphIndex<Primary extends VectorRepresentation, Secondary ex
 
     OnHeapGraphIndex(MutableRandomAccessVectorRepresentations<Primary> primaries,
                      MutableRandomAccessVectorRepresentations<Secondary> secondaries,
-                     SearchScoreProvider<Primary, Secondary> searchScoreProvider,
+                     SearchScoreBundle<Primary, Secondary> searchScoreBundle,
                      List<Integer> maxDegrees,
                      double overflowRatio, boolean isHierarchical) {
-        super(primaries, secondaries);
-        this.searchScoreProvider = searchScoreProvider;
+        super(primaries, secondaries, searchScoreBundle);
         this.maxDegrees = new IntArrayList();
 
         setDegrees(maxDegrees);
@@ -300,7 +297,7 @@ public class OnHeapGraphIndex<Primary extends VectorRepresentation, Secondary ex
 
     @Override
     public GraphSearcher getSearcher() {
-        return new GraphSearcherImplementation<>(this.getView(), this.searchScoreProvider);
+        return new GraphSearcherImplementation<>(this.getView(), this.getSearchScoreBundle());
     }
 
     @Override

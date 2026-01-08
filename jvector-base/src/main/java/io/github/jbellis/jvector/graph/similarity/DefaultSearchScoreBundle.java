@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
-public final class DefaultSearchScoreProvider<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements SearchScoreProvider {
+public final class DefaultSearchScoreBundle<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements SearchScoreBundle {
     private final SimilarityFunction<Primary> similarityFunction;
     private final SimilarityFunction<Secondary> reranker;
 
@@ -30,7 +30,7 @@ public final class DefaultSearchScoreProvider<Primary extends VectorRepresentati
      * <p>
      * No reranking is performed.
      */
-    public DefaultSearchScoreProvider(SimilarityFunction<Primary> similarityFunction) {
+    public DefaultSearchScoreBundle(SimilarityFunction<Primary> similarityFunction) {
         this(similarityFunction, null);
     }
 
@@ -43,7 +43,7 @@ public final class DefaultSearchScoreProvider<Primary extends VectorRepresentati
      * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
      * or `ScoringView.rerankerFor`.
      */
-    public DefaultSearchScoreProvider(SimilarityFunction<Primary> similarityFunction, SimilarityFunction<Secondary> reranker) {
+    public DefaultSearchScoreBundle(SimilarityFunction<Primary> similarityFunction, SimilarityFunction<Secondary> reranker) {
         assert similarityFunction != null;
         if (!similarityFunction.compatible(reranker)) {
             throw new IllegalArgumentException("reranker is not compatible with scoreFunction");
@@ -80,8 +80,8 @@ public final class DefaultSearchScoreProvider<Primary extends VectorRepresentati
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */
-    public static DefaultSearchScoreProvider<VectorFloat<?>, VectorFloat<?>> exact(VectorSimilarityFunction vsf) {
-        return new DefaultSearchScoreProvider<VectorFloat<?>, VectorFloat<?>>(new DefaultScoreFunction(vsf));
+    public static DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>> exact(VectorSimilarityFunction vsf) {
+        return new DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>>(new DefaultScoreFunction(vsf));
     }
 
 }

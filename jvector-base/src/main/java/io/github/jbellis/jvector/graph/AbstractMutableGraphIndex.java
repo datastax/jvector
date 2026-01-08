@@ -16,19 +16,32 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.representations.PersistenceType;
 import io.github.jbellis.jvector.graph.representations.MutableRandomAccessVectorRepresentations;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 
-public abstract class AbstractMutableGraphIndex<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements MutableGraphIndex, Viewable{
-    final private MutableRandomAccessVectorRepresentations<Primary> primaries;
-    final private MutableRandomAccessVectorRepresentations<Secondary> secondaries;
+public abstract class AbstractMutableGraphIndex<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements MutableGraphIndex, Viewable {
+    private final MutableRandomAccessVectorRepresentations<Primary> primaries;
+    private final MutableRandomAccessVectorRepresentations<Secondary> secondaries;
+    private final SearchScoreBundle<Primary, Secondary> searchScoreBundle;
 
-    AbstractMutableGraphIndex(MutableRandomAccessVectorRepresentations<Primary> primaries, MutableRandomAccessVectorRepresentations<Secondary> secondaries) {
+    private final PersistenceType primaryPersistenceType;
+    private final PersistenceType secondaryPersistenceType;
+
+    AbstractMutableGraphIndex(MutableRandomAccessVectorRepresentations<Primary> primaries,
+                              MutableRandomAccessVectorRepresentations<Secondary> secondaries,
+                              PersistenceType primaryPersistenceType,
+                              PersistenceType secondaryPersistenceType,
+                              SearchScoreBundle<Primary, Secondary> searchScoreBundle) {
         if (primaries.dimension() != secondaries.dimension()) {
             throw new IllegalArgumentException("The dimensions of the primary and secondary representations must be the same");
         }
         this.primaries = primaries;
         this.secondaries = secondaries;
+        this.searchScoreBundle = searchScoreBundle;
+        this.primaryPersistenceType = primaryPersistenceType;
+        this.secondaryPersistenceType = secondaryPersistenceType;
     }
 
     public MutableRandomAccessVectorRepresentations<Primary> getPrimaryRepresentations() {
@@ -37,5 +50,17 @@ public abstract class AbstractMutableGraphIndex<Primary extends VectorRepresenta
 
     public MutableRandomAccessVectorRepresentations<Secondary> getSecondaryRepresentations() {
         return secondaries;
+    }
+
+    public SearchScoreBundle<Primary, Secondary> getSearchScoreBundle() {
+        return searchScoreBundle;
+    }
+
+    public PersistenceType getPrimaryPersistenceType() {
+        return primaryPersistenceType;
+    }
+
+    public PersistenceType getSecondaryPersistenceType() {
+        return secondaryPersistenceType;
     }
 }

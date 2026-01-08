@@ -1,4 +1,4 @@
-package io.github.jbellis.jvector.graph.disk;
+package io.github.jbellis.jvector.graph.representations;
 
 public enum PersistenceType {
     INLINE,

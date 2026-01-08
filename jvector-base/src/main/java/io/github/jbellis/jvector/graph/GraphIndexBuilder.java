@@ -25,7 +25,7 @@ import io.github.jbellis.jvector.graph.diversity.DiversityPruner;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExceptionUtils;
@@ -103,7 +103,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
-    public GraphIndexBuilder(SearchScoreProvider<Primary, Secondary> scoreProvider,
+    public GraphIndexBuilder(SearchScoreBundle<Primary, Secondary> scoreProvider,
                              int dimension,
                              int M,
                              int beamWidth,
@@ -130,7 +130,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
      */
-    public GraphIndexBuilder(SearchScoreProvider<Primary, Secondary> scoreProvider,
+    public GraphIndexBuilder(SearchScoreBundle<Primary, Secondary> scoreProvider,
                              int dimension,
                              int M,
                              int beamWidth,
@@ -160,7 +160,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
      */
-    public GraphIndexBuilder(SearchScoreProvider<Primary, Secondary> scoreProvider,
+    public GraphIndexBuilder(SearchScoreBundle<Primary, Secondary> scoreProvider,
                              int dimension,
                              int M,
                              int beamWidth,
@@ -191,7 +191,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
      */
-    public GraphIndexBuilder(SearchScoreProvider<Primary, Secondary> scoreProvider,
+    public GraphIndexBuilder(SearchScoreBundle<Primary, Secondary> scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
                              int beamWidth,
@@ -222,7 +222,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
      */
-    public GraphIndexBuilder(SearchScoreProvider<Primary, Secondary> scoreProvider,
+    public GraphIndexBuilder(SearchScoreBundle<Primary, Secondary> scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
                              int beamWidth,
@@ -309,6 +309,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
         this.parallelExecutor = parallelExecutor;
 
         this.graph = mutableGraphIndex;
+        this.diversityPruner = new VamanaDiversityPruner<Primary>(scoreProvider.primaryScoreFunction(), this.graph.getPrimaryRepresentations(), alpha);
 
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
@@ -483,11 +484,11 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
      * other in-progress updates as neighbor candidates.
      *
      * @param node the node ID to add
-     * @param searchScoreProvider a SearchScoreProvider corresponding to the vector to add.
+     * @param searchScoreBundle a SearchScoreProvider corresponding to the vector to add.
      *                            It needs to be compatible with the BuildScoreProvider provided to the constructor
      * @return an estimate of the number of extra bytes used by the graph after adding the given node
      */
-    public long addGraphNode(int node, SearchScoreProvider searchScoreProvider) {
+    public long addGraphNode(int node, SearchScoreBundle searchScoreBundle) {
         var nodeLevel = new NodeAtLevel(getRandomGraphLevel(), node);
         // do this before adding to in-progress, so a concurrent writer checking
         // the in-progress set doesn't have to worry about uninitialized neighbor sets
@@ -507,14 +508,14 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
             if (entry == null) {
                 result = new SearchResult(new NodeScore[] {}, 0, 0, 0, 0, 0);
             } else {
-                gs.initializeInternal(searchScoreProvider, entry, bits);
+                gs.initializeInternal(searchScoreBundle, entry, bits);
 
                 // Move downward from entry.level to 1
                 for (int lvl = entry.level; lvl > 0; lvl--) {
                     if (lvl > nodeLevel.level) {
-                        gs.searchOneLayer(searchScoreProvider, 1, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreBundle, 1, 0.0f, lvl, gs.getView().liveNodes());
                     } else {
-                        gs.searchOneLayer(searchScoreProvider, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreBundle, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
                         NodeScore[] neighbors = new NodeScore[gs.approximateResults.size()];
                         AtomicInteger index = new AtomicInteger();
                         // TODO extract an interface that lets us avoid the copy here and in toScratchCandidates
@@ -522,7 +523,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
                             neighbors[index.getAndIncrement()] = new NodeScore(neighbor, score);
                         });
                         Arrays.sort(neighbors);
-                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
+                        updateNeighborsOneLayer(lvl, nodeLevel.node, neighbors, naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreBundle);
                     }
                     gs.setEntryPointsFromPreviousLayer();
                 }
@@ -531,7 +532,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
                 result = gs.resume(beamWidth, beamWidth);
             }
 
-            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
+            updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreBundle);
 
             graph.markComplete(nodeLevel);
         } catch (Exception e) {
@@ -543,7 +544,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
         return IntStream.rangeClosed(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
     }
 
-    private void updateNeighborsOneLayer(int level, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
+    private void updateNeighborsOneLayer(int level, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreBundle ssp) {
         // Update neighbors with these candidates.
         // The DiskANN paper calls for using the entire set of visited nodes along the search path as
         // potential candidates, but in practice we observe neighbor lists being completely filled using

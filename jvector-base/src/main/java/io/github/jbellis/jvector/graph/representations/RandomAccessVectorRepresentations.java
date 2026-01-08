@@ -24,7 +24,6 @@
 
 package io.github.jbellis.jvector.graph.representations;
 
-import io.github.jbellis.jvector.graph.disk.PersistenceType;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
@@ -36,20 +35,8 @@ import java.util.logging.Logger;
  * Provides random access to vectors by dense ordinal. This interface is used by graph-based
  * implementations of KNN search.
  */
-public interface RandomAccessVectorRepresentations<Vec extends VectorRepresentation> extends Accountable {
+public interface RandomAccessVectorRepresentations<Vec extends VectorRepresentation> extends VectorRepresentationCollection<Vec>, Accountable {
     Logger LOG = Logger.getLogger(RandomAccessVectorRepresentations.class.getName());
-
-    /**
-     * Return the number of vector values.
-     * <p>
-     * All copies of a given RAVV should have the same size.  Typically this is achieved by either
-     * (1) implementing a threadsafe, un-shared RAVV, where `copy` returns `this`, or
-     * (2) implementing a fixed-size RAVV.
-     */
-    int size();
-
-    /** Return the dimension of the returned vector values */
-    int dimension();
 
     /**
      * Return the vector value indexed at the given ordinal.

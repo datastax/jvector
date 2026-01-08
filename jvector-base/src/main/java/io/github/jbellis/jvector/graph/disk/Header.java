@@ -18,6 +18,10 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.AbstractMutableGraphIndex;
+import io.github.jbellis.jvector.graph.representations.GlobalInformation;
+import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -36,85 +40,47 @@ import java.util.Map;
  * The header can be written at the beginning of the index file or alternatively in a separate metadata file and is read when loading an index.
  * It provides all the metadata needed to correctly interpret the on-disk format of the graph.
  */
-class Header {
+class Header<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements Accountable {
     final CommonHeader common;
 
-    // In V6, it is important that the features map is sorted according to the feature order defined in AbstractFeature
-    // In V5 and older, these maps use the FeatureId as the sorting order
-    final Map<FeatureId, ? extends Feature> features;
+    final GlobalInformation<Primary> primaryGlobalInformation;
+    final GlobalInformation<Secondary> secondaryGlobalInformation;
 
-    Header(CommonHeader common, Map<FeatureId, ? extends Feature> features) {
+    Header(CommonHeader common, AbstractMutableGraphIndex<Primary, Secondary> graph) {
+        this(common, graph.getPrimaryRepresentations().getGlobalInformation(),
+                graph.getSecondaryRepresentations().getGlobalInformation());
+    }
+
+    private Header(CommonHeader common, GlobalInformation<Primary> primaryGlobalInformation, GlobalInformation<Secondary> secondaryGlobalInformation) {
         this.common = common;
-        this.features = features;
+        this.primaryGlobalInformation = primaryGlobalInformation;
+        this.secondaryGlobalInformation = secondaryGlobalInformation;
     }
 
     void write(IndexWriter out) throws IOException {
         common.write(out);
 
-        if (common.version >= 6) {
-            // Writing the features in order instead of writing a single integer with all the features (as done in <V6),
-            // preserves the initial ordering computed in the writer.
-            out.writeInt(features.size());
-            for (var featureId : features.keySet()) {
-                out.writeInt(featureId.ordinal());
-                Feature feature = features.get(featureId);
-                feature.writeHeader(out);
-            }
-        } else {
-            if (common.version >= 3) {
-                out.writeInt(FeatureId.serialize(EnumSet.copyOf(features.keySet())));
-            }
-
-            // we restrict pre-version-3 writers to INLINE_VECTORS features, so we don't need additional version-handling here
-            for (Feature writer : features.values()) {
-                writer.writeHeader(out);
-            }
-
-        }
+        primaryGlobalInformation.write(out); // write their header
+        secondaryGlobalInformation.write(out); // write their header
     }
 
-    public int size() {
-        int size = common.size();
-
-        if (common.version >= 6) {
-            // In V6, this accounts for the number of features and the ordinal of each feature
-            size += Integer.BYTES + features.size() * Integer.BYTES;
-        } else if (common.version >= 3) {
-            size += Integer.BYTES;
-        }
-
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
-
+    @Override
+    public long ramBytesUsed() {
+        long size = common.ramBytesUsed();
+        size += this.primaryGlobalInformation.ramBytesUsed();
+        size += this.primaryGlobalInformation.ramBytesUsed();
         return size;
     }
 
-    static Header load(RandomAccessReader reader, long offset) throws IOException {
+    static <Primary extends VectorRepresentation, Secondary extends VectorRepresentation> Header<Primary, Secondary> load(RandomAccessReader reader, long offset) throws IOException {
         reader.seek(offset);
 
-        Map<FeatureId, Feature> features;
-
         CommonHeader common = CommonHeader.load(reader);
-        if (common.version >= 6) {
-            features = new LinkedHashMap<>();
-            int nFeatures = reader.readInt();
-            for (int i = 0; i < nFeatures; i++) {
-                FeatureId featureId = FeatureId.values()[reader.readInt()];
-                features.put(featureId, featureId.load(common, reader));
-            }
-        } else {
-            EnumSet<FeatureId> featureIds;
-            features = new EnumMap<>(FeatureId.class);
 
-            if (common.version >= 3) {
-                featureIds = FeatureId.deserialize(reader.readInt());
-            } else {
-                featureIds = EnumSet.of(FeatureId.INLINE_VECTORS);
-            }
-            for (FeatureId featureId : featureIds) {
-                features.put(featureId, featureId.load(common, reader));
-            }
-        }
+        // read the headers for the primary and secondary representations and store them somewhere, not sure what is the right data structure or location yet
+        GlobalInformation<Primary> primaryGlobalInformation = null;
+        GlobalInformation<Secondary> secondaryGlobalInformation = null;
 
-        return new Header(common, features);
+        return new Header(common, primaryGlobalInformation, secondaryGlobalInformation);
     }
 }

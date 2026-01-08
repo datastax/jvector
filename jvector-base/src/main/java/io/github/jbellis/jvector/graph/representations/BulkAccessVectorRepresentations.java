@@ -35,20 +35,8 @@ import java.util.logging.Logger;
 /**
  * Provides similarity computations in bulk (i.e., sequentially) to the stored vectors.
  */
-public interface BulkAccessVectorRepresentations extends Accountable {
+public interface BulkAccessVectorRepresentations<Vec extends VectorRepresentation> extends VectorRepresentationCollection<Vec>, Accountable {
     Logger LOG = Logger.getLogger(BulkAccessVectorRepresentations.class.getName());
-
-    /**
-     * Return the number of vector values.
-     * <p>
-     * All copies of a given BAVR should have the same size.  Typically this is achieved by either
-     * (1) implementing a threadsafe, un-shared BAVR, where `copy` returns `this`, or
-     * (2) implementing a fixed-size BAVR.
-     */
-    int size();
-
-    /** Return the dimension of the returned vector values */
-    int dimension();
 
     /**
      * Return the similarities between the query and the stored vectors. The length of the result
@@ -75,7 +63,7 @@ public interface BulkAccessVectorRepresentations extends Accountable {
      * <p>
      * Un-shared implementations may simply return `this`.
      */
-    BulkAccessVectorRepresentations copy();
+    BulkAccessVectorRepresentations<Vec> copy();
 
     /**
      * Returns a supplier of thread-local copies of the RAVV.

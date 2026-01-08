@@ -5,6 +5,6 @@ import io.github.jbellis.jvector.graph.NodeArray;
 
 import java.io.IOException;
 
-public class InlineWriter {
-    void writeFor(int nodeId, NodeArray nodes, IndexWriter out) throws IOException {}
+public interface InGraphRepresentationWriter {
+    void writeFor(int nodeId, NodeArray nodes, IndexWriter out) throws IOException;
 }
