@@ -146,6 +146,48 @@ public class SiftLoader {
     }
 
     /**
+     * Read all ground-truth neighbors from an .ivecs file as a list of primitive arrays.
+     */
+    public static List<int[]> readIvecsAsArrays(String filename) {
+        try {
+            return readIvecsAsArrays(filename, Integer.MAX_VALUE);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Read at most {@code numVectors} from an .ivecs file as a list of primitive arrays.
+     */
+    public static List<int[]> readIvecsAsArrays(String filePath, int numVectors) throws IOException {
+        if (numVectors <= 0) {
+            throw new IllegalArgumentException("numVectors must be > 0, got " + numVectors);
+        }
+
+        var groundTruth = new ArrayList<int[]>(Math.min(numVectors, 1024));
+
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
+            int count = 0;
+            while (count < numVectors && dis.available() > 0) {
+                int k = Integer.reverseBytes(dis.readInt());
+                int[] neighbors = new int[k];
+                for (int i = 0; i < k; i++) {
+                    neighbors[i] = Integer.reverseBytes(dis.readInt());
+                }
+                groundTruth.add(neighbors);
+                count++;
+            }
+        }
+
+        if (numVectors != Integer.MAX_VALUE && groundTruth.size() != numVectors) {
+            throw new IOException(String.format("File %s ended early: requested %d, read %d",
+                    filePath, numVectors, groundTruth.size()));
+        }
+
+        return groundTruth;
+    }
+
+    /**
      * Read all ground-truth neighbors from an .ivecs file.
      */
     public static List<List<Integer>> readIvecs(String filename) {

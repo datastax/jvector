@@ -68,15 +68,21 @@ public class DistancesASH {
         return "UNKNOWN(" + optimizer + ")";
     }
 
-    public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
+    public static void testASHEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
         final boolean RUN_SANITY_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
+        final boolean RUN_RECALL_CHECK =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+
+        final int RECALL_K =
+                Integer.getInteger("jvector.bench.recall.k", 10);
+
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -88,14 +94,14 @@ public class DistancesASH {
         final int HEADER_BITS = 72;
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {16, 32, 64}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
 
         // How many ASH landmarks to use, C = [1, 64]
         final int landmarkCount = 1;
 
         // Define the benchmark size
-        int maxQueries = 1_000;
-        int maxVectors = 1_000_000;
+        int maxQueries = 10_000;
+        int maxVectors = 10_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -106,14 +112,23 @@ public class DistancesASH {
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase, nVectors);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries, nQueries);
+        List<int[]> groundTruth = SiftLoader.readIvecsAsArrays(filenameGT, nQueries);
 
         // ------------------------------------------------------------------
         // Remove zero-norm vectors (undefined for ASH / Eq. 11)
         // ------------------------------------------------------------------
+
         int beforeBase = vectors.size();
-        List<VectorFloat<?>> filteredBase = new ArrayList<>(vectors.size());
-        for (VectorFloat<?> v : vectors) {
+
+        // Maps original index to filtered index. Value is -1 if vector was removed.
+        int[] oldToNew = new int[beforeBase];
+        java.util.Arrays.fill(oldToNew, -1);
+
+        List<VectorFloat<?>> filteredBase = new ArrayList<>(beforeBase);
+        for (int i = 0; i < beforeBase; i++) {
+            VectorFloat<?> v = vectors.get(i);
             if (VectorUtil.dotProduct(v, v) > 0f) {
+                oldToNew[i] = filteredBase.size();
                 filteredBase.add(v);
             }
         }
@@ -149,7 +164,7 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = (dimension / 4) + HEADER_BITS;
+        int encodedBits = (dimension / 4) + HEADER_BITS - 64; // (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
         if ((payloadBits & 63) != 0) {
@@ -338,6 +353,69 @@ public class DistancesASH {
         }
 
         // ==================================================================
+        // [1b] Recall@K run (Parallelized)
+        // ==================================================================
+        if (RUN_RECALL_CHECK) {
+            int[] atValues = {10, 15, 20, 30, 40, 50};
+            int maxAt = 50;
+            List<ForkJoinTask<double[]>> recallTasks = new ArrayList<>();
+
+            logProgress("\t[stage] Computing " + RECALL_K + "-Recall@K...");
+            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, finalQueryCount);
+
+                recallTasks.add(simdExecutor.submit(() -> {
+                    double[] localTotalRecall = new double[atValues.length];
+                    for (int i = s; i < e; i++) {
+                        VectorFloat<?> q = finalQueries.get(i);
+                        ScoreFunction.ApproximateScoreFunction f = ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+
+                        // Min-heap to keep top 50 results (storing score as int bits and ordinal as long)
+                        var topCandidates = new java.util.PriorityQueue<long[]>((a, b) -> Float.compare(Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0])));
+                        for (int j = 0; j < finalVectorCount; j++) {
+                            float score = f.similarityTo(j);
+                            if (topCandidates.size() < maxAt) {
+                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
+                            } else if (score > Float.intBitsToFloat((int) topCandidates.peek()[0])) {
+                                topCandidates.poll();
+                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
+                            }
+                        }
+
+                        int[] topIndices = new int[topCandidates.size()];
+                        for (int rank = topCandidates.size() - 1; rank >= 0; rank--) topIndices[rank] = (int) topCandidates.poll()[1];
+
+                        int[] queryGT = groundTruth.get(i);
+                        for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                            int at = atValues[aIdx];
+                            java.util.Set<Integer> topAtSet = new java.util.HashSet<>();
+                            for (int r = 0; r < Math.min(at, topIndices.length); r++) {
+                                topAtSet.add((newToOldFinal == null) ? topIndices[r] : newToOldFinal[topIndices[r]]);
+                            }
+                            int matches = 0;
+                            for (int g = 0; g < RECALL_K; g++) {
+                                if (topAtSet.contains(queryGT[g])) matches++;
+                            }
+                            localTotalRecall[aIdx] += (double) matches / RECALL_K;
+                        }
+                    }
+                    return localTotalRecall;
+                }));
+            }
+
+            double[] totalRecall = new double[atValues.length];
+            for (ForkJoinTask<double[]> t : recallTasks) {
+                double[] local = t.join();
+                for (int aIdx = 0; aIdx < atValues.length; aIdx++) totalRecall[aIdx] += local[aIdx];
+            }
+
+            for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                System.out.format("\tASH %d-recall@%d = %.4f%n", RECALL_K, atValues[aIdx], totalRecall[aIdx] / finalQueryCount);
+            }
+        }
+
+        // ==================================================================
         // [2] Scalar ASH scoring timing (reference)
         // ==================================================================
         if (RUN_SCALAR_SCORING) {
@@ -522,7 +600,8 @@ public class DistancesASH {
 
         var baseVectors = "siftsmall/siftsmall_base.fvecs";
         var queryVectors = "siftsmall/siftsmall_query.fvecs";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runGIST() throws IOException {
@@ -530,7 +609,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/gist/gist_base.fvecs";
         var queryVectors = "./fvec/gist/gist_query.fvecs";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runCohere100k() throws IOException {
@@ -538,7 +618,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec";
         var queryVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_indices_b100000_q10000_k100.ivec";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runADA() throws IOException {
@@ -546,7 +627,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
         var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/ada-002/ada_002_100000_indices_query_10000.ivec";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runColbert() throws IOException {
@@ -554,7 +636,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_base_vectors_1000000.fvec";
         var queryVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_query_vectors_100000.fvec";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runOpenai1536() throws IOException {
@@ -562,7 +645,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_base_vectors.fvec";
         var queryVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_indices_query_10000.ivec";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runOpenai3072() throws IOException {
@@ -570,7 +654,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
         var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_indices_query_10000.ivec";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runCap6m() throws IOException {
@@ -578,7 +663,8 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs";
         var queryVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/cap-6m/cap_6m_gt_norm_shuffle_ip_k100.ivecs";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runCohere10m() throws IOException {
@@ -586,18 +672,19 @@ public class DistancesASH {
 
         var baseVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs";
         var queryVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs";
-        testASHEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void main(String[] args) throws IOException {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
-        runADA();
-        runOpenai1536();
-        runOpenai3072();
-//        runCap6m();
-//        runCohere10m();
+//        runCohere100k();
+//        runADA();
+//        runOpenai1536();
+//        runOpenai3072();
+        runCap6m();
+        runCohere10m();
     }
 }
