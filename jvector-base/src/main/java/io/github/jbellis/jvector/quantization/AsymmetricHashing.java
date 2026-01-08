@@ -621,6 +621,23 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     public static final class RandomBinaryQuantizer implements BinaryQuantizer {
+        // ThreadLocal to hold the reusable buffers.
+        // Using a simple container class to avoid multiple ThreadLocal lookups.
+        private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
+
+        private static final class Workspace {
+            float[] x;
+            float[] muArr;
+            float[] xhat;
+
+            void ensureCapacity(int dim) {
+                if (x == null || x.length < dim) {
+                    x = new float[dim];
+                    muArr = new float[dim];
+                    xhat = new float[dim];
+                }
+            }
+        }
 
         @Override
         public void quantizeBody(VectorFloat<?> vector,
@@ -633,14 +650,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             final float[][] A = stiefel.AFloat;
             final int originalDim = stiefel.cols;
 
+            // Get workspace for this thread and ensure correct sizing (originalDim may have changed)
+            Workspace ws = WORKSPACE.get();
+            ws.ensureCapacity(originalDim);
+
+            // Alias for readability (no new allocations)
+            final float[] x = ws.x;
+            final float[] muArr = ws.muArr;
+            final float[] xhat = ws.xhat;
+
             final var vecUtil =
                     io.github.jbellis.jvector.vector.VectorizationProvider
                             .getInstance()
                             .getVectorUtilSupport();
 
-            // Copy vector and mean once (no virtual calls in inner loop)
-            final float[] x = new float[originalDim];
-            final float[] muArr = new float[originalDim];
+            // Copy vector and mean once into workspace
             for (int d = 0; d < originalDim; d++) {
                 x[d] = vector.get(d);
                 muArr[d] = mu.get(d);
@@ -649,8 +673,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             // ASH paper, Eq. 6, normalization
             final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
 
-            // Normalized residual x̂
-            final float[] xhat = new float[originalDim];
+            // Compute normalized residual x̂
             for (int d = 0; d < originalDim; d++) {
                 xhat[d] = (x[d] - muArr[d]) * invNorm;
             }
