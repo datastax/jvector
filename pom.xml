@@ -1,4 +1,4 @@
-<project xmlns="https://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"
          child.project.url.inherit.append.path="false">
     <modelVersion>4.0.0</modelVersion>
@@ -42,6 +42,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
         <revision>4.0.0-rc.7-SNAPSHOT</revision>
+        <ludovic.netlib.version>3.0.3</ludovic.netlib.version>
     </properties>
     <modules>
         <module>jvector-base</module>
@@ -198,6 +199,31 @@
     </dependencies>
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>com.github.fommil.netlib</groupId>
+                <artifactId>core</artifactId>
+                <version>1.1.2</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ludovic.netlib</groupId>
+                <artifactId>netlib</artifactId>
+                <version>${ludovic.netlib.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ludovic.netlib</groupId>
+                <artifactId>blas</artifactId>
+                <version>${ludovic.netlib.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ludovic.netlib</groupId>
+                <artifactId>lapack</artifactId>
+                <version>${ludovic.netlib.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.ludovic.netlib</groupId>
+                <artifactId>arpack</artifactId>
+                <version>${ludovic.netlib.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-engine</artifactId>

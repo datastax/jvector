@@ -28,6 +28,8 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
+import dev.ludovic.netlib.blas.BLAS;
+import dev.ludovic.netlib.lapack.LAPACK;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
@@ -37,6 +39,9 @@ import java.util.Random;
 import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.commons.math3.linear.QRDecomposition;
 import org.apache.commons.math3.linear.RealMatrix;
+import org.apache.commons.math3.linear.Array2DRowRealMatrix;
+import org.apache.commons.math3.linear.SingularValueDecomposition;
+import org.netlib.util.intW;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
@@ -48,6 +53,26 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
     public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
     private static final int MAGIC = 0x75EC4012;  // TODO update the magic number?
+
+    // ---------------------------------------------------------------------
+    // Training configuration (reference defaults; TODO tune later)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Training sample size for ITQ. Default mirrors a practical upper bound for large datasets.
+     */
+    private static final int ITQ_N_TRAIN = 100_000;
+
+    /**
+     * Training sample size for LANDING. Reduce if LANDING becomes too expensive at larger D/d.
+     */
+    private static final int LANDING_N_TRAIN = 100_000;
+
+    /** Tune for tradeoff between convergence rate and processing speed. */
+    private static final int LANDING_BATCH_SIZE = 256;
+
+    /** Final setting TBD. */
+    private static final int TRAINING_ITERS = 20;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: float (32 bits), where scale = ||x − μ|| / sqrt(d)
@@ -280,13 +305,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
+        // Keep determinism consistent within ASH.  TODO define seed constant or remove.
+        final Random rng = new Random(42);
+
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
-            stiefelTransform = runWithoutTraining(originalDim, quantizedDim, new Random(42));
-        } else if (optimizer == ITQ) {
-            throw new IllegalArgumentException("ITQ optimizer not implemented yet");
-        } else if (optimizer == LANDING) {
-            throw new IllegalArgumentException("LANDING optimizer not implemented yet");
+            stiefelTransform = runWithoutTraining(originalDim, quantizedDim, rng);
+        } else if (optimizer == ITQ || optimizer == LANDING) {
+            // Build training inputs from a random sample of points.
+            TrainingData td = prepareTrainingData(points, landmarks, optimizer, originalDim, rng);
+
+            if (optimizer == ITQ) {
+                stiefelTransform = runItqTrainer(td.xTrainNorm, quantizedDim, rng, TRAINING_ITERS);
+            } else {
+                stiefelTransform = runLandingTrainer(td.xTrainNorm, quantizedDim, rng, TRAINING_ITERS);
+            }
         } else {
             throw new IllegalArgumentException("Unknown optimizer " + optimizer);
         }
@@ -642,6 +675,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     public static final class ItqBinaryQuantizer implements BinaryQuantizer {
+        // Same binarization math for all optimizers; only the learned transform differs.
+        // TODO consolidate quantizeBody across learners/random
+        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
+
         @Override
         public void quantizeBody(VectorFloat<?> vector,
                                  VectorFloat<?> mu,
@@ -649,11 +686,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                  int quantizedDim,
                                  StiefelTransform stiefel,
                                  long[] outWords) {
-            throw new UnsupportedOperationException("ITQ not implemented");
+            delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, stiefel, outWords);
         }
     }
 
     public static final class LandingBinaryQuantizer implements BinaryQuantizer {
+        // Same binarization math for all optimizers; only the learned transform differs.
+        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
+
         @Override
         public void quantizeBody(VectorFloat<?> vector,
                                  VectorFloat<?> mu,
@@ -661,7 +701,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                  int quantizedDim,
                                  StiefelTransform stiefel,
                                  long[] outWords) {
-            throw new UnsupportedOperationException("LANDING not implemented");
+            delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, stiefel, outWords);
         }
     }
 
@@ -839,7 +879,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             result = 31 * result + Arrays.hashCode(binaryVector);
             return result;
         }
-
     }
 
     /**
@@ -1149,6 +1188,491 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         quantizeVector(vector, residualNorm, landmark, dest);
     }
 
+    // ---------------------------------------------------------------------
+    // Training of projection matrix (ITQ + LANDING algorithms)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Training inputs derived from a random sample of the dataset:
+     * xTrainNorm holds normalized centered residuals.
+     *
+     * NOTE: Vectors are read as floats; training matrices are accumulated/stored in double precision.
+     */
+    private static final class TrainingData {
+        final double[][] xTrainNorm; // [N_train][D]
+
+        TrainingData(double[][] xTrainNorm) {
+            this.xTrainNorm = xTrainNorm;
+        }
+    }
+
+    /**
+     * Builds normalized centered residuals for training:
+     *  - Choose N_train = min(N, cap) (cap differs by optimizer).
+     *  - Sample ordinals uniformly at random (deterministic RNG).
+     *  - For each sampled ordinal i:
+     *      c = argmin ||x_i - mu_c||^2  (same rule as encoding)
+     *      r = x_i - mu_c
+     *      r_hat = r / ||r||
+     *      store r_hat into xTrainNorm
+     */
+    private static TrainingData prepareTrainingData(
+            VectorFloat<?>[] points,
+            VectorFloat<?>[] landmarks,
+            int optimizer,
+            int originalDim,
+            Random rng
+    ) {
+        final int N = points.length;
+        final int cap = (optimizer == LANDING) ? LANDING_N_TRAIN : ITQ_N_TRAIN;
+        final int nTrain = Math.min(N, cap);
+
+        final int[] sample = reservoirSampleOrdinals(N, nTrain, rng);
+        Arrays.sort(sample); // deterministic order for reproducibility
+
+        final double[][] xTrainNorm = new double[nTrain][originalDim];
+
+        int row = 0;
+        int samplePos = 0;
+
+        for (int i = 0; i < N && samplePos < nTrain; i++) {
+            if (sample[samplePos] != i) {
+                continue;
+            }
+            samplePos++;
+
+            final VectorFloat<?> x = points[i];
+
+            // Nearest landmark assignment (same semantics as encodeTo).
+            byte best = 0;
+            float bestDist = Float.POSITIVE_INFINITY;
+            for (int c = 0; c < landmarks.length; c++) {
+                float dist = VectorUtil.squareL2Distance(x, landmarks[c]);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = (byte) c;
+                }
+            }
+
+            final VectorFloat<?> mu = landmarks[best & 0xFF];
+
+            // Center and normalize into double precision row.
+            final double[] out = xTrainNorm[row++];
+
+            double ss = 0.0;
+            for (int d = 0; d < originalDim; d++) {
+                double v = (double) x.get(d) - (double) mu.get(d);
+                out[d] = v;
+                ss += v * v;
+            }
+
+            // Normalize residuals.  NOTE: Does not handle zero vectors!
+            double inv = 1.0 / Math.sqrt(ss);
+            for (int d = 0; d < originalDim; d++) {
+                out[d] *= inv;
+            }
+        }
+
+        if (row != nTrain) {
+            throw new IllegalStateException("Training sample fill mismatch: got " + row + ", expected " + nTrain);
+        }
+
+        return new TrainingData(xTrainNorm);
+    }
+
+    /**
+     * Reservoir sample k ordinals uniformly from [0, N).
+     * Deterministic given rng.
+     */
+    private static int[] reservoirSampleOrdinals(int N, int k, Random rng) {
+        if (k < 0 || k > N) throw new IllegalArgumentException("k out of range: " + k + " for N=" + N);
+        int[] r = new int[k];
+        for (int i = 0; i < k; i++) r[i] = i;
+        for (int i = k; i < N; i++) {
+            int j = rng.nextInt(i + 1);
+            if (j < k) r[j] = i;
+        }
+        return r;
+    }
+
+    /**
+     * ITQ trainer:
+     *  - PCA basis from SVD(X_train_norm)
+     *  - iterative orthogonal Procrustes updates on temp_mat
+     *  - returns W = M_pca @ R
+     */
+    private static StiefelTransform runItqTrainer(
+            double[][] xHdNorm,   // [N][D] normalized residuals
+            int quantizedDim,     // d
+            Random rng,
+            int nTrainingIterations
+    ) {
+        logProgress("\t[stage] Starting runITQTrainer...");
+
+        final int N = xHdNorm.length;
+        final int D = xHdNorm[0].length;
+        final int d = quantizedDim;
+
+        // PCA basis M = V[:, :d] where X = U S V^T
+        RealMatrix X = new Array2DRowRealMatrix(xHdNorm, false); // [N×D]
+        logProgress("\t[stage] Starting Native SVD for PCA...");
+        // We only need V, so we tell LAPACK to skip U to save massive amounts of time/memory
+        RealMatrix V = computeNativeV(X);
+        logProgress("\t[stage] Completed Native SVD...");
+        RealMatrix M = V.getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
+
+        // Early stopping based on stabilized binary codes (subject to max iterations)
+        RealMatrix prevXbin = null;
+        int stable = 0;
+        final double STOP_FRAC = 4e-3;   // stop when <0.4% bits flip TODO setting
+        final int STOP_PATIENCE = 3;     // for 3 consecutive epochs TODO setting
+
+        // X_norm = X_hd_norm @ M (N x d)
+        RealMatrix Xnorm = nativeMultiply(X, M); // [N×d]
+
+        // temp_mat ~ N(0,1) in R^{d×d}. Initial random rotation.
+        RealMatrix temp = gaussianMatrix(d, d, rng);
+
+        // Loop: epoch 0..iters inclusive; last epoch computes R but does not update temp_mat.
+        RealMatrix R = null;
+        logProgress("\t[stage] ITQ training iterations started...");
+        for (int epoch = 0; epoch <= nTrainingIterations; epoch++) {
+            R = orthogonalize(temp); // R = U @ V^T
+
+            if (epoch < nTrainingIterations) {
+                // Use native multiplication for Xtr = Xnorm @ R
+                RealMatrix Xtr = nativeMultiply(Xnorm, R);             // [N×d]
+                RealMatrix Xbin = sign01(Xtr);                         // [N×d] in {+1,-1}
+
+                if (prevXbin != null) {
+                    long changed = 0;
+                    long total = (long) N * (long) d;
+                    for (int i = 0; i < N; i++) {
+                        for (int j = 0; j < d; j++) {
+                            if (Xbin.getEntry(i, j) != prevXbin.getEntry(i, j)) changed++;
+                        }
+                    }
+                    double frac = (double) changed / (double) total;
+
+                    logProgress(String.format(java.util.Locale.ROOT,
+                            "\titeration %d/%d - fracBitsChanged=%.6g (stable=%d/%d)",
+                            epoch, nTrainingIterations, frac, stable, STOP_PATIENCE));
+
+                    if (frac < STOP_FRAC) {
+                        if (++stable >= STOP_PATIENCE) break;
+                    } else {
+                        stable = 0;
+                    }
+                }
+
+                // Optimized temp = Xnorm.T @ Xbin
+                // This avoids the physical transpose of the large Xnorm matrix
+                prevXbin = Xbin;
+                temp = nativeMultiplyTransposedA(Xnorm, Xbin);          // [d×d]
+            }
+        }
+        logProgress("\t[stage] ITQ training completed.");
+
+        // W = M @ R  (shape [D×d])
+        // Use native multiply for the final transform matrix
+        RealMatrix W = nativeMultiply(M, R);
+        return new StiefelTransform(W);
+    }
+
+    /**
+     * LANDING trainer TODO incomplete
+     *
+     * NOTE: This is a DRAFT (not hardened) implementation using RealMatrix operations.
+     * We can SIMD/block-optimize the hot math once correctness is validated.
+     */
+    private static StiefelTransform runLandingTrainer(
+            double[][] xHdNorm,   // [N][D] normalized residuals
+            int quantizedDim,     // d
+            Random rng,
+            int nTrainingIterations
+    ) {
+        final int N = xHdNorm.length;
+        final int D = xHdNorm[0].length;
+        final int d = quantizedDim;
+
+        RealMatrix X = new Array2DRowRealMatrix(xHdNorm, false); // [N×D]
+
+        // PCA basis M_pca = V[:, :d]
+        SingularValueDecomposition svdX = new SingularValueDecomposition(X);
+        RealMatrix V = svdX.getV();
+        RealMatrix M_pca = V.getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
+
+        // Init:
+        // temp(d×d) -> Q = U V^T
+        // A = Q @ M_pca^T  (d×D)
+        // W = A^T          (D×d)
+        RealMatrix Q = orthogonalize(gaussianMatrix(d, d, rng));
+        RealMatrix A = Q.multiply(M_pca.transpose()); // [d×D]
+        RealMatrix W = A.transpose();                 // [D×d]
+
+        final RealMatrix I_D = MatrixUtils.createRealIdentityMatrix(D);
+        final double invSqrtD = 1.0 / Math.sqrt(d);
+
+        int[] idx = new int[N];
+        for (int i = 0; i < N; i++) idx[i] = i;
+
+        for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
+            shuffleInPlace(idx, rng);
+
+            for (int off = 0; off < N; off += LANDING_BATCH_SIZE) {
+                final int end = Math.min(N, off + LANDING_BATCH_SIZE);
+                final int B = end - off;
+
+                // Build batch matrix X_batch (B×D)
+                double[][] xb = new double[B][D];
+                for (int bi = 0; bi < B; bi++) {
+                    xb[bi] = xHdNorm[idx[off + bi]];
+                }
+                RealMatrix Xb = new Array2DRowRealMatrix(xb, false);
+
+                // X_sign = sign(Xb @ W) / sqrt(d)
+                RealMatrix Xproj = Xb.multiply(W);                        // [B×d]
+                RealMatrix Xsign = sign01(Xproj).scalarMultiply(invSqrtD);// [B×d]
+
+                // gradA = (X_sign^T X_sign) A - (X_sign^T X_batch)
+                RealMatrix XtX = Xsign.transpose().multiply(Xsign);       // [d×d]
+                RealMatrix XtB = Xsign.transpose().multiply(Xb);          // [d×D]
+                RealMatrix gradA = XtX.multiply(A).subtract(XtB);         // [d×D]
+
+                // gradW = (X_batch^T X_batch) ( W (A A^T) - A^T )
+                RealMatrix G = Xb.transpose().multiply(Xb);               // [D×D]
+                RealMatrix AAT = A.multiply(A.transpose());               // [d×d]
+                RealMatrix term = W.multiply(AAT).subtract(A.transpose());// [D×d]
+                RealMatrix gradW = G.multiply(term);                      // [D×d]
+
+                double lr = 0.1 * Math.pow(0.98, epoch);
+                double lambda = 1.0;
+
+                // skew = 0.5 * (A^T gradA - (A^T gradA)^T)
+                RealMatrix Mmat = A.transpose().multiply(gradA);          // [D×D]
+                RealMatrix skew = Mmat.subtract(Mmat.transpose()).scalarMultiply(0.5);
+
+                // A -= lr * A @ ( lambda*(A^T A - I) + skew )
+                RealMatrix ortho = A.transpose().multiply(A).subtract(I_D);
+                RealMatrix updateCore = ortho.scalarMultiply(lambda).add(skew);
+                A = A.subtract(A.multiply(updateCore).scalarMultiply(lr));
+
+                // W -= lr * gradW
+                W = W.subtract(gradW.scalarMultiply(lr));
+            }
+        }
+
+        return new StiefelTransform(W);
+    }
+
+    private static void shuffleInPlace(int[] a, Random rng) {
+        for (int i = a.length - 1; i > 0; i--) {
+            int j = rng.nextInt(i + 1);
+            int tmp = a[i];
+            a[i] = a[j];
+            a[j] = tmp;
+        }
+    }
+
+    private static RealMatrix gaussianMatrix(int rows, int cols, Random rng) {
+        double[][] m = new double[rows][cols];
+        for (int i = 0; i < rows; i++) {
+            double[] r = m[i];
+            for (int j = 0; j < cols; j++) {
+                r[j] = rng.nextGaussian();
+            }
+        }
+        return new Array2DRowRealMatrix(m, false);
+    }
+
+    /** Orthonormal factor: U @ V^T from SVD(M). */
+//    private static RealMatrix orthogonalize(RealMatrix m) {
+//        SingularValueDecomposition svd = new SingularValueDecomposition(m);
+//        return svd.getU().multiply(svd.getVT());
+//    }
+
+    // Basic dgemm routine.
+    private static RealMatrix nativeMultiply(RealMatrix A, RealMatrix B) {
+        int m = A.getRowDimension();
+        int n = B.getColumnDimension();
+        int k = A.getColumnDimension(); // Must match B's row dimension
+
+        // 1. Convert to 1D Column-Major for BLAS
+        double[] aArr = serializeColumnMajor(A);
+        double[] bArr = serializeColumnMajor(B);
+        double[] cArr = new double[m * n];
+
+        // 2. Call Native DGEMM: C = alpha*A*B + beta*C
+        // "N", "N" means 'No Transpose' for both A and B
+        BLAS.getInstance().dgemm(
+                "N", "N",
+                m, n, k,
+                1.0,    // alpha
+                aArr, m, // A and its leading dimension
+                bArr, k, // B and its leading dimension
+                0.0,    // beta (ignores existing values in cArr)
+                cArr, m  // C and its leading dimension
+        );
+
+        // 3. Convert back to RealMatrix
+        return new Array2DRowRealMatrix(deserializeColumnMajor(cArr, m, n), false);
+    }
+
+    // Uses the dgesvd routine but tells LAPACK to skip the U matrix (for PCA).  Saves time....
+    private static RealMatrix computeNativeV(RealMatrix x) {
+        int rows = x.getRowDimension();
+        int cols = x.getColumnDimension();
+        double[] a = serializeColumnMajor(x);
+
+        double[] s = new double[Math.min(rows, cols)];
+        double[] vt = new double[cols * cols]; // Right singular vectors
+        intW info = new intW(0);
+
+        // Query optimal workspace size (standard LAPACK practice)
+        double[] workQuery = new double[1];
+        LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, workQuery, -1, info);
+
+        int lwork = (int) workQuery[0];
+        double[] work = new double[lwork];
+
+        // Actual call: "N" = No U matrix, "A" = All columns of V^T
+        LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, work, lwork, info);
+
+        if (info.val != 0) {
+            throw new RuntimeException("Native PCA SVD failed with info=" + info.val);
+        }
+
+        // Convert VT (column-major) back to RealMatrix
+        return new Array2DRowRealMatrix(deserializeColumnMajor(vt, cols, cols), false);
+    }
+
+    /** Computes A^T * B using Native BLAS dgemm */
+    private static RealMatrix nativeMultiplyTransposedA(RealMatrix A, RealMatrix B) {
+        int m = A.getColumnDimension(); // A.T has rows = A.cols
+        int n = B.getColumnDimension();
+        int k = A.getRowDimension();    // A.T has cols = A.rows
+
+        double[] aArr = serializeColumnMajor(A);
+        double[] bArr = serializeColumnMajor(B);
+        double[] cArr = new double[m * n];
+
+        // "T" = Transpose Matrix A, "N" = No Transpose Matrix B
+        BLAS.getInstance().dgemm(
+                "T", "N",
+                m, n, k,
+                1.0,
+                aArr, k, // Leading dimension is k because A is currently [k x m]
+                bArr, k,
+                0.0,
+                cArr, m
+        );
+
+        return new Array2DRowRealMatrix(deserializeColumnMajor(cArr, m, n), false);
+    }
+
+    private static double calculateMSE(RealMatrix a, RealMatrix b) {
+        double sumSq = 0;
+        int rows = a.getRowDimension();
+        int cols = a.getColumnDimension();
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                double diff = a.getEntry(i, j) - b.getEntry(i, j);
+                sumSq += diff * diff;
+            }
+        }
+        return sumSq / (rows * cols);
+    }
+
+    private static RealMatrix orthogonalize(RealMatrix m) {
+        int rows = m.getRowDimension();
+        int cols = m.getColumnDimension();
+
+        // Convert to column-major for Native LAPACK
+        double[] a = serializeColumnMajor(m);
+
+        // Prepare output buffers
+        double[] u = new double[rows * rows];
+        double[] vt = new double[cols * cols];
+        double[] s = new double[Math.min(rows, cols)];
+
+        // int wrapper required....
+        intW info = new intW(0);
+
+        // LAPACK Workspace (Required for dgesvd): Pass -1 for lwork and a 1-element array for work
+        double[] workQuery = new double[1];
+        LAPACK.getInstance().dgesvd(
+                "A", "A", rows, cols, a, rows, s, u, rows, vt, cols,
+                workQuery, -1, info
+        );
+
+        // Extract the optimal lwork and allocate the real workspace
+        int lwork = (int) workQuery[0];
+        double[] work = new double[lwork];
+
+        // Native SVD call
+        LAPACK.getInstance().dgesvd(
+                "A", "A",     // Compute all columns of U and all rows of VT
+                rows, cols,   // Matrix dimensions
+                a, rows,      // Input matrix and its leading dimension
+                s,            // Output singular values
+                u, rows,      // Output U and its leading dimension
+                vt, cols,     // Output VT and its leading dimension
+                work, lwork,  // Workspace
+                info          // Success/Fail code
+        );
+
+        if (info.val != 0) {
+            throw new RuntimeException("LAPACK dgesvd failed with info=" + info.val);
+        }
+
+        // Convert back to Commons Math
+        RealMatrix U = new Array2DRowRealMatrix(deserializeColumnMajor(u, rows, rows), false);
+        RealMatrix VT = new Array2DRowRealMatrix(deserializeColumnMajor(vt, cols, cols), false);
+
+        return U.multiply(VT);
+    }
+
+    /** Converts an Apache Commons RealMatrix to a column-major 1D array for LAPACK. */
+    private static double[] serializeColumnMajor(RealMatrix m) {
+        int rows = m.getRowDimension();
+        int cols = m.getColumnDimension();
+        double[] data = new double[rows * cols];
+        for (int c = 0; c < cols; c++) {
+            for (int r = 0; r < rows; r++) {
+                data[c * rows + r] = m.getEntry(r, c);
+            }
+        }
+        return data;
+    }
+
+    /** Converts a column-major 1D array back into a row-major double[][] for Commons Math. */
+    private static double[][] deserializeColumnMajor(double[] data, int rows, int cols) {
+        double[][] matrix = new double[rows][cols];
+        for (int c = 0; c < cols; c++) {
+            for (int r = 0; r < rows; r++) {
+                matrix[r][c] = data[c * rows + r];
+            }
+        }
+        return matrix;
+    }
+
+    /**
+     * Elementwise sign producing +/-1 (no zeros), consistent with ASH encoding convention:
+     * bit=1 iff projection > 0, else bit=0.
+     */
+    private static RealMatrix sign01(RealMatrix m) {
+        final int r = m.getRowDimension();
+        final int c = m.getColumnDimension();
+        double[][] out = new double[r][c];
+        for (int i = 0; i < r; i++) {
+            double[] row = out[i];
+            for (int j = 0; j < c; j++) {
+                row[j] = (m.getEntry(i, j) > 0.0) ? 1.0 : -1.0;
+            }
+        }
+        return new Array2DRowRealMatrix(out, false);
+    }
+
     @Override
     public int compressorSize() {
         // Must exactly match write(out, version)
@@ -1377,6 +1901,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             h = 31 * h + vectorHash(v);
         }
         return h;
+    }
+
+    private static void logProgress(String msg) {
+        System.out.println(msg);
+        System.out.flush();
     }
 
     @Override

@@ -44,6 +44,30 @@ public class DistancesASH {
         );
     }
 
+    private static void logProgress(String msg) {
+        System.out.println(msg);
+        System.out.flush();
+    }
+
+    private static int parseOptimizerFromProperty() {
+        String opt = System.getProperty("jvector.ash.optimizer", "random").trim().toLowerCase();
+
+        if ("random".equals(opt)) return AsymmetricHashing.RANDOM;
+        if ("itq".equals(opt)) return AsymmetricHashing.ITQ;
+        if ("landing".equals(opt)) return AsymmetricHashing.LANDING;
+
+        throw new IllegalArgumentException(
+                "Unknown jvector.ash.optimizer=" + opt + " (expected random|itq|landing)"
+        );
+    }
+
+    private static String optimizerName(int optimizer) {
+        if (optimizer == AsymmetricHashing.RANDOM) return "RANDOM";
+        if (optimizer == AsymmetricHashing.ITQ) return "ITQ";
+        if (optimizer == AsymmetricHashing.LANDING) return "LANDING";
+        return "UNKNOWN(" + optimizer + ")";
+    }
+
     public static void testASHEncodings(String filenameBase, String filenameQueries) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
@@ -52,7 +76,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "true"));
 
         final boolean RUN_SCALAR_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
@@ -149,15 +173,28 @@ public class DistancesASH {
                 vectors.size(), queries.size(), dimension);
 
         // ------------------------------------------------------------------
-        // Build ASH
+        // Build ASH (centroids + optional training), then encode
         // ------------------------------------------------------------------
         var ravv = new ListRandomAccessVectorValues(vectors, dimension);
-        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM, encodedBits, landmarkCount);
 
+        // Choose optimizer at runtime:
+        //   -Djvector.ash.optimizer=random|itq|landing
+        final int optimizer = parseOptimizerFromProperty();
+
+        logProgress("\tASH optimizer = " + optimizerName(optimizer));
+
+        logProgress("\t[stage] ASH initialize: starting (centroids + training)");
+        long initStart = System.nanoTime();
+        var ash = AsymmetricHashing.initialize(ravv, optimizer, encodedBits, landmarkCount);
+        long initEnd = System.nanoTime();
+        logProgress("\t[stage] ASH initialize: done in " + (initEnd - initStart) / 1e9 + " seconds");
+
+        logProgress("\t[stage] ASH encodeAll: starting");
         long startTime = System.nanoTime();
         CompressedVectors ashVecs = ash.encodeAll(ravv);
         long endTime = System.nanoTime();
-        System.out.println("\tEncoding took " + (endTime - startTime) / 1e9 + " seconds");
+        logProgress("\t[stage] ASH encodeAll: done in " + (endTime - startTime) / 1e9 + " seconds");
+
 
         double encSeconds = (endTime - startTime) / 1e9;
         double encThroughput = finalVectorCount / encSeconds;

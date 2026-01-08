@@ -617,6 +617,7 @@ public class ASHVectors implements CompressedVectors {
                     int idx = ord + lane;
                     float m = maskedAdds[lane];
                     out[idx - start] =
+                            // scale the 0/1 stored bits to +/-1 for processing.
                             scales[idx] * (2f * m - runSumTildeQ)
                                     + runDotQMu
                                     + offsets[idx];
