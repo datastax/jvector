@@ -336,6 +336,15 @@ public class DistancesPQ {
         );
     }
 
+    public static void runADANoZeros() throws IOException {
+        System.out.println("Running ada-002-no-zeros");
+
+        testPQEncodings(
+                "./fvec/ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec",
+                "./fvec/ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec"
+        );
+    }
+
     public static void runOpenai1536() throws IOException {
         System.out.println("Running text-embedding-3-large_1536");
         testPQEncodings(
@@ -370,7 +379,8 @@ public class DistancesPQ {
 
     public static void main(String[] args) throws IOException {
         runCohere100k();
-        runADA();
+//        runADA();
+        runADANoZeros();
         runOpenai1536();
         runOpenai3072();
 //        runCap6m();

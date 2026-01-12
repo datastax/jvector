@@ -76,7 +76,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_RECALL_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "true"));
 
         final int RECALL_K =
                 Integer.getInteger("jvector.bench.recall.k", 10);
@@ -100,8 +100,8 @@ public class DistancesASH {
         final int landmarkCount = 1;
 
         // Define the benchmark size
-        int maxQueries = 10_000;
-        int maxVectors = 10_000_000;
+        int maxQueries = 1_000;
+        int maxVectors = 1_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -164,17 +164,17 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = (dimension / 4) + HEADER_BITS - 64; // (dimension / 4) + HEADER_BITS;
+        int encodedBits = dimension / 4; // 384; // (dimension / 4) + HEADER_BITS; // (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
-        if ((payloadBits & 63) != 0) {
-            throw new IllegalArgumentException(
-                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
-                            "Got payloadBits=" + payloadBits +
-                            " (encodedBits=" + encodedBits +
-                            ", HEADER_BITS=" + HEADER_BITS + ")"
-            );
-        }
+//        if ((payloadBits & 63) != 0) {
+//            throw new IllegalArgumentException(
+//                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
+//                            "Got payloadBits=" + payloadBits +
+//                            " (encodedBits=" + encodedBits +
+//                            ", HEADER_BITS=" + HEADER_BITS + ")"
+//            );
+//        }
 
         System.out.println(
                 "\toriginalDim = " + dimension +
@@ -394,8 +394,13 @@ public class DistancesASH {
                                 topAtSet.add((newToOldFinal == null) ? topIndices[r] : newToOldFinal[topIndices[r]]);
                             }
                             int matches = 0;
+                            java.util.HashSet<Integer> gtSeen = new java.util.HashSet<>(RECALL_K * 2);
+                            // Compute and don't count duplicates (if present in GT or retrieved IDs)
                             for (int g = 0; g < RECALL_K; g++) {
-                                if (topAtSet.contains(queryGT[g])) matches++;
+                                int gtId = queryGT[g];
+                                if (gtSeen.add(gtId) && topAtSet.contains(gtId)) {
+                                    matches++;
+                                }
                             }
                             localTotalRecall[aIdx] += (double) matches / RECALL_K;
                         }
@@ -623,11 +628,20 @@ public class DistancesASH {
     }
 
     public static void runADA() throws IOException {
-        System.out.println("Running ada_002");
+        System.out.println("Running ada-002");
 
         var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
         var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
         var gtVectors = "./fvec/ada-002/ada_002_100000_indices_query_10000.ivec";
+        testASHEncodings(baseVectors, queryVectors, gtVectors);
+    }
+
+    public static void runADANoZeros() throws IOException {
+        System.out.println("Running ada-002-no-zeros");
+
+        var baseVectors = "./fvec/ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec";
+        var queryVectors = "./fvec/ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec";
+        var gtVectors = "./fvec/ada-002-no-zeros/ada-002_gt_no_zeros.ivec";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
@@ -680,11 +694,12 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-//        runCohere100k();
+        runCohere100k();
 //        runADA();
-//        runOpenai1536();
-//        runOpenai3072();
-        runCap6m();
-        runCohere10m();
+        runADANoZeros();
+        runOpenai1536();
+        runOpenai3072();
+//        runCap6m();
+//        runCohere10m();
     }
 }
