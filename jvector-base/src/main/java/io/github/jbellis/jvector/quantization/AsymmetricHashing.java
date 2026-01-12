@@ -372,15 +372,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
-        if ((payloadBits & 63) != 0) {
-            throw new IllegalArgumentException(
-                    "Invalid encodedBits=" + encodedBits +
-                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
-                            "for aligned binary payload. " +
-                            "Got payloadBits=" + payloadBits +
-                            " (headerBits=" + headerBits + ")."
-            );
-        }
+//        if ((payloadBits & 63) != 0) {
+//            throw new IllegalArgumentException(
+//                    "Invalid encodedBits=" + encodedBits +
+//                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
+//                            "for aligned binary payload. " +
+//                            "Got payloadBits=" + payloadBits +
+//                            " (headerBits=" + headerBits + ")."
+//            );
+//        }
 
         if (payloadBits > originalDim) {
             throw new IllegalArgumentException(
@@ -999,56 +999,78 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /**
      * RANDOM (untrained) Stiefel initialization.
-     * Generates a random orthonormal projection from R^originalDim → R^quantizedDim
-     * by sampling a Gaussian matrix and orthonormalizing via QR decomposition.
-     * A deterministic sign normalization is applied so results are reproducible
-     * across runs and linear algebra backends.
-     * @param originalDim dimensionality of the input vectors
-     * @param quantizedDim dimensionality of the binary embedding
-     * @param rng random number generator
+     *
+     * <p>Samples a Gaussian matrix G ∈ R^{D×d} and computes its polar factor
+     * W = U·Vᵀ via a thin SVD (G = U·S·Vᵀ). The resulting W has orthonormal
+     * columns (WᵀW = I) and can be used as an orthonormal projection matrix
+     * (e.g., y = Wᵀx maps R^D → R^d).
+     *
+     * <p>Applies a deterministic per-column sign alignment to reduce SVD sign
+     * ambiguity by flipping columns of W to be positively correlated with the
+     * corresponding columns of G.
+     *
+     * @param D dimensionality of the input vectors
+     * @param d dimensionality of the projected (embedding) space
+     * @param rng random number generator used to sample G
+     * @return a {@link StiefelTransform} containing W ∈ R^{D×d} with orthonormal columns
+     * @throws IllegalArgumentException if d <= 0 or d > D
+     * @throws RuntimeException if the native SVD fails
      */
-    public static StiefelTransform runWithoutTraining(int originalDim,
-                                                      int quantizedDim,
-                                                      Random rng) {
-
-        if (quantizedDim <= 0 || quantizedDim > originalDim) {
-            throw new IllegalArgumentException(
-                    "Invalid quantizedDim=" + quantizedDim +
-                            " for originalDim=" + originalDim
-            );
+    public static StiefelTransform runWithoutTraining(int D, int d, Random rng) {
+        if (d <= 0 || d > D) {
+            throw new IllegalArgumentException("Invalid d=" + d + " for D=" + D);
         }
 
-        // Sample Gaussian matrix G ∈ R^{originalDim × quantizedDim}
-        double[][] gaussian = new double[originalDim][quantizedDim];
-        for (int i = 0; i < originalDim; i++) {
-            for (int j = 0; j < quantizedDim; j++) {
-                gaussian[i][j] = rng.nextGaussian();
+        // Sample Gaussian matrix G [D x d]
+        // Using a 1D array for native speed, then wrapping it
+        double[] gData = new double[D * d];
+        for (int i = 0; i < gData.length; i++) {
+            gData[i] = rng.nextGaussian();
+        }
+        RealMatrix G = new Array2DRowRealMatrix(deserializeColumnMajor(gData, D, d), false);
+
+        // Perform Thin SVD: G = U S VT
+        // We need U [D x d] and VT [d x d]
+        double[] u = new double[D * d];
+        double[] vt = new double[d * d];
+        double[] s = new double[d];
+        intW info = new intW(0);
+
+        // Workspace query for dgesvd
+        double[] workQuery = new double[1];
+        LAPACK.getInstance().dgesvd("S", "S", D, d, gData, D, s, u, D, vt, d, workQuery, -1, info);
+        double[] work = new double[(int) workQuery[0]];
+
+        // Execute dgesvd with Job "S" (Thin SVD)
+        LAPACK.getInstance().dgesvd("S", "S", D, d, gData, D, s, u, D, vt, d, work, work.length, info);
+
+        if (info.val != 0) {
+            throw new RuntimeException("Native SVD failed with info=" + info.val);
+        }
+
+        // Compute W = U @ VT [D x d]
+        // This is the Polar Decomposition (nearest orthonormal matrix to G)
+        double[] wData = new double[D * d];
+        BLAS.getInstance().dgemm("N", "N", D, d, d, 1.0, u, D, vt, d, 0.0, wData, D);
+
+        RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wData, D, d), false);
+
+        // Sign Alignment (Crucial for ASH/Random bits)
+        // To ensure the "direction" of our bits matches the Gaussian seeds,
+        // we flip columns of W so they are positively correlated with G.
+        for (int j = 0; j < d; j++) {
+            double dot = 0;
+            for (int i = 0; i < D; i++) {
+                dot += W.getEntry(i, j) * G.getEntry(i, j);
             }
-        }
-
-        RealMatrix G = MatrixUtils.createRealMatrix(gaussian);
-
-        // QR decomposition: G = Q R
-        QRDecomposition qr = new QRDecomposition(G);
-
-        // Commons Math returns full Q (m×m). We need thin Q (m×n).
-        RealMatrix Qfull = qr.getQ();  // originalDim × originalDim
-        RealMatrix Q = Qfull.getSubMatrix(0, originalDim - 1, 0, quantizedDim - 1); // originalDim × quantizedDim
-
-        RealMatrix R = qr.getR(); // originalDim × quantizedDim
-
-        // Normalize QR sign ambiguity for determinism (RANDOM only)
-        int diag = Math.min(R.getRowDimension(), R.getColumnDimension()); // == quantizedDim
-        for (int j = 0; j < diag; j++) {
-            if (R.getEntry(j, j) < 0.0) {
-                for (int i = 0; i < Q.getRowDimension(); i++) {
-                    Q.setEntry(i, j, -Q.getEntry(i, j));
+            if (dot < 0.0) {
+                for (int i = 0; i < D; i++) {
+                    W.setEntry(i, j, -W.getEntry(i, j));
                 }
             }
         }
 
-        // W := Q (originalDim × quantizedDim)
-        return new StiefelTransform(Q);
+        return new StiefelTransform(W);
     }
 
     @Override
@@ -1607,52 +1629,52 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     private static RealMatrix orthogonalize(RealMatrix m) {
-        int rows = m.getRowDimension();
-        int cols = m.getColumnDimension();
+        int rows = m.getRowDimension(); // D
+        int cols = m.getColumnDimension(); // d
+        int k = Math.min(rows, cols); // The rank for thin SVD
 
-        // Convert to column-major for Native LAPACK
+        // Move to column-major 1D array
         double[] a = serializeColumnMajor(m);
 
-        // Prepare output buffers
-        double[] u = new double[rows * rows];
-        double[] vt = new double[cols * cols];
-        double[] s = new double[Math.min(rows, cols)];
-
-        // int wrapper required....
+        // Prepare Thin-SVD buffers
+        // u: [rows * k] instead of [rows * rows]
+        // vt: [k * cols] instead of [cols * cols]
+        double[] u = new double[rows * k];
+        double[] vt = new double[k * cols];
+        double[] s = new double[k];
         intW info = new intW(0);
 
-        // LAPACK Workspace (Required for dgesvd): Pass -1 for lwork and a 1-element array for work
+        // Workspace Query
         double[] workQuery = new double[1];
         LAPACK.getInstance().dgesvd(
-                "A", "A", rows, cols, a, rows, s, u, rows, vt, cols,
+                "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
                 workQuery, -1, info
         );
 
-        // Extract the optimal lwork and allocate the real workspace
         int lwork = (int) workQuery[0];
         double[] work = new double[lwork];
 
-        // Native SVD call
+        // Actual Thin-SVD call (Job "S")
         LAPACK.getInstance().dgesvd(
-                "A", "A",     // Compute all columns of U and all rows of VT
-                rows, cols,   // Matrix dimensions
-                a, rows,      // Input matrix and its leading dimension
-                s,            // Output singular values
-                u, rows,      // Output U and its leading dimension
-                vt, cols,     // Output VT and its leading dimension
-                work, lwork,  // Workspace
-                info          // Success/Fail code
+                "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
+                work, lwork, info
         );
 
         if (info.val != 0) {
             throw new RuntimeException("LAPACK dgesvd failed with info=" + info.val);
         }
 
-        // Convert back to Commons Math
-        RealMatrix U = new Array2DRowRealMatrix(deserializeColumnMajor(u, rows, rows), false);
-        RealMatrix VT = new Array2DRowRealMatrix(deserializeColumnMajor(vt, cols, cols), false);
+        // Native Multiplication: Result = U @ VT
+        // Using dgemm here)
+        double[] resultData = new double[rows * cols];
+        BLAS.getInstance().dgemm(
+                "N", "N", rows, cols, k,
+                1.0, u, rows,  // A = u, lda = rows
+                vt, k,         // B = vt, ldb = k
+                0.0, resultData, rows // C = resultData, ldc = rows
+        );
 
-        return U.multiply(VT);
+        return new Array2DRowRealMatrix(deserializeColumnMajor(resultData, rows, cols), false);
     }
 
     /** Converts an Apache Commons RealMatrix to a column-major 1D array for LAPACK. */
@@ -1660,9 +1682,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int rows = m.getRowDimension();
         int cols = m.getColumnDimension();
         double[] data = new double[rows * cols];
+
+        // Accept RealMatrix double[][] implementation
+        double[][] raw = m.getData();
+
         for (int c = 0; c < cols; c++) {
+            int colOffset = c * rows;
             for (int r = 0; r < rows; r++) {
-                data[c * rows + r] = m.getEntry(r, c);
+                data[colOffset + r] = raw[r][c];
             }
         }
         return data;
@@ -1672,13 +1699,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static double[][] deserializeColumnMajor(double[] data, int rows, int cols) {
         double[][] matrix = new double[rows][cols];
         for (int c = 0; c < cols; c++) {
+            int colOffset = c * rows;
             for (int r = 0; r < rows; r++) {
-                matrix[r][c] = data[c * rows + r];
+                matrix[r][c] = data[colOffset + r];
             }
         }
         return matrix;
     }
-
     /**
      * Elementwise sign producing +/-1 (no zeros), consistent with ASH encoding convention:
      * bit=1 iff projection > 0, else bit=0.
