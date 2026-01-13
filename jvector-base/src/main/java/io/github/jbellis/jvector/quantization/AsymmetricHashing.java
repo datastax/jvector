@@ -43,6 +43,16 @@ import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.SingularValueDecomposition;
 import org.netlib.util.intW;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+
+import java.io.BufferedOutputStream;
+import java.io.FileOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
 /**
@@ -246,7 +256,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
                                                int optimizer,
                                                int encodedBits,
-                                               int landmarkCount) {
+                                               int landmarkCount) throws IOException {
 
         final int quantizedDim = encodedBits - HEADER_BITS;
 
@@ -265,20 +275,37 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // payload bits are always 64-bit aligned by validateEncodedBits()
         validateEncodedBits(encodedBits, HEADER_BITS, originalDim);
 
-        // NOTE: points are treated as read-only by KMeansPlusPlusClusterer.  Materialize once.
+        // NOTE: points are treated as read-only by KMeansPlusPlusClusterer.
+        // Materialize and L2-normalize points
         VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
         for (int i = 0; i < ravvCopy.size(); i++) {
-            points[i] = ravvCopy.getVector(i);
+            VectorFloat<?> v = ravvCopy.getVector(i).copy(); // copy to avoid mutating original source
+            float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
+            if (norm > 1e-10f) {
+                VectorUtil.scale(v, 1.0f / norm);
+            }
+            points[i] = v;
         }
 
         VectorFloat<?>[] landmarks;
         if (landmarkCount == 1) {
-            // Mean centroid
-            VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
+            double[] muAccumulator = new double[originalDim];
+
+            // Accumulate in double precision
             for (int i = 0; i < points.length; i++) {
-                VectorUtil.addInPlace(mu0, points[i]);
+                VectorFloat<?> p = points[i];
+                for (int d = 0; d < originalDim; d++) {
+                    muAccumulator[d] += p.get(d);
+                }
             }
-            VectorUtil.scale(mu0, 1.0f / points.length);
+
+            // Scale and materialize back into a float vector
+            VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
+            double invN = 1.0 / points.length;
+            for (int d = 0; d < originalDim; d++) {
+                mu0.set(d, (float) (muAccumulator[d] * invN));
+            }
+
             landmarks = new VectorFloat<?>[] { mu0 };
         } else {
             long kmStart = System.nanoTime();
@@ -305,8 +332,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
-        // Keep determinism consistent within ASH.  TODO define seed constant or remove.
-        final Random rng = new Random(42);
+        // Keep determinism consistent within ASH.  TODO explore more robust random initialization
+        final Random rng = new Random(103);
 
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
@@ -372,15 +399,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
-//        if ((payloadBits & 63) != 0) {
-//            throw new IllegalArgumentException(
-//                    "Invalid encodedBits=" + encodedBits +
-//                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
-//                            "for aligned binary payload. " +
-//                            "Got payloadBits=" + payloadBits +
-//                            " (headerBits=" + headerBits + ")."
-//            );
-//        }
+        if ((payloadBits & 63) != 0) {
+            throw new IllegalArgumentException(
+                    "Invalid encodedBits=" + encodedBits +
+                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
+                            "for aligned binary payload. " +
+                            "Got payloadBits=" + payloadBits +
+                            " (headerBits=" + headerBits + ")."
+            );
+        }
 
         if (payloadBits > originalDim) {
             throw new IllegalArgumentException(
@@ -406,36 +433,39 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             int originalDim
     ) {
         final int C = landmarks.length;
-        final float[][] A = stiefelTransform.AFloat; // [d][D]
-
-        final var vecUtil =
-                io.github.jbellis.jvector.vector.VectorizationProvider
-                        .getInstance()
-                        .getVectorUtilSupport();
+        // Use a double-precision matrix for the projection
+        final double[][] A = stiefelTransform.AData; // [d][D]
 
         final float[][] landmarkProj = new float[C][quantizedDim];
         final float[] landmarkProjSum = new float[C];
 
-        final float[] muArr = new float[originalDim];
+        // Materialize μ as double[] to maintain precision during the dot product
+        final double[] muArr = new double[originalDim];
 
         for (int c = 0; c < C; c++) {
             VectorFloat<?> mu = landmarks[c];
 
-            // materialize μ once
             for (int i = 0; i < originalDim; i++) {
                 muArr[i] = mu.get(i);
             }
 
-            float sum = 0f;
+            double totalSum = 0.0;
             float[] proj = landmarkProj[c];
 
             for (int j = 0; j < quantizedDim; j++) {
-                float v = vecUtil.ashDotRow(A[j], muArr);
-                proj[j] = v;
-                sum += v;
+                double rowDot = 0.0;
+                double[] Arow = A[j];
+
+                // Double-precision dot product
+                for (int k = 0; k < originalDim; k++) {
+                    rowDot += Arow[k] * muArr[k];
+                }
+
+                proj[j] = (float) rowDot;
+                totalSum += rowDot;
             }
 
-            landmarkProjSum[c] = sum;
+            landmarkProjSum[c] = (float) totalSum;
         }
 
         return new LandmarkProjections(landmarkProj, landmarkProjSum);
@@ -1037,12 +1067,16 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         intW info = new intW(0);
 
         // Workspace query for dgesvd
+        double[] a = gData.clone(); // <- preserve original G for the real factorization
         double[] workQuery = new double[1];
-        LAPACK.getInstance().dgesvd("S", "S", D, d, gData, D, s, u, D, vt, d, workQuery, -1, info);
+        LAPACK.getInstance().dgesvd("S", "S", D, d, a, D, s, u, D, vt, d, workQuery, -1, info);
+        if (info.val != 0) throw new RuntimeException("SVD workspace query failed info=" + info.val);
+
         double[] work = new double[(int) workQuery[0]];
 
+        a = gData.clone(); // <- ensure the real call sees the original Gaussian matrix
         // Execute dgesvd with Job "S" (Thin SVD)
-        LAPACK.getInstance().dgesvd("S", "S", D, d, gData, D, s, u, D, vt, d, work, work.length, info);
+        LAPACK.getInstance().dgesvd("S", "S", D, d, a, D, s, u, D, vt, d, work, work.length, info);
 
         if (info.val != 0) {
             throw new RuntimeException("Native SVD failed with info=" + info.val);
@@ -1054,21 +1088,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         BLAS.getInstance().dgemm("N", "N", D, d, d, 1.0, u, D, vt, d, 0.0, wData, D);
 
         RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wData, D, d), false);
-
-        // Sign Alignment (Crucial for ASH/Random bits)
-        // To ensure the "direction" of our bits matches the Gaussian seeds,
-        // we flip columns of W so they are positively correlated with G.
-        for (int j = 0; j < d; j++) {
-            double dot = 0;
-            for (int i = 0; i < D; i++) {
-                dot += W.getEntry(i, j) * G.getEntry(i, j);
-            }
-            if (dot < 0.0) {
-                for (int i = 0; i < D; i++) {
-                    W.setEntry(i, j, -W.getEntry(i, j));
-                }
-            }
-        }
 
         return new StiefelTransform(W);
     }
@@ -1361,10 +1380,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // PCA basis M = V[:, :d] where X = U S V^T
         RealMatrix X = new Array2DRowRealMatrix(xHdNorm, false); // [N×D]
         logProgress("\t[stage] Starting Native SVD for PCA...");
-        // We only need V, so we tell LAPACK to skip U to save massive amounts of time/memory
-        RealMatrix V = computeNativeV(X);
+        // We only need VT, so we tell LAPACK to skip U to save massive amounts of time/memory
+        RealMatrix Vt = computeNativeVt(X);
         logProgress("\t[stage] Completed Native SVD...");
-        RealMatrix M = V.getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
+        RealMatrix M = Vt.transpose().getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
 
         // Early stopping based on stabilized binary codes (subject to max iterations)
         RealMatrix prevXbin = null;
@@ -1530,12 +1549,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return new Array2DRowRealMatrix(m, false);
     }
 
-    /** Orthonormal factor: U @ V^T from SVD(M). */
-//    private static RealMatrix orthogonalize(RealMatrix m) {
-//        SingularValueDecomposition svd = new SingularValueDecomposition(m);
-//        return svd.getU().multiply(svd.getVT());
-//    }
-
     // Basic dgemm routine.
     private static RealMatrix nativeMultiply(RealMatrix A, RealMatrix B) {
         int m = A.getRowDimension();
@@ -1564,16 +1577,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     // Uses the dgesvd routine but tells LAPACK to skip the U matrix (for PCA).  Saves time....
-    private static RealMatrix computeNativeV(RealMatrix x) {
+    private static RealMatrix computeNativeVt(RealMatrix x) {
         int rows = x.getRowDimension();
         int cols = x.getColumnDimension();
-        double[] a = serializeColumnMajor(x);
+        double[] a0 = serializeColumnMajor(x);
 
         double[] s = new double[Math.min(rows, cols)];
         double[] vt = new double[cols * cols]; // Right singular vectors
         intW info = new intW(0);
 
-        // Query optimal workspace size (standard LAPACK practice)
+        // Query optimal workspace size (standard LAPACK practice); use a copy
+        double[] a = a0.clone();
         double[] workQuery = new double[1];
         LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, workQuery, -1, info);
 
@@ -1581,6 +1595,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         double[] work = new double[lwork];
 
         // Actual call: "N" = No U matrix, "A" = All columns of V^T
+        a = a0.clone(); // Use a fresh copy again
         LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, work, lwork, info);
 
         if (info.val != 0) {
@@ -1634,7 +1649,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int k = Math.min(rows, cols); // The rank for thin SVD
 
         // Move to column-major 1D array
-        double[] a = serializeColumnMajor(m);
+        double[] a0 = serializeColumnMajor(m);
 
         // Prepare Thin-SVD buffers
         // u: [rows * k] instead of [rows * rows]
@@ -1645,6 +1660,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         intW info = new intW(0);
 
         // Workspace Query
+        double[] a = a0.clone(); // Make a copy
         double[] workQuery = new double[1];
         LAPACK.getInstance().dgesvd(
                 "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
@@ -1655,6 +1671,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         double[] work = new double[lwork];
 
         // Actual Thin-SVD call (Job "S")
+        a = a0.clone(); // Fresh copy again
         LAPACK.getInstance().dgesvd(
                 "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
                 work, lwork, info
@@ -1708,7 +1725,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
     /**
      * Elementwise sign producing +/-1 (no zeros), consistent with ASH encoding convention:
-     * bit=1 iff projection > 0, else bit=0.
+     * bit=1 iff projection > 0, else bit=-1.
      */
     private static RealMatrix sign01(RealMatrix m) {
         final int r = m.getRowDimension();
