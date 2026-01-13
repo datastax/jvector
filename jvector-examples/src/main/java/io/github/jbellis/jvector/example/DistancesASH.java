@@ -164,17 +164,17 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = dimension / 4; // 384; // (dimension / 4) + HEADER_BITS; // (dimension / 4) + HEADER_BITS;
+        int encodedBits = (dimension / 2) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
-//        if ((payloadBits & 63) != 0) {
-//            throw new IllegalArgumentException(
-//                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
-//                            "Got payloadBits=" + payloadBits +
-//                            " (encodedBits=" + encodedBits +
-//                            ", HEADER_BITS=" + HEADER_BITS + ")"
-//            );
-//        }
+        if ((payloadBits & 63) != 0) {
+            throw new IllegalArgumentException(
+                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
+                            "Got payloadBits=" + payloadBits +
+                            " (encodedBits=" + encodedBits +
+                            ", HEADER_BITS=" + HEADER_BITS + ")"
+            );
+        }
 
         System.out.println(
                 "\toriginalDim = " + dimension +
