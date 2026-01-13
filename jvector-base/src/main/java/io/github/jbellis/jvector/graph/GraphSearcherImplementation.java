@@ -32,6 +32,7 @@ import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.GrowableLongHeap;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
@@ -160,7 +161,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
                                   Bits acceptOrds)
     {
         var sf = scoreProvider.primaryScoreFunction();
-        sf.fixFirstArgument(queryVector);
+        sf.fixQuery(queryVector);
 
         initializeInternal(sf,entry, acceptOrds);
 
@@ -393,7 +394,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
         view.close();
     }
 
-    private static class CachingReranker implements SimilarityFunction.Exact {
+    private class CachingReranker implements SimilarityFunction<Secondary> {
         // this cache never gets cleared out (until a new search reinitializes it),
         // but we expect resume() to be called at most a few times so it's fine
         private final Int2ObjectHashMap<Float> cachedScores;
@@ -406,24 +407,49 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
             rerankCalls = 0;
         }
 
-        @Override
-        public void fixFirstArgument(VectorRepresentation.Exact vec) {
-
-        }
-
-        @Override
-        public float similarityTo(int node2) {
-            if (cachedScores.containsKey(node2)) {
-                return cachedScores.get(node2);
-            }
-            rerankCalls++;
-            float score = scoreProvider.secondaryScoreFunction().similarityTo(node2);
-            cachedScores.put(node2, Float.valueOf(score));
-            return score;
-        }
-
         public int getRerankCalls() {
             return rerankCalls;
+        }
+
+        @Override
+        public boolean isExact() {
+            // TODO complete
+            return false;
+        }
+
+        @Override
+        public void fixQuery(VectorFloat<?> query) {
+            // TODO complete
+        }
+
+        @Override
+        public float similarityTo(Secondary other) {
+            // TODO complete
+            return 0;
+        }
+
+        @Override
+        public float similarity(Secondary vec1, Secondary vec2) {
+            // TODO complete
+            return 0;
+        }
+
+        @Override
+        public VectorSimilarityFunction getSimilarityFunction() {
+            // TODO complete
+            return null;
+        }
+
+        @Override
+        public SimilarityFunction<Secondary> copy() {
+            // TODO complete
+            return null;
+        }
+
+        @Override
+        public <Vec2 extends VectorRepresentation> boolean compatible(SimilarityFunction<Vec2> other) {
+            // TODO complete
+            return false;
         }
     }
 }
