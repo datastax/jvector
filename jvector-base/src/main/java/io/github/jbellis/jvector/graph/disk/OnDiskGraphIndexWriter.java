@@ -68,6 +68,7 @@ import java.util.function.IntFunction;
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     private final long startOffset;
     private volatile boolean useParallelWrites = false;
+    private volatile boolean featuresPreWritten = false;
     private final Path filePath; // Required for parallel writes
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;
@@ -176,6 +177,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         }
 
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
+        featuresPreWritten = true;
     }
 
     private long featureOffsetForOrdinal(int ordinal) {
@@ -270,7 +272,8 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
                 ordinalMapper,
                 inlineFeatures,
                 featureStateSuppliers,
-                baseOffset
+                baseOffset,
+                featuresPreWritten
             );
 
             // Update maxOrdinalWritten

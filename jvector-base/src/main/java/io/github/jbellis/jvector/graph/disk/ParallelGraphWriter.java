@@ -166,12 +166,14 @@ class ParallelGraphWriter implements AutoCloseable {
      * @param inlineFeatures the inline features to write
      * @param featureStateSuppliers suppliers for feature state
      * @param baseOffset the file offset where L0 records start
+     * @param featuresPreWritten whether features have already been written via writeInline
      * @throws IOException if an IO error occurs
      */
     public void writeL0Records(OrdinalMapper ordinalMapper,
                                List<Feature> inlineFeatures,
                                Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
-                               long baseOffset) throws IOException {
+                               long baseOffset,
+                               boolean featuresPreWritten) throws IOException {
         int maxOrdinal = ordinalMapper.maxOrdinal();
         int totalOrdinals = maxOrdinal + 1;
 
@@ -211,7 +213,8 @@ class ParallelGraphWriter implements AutoCloseable {
                         featureStateSuppliers,
                         recordSize,
                         baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                        buffer
+                        buffer,
+                        featuresPreWritten
                 );
 
                 return task.call();
