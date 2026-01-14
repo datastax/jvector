@@ -16,10 +16,13 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+
+import java.io.IOException;
 
 public abstract class CompressorParameters {
     public static final CompressorParameters NONE = new NoCompressionParameters();
@@ -98,6 +101,37 @@ public abstract class CompressorParameters {
         @Override
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             return null;
+        }
+    }
+    public static class ASHParameters extends CompressorParameters {
+        private final int optimizer;
+        private final int encodedBits;
+        private final int landmarkCount;
+
+        public ASHParameters(int optimizer, int encodedBits, int landmarkCount) {
+            this.optimizer = optimizer;
+            this.encodedBits = encodedBits;
+            this.landmarkCount = landmarkCount;
+        }
+
+        @Override
+        public VectorCompressor<?> computeCompressor(DataSet ds) {
+            try {
+                return AsymmetricHashing.initialize(ds.getBaseRavv(), optimizer, encodedBits, landmarkCount);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public String idStringFor(DataSet ds) {
+            return String.format("ASH_%s_opt%d_bits%d_C%d", ds.getName(), optimizer, encodedBits, landmarkCount);
+        }
+
+        // TODO set to true for production after debug is complete.
+        @Override
+        public boolean supportsCaching() {
+            return false;
         }
     }
 }

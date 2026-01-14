@@ -37,7 +37,6 @@ import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.Random;
 import org.apache.commons.math3.linear.MatrixUtils;
-import org.apache.commons.math3.linear.QRDecomposition;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.apache.commons.math3.linear.SingularValueDecomposition;
@@ -534,22 +533,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             landmarks[c] = vectorTypeSupport.readFloatVector(in, dim);
         }
 
-        // NOTE: StiefelTransform loading will be added in Step 2.
-        // For now, construct a placeholder or re-run the RANDOM initializer.
-        StiefelTransform stiefelTransform;
-
-        if (optimizer == RANDOM) {
-            // Deterministic re-construction for now
-            stiefelTransform = runWithoutTraining(
-                    originalDimension,
-                    quantizedDim,
-                    new Random(42)
-            );
-        } else {
-            throw new IllegalArgumentException(
-                    "ASH optimizer " + optimizer + " requires learned transform; not yet supported in load()"
-            );
-        }
+        // Load StiefelTransform (required for ALL optimizers, including ITQ/LANDING)
+        StiefelTransform stiefelTransform = readStiefelTransform(in, quantizedDim, originalDimension);
 
         LandmarkProjections lp =
                 computeLandmarkProjections(
@@ -600,7 +585,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             vectorTypeSupport.writeFloatVector(out, landmarks[c]);
         }
 
-        // NOTE: stiefelTransform serialization will be added later
+        // Stiefel transform serialization (required for caching and non-RANDOM optimizers):
+        // Serialize A = W^T in float precision as a [d][D] row-major matrix.
+        writeStiefelTransform(out, stiefelTransform);
     }
 
     // ---------------------------------------------------------------------
@@ -1738,6 +1725,57 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
         return new Array2DRowRealMatrix(out, false);
+    }
+
+    private static void writeStiefelTransform(DataOutput out, StiefelTransform st) throws IOException {
+        // Serialize A = W^T in float precision as a [d][D] row-major matrix.
+        // This keeps the format compact and matches the encoding/scoring fast paths.
+        out.writeInt(st.rows);
+        out.writeInt(st.cols);
+
+        for (int i = 0; i < st.rows; i++) {
+            float[] row = st.AFloat[i];
+            if (row.length != st.cols) {
+                throw new IOException("Invalid StiefelTransform AFloat row length: " + row.length + " != " + st.cols);
+            }
+            for (int j = 0; j < st.cols; j++) {
+                out.writeFloat(row[j]);
+            }
+        }
+    }
+
+    private static StiefelTransform readStiefelTransform(RandomAccessReader in, int expectedRows, int expectedCols) throws IOException {
+        int rows = in.readInt();
+        int cols = in.readInt();
+
+        if (rows != expectedRows) {
+            throw new IOException("StiefelTransform rows mismatch: expected " + expectedRows + ", got " + rows);
+        }
+        if (cols != expectedCols) {
+            throw new IOException("StiefelTransform cols mismatch: expected " + expectedCols + ", got " + cols);
+        }
+
+        // Read A = W^T as [rows][cols] (row-major) in float precision.
+        float[][] aFloat = new float[rows][cols];
+        for (int i = 0; i < rows; i++) {
+            float[] row = aFloat[i];
+            for (int j = 0; j < cols; j++) {
+                row[j] = in.readFloat();
+            }
+        }
+
+        // Reconstruct W [D x d] so we can build StiefelTransform(W)
+        // W[j][i] = A[i][j]
+        double[][] wData = new double[cols][rows];
+        for (int i = 0; i < rows; i++) {
+            float[] aRow = aFloat[i];
+            for (int j = 0; j < cols; j++) {
+                wData[j][i] = aRow[j];
+            }
+        }
+
+        RealMatrix W = new Array2DRowRealMatrix(wData, false);
+        return new StiefelTransform(W);
     }
 
     @Override

@@ -60,6 +60,38 @@ public class Compression {
                 };
             case "BQ":
                 return ds -> new CompressorParameters.BQParameters();
+            case "ASH":
+                return ds -> {
+                    if (parameters == null) {
+                        throw new IllegalArgumentException("ASH requires parameters: encodedBits, optimizer, landmarkCount");
+                    }
+
+                    int encodedBits = Integer.parseInt(parameters.get("encodedBits"));
+                    int landmarkCount = Integer.parseInt(parameters.getOrDefault("landmarkCount", "1"));
+
+                    // optimizer can be numeric or name (RANDOM/ITQ/LANDING)
+                    String optStr = parameters.get("optimizer");
+                    if (optStr == null) {
+                        throw new IllegalArgumentException("ASH requires 'optimizer' parameter");
+                    }
+
+                    int optimizer;
+                    switch (optStr.trim().toUpperCase()) {
+                        case "RANDOM":
+                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.RANDOM;
+                            break;
+                        case "ITQ":
+                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.ITQ;
+                            break;
+                        case "LANDING":
+                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.LANDING;
+                            break;
+                        default:
+                            optimizer = Integer.parseInt(optStr);
+                    }
+
+                    return new CompressorParameters.ASHParameters(optimizer, encodedBits, landmarkCount);
+                };
             default:
                 throw new IllegalArgumentException("Unsupported compression type: " + type);
 

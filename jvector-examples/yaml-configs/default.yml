@@ -3,23 +3,28 @@ version: 6
 dataset: default
 
 construction:
-  outDegree: [32]
-  efConstruction: [100]
+  outDegree: [64]
+  efConstruction: [200]
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
-    - type: PQ
+#    - type: PQ
+#      parameters:
+#        m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+#        # mFactor: 8
+#        # k: 256 # optional parameter. By default, k=256
+#        centerData: No
+#        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+    - type: ASH
       parameters:
-        m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+        encodedBits: "1544"
+        optimizer: "ITQ"
+        landmarkCount: "1"
   reranking:
-    - NVQ
-  useSavedIndexIfExists: Yes
+    - FP
+  useSavedIndexIfExists: No
 
 search:
   topKOverquery:
@@ -27,12 +32,17 @@ search:
     100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
-    - type: PQ
+#    - type: PQ
+#      parameters:
+#        m: 192
+#        # k: 256 # optional parameter. By default, k=256
+#        centerData: No
+#        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+    - type: ASH
       parameters:
-        m: 192
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+        encodedBits: "1544"
+        optimizer: "ITQ"
+        landmarkCount: "1"
   benchmarks: # full option set, if the whole "benchmarks" section is not specified, a default set will be used
     throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
     latency: [ AVG ] # additional options: [ AVG, STD, P999 ]

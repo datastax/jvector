@@ -100,8 +100,8 @@ public class DistancesASH {
         final int landmarkCount = 1;
 
         // Define the benchmark size
-        int maxQueries = 1_000;
-        int maxVectors = 1_000_000;
+        int maxQueries = 10_000;
+        int maxVectors = 10_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -164,7 +164,7 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = (dimension / 2) + HEADER_BITS;
+        int encodedBits = (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
         if ((payloadBits & 63) != 0) {
@@ -694,12 +694,12 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
+//        runCohere100k();
 //        runADA();
-        runADANoZeros();
-        runOpenai1536();
-        runOpenai3072();
-//        runCap6m();
-//        runCohere10m();
+//        runADANoZeros();
+//        runOpenai1536();
+//        runOpenai3072();
+        runCap6m();
+        runCohere10m();
     }
 }
