@@ -32,11 +32,12 @@ public enum GraphIndexWriterTypes {
      */
     ON_DISK_SEQUENTIAL,
 
+    RANDOM_ACCESS,
     /**
      * Parallel on-disk writer that uses asynchronous I/O for improved throughput.
      * Builds records in parallel across multiple threads and writes them
      * asynchronously using AsynchronousFileChannel.
      * Requires a Path to be provided for async file channel access.
      */
-    ON_DISK_PARALLEL
+    RANDOM_ACCESS_PARALLEL
 }
