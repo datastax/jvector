@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -226,6 +228,114 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider diversityProviderFor(int node1) {
+                return searchProviderFor(node1);
+            }
+        };
+    }
+
+    /**
+     * Returns a BSP that performs approximate score comparisons using the given ASHVectors.
+     *
+     * <p><b>Construction (node-node) scoring:</b> Uses symmetric ASH–ASH dot-product approximation
+     * computed from the encoded binary payload + per-vector header fields (scale, offset).
+     *
+     * <p><b>Query (vector-node) scoring:</b> Delegates to ASHVectors' query-time score function
+     * (asymmetric float query → ASH vector).
+     *
+     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark) and
+     * {@link VectorSimilarityFunction#DOT_PRODUCT}.
+     */
+    static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
+        if (vsf != VectorSimilarityFunction.DOT_PRODUCT) {
+            throw new UnsupportedOperationException("ASH build scoring supports DOT_PRODUCT only");
+        }
+
+        final AsymmetricHashing ash = ashv.getCompressor();
+        if (ash.landmarkCount != 1) {
+            throw new IllegalArgumentException("ASH build scoring requires landmarkCount==1, got " + ash.landmarkCount);
+        }
+
+        final int d = ash.quantizedDim;
+
+        // ||mu||^2 is a constant (C=1) for this scorer.
+        final float muNormSq = VectorUtil.dotProduct(ash.landmarks[0], ash.landmarks[0]);
+
+        return new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return false;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                // In the C=1 case, ASH uses the dataset mean as its single landmark.
+                // Return a copy so callers can't mutate ASH's internal landmark.
+                return ash.landmarks[0].copy();
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                // Query-time asymmetric scoring is already implemented by ASHVectors.
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf));
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+
+                final AsymmetricHashing.QuantizedVector v1 = ashv.get(node1);
+
+                return new DefaultSearchScoreProvider(new ScoreFunction() {
+                    @Override
+                    public boolean isExact() {
+                        return false;
+                    }
+
+                    @Override
+                    public float similarityTo(int node2) {
+                        final AsymmetricHashing.QuantizedVector v2 = ashv.get(node2);
+
+                        final long[] aBits = v1.binaryVector;
+                        final long[] bBits = v2.binaryVector;
+
+                        int matches = 0;
+
+                        int bitBase = 0;
+                        for (int w = 0; w < aBits.length && bitBase < d; w++, bitBase += 64) {
+                            long aw = aBits[w];
+                            long bw = bBits[w];
+
+                            // Defensive tail masking (should be unnecessary when d is 64-bit aligned)
+                            final int remaining = d - bitBase;
+                            if (remaining < 64) {
+                                final long mask = (remaining == 64) ? ~0L : ((1L << remaining) - 1L);
+                                aw &= mask;
+                                bw &= mask;
+                            }
+
+                            // matches = count of equal bits across positions (XNOR-popcount)
+                            matches += Long.bitCount(~(aw ^ bw));
+                        }
+
+                        // g(.) is sign-coded; with bits interpreted as {0,1} representing { -1, +1 } via s = 2b - 1:
+                        // <s_x, s_y> = 2*matches - d
+                        final float signDot = 2.0f * matches - (float) d;
+
+                        // Reconstruction (C=1):
+                        // <x,y> ≈ ||x-μ|| ||y-μ|| <tilde x, tilde y> + <x,μ> + <y,μ> - ||μ||^2
+                        //
+                        // with:
+                        //   scale = ||x-μ|| / sqrt(d)
+                        //   offset = <x,μ> - ||μ||^2
+                        // and decoder scaling f(z)=d^{-1/2}Az implies <tilde x, tilde y> ≈ (1/d)<g(tilde x), g(tilde y)>
+                        // so centered term becomes: scale_x * scale_y * <g_x, g_y>
+                        return (v1.scale * v2.scale) * signDot + v1.offset + v2.offset + muNormSq;
+                    }
+                });
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                // Keep search/diversity consistent for approximate scoring.
                 return searchProviderFor(node1);
             }
         };

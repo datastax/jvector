@@ -51,7 +51,7 @@ public class MultiFileDatasource {
         var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
         var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
         var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-        return DataSetUtils.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
+        return DataSetUtils.getScrubbedDataSet(name, VectorSimilarityFunction.DOT_PRODUCT, baseVectors, queryVectors, gtVectors);
     }
 
     public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{
@@ -95,6 +95,10 @@ public class MultiFileDatasource {
                                                             "wikipedia_squad/100k/text-embedding-3-small_1536_100000_base_vectors.fvec",
                                                             "wikipedia_squad/100k/text-embedding-3-small_1536_100000_query_vectors_10000.fvec",
                                                             "wikipedia_squad/100k/text-embedding-3-small_1536_100000_indices_query_10000.ivec"));
+        put("ada002-100k-no-zeros", new MultiFileDatasource("ada002-100k",
+                "ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec",
+                "ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec",
+                "ada-002-no-zeros/ada-002_gt_no_zeros.ivec"));
         put("ada002-100k", new MultiFileDatasource("ada002-100k",
                                                    "wikipedia_squad/100k/ada_002_100000_base_vectors.fvec",
                                                    "wikipedia_squad/100k/ada_002_100000_query_vectors_10000.fvec",
