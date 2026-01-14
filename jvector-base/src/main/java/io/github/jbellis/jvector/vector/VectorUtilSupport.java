@@ -263,6 +263,42 @@ public interface VectorUtilSupport {
   }
 
   /**
+   * Computes maskedAdd for a single vector stored in packed *by-vector* form.
+   * Returns:
+   *   maskedAdd = <tildeQ, b>
+   *
+   * packedBits layout:
+   *   packedBits[packedBase + w] is 64-bit word w for this vector.
+   *
+   * Default implementation is scalar bit-walk with a register accumulator.
+   * SIMD backends may override.
+   */
+  default float ashMaskedAddAllWords(
+          float[] tildeQ,
+          int d,
+          long[] packedBits,
+          int packedBase,  // ord * nWords (by-vector contiguous)
+          int nWords
+  ) {
+    float maskedAdd = 0f; // register accumulator (critical!)
+
+    for (int w = 0; w < nWords; w++) {
+      long word = packedBits[packedBase + w];
+      int baseDim = w * 64;
+
+      // Walk set bits (fast when sparse; matches your block fallback style)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+        if (idx < d) maskedAdd += tildeQ[idx];
+        word &= (word - 1);
+      }
+    }
+
+    return maskedAdd;
+  }
+
+  /**
    * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
    * For each lane in [0, blockLen), writes:
    *   outMaskedAdd[lane] = <tildeQ, b_lane>
