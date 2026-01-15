@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.FixedBitSet;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -64,7 +64,7 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private List<VectorFloat<?>> vectors = createRandomVectors(nVectors, dimension);
     private RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(vectors, dimension);
 
-    private VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+    private VectorSimilarityType similarityFunction = VectorSimilarityType.DOT_PRODUCT;
 
     private BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
     private GraphIndexBuilder builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, true);

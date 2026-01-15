@@ -16,8 +16,8 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
-    private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;
+    private final Map<VectorSimilarityType, VectorFloat<?>> codebookPartialSumsMap;
 
     /**
      * Construct an immutable PQVectors instance with the given ProductQuantization and compressed data chunks.
@@ -54,12 +54,12 @@ public class ImmutablePQVectors extends PQVectors {
         return vectorCount;
     }
 
-    private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
+    private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityType vsf) {
         return codebookPartialSumsMap.computeIfAbsent(vsf, pq::createCodebookPartialSums);
     }
 
     @Override
-    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityType similarityFunction) {
         final int subspaceCount = pq.getSubspaceCount();
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);

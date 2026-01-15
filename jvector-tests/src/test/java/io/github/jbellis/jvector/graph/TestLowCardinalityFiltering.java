@@ -31,7 +31,7 @@ import io.github.jbellis.jvector.graph.representations.RandomAccessVectorReprese
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
@@ -62,7 +62,7 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
         int dimensions = 16;
         int topK = 10;
 
-        VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
+        VectorSimilarityType similarityFunction = VectorSimilarityType.COSINE;
 
         // build index
         VectorFloat<?>[] vectors = TestVectorGraph.createRandomFloatVectors(nVectors, dimensions, R);
@@ -108,7 +108,7 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
      * Create "interesting" test parameters -- shouldn't match too many (we want to validate
      * that threshold code doesn't just crawl the entire graph) or too few (we might not find them)
      */
-    private float getRecall(RandomAccessVectorRepresentations ravv, Map<Boolean, BitSet> bitSets, VectorSimilarityFunction similarityFunction, VectorFloat<?> query, boolean queryClass, int topK, SearchResult result) {
+    private float getRecall(RandomAccessVectorRepresentations ravv, Map<Boolean, BitSet> bitSets, VectorSimilarityType similarityFunction, VectorFloat<?> query, boolean queryClass, int topK, SearchResult result) {
         var resultNodes = result.getNodes();
         assertEquals(topK, resultNodes.length);
 

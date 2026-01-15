@@ -17,9 +17,9 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -84,34 +84,6 @@ public abstract class BQVectors implements CompressedVectors {
         }
 
         return new ImmutableBQVectors(bq, compressedVectors);
-    }
-
-    @Override
-    public SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
-        return scoreFunctionFor(q, similarityFunction);
-    }
-
-    /**
-     * Note that `similarityFunction` is ignored, you always get Hamming distance similarity with BQ, which
-     * is a useful approximation for cosine distance and not really anything else.
-     */
-    @Override
-    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
-        var qBQ = compressedVectors[node1];
-
-        return node2 -> {
-            var vBQ = compressedVectors[node2];
-            return similarityBetween(qBQ, vBQ);
-        };
-    }
-
-    @Override
-    public SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
-        var qBQ = bq.encode(q);
-        return node2 -> {
-            var vBQ = compressedVectors[node2];
-            return similarityBetween(qBQ, vBQ);
-        };
     }
 
     public float similarityBetween(long[] encoded1, long[] encoded2) {

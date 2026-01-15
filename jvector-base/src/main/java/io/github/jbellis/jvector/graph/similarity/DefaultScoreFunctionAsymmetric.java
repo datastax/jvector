@@ -17,14 +17,14 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.vector.VectorRepresentation;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-public class DefaultScoreFunction implements SimilarityFunction<VectorFloat<?>> {
+public class DefaultScoreFunctionAsymmetric implements AsymmetricSimilarityFunction<VectorFloat<?>> {
     private VectorFloat<?> query;
-    private VectorSimilarityFunction vsf;
+    private VectorSimilarityType vsf;
 
-    public DefaultScoreFunction(VectorSimilarityFunction vsf) {
+    public DefaultScoreFunctionAsymmetric(VectorSimilarityType vsf) {
         query = null;
         this.vsf = vsf;
     }
@@ -50,17 +50,17 @@ public class DefaultScoreFunction implements SimilarityFunction<VectorFloat<?>> 
     }
 
     @Override
-    public VectorSimilarityFunction getSimilarityFunction() {
+    public VectorSimilarityType getSimilarityFunction() {
         return vsf;
     }
 
     @Override
-    public <Vec2 extends VectorRepresentation> boolean compatible(SimilarityFunction<Vec2> other) {
+    public <Vec2 extends VectorRepresentation> boolean compatible(AsymmetricSimilarityFunction<Vec2> other) {
         return vsf == other.getSimilarityFunction();
     }
 
     @Override
-    public SimilarityFunction<VectorFloat<?>> copy() {
-        return new DefaultScoreFunction(vsf);
+    public AsymmetricSimilarityFunction<VectorFloat<?>> copy() {
+        return new DefaultScoreFunctionAsymmetric(vsf);
     }
 }

@@ -24,7 +24,7 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.AbstractLongHeap;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
@@ -151,13 +151,14 @@ public class NodeQueue {
         return nodes;
     }
 
+    // TODO this method is out of place here
     /**
      * Rerank results and return the worst approximate score that made it into the topK.
      * The topK results will be placed into `reranked`, and the remainder into `unused`.
      * <p>
      * Only the best result or results whose approximate score is at least `rerankFloor` will be reranked.
      */
-    public float rerank(int topK, SimilarityFunction.Exact reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
+    public float rerank(int topK, AsymmetricSimilarityFunction.Exact reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
         // Rescore the nodes whose approximate score meets the floor.  Nodes that do not will be marked as -1
         int[] ids = new int[size()];
         float[] exactScores = new float[size()];

@@ -17,10 +17,10 @@ package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -47,7 +47,7 @@ import java.util.concurrent.TimeUnit;
 public class PQDistanceCalculationBenchmark {
     private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationBenchmark.class);
     private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private final VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+    private final VectorSimilarityType vsf = VectorSimilarityType.EUCLIDEAN;
 
     private List<VectorFloat<?>> vectors;
     private PQVectors pqVectors;
@@ -117,7 +117,7 @@ public class PQDistanceCalculationBenchmark {
 
         for (int q = 0; q < queryCount; q++) {
             for (int i = 0; i < vectorCount; i++) {
-                final SimilarityFunction sf = buildScoreProvider.diversityProviderFor(i).primaryScoreFunction();
+                final AsymmetricSimilarityFunction sf = buildScoreProvider.diversityProviderFor(i).primaryScoreFunction();
                 float similarity = sf.similarityTo(q);
                 totalSimilarity += similarity;
             }

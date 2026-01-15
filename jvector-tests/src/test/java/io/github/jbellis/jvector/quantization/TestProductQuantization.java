@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -171,7 +171,7 @@ public class TestProductQuantization extends RandomizedTest {
         for (int i = 0; i < vectors.length; i++) {
             pq.decode(cv.get(i), decodedScratch);
             if (VectorUtil.dotProduct(vectors[i], decodedScratch) >= T) {
-                loss += 1 - VectorSimilarityFunction.EUCLIDEAN.compare(vectors[i], decodedScratch);
+                loss += 1 - VectorSimilarityType.EUCLIDEAN.compare(vectors[i], decodedScratch);
             }
         }
         return loss;
@@ -423,7 +423,7 @@ public class TestProductQuantization extends RandomizedTest {
             pqm.encodeAndSet(ordinal, v);
         }
 
-        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+        for (VectorSimilarityType vsf : VectorSimilarityType.values()) {
             var sf = pqm.diversityFunctionFor(10, vsf);
 
             ImmutablePQVectors pqi = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), new ListRandomAccessVectorRepresentations(vectors, 384), ForkJoinPool.commonPool());

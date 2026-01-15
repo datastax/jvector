@@ -26,13 +26,13 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.GrowableLongHeap;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
@@ -186,7 +186,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
         approximateResults.clear();
     }
 
-    void initializeInternal(SimilarityFunction<Primary> similarityFunction, NodeAtLevel entry, Bits rawAcceptOrds) {
+    void initializeInternal(AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider();
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
@@ -199,7 +199,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
 
         // Start with entry point
         var vr = view.getPrimaryRepresentation(entry.node);
-        float score = similarityFunction.similarityTo(vr);
+        float score = asymmetricSimilarityFunction.similarityTo(vr);
         visited.add(entry.node);
         candidates.push(entry.node, score);
 
@@ -394,7 +394,7 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
         view.close();
     }
 
-    private class CachingReranker implements SimilarityFunction<Secondary> {
+    private class CachingReranker implements AsymmetricSimilarityFunction<Secondary> {
         // this cache never gets cleared out (until a new search reinitializes it),
         // but we expect resume() to be called at most a few times so it's fine
         private final Int2ObjectHashMap<Float> cachedScores;
@@ -435,19 +435,19 @@ public class GraphSearcherImplementation<Primary extends VectorRepresentation, S
         }
 
         @Override
-        public VectorSimilarityFunction getSimilarityFunction() {
+        public VectorSimilarityType getSimilarityFunction() {
             // TODO complete
             return null;
         }
 
         @Override
-        public SimilarityFunction<Secondary> copy() {
+        public AsymmetricSimilarityFunction<Secondary> copy() {
             // TODO complete
             return null;
         }
 
         @Override
-        public <Vec2 extends VectorRepresentation> boolean compatible(SimilarityFunction<Vec2> other) {
+        public <Vec2 extends VectorRepresentation> boolean compatible(AsymmetricSimilarityFunction<Vec2> other) {
             // TODO complete
             return false;
         }

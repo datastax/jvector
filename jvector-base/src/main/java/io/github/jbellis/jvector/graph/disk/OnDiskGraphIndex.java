@@ -33,14 +33,14 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -614,15 +614,15 @@ public class OnDiskGraphIndex<Primary extends VectorRepresentation, Secondary ex
         }
 
         @Override
-        public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, GraphIndexView.IntMarker visited, GraphIndexView.NeighborProcessor neighborProcessor) {
-            var useEdgeLoading = similarityFunction.supportsSimilarityToNeighbors();
+        public void processNeighbors(int level, int node, AsymmetricSimilarityFunction asymmetricSimilarityFunction, GraphIndexView.IntMarker visited, GraphIndexView.NeighborProcessor neighborProcessor) {
+            var useEdgeLoading = asymmetricSimilarityFunction.supportsSimilarityToNeighbors();
             if (useEdgeLoading && level == 0) {
-                similarityFunction.enableSimilarityToNeighbors(node);
+                asymmetricSimilarityFunction.enableSimilarityToNeighbors(node);
 
                 for (int i = 0; i < nodeDegree; i++) {
                     var friendOrd = neighbors[i];
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = similarityFunction.similarityToNeighbor(node, i);
+                        float friendSimilarity = asymmetricSimilarityFunction.similarityToNeighbor(node, i);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -631,7 +631,7 @@ public class OnDiskGraphIndex<Primary extends VectorRepresentation, Secondary ex
                 while (it.hasNext()) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
+                        float friendSimilarity = asymmetricSimilarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -680,7 +680,7 @@ public class OnDiskGraphIndex<Primary extends VectorRepresentation, Secondary ex
         }
 
         @Override
-        public SimilarityFunction.Exact rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        public AsymmetricSimilarityFunction.Exact rerankerFor(VectorFloat<?> queryVector, VectorSimilarityType vsf) {
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
                 return RandomAccessVectorRepresentations.super.rerankerFor(queryVector, vsf);
             } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
@@ -691,7 +691,7 @@ public class OnDiskGraphIndex<Primary extends VectorRepresentation, Secondary ex
         }
 
         @Override
-        public SimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        public AsymmetricSimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityType vsf) {
             if (features.containsKey(FeatureId.FUSED_PQ)) {
                 return ((FusedFeatureImplementation) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else {

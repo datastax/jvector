@@ -17,8 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.vector.VectorRepresentation;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 
 /**
  * Provides an API for encapsulating similarity to another node or vector.  Used both for
@@ -28,19 +27,11 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * ExactScoreFunction and ApproximateScoreFunction are provided for convenience so they
  * can be defined as a simple lambda.
  */
-public interface SimilarityFunction<Vec extends VectorRepresentation> {
+public interface SymmetricSimilarityFunction<Vec extends VectorRepresentation> {
     /**
      * @return true if the ScoreFunction returns exact, full-resolution scores. That is, if the underlying VectorRepresentation is exact.
      */
     boolean isExact();
-
-
-    void fixQuery(VectorFloat<?> query);
-
-    /**
-     * @return the similarity to another vector representation. This method is stateful and requires calling fixFirstArgument.
-     */
-    float similarityTo(Vec other);
 
     /**
      * @return the similarity between vec1 and vec2. This method is stateless, it does not use the fixQuery path.
@@ -50,28 +41,16 @@ public interface SimilarityFunction<Vec extends VectorRepresentation> {
     /**
      * @return the VectorSimilarityFunction used by this score function
      */
-    VectorSimilarityFunction getSimilarityFunction();
+    VectorSimilarityType getSimilarityFunction();
 
     /**
      * @return a copy of this score function
      */
-    SimilarityFunction<Vec> copy();
+    SymmetricSimilarityFunction<Vec> copy();
 
     /**
      * @return true if the functions are compatible, that is if they implement the same similarity type
      * (cosine, Euclidean, inner product, etc.).
      */
-    <Vec2 extends VectorRepresentation> boolean compatible(SimilarityFunction<Vec2> other);
-
-    interface Exact extends SimilarityFunction<VectorRepresentation.Exact> {
-        default boolean isExact() {
-            return true;
-        }
-    }
-
-    interface Approximate extends SimilarityFunction<VectorRepresentation.Approximate> {
-        default boolean isExact() {
-            return false;
-        }
-    }
+    <Vec2 extends VectorRepresentation> boolean compatible(SymmetricSimilarityFunction<Vec2> other);
 }

@@ -18,9 +18,9 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -189,7 +189,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityType similarityFunction) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new PQDecoder.DotProductDecoder(this, q);
@@ -202,7 +202,7 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
-    public SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityType similarityFunction) {
         VectorFloat<?> centeredQuery = pq.globalCentroid == null ? q : VectorUtil.sub(q, pq.globalCentroid);
 
         final int subspaceCount = pq.getSubspaceCount();
@@ -263,7 +263,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityType similarityFunction) {
         final int subspaceCount = pq.getSubspaceCount();
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);

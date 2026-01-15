@@ -24,7 +24,7 @@ import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.DiversityPruner;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
@@ -783,7 +783,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
                                               int newNode,
                                               Set<NodeAtLevel> inProgress,
                                               NodeArray scratch,
-                                              SimilarityFunction similarityFunction)
+                                              AsymmetricSimilarityFunction asymmetricSimilarityFunction)
     {
         scratch.clear();
         for (NodeAtLevel n : inProgress) {
@@ -791,7 +791,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
                 continue;
             }
             var vr = graph.getVector(n.node);
-            scratch.insertSorted(n.node, similarityFunction.similarityTo(vr));
+            scratch.insertSorted(n.node, asymmetricSimilarityFunction.similarityTo(vr));
         }
         return scratch;
     }
@@ -864,7 +864,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
                 int nNeighbors = in.readInt();
 
                 var searchProvider = scoreProvider.searchProviderFor(nodeId);
-                SimilarityFunction sf;
+                AsymmetricSimilarityFunction sf;
                 if (level > 0 || searchProvider.secondaryScoreFunction() == null) {
                     sf = searchProvider.primaryScoreFunction();
                 } else {
@@ -906,7 +906,7 @@ public class GraphIndexBuilder<Primary extends VectorRepresentation, Secondary e
             int nNeighbors = in.readInt();
 
             var searchProvider = scoreProvider.searchProviderFor(nodeId);
-            SimilarityFunction sf;
+            AsymmetricSimilarityFunction sf;
             if (searchProvider.secondaryScoreFunction() == null) {
                 sf = searchProvider.primaryScoreFunction();
             } else {

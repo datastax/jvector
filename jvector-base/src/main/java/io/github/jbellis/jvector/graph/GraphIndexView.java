@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 
@@ -56,7 +56,7 @@ public interface GraphIndexView<Primary extends VectorRepresentation, Secondary 
      * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
      * The processor is meant to add the best nodes to a queue, for example.
      */
-    void processNeighbors(int level, int node, SimilarityFunction<Primary> similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor);
+    void processNeighbors(int level, int node, AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction, IntMarker visited, NeighborProcessor neighborProcessor);
 
     /**
      * This method is deprecated as most View usages should not need size.

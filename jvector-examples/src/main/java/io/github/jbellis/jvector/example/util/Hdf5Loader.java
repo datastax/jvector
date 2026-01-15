@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -36,12 +36,12 @@ public class Hdf5Loader {
 
     public static DataSet load(String filename) {
         // infer the similarity
-        VectorSimilarityFunction similarityFunction;
+        VectorSimilarityType similarityFunction;
         if (filename.contains("-angular") || filename.contains("-dot")) {
-            similarityFunction = VectorSimilarityFunction.COSINE;
+            similarityFunction = VectorSimilarityType.COSINE;
         }
         else if (filename.contains("-euclidean")) {
-            similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
+            similarityFunction = VectorSimilarityType.EUCLIDEAN;
         }
         else {
             throw new IllegalArgumentException("Unknown similarity function -- expected angular or euclidean for " + filename);

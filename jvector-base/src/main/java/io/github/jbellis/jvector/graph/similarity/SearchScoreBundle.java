@@ -20,9 +20,9 @@ import io.github.jbellis.jvector.vector.VectorRepresentation;
 
 public interface SearchScoreBundle<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> {
 
-    SimilarityFunction<Primary> primaryScoreFunction();
+    AsymmetricSimilarityFunction<Primary> primaryScoreFunction();
 
-    SimilarityFunction<Secondary> secondaryScoreFunction();
+    AsymmetricSimilarityFunction<Secondary> secondaryScoreFunction();
 
     /**
      * Convenience function to avoid instantiating a ScoreFunction<Primary>

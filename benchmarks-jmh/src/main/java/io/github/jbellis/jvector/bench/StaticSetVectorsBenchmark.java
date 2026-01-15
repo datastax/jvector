@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -61,7 +61,7 @@ public class StaticSetVectorsBenchmark {
         ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
         // score provider using the raw, in-memory vectors
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
 
         graphIndexBuilder = new GraphIndexBuilder(bsp,
                 ravv.dimension(),
@@ -88,7 +88,7 @@ public class StaticSetVectorsBenchmark {
         var searchResult = GraphSearcher.search(queryVector,
                 10, // number of results
                 ravv, // vectors we're searching, used for scoring
-                VectorSimilarityFunction.EUCLIDEAN, // how to score
+                VectorSimilarityType.EUCLIDEAN, // how to score
                 graphIndex,
                 Bits.ALL); // valid ordinals to consider
         blackhole.consume(searchResult);

@@ -19,24 +19,23 @@ package io.github.jbellis.jvector.graph.diversity;
 import io.github.jbellis.jvector.graph.NodeArray;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.SymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.vector.VectorRepresentation;
 
-import static java.lang.Math.min;
 
 public class VamanaDiversityPruner<Vec extends VectorRepresentation> implements DiversityPruner {
     /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
     public final float alpha;
 
     /** used to compute diversity */
-    public final SimilarityFunction<Vec> similarityFunction;
+    public final SymmetricSimilarityFunction<Vec> symmetricSimilarityFunction;
     public final RandomAccessVectorRepresentations<Vec> representations;
 
     /** Create a new diversity provider */
-    public VamanaDiversityPruner(SimilarityFunction<Vec> similarityFunction, RandomAccessVectorRepresentations<Vec> representations, float alpha) {
-        this.similarityFunction = similarityFunction;
+    public VamanaDiversityPruner(SymmetricSimilarityFunction<Vec> symmetricSimilarityFunction, RandomAccessVectorRepresentations<Vec> representations, float alpha) {
+        this.symmetricSimilarityFunction = symmetricSimilarityFunction;
         this.representations = representations;
         this.alpha = alpha;
     }
@@ -65,7 +64,7 @@ public class VamanaDiversityPruner<Vec extends VectorRepresentation> implements 
                 }
 
                 Vec vector = representations.getVector(cNode);
-                if (isDiverse(cNode, cScore, neighbors, similarityFunction, vector, selected, currentAlpha)) {
+                if (isDiverse(cNode, cScore, neighbors, symmetricSimilarityFunction, vector, selected, currentAlpha)) {
                     selected.set(i);
                     nSelected++;
                 }
@@ -77,7 +76,7 @@ public class VamanaDiversityPruner<Vec extends VectorRepresentation> implements 
 
     // is the candidate node with the given score closer to the base node than it is to any of the
     // already-selected neighbors
-    private boolean isDiverse(int node, float score, NodeArray others, SimilarityFunction<Vec> sf, Vec vector, BitSet selected, float alpha) {
+    private boolean isDiverse(int node, float score, NodeArray others, SymmetricSimilarityFunction<Vec> sf, Vec vector, BitSet selected, float alpha) {
         assert others.size() > 0;
 
         for (int i = selected.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {

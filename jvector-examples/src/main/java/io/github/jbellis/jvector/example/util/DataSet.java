@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.*;
@@ -50,7 +50,7 @@ public interface DataSet {
      * during indexing and traversal.
      * @return the similarity function
      */
-    VectorSimilarityFunction getSimilarityFunction();
+    VectorSimilarityType getSimilarityFunction();
 
     /**
      * The base vectors as a list.

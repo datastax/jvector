@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.bench;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -62,7 +62,7 @@ public class IndexConstructionWithStaticSetBenchmark {
         ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
         // score provider using the raw, in-memory vectors
-        bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
     }
 
     @TearDown

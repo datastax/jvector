@@ -15,8 +15,8 @@
  */
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -26,7 +26,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 /**
  * Performs similarity comparisons with compressed vectors without decoding them
  */
-abstract class PQDecoder implements SimilarityFunction.Approximate {
+abstract class PQDecoder implements AsymmetricSimilarityFunction.Approximate {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     protected final PQVectors cv;
@@ -38,7 +38,7 @@ abstract class PQDecoder implements SimilarityFunction.Approximate {
     protected static abstract class CachingDecoder extends PQDecoder {
         protected final VectorFloat<?> partialSums;
 
-        protected CachingDecoder(PQVectors cv, VectorFloat<?> query, VectorSimilarityFunction vsf) {
+        protected CachingDecoder(PQVectors cv, VectorFloat<?> query, VectorSimilarityType vsf) {
             super(cv);
             var pq = this.cv.pq;
             partialSums = cv.reusablePartialSums();
@@ -60,7 +60,7 @@ abstract class PQDecoder implements SimilarityFunction.Approximate {
 
     static class DotProductDecoder extends CachingDecoder {
         public DotProductDecoder(PQVectors cv, VectorFloat<?> query) {
-            super(cv, query, VectorSimilarityFunction.DOT_PRODUCT);
+            super(cv, query, VectorSimilarityType.DOT_PRODUCT);
         }
 
         @Override
@@ -71,7 +71,7 @@ abstract class PQDecoder implements SimilarityFunction.Approximate {
 
     static class EuclideanDecoder extends CachingDecoder {
         public EuclideanDecoder(PQVectors cv, VectorFloat<?> query) {
-            super(cv, query, VectorSimilarityFunction.EUCLIDEAN);
+            super(cv, query, VectorSimilarityType.EUCLIDEAN);
         }
 
         @Override

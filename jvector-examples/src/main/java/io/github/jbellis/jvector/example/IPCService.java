@@ -24,11 +24,11 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -67,7 +67,7 @@ public class IPCService
         float neighborOverflow;
         boolean addHierarchy;
         boolean refineFinalGraph;
-        VectorSimilarityFunction similarityFunction;
+        VectorSimilarityType similarityFunction;
         RandomAccessVectorRepresentations ravv;
         CompressedVectors cv;
         GraphIndexBuilder indexBuilder;
@@ -106,7 +106,7 @@ public class IPCService
             throw new IllegalArgumentException("Illegal CREATE statement. Expecting 'CREATE [DIMENSIONS] [SIMILARITY_TYPE] [M] [EF]'");
 
         int dimensions = Integer.parseInt(args[0]);
-        VectorSimilarityFunction sim = VectorSimilarityFunction.valueOf(args[1]);
+        VectorSimilarityType sim = VectorSimilarityType.valueOf(args[1]);
         int M = Integer.parseInt(args[2]);
         int efConstruction = Integer.parseInt(args[3]);
         float neighborOverflow = Float.parseFloat(args[4]);
@@ -180,7 +180,7 @@ public class IPCService
     private CompressedVectors pqIndex(RandomAccessVectorRepresentations ravv, SessionContext ctx) {
         var pqDims = ctx.dimension > 10 ? Math.max(ctx.dimension / 4, 10) : ctx.dimension;
         long start = System.nanoTime();
-        ProductQuantization pq = ProductQuantization.compute(ravv, pqDims, 256, ctx.similarityFunction == VectorSimilarityFunction.EUCLIDEAN);
+        ProductQuantization pq = ProductQuantization.compute(ravv, pqDims, 256, ctx.similarityFunction == VectorSimilarityType.EUCLIDEAN);
         System.out.format("PQ@%s build %.2fs,%n", pqDims, (System.nanoTime() - start) / 1_000_000_000.0);
         start = System.nanoTime();
         var cv = pq.encodeAll(ravv);
@@ -258,7 +258,7 @@ public class IPCService
 
             SearchResult r;
             if (ctx.cv != null) {
-                SimilarityFunction.Approximate sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
+                AsymmetricSimilarityFunction.Approximate sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
                 try (var view = ctx.index.getView()) {
                     var rr = view instanceof ImmutableGraphIndex.ScoringView
                             ? ((ImmutableGraphIndex.ScoringView) view).rerankerFor(queryVector, ctx.similarityFunction)

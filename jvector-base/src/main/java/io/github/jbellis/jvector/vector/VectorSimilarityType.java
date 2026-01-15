@@ -31,7 +31,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * vector. This is a label describing the method used during indexing and searching of the vectors
  * in order to determine the nearest neighbors.
  */
-public enum VectorSimilarityFunction {
+public enum VectorSimilarityType {
 
   /** Euclidean distance */
   EUCLIDEAN {
@@ -57,7 +57,7 @@ public enum VectorSimilarityFunction {
 
   /**
    * Cosine similarity. NOTE: the preferred way to perform cosine similarity is to normalize all
-   * vectors to unit length, and instead use {@link VectorSimilarityFunction#DOT_PRODUCT}. You
+   * vectors to unit length, and instead use {@link VectorSimilarityType#DOT_PRODUCT}. You
    * should only use this function if you need to preserve the original vectors and cannot normalize
    * them in advance. The similarity score is normalised to assure it is positive.
    */

@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.microbench;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -96,7 +96,7 @@ public class GraphIndexBench {
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuild(Blackhole bh, Parameters p) {
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityFunction.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, false);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityType.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, false);
         bh.consume(graphIndexBuilder.build(p.vectors));
     }
 
@@ -104,7 +104,7 @@ public class GraphIndexBench {
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) {
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityFunction.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, true);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.vectors, VectorSimilarityType.DOT_PRODUCT, 8, 60, 1.2f, 1.4f, true);
         bh.consume(graphIndexBuilder.build(p.vectors));
     }
 

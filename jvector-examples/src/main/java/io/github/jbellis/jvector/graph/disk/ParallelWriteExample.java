@@ -31,6 +31,7 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -312,7 +313,7 @@ public class ParallelWriteExample {
         // Build PQ compression (matching Grid.buildOnDisk pattern)
         System.out.println("Computing PQ compression...");
         int pqM = floatVectors.dimension() / 8; // m = dimension / 8
-        boolean centerData = ds.getSimilarityFunction() == io.github.jbellis.jvector.vector.VectorSimilarityFunction.EUCLIDEAN;
+        boolean centerData = ds.getSimilarityFunction() == VectorSimilarityType.EUCLIDEAN;
         var pq = ProductQuantization.compute(floatVectors, pqM, 256, centerData, UNWEIGHTED);
         var pqVectors = (PQVectors) pq.encodeAll(floatVectors);
         System.out.printf("PQ compression: %d subspaces, 256 clusters%n", pqM);

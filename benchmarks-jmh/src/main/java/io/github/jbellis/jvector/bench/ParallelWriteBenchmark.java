@@ -32,7 +32,7 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -112,7 +112,7 @@ public class ParallelWriteBenchmark {
         pqVectors = (PQVectors) pq.encodeAll(floatVectors);
 
         // Build graph using PQ build score provider
-        final var bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqVectors);
+        final var bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityType.EUCLIDEAN, pqVectors);
         try (var builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction,
                 neighborOverflow, alpha, addHierarchy, refineFinalGraph)) {
             graph = builder.build(floatVectors);

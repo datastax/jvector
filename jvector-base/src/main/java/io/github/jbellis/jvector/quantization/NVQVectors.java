@@ -17,9 +17,9 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.DataOutput;
@@ -98,18 +98,18 @@ public class NVQVectors implements CompressedVectors {
     }
 
     @Override
-    public SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> query, VectorSimilarityType similarityFunction) {
         return scoreFunctionFor(query, similarityFunction);
     }
 
     @Override
-    public SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> query, VectorSimilarityType similarityFunction) {
         var function = scorer.scoreFunctionFor(query, similarityFunction);
         return node2 -> function.similarityTo(compressedVectors[node2]);
     }
 
     @Override
-    public SimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+    public AsymmetricSimilarityFunction.Approximate diversityFunctionFor(int node1, VectorSimilarityType similarityFunction) {
         throw new UnsupportedOperationException();
     }
 

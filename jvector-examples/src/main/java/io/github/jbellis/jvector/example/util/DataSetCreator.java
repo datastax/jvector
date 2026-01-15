@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -63,7 +63,7 @@ public class DataSetCreator {
                     return v.get(0) >= q[0] - topK && v.get(0) <= q[0] + topK && v.get(1) >= q[1] - topK && v.get(1) <= q[1] + topK;
                 })
                 .boxed() // allows sorting with custom comparator
-                .sorted(Comparator.comparingDouble((Integer j) -> VectorSimilarityFunction.EUCLIDEAN.compare(vectorTypeSupport.createFloatVector(q), baseVectors.get(j))).reversed())
+                .sorted(Comparator.comparingDouble((Integer j) -> VectorSimilarityType.EUCLIDEAN.compare(vectorTypeSupport.createFloatVector(q), baseVectors.get(j))).reversed())
                 .limit(topK)
                 .collect(Collectors.toList());
 
@@ -73,6 +73,6 @@ public class DataSetCreator {
         var groundTruth = queries.stream().map(Map.Entry::getValue).collect(Collectors.toList());
 
         String name = "2D" + gridWidth;
-        return new SimpleDataSet(name, VectorSimilarityFunction.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
+        return new SimpleDataSet(name, VectorSimilarityType.EUCLIDEAN, baseVectors, queryVectors, groundTruth);
     }
 }

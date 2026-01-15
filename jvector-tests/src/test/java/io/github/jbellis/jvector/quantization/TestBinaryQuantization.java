@@ -22,7 +22,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,7 +44,7 @@ public class TestBinaryQuantization extends RandomizedTest
         }
         assertEquals(mutableCompressedVectors.count(), immutableCompressedVectors.count());
         var randomVector = TestUtil.randomVector(getRandom(), 64);
-        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values())
+        for (VectorSimilarityType vsf : VectorSimilarityType.values())
         {
             var immutableScoreFunction = immutableCompressedVectors.scoreFunctionFor(randomVector, vsf);
             var mutableScoreFunction = mutableCompressedVectors.scoreFunctionFor(randomVector, vsf);

@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.openjdk.jmh.annotations.*;
@@ -74,11 +74,11 @@ public class IndexConstructionWithRandomSetBenchmark {
                     256,
                     true);
             final PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
-            buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqVectors);
+            buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityType.EUCLIDEAN, pqVectors);
         } else {
             log.info("Using Exact build score provider with original dimension: {}, M: {}, beam width: {}", originalDimension, M, beamWidth);
             // score provider using the raw, in-memory vectors
-            buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+            buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         }
 
     }

@@ -19,10 +19,10 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.quantization.NVQScorer;
 import io.github.jbellis.jvector.quantization.NVQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.DataOutput;
@@ -100,9 +100,9 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
         return nvq.globalMean.length();
     }
 
-    SimilarityFunction.Exact rerankerFor(VectorFloat<?> queryVector,
-                                         VectorSimilarityFunction vsf,
-                                         FeatureSource source) {
+    AsymmetricSimilarityFunction.Exact rerankerFor(VectorFloat<?> queryVector,
+                                                   VectorSimilarityType vsf,
+                                                   FeatureSource source) {
         var function = scorer.scoreFunctionFor(queryVector, vsf);
 
         return node2 -> {

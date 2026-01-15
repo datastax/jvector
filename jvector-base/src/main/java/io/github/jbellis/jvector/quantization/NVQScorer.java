@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -30,7 +30,7 @@ public class NVQScorer {
         this.nvq = nvq;
     }
 
-    public NVQScoreFunction scoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
+    public NVQScoreFunction scoreFunctionFor(VectorFloat<?> query, VectorSimilarityType similarityFunction) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return dotProductScoreFunctionFor(query);

@@ -29,10 +29,10 @@ import io.github.jbellis.jvector.graph.NodeQueue;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.After;
 import org.junit.Before;
@@ -87,7 +87,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
             try (var cachedOnDiskView = onDiskGraph.getView())
             {
-                for (var similarityFunction : VectorSimilarityFunction.values()) {
+                for (var similarityFunction : VectorSimilarityType.values()) {
                     var queryVector = TestUtil.randomVector(random, 512);
                     var pqScoreFunction = pqv.precomputedScoreFunctionFor(queryVector, similarityFunction);
                     var fusedScoreFunction = cachedOnDiskView.approximateScoreFunctionFor(queryVector, similarityFunction);
@@ -114,7 +114,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     @Test
     // build a random graph, then check that it has at least 90% recall
     public void testRecallOnGraphWithRandomVectors() throws IOException {
-        for (var similarityFunction : VectorSimilarityFunction.values()) {
+        for (var similarityFunction : VectorSimilarityType.values()) {
             for (var addHierarchy : List.of(false, true)) {
                 for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
                     testRecallOnGraphWithRandomVectors(addHierarchy, similarityFunction, featureId);
@@ -124,7 +124,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     }
 
     // build a random graph, then check that it has at least 90% recall
-    public void testRecallOnGraphWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
+    public void testRecallOnGraphWithRandomVectors(boolean addHierarchy, VectorSimilarityType similarityFunction, FeatureId featureId) throws IOException {
         var outputPath = testDirectory.resolve("random_fused_graph" + random.nextInt());
 
         int size = 1_000;
@@ -179,7 +179,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
     @Test
     // build a random graph, then check that it has at least 90% recall
     public void testScoresWithRandomVectors() throws IOException {
-        for (var similarityFunction : VectorSimilarityFunction.values()) {
+        for (var similarityFunction : VectorSimilarityType.values()) {
             for (var addHierarchy : List.of(false, true)) {
                 for (var featureId: List.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS)) {
                     testScoresWithRandomVectors(addHierarchy, similarityFunction, featureId);
@@ -188,7 +188,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
         }
     }
 
-    public void testScoresWithRandomVectors(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
+    public void testScoresWithRandomVectors(boolean addHierarchy, VectorSimilarityType similarityFunction, FeatureId featureId) throws IOException {
         var outputPath = testDirectory.resolve("random_fused_graph" + random.nextInt());
 
         int size = 1_000;
@@ -244,7 +244,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
         int dim = 32;
         MockVectorRepresentations ravv = vectorValues(size, dim);
 
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 32, 10, 1.0f, 1.0f, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.COSINE, 32, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
         // create renumbering map
@@ -276,12 +276,12 @@ public class TestFusedGraphIndex extends RandomizedTest {
     // build a random graph, then check that it has at least 90% recall
     public void testRecallOnGraphWithRenumbering() throws IOException {
         for (var addHierarchy : List.of(true)) {
-            testRecallOnGraphWithRenumbering(addHierarchy, VectorSimilarityFunction.COSINE, FeatureId.INLINE_VECTORS);
+            testRecallOnGraphWithRenumbering(addHierarchy, VectorSimilarityType.COSINE, FeatureId.INLINE_VECTORS);
         }
     }
 
     // build a random graph, then check that it has at least 90% recall
-    public void testRecallOnGraphWithRenumbering(boolean addHierarchy, VectorSimilarityFunction similarityFunction, FeatureId featureId) throws IOException {
+    public void testRecallOnGraphWithRenumbering(boolean addHierarchy, VectorSimilarityType similarityFunction, FeatureId featureId) throws IOException {
         var outputPath = testDirectory.resolve("random_fused_graph");
 
         int size = 1_000;
@@ -339,9 +339,9 @@ public class TestFusedGraphIndex extends RandomizedTest {
         Files.deleteIfExists(outputPath);
     }
 
-    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex.View view, CompressedVectors cv) {
+    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityType similarityFunction, ImmutableGraphIndex.View view, CompressedVectors cv) {
         var scoringView = (ImmutableGraphIndex.ScoringView) view;
-        SimilarityFunction.Approximate asf;
+        AsymmetricSimilarityFunction.Approximate asf;
         if (fused) {
             asf = scoringView.approximateScoreFunctionFor(queryVector, similarityFunction);
         } else {

@@ -18,8 +18,8 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeatureImplementation;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -31,7 +31,7 @@ import org.agrona.collections.Int2ObjectHashMap;
  * Performs similarity comparisons with compressed vectors without decoding them.
  * These decoders use vectors fused into a graph.
  */
-public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
+public abstract class FusedPQDecoder implements AsymmetricSimilarityFunction.Approximate {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     protected final ProductQuantization pq;
     Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
@@ -43,14 +43,14 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
     protected final ByteSequence<?> neighborCodes;
     // decoder state
     protected final VectorFloat<?> partialSums;
-    protected final VectorSimilarityFunction vsf;
+    protected final VectorSimilarityType vsf;
     protected int origin;
 
     protected FusedPQDecoder(ProductQuantization pq,
                              Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                              VectorFloat<?> query, FusedFeatureImplementation.PackedNeighbors packedNeighbors,
                              ByteSequence<?> neighborCodes, VectorFloat<?> results, Exact esf,
-                             VectorSimilarityFunction vsf) {
+                             VectorSimilarityType vsf) {
         this.pq = pq;
         this.hierarchyCachedFeatures = hierarchyCachedFeatures;
         this.query = query;
@@ -64,7 +64,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
         // cosine similarity is a special case where we need to compute the squared magnitude of the query
         // in the same loop, so we skip this and compute it in the cosine constructor
         partialSums = pq.reusablePartialSums();
-        if (vsf != VectorSimilarityFunction.COSINE) {
+        if (vsf != VectorSimilarityType.COSINE) {
             VectorFloat<?> center = pq.globalCentroid;
             var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
             for (var i = 0; i < pq.getSubspaceCount(); i++) {
@@ -117,7 +117,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
                                  Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                  VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
                                  Exact esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityType.DOT_PRODUCT);
         }
 
         @Override
@@ -131,7 +131,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
                                 Exact esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.EUCLIDEAN);
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityType.EUCLIDEAN);
         }
 
         @Override
@@ -151,7 +151,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
                                 Exact esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.COSINE);
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityType.COSINE);
 
             // this part is not query-dependent, so we can cache it
             partialSquaredMagnitudes = pq.partialSquaredMagnitudes().updateAndGet(current -> {
@@ -184,7 +184,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
                 int size = pq.subvectorSizesAndOffsets[i][0];
                 var codebook = pq.codebooks[i];
                 // cosine numerator is the same partial sums as if we were using DOT_PRODUCT
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
+                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityType.DOT_PRODUCT, partialSums);
                 queryMagSum += VectorUtil.dotProduct(centeredQuery, offset, centeredQuery, offset, size);
             }
 
@@ -221,7 +221,7 @@ public abstract class FusedPQDecoder implements SimilarityFunction.Approximate {
     public static FusedPQDecoder newDecoder(FusedFeatureImplementation.PackedNeighbors neighbors, ProductQuantization pq,
                                             Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
                                             ByteSequence<?> reusableNeighborCodes, VectorFloat<?> results,
-                                            VectorSimilarityFunction similarityFunction, Exact esf) {
+                                            VectorSimilarityType similarityFunction, Exact esf) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return new DotProductDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);

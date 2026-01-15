@@ -117,7 +117,7 @@ public interface VectorUtilSupport {
   /**
    * Calculates the distance between 2 vectors, which were quantized using Product Quantization, using a precomputed table of partial results
    *
-   * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityFunction)}
+   * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityType)}
    *
    * @param codebookPartialSums the vector of all PQ
    * @param subspaceCount the number of PQ subspaces
@@ -132,7 +132,7 @@ public interface VectorUtilSupport {
 
   int hammingDistance(long[] v1, long[] v2);
 
-  void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
+  void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityType vsf, VectorFloat<?> partialSums);
 
   float max(VectorFloat<?> v);
   float min(VectorFloat<?> v);

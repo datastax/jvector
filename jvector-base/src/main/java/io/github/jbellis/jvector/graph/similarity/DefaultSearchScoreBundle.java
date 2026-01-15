@@ -17,25 +17,25 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.vector.VectorRepresentation;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
 public final class DefaultSearchScoreBundle<Primary extends VectorRepresentation, Secondary extends VectorRepresentation> implements SearchScoreBundle {
-    private final SimilarityFunction<Primary> similarityFunction;
-    private final SimilarityFunction<Secondary> reranker;
+    private final AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction;
+    private final AsymmetricSimilarityFunction<Secondary> reranker;
 
     /**
-     * @param similarityFunction the primary, fast scoring function
+     * @param asymmetricSimilarityFunction the primary, fast scoring function
      * <p>
      * No reranking is performed.
      */
-    public DefaultSearchScoreBundle(SimilarityFunction<Primary> similarityFunction) {
-        this(similarityFunction, null);
+    public DefaultSearchScoreBundle(AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction) {
+        this(asymmetricSimilarityFunction, null);
     }
 
     /**
-     * @param similarityFunction the primary, fast scoring function
+     * @param asymmetricSimilarityFunction the primary, fast scoring function
      * @param reranker optional reranking function
      * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction.  However,
      * it is allowed, and sometimes useful, to only perform approximate scoring without reranking.
@@ -43,28 +43,28 @@ public final class DefaultSearchScoreBundle<Primary extends VectorRepresentation
      * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
      * or `ScoringView.rerankerFor`.
      */
-    public DefaultSearchScoreBundle(SimilarityFunction<Primary> similarityFunction, SimilarityFunction<Secondary> reranker) {
-        assert similarityFunction != null;
-        if (!similarityFunction.compatible(reranker)) {
+    public DefaultSearchScoreBundle(AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction, AsymmetricSimilarityFunction<Secondary> reranker) {
+        assert asymmetricSimilarityFunction != null;
+        if (!asymmetricSimilarityFunction.compatible(reranker)) {
             throw new IllegalArgumentException("reranker is not compatible with scoreFunction");
         }
-        this.similarityFunction = similarityFunction;
+        this.asymmetricSimilarityFunction = asymmetricSimilarityFunction;
         this.reranker = reranker;
     }
 
     @Override
-    public SimilarityFunction<Primary> primaryScoreFunction() {
-        return similarityFunction;
+    public AsymmetricSimilarityFunction<Primary> primaryScoreFunction() {
+        return asymmetricSimilarityFunction;
     }
 
     @Override
-    public SimilarityFunction<Secondary> secondaryScoreFunction() {
+    public AsymmetricSimilarityFunction<Secondary> secondaryScoreFunction() {
         return reranker;
     }
 
     @Override
     public boolean isPrimaryExact() {
-        return similarityFunction.isExact();
+        return asymmetricSimilarityFunction.isExact();
     }
 
     @Override
@@ -80,8 +80,8 @@ public final class DefaultSearchScoreBundle<Primary extends VectorRepresentation
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */
-    public static DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>> exact(VectorSimilarityFunction vsf) {
-        return new DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>>(new DefaultScoreFunction(vsf));
+    public static DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>> exact(VectorSimilarityType vsf) {
+        return new DefaultSearchScoreBundle<VectorFloat<?>, VectorFloat<?>>(new DefaultScoreFunctionAsymmetric(vsf));
     }
 
 }

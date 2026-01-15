@@ -37,7 +37,7 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -100,7 +100,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testRenumberingOnDelete(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
         var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
         // delete the first node
@@ -151,7 +151,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testReorderingRenumbering(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
         var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
         // create renumbering map
@@ -185,7 +185,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     public void testReorderingWithHoles(boolean addHierarchy) throws IOException {
         // graph of 3 vectors
         var ravv = new TestVectorGraph.CircularFloatVectorRepresentations(3);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.COSINE, 2, 10, 1.0f, 1.0f, addHierarchy);
         var original = TestUtil.buildSequentially(builder, ravv);
 
         // create renumbering map
@@ -393,8 +393,8 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
 
             var q = randomVector(ThreadLocalRandom.current(), ravv.dimension());
-            var results1 = GraphSearcher.search(q, 10, ravv, VectorSimilarityFunction.EUCLIDEAN, graph, Bits.ALL);
-            var results2 = GraphSearcher.search(q, 10, ravv, VectorSimilarityFunction.EUCLIDEAN, onDiskGraph, Bits.ALL);
+            var results1 = GraphSearcher.search(q, 10, ravv, VectorSimilarityType.EUCLIDEAN, graph, Bits.ALL);
+            var results2 = GraphSearcher.search(q, 10, ravv, VectorSimilarityType.EUCLIDEAN, onDiskGraph, Bits.ALL);
             assertEquals(results1, results2);
         }
     }
@@ -425,8 +425,8 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             TestUtil.assertGraphEquals(graph, onDiskGraph);
 
             var q = randomVector(ThreadLocalRandom.current(), ravv.dimension());
-            var results1 = GraphSearcher.search(q, 10, ravv, VectorSimilarityFunction.EUCLIDEAN, graph, Bits.ALL);
-            var results2 = GraphSearcher.search(q, 10, ravv, VectorSimilarityFunction.EUCLIDEAN, onDiskGraph, Bits.ALL);
+            var results1 = GraphSearcher.search(q, 10, ravv, VectorSimilarityType.EUCLIDEAN, graph, Bits.ALL);
+            var results2 = GraphSearcher.search(q, 10, ravv, VectorSimilarityType.EUCLIDEAN, onDiskGraph, Bits.ALL);
             assertEquals(results1, results2);
         }
     }

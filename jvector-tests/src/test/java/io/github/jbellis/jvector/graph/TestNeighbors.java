@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import org.junit.Test;
 
 import java.util.stream.IntStream;
@@ -31,7 +31,7 @@ public class TestNeighbors extends RandomizedTest {
   @Test
   public void testInsertDiverse() {
     // set up BSP
-    var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+    var similarityFunction = VectorSimilarityType.DOT_PRODUCT;
     var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
     var candidates = new NodeArray(10);
     var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarityFunction);
@@ -58,7 +58,7 @@ public class TestNeighbors extends RandomizedTest {
   @Test
   public void testInsertDiverseConcurrent() {
     // set up BSP
-    var sf = VectorSimilarityFunction.DOT_PRODUCT;
+    var sf = VectorSimilarityType.DOT_PRODUCT;
     var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
     var natural = new NodeArray(10);
     var concurrent = new NodeArray(10);
@@ -84,7 +84,7 @@ public class TestNeighbors extends RandomizedTest {
   public void testInsertDiverseRetainsNatural() {
     // set up BSP
     var vectors = new TestVectorGraph.CircularFloatVectorRepresentations(10);
-    var similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+    var similarityFunction = VectorSimilarityType.DOT_PRODUCT;
     var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarityFunction);
 
     // check that the new neighbor doesn't replace the existing one (since both are diverse, and the max degree accommodates both)

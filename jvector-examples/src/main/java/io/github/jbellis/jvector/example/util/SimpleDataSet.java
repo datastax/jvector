@@ -18,21 +18,21 @@ package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
 
 public class SimpleDataSet implements DataSet {
     private final String name;
-    private final VectorSimilarityFunction similarityFunction;
+    private final VectorSimilarityType similarityFunction;
     private final List<VectorFloat<?>> baseVectors;
     private final List<VectorFloat<?>> queryVectors;
     private final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
     public SimpleDataSet(String name,
-                         VectorSimilarityFunction similarityFunction,
+                         VectorSimilarityType similarityFunction,
                          List<VectorFloat<?>> baseVectors,
                          List<VectorFloat<?>> queryVectors,
                          List<? extends List<Integer>> groundTruth)
@@ -83,7 +83,7 @@ public class SimpleDataSet implements DataSet {
     }
 
     @Override
-    public VectorSimilarityFunction getSimilarityFunction() {
+    public VectorSimilarityType getSimilarityFunction() {
         return similarityFunction;
     }
 

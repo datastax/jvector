@@ -17,11 +17,11 @@ package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -90,10 +90,10 @@ public class RecallWithRandomVectorsBenchmark {
         if (numberOfPQSubspaces > 0) {
             ProductQuantization productQuantization = ProductQuantization.compute(ravv, numberOfPQSubspaces, 256, true);
             pqVectors = (PQVectors) productQuantization.encodeAll(ravv);
-            buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqVectors);
+            buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityType.EUCLIDEAN, pqVectors);
         } else {
             // score provider using the raw, in-memory vectors
-            buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+            buildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
             pqVectors = null;
         }
 
@@ -174,15 +174,15 @@ public class RecallWithRandomVectorsBenchmark {
                 if (pqVectors != null) { // Quantized, use the precomputed score function
                     // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
                     // then reranks with the exact vectors that are stored on disk in the index
-                    SimilarityFunction.Approximate asf = pqVectors.precomputedScoreFunctionFor(
+                    AsymmetricSimilarityFunction.Approximate asf = pqVectors.precomputedScoreFunctionFor(
                             queryVector,
-                            VectorSimilarityFunction.EUCLIDEAN
+                            VectorSimilarityType.EUCLIDEAN
                     );
-                    SimilarityFunction.Exact reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
+                    AsymmetricSimilarityFunction.Exact reranker = ravv.rerankerFor(queryVector, VectorSimilarityType.EUCLIDEAN);
                     ssp = new DefaultSearchScoreProvider(asf, reranker);
                     searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL);
                 } else { // Not quantized, used typical searcher
-                    ssp = DefaultSearchScoreProvider.exact(queryVector, VectorSimilarityFunction.EUCLIDEAN, ravv);
+                    ssp = DefaultSearchScoreProvider.exact(queryVector, VectorSimilarityType.EUCLIDEAN, ravv);
                     searchResult = graphSearcher.search(ssp, k, Bits.ALL);
                 }
             }
@@ -224,7 +224,7 @@ public class RecallWithRandomVectorsBenchmark {
             var exactResults = new ArrayList<SearchResult.NodeScore>();
 
             for (int i = 0; i < baseVectors.size(); i++) {
-                float similarityScore = VectorSimilarityFunction.EUCLIDEAN.compare(queryVector, baseVectors.get(i));
+                float similarityScore = VectorSimilarityType.EUCLIDEAN.compare(queryVector, baseVectors.get(i));
                 exactResults.add(new SearchResult.NodeScore(i, similarityScore));
             }
 

@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -36,7 +36,7 @@ public class BuildScoreProviderTest {
      */
     @Test
     public void testOrdinalMapping() {
-        final VectorSimilarityFunction vsf = VectorSimilarityFunction.DOT_PRODUCT;
+        final VectorSimilarityType vsf = VectorSimilarityType.DOT_PRODUCT;
 
         // Create test vectors
         final List<VectorFloat<?>> vectors = new ArrayList<>();

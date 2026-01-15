@@ -27,7 +27,7 @@ import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -83,7 +83,7 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
     void buildAndCompareGraphs(int size, int dimension, int maxConnections, int beamWidth, float alpha, float neighborOverflow, boolean addHierarchy) throws IOException {
         // Create random vectors and build a graph
         var ravv = new ListRandomAccessVectorRepresentations(new ArrayList<>(TestUtil.createRandomVectors(size, dimension)), dimension);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, maxConnections, beamWidth, neighborOverflow, alpha, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.COSINE, maxConnections, beamWidth, neighborOverflow, alpha, addHierarchy);
         ImmutableGraphIndex graph = TestUtil.buildSequentially(builder, ravv);
 
         // Create a sequential writer and write the graph

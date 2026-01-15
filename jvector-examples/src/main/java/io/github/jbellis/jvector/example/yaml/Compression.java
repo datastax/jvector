@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 
 import java.util.Map;
 import java.util.function.Function;
@@ -42,7 +42,7 @@ public class Compression {
                 return ds -> {
                     boolean centerData;
                     if (strCenterData == null) {
-                        centerData = ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN;
+                        centerData = ds.getSimilarityFunction() == VectorSimilarityType.EUCLIDEAN;
                     } else {
                         centerData = strCenterData.equals("Yes");;
                     }

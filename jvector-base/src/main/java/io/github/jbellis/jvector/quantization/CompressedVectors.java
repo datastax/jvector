@@ -17,9 +17,9 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.DataOutput;
@@ -50,17 +50,17 @@ public interface CompressedVectors extends Accountable {
     VectorCompressor<?> getCompressor();
 
     /** precomputes partial scores for the given query with every centroid; suitable for most searches */
-    SimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
+    AsymmetricSimilarityFunction.Approximate precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityType similarityFunction);
 
     /** no precomputation; suitable when just a handful of score computations are performed */
-    SimilarityFunction.Approximate diversityFunctionFor(int nodeId, VectorSimilarityFunction similarityFunction);
+    AsymmetricSimilarityFunction.Approximate diversityFunctionFor(int nodeId, VectorSimilarityType similarityFunction);
 
     /** no precomputation; suitable when just a handful of score computations are performed */
-    SimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
+    AsymmetricSimilarityFunction.Approximate scoreFunctionFor(VectorFloat<?> q, VectorSimilarityType similarityFunction);
 
 
     @Deprecated
-    default SimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+    default AsymmetricSimilarityFunction.Approximate approximateScoreFunctionFor(VectorFloat<?> q, VectorSimilarityType similarityFunction) {
         return precomputedScoreFunctionFor(q, similarityFunction);
     }
 

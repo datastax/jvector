@@ -27,7 +27,7 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
 import io.github.jbellis.jvector.graph.representations.MutableRandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreBundle;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
@@ -475,12 +475,12 @@ public class OnHeapGraphIndex<Primary extends VectorRepresentation, Secondary ex
         }
 
         @Override
-        public void processNeighbors(int level, int node, SimilarityFunction<Primary> similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+        public void processNeighbors(int level, int node, AsymmetricSimilarityFunction<Primary> asymmetricSimilarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
             for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                 var friendOrd = it.nextInt();
                 if (visited.mark(friendOrd)) {
                     var vr = getPrimaryRepresentations().getVector(friendOrd);
-                    float friendSimilarity = similarityFunction.similarityTo(vr);
+                    float friendSimilarity = asymmetricSimilarityFunction.similarityTo(vr);
                     neighborProcessor.process(friendOrd, friendSimilarity);
                 }
             }

@@ -25,7 +25,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityPruner;
 import io.github.jbellis.jvector.graph.representations.RandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -63,7 +63,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private static final boolean ADD_HIERARCHY = false;
     private static final int TOP_K = 10;
     private static final int NUM_QUERY_VECTORS = 100;
-    private static VectorSimilarityFunction SIMILARITY_FUNCTION = VectorSimilarityFunction.EUCLIDEAN;
+    private static VectorSimilarityType SIMILARITY_FUNCTION = VectorSimilarityType.EUCLIDEAN;
 
     private Path testDirectory;
 
@@ -348,7 +348,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
 
      * @return the ground truth
      */
-    private static int[] getGroundTruth(RandomAccessVectorRepresentations ravv, VectorFloat<?> queryVector, int topK, VectorSimilarityFunction similarityFunction) {
+    private static int[] getGroundTruth(RandomAccessVectorRepresentations ravv, VectorFloat<?> queryVector, int topK, VectorSimilarityType similarityFunction) {
         var exactResults = new ArrayList<SearchResult.NodeScore>();
         for (int i = 0; i < ravv.size(); i++) {
             float similarityScore = similarityFunction.compare(queryVector, ravv.getVector(i));

@@ -20,7 +20,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
@@ -52,7 +52,7 @@ public class Test2DThreshold extends LuceneTestCase {
         // build index
         VectorFloat<?>[] vectors = TestVectorGraph.createRandomFloatVectors(graphSize, 2, R);
         var ravv = new ListRandomAccessVectorRepresentations(List.of(vectors), 2);
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, maxDegree, 2 * maxDegree, 1.2f, 1.4f, addHierarchy);
+        var builder = new GraphIndexBuilder(ravv, VectorSimilarityType.EUCLIDEAN, maxDegree, 2 * maxDegree, 1.2f, 1.4f, addHierarchy);
         var onHeapGraph = builder.build(ravv);
 
         // test raw vectors
@@ -65,7 +65,7 @@ public class Test2DThreshold extends LuceneTestCase {
         for (int i = 0; i < nQueries; i++) {
             TestParams tp = createTestParams(vectors);
 
-            var sf = ravv.rerankerFor(tp.q, VectorSimilarityFunction.EUCLIDEAN);
+            var sf = ravv.rerankerFor(tp.q, VectorSimilarityType.EUCLIDEAN);
             var result = searcher.search(new DefaultSearchScoreProvider(sf), vectors.length, tp.th, Bits.ALL);
 
             meanVisitedRatio += ((float) result.getVisitedCount()) / (vectors.length * nQueries);
@@ -113,7 +113,7 @@ public class Test2DThreshold extends LuceneTestCase {
         float th = (float) (0.3 + 0.45 * R.nextDouble());
 
         // Count the number of vectors that have a similarity score greater than or equal to the threshold
-        long exactCount = Arrays.stream(vectors).filter(v -> VectorSimilarityFunction.EUCLIDEAN.compare(q, v) >= th).count();
+        long exactCount = Arrays.stream(vectors).filter(v -> VectorSimilarityType.EUCLIDEAN.compare(q, v) >= th).count();
 
         return new TestParams(exactCount, q, th);
     }

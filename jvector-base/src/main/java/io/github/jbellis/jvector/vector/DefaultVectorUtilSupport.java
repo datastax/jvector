@@ -348,7 +348,7 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
-  public void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+  public void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityType vsf, VectorFloat<?> partialSums) {
     int codebookBase = codebookIndex * clusterCount;
     for (int i = 0; i < clusterCount; i++) {
       switch (vsf) {

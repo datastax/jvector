@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -28,7 +28,7 @@ public class DataSetUtils {
      * Note: This only scrubs and normalizes for dot product similarity.
      */
     public static DataSet getScrubbedDataSet(String pathStr,
-                                             VectorSimilarityFunction vsf,
+                                             VectorSimilarityType vsf,
                                              List<VectorFloat<?>> baseVectors,
                                              List<VectorFloat<?>> queryVectors,
                                              List<List<Integer>> groundTruth) {
@@ -56,7 +56,7 @@ public class DataSetUtils {
             int j = 0;
             for (int i = 0; i < baseVectors.size(); i++) {
                 VectorFloat<?> v = baseVectors.get(i);
-                var valid = (vsf == VectorSimilarityFunction.EUCLIDEAN) || Math.abs(normOf(v)) > 1e-5;
+                var valid = (vsf == VectorSimilarityType.EUCLIDEAN) || Math.abs(normOf(v)) > 1e-5;
                 if (valid && uniqueVectors.add(v)) {
                     scrubbedBaseVectors.add(v);
                     rawToScrubbed.put(i, j++);
@@ -66,7 +66,7 @@ public class DataSetUtils {
         // also remove zero query vectors and query vectors that are present in the base set
         for (int i = 0; i < queryVectors.size(); i++) {
             VectorFloat<?> v = queryVectors.get(i);
-            var valid = (vsf == VectorSimilarityFunction.EUCLIDEAN) || Math.abs(normOf(v)) > 1e-5;
+            var valid = (vsf == VectorSimilarityType.EUCLIDEAN) || Math.abs(normOf(v)) > 1e-5;
             var dupe = uniqueVectors.contains(v);
             if (valid && !dupe) {
                 scrubbedQueryVectors.add(v);
@@ -79,7 +79,7 @@ public class DataSetUtils {
         }
 
         // now that the zero vectors are removed, we can normalize if it looks like they aren't already
-        if (vsf == VectorSimilarityFunction.DOT_PRODUCT) {
+        if (vsf == VectorSimilarityType.DOT_PRODUCT) {
             if (Math.abs(normOf(baseVectors.get(0)) - 1.0) > 1e-5) {
                 normalizeAll(scrubbedBaseVectors);
                 normalizeAll(scrubbedQueryVectors);

@@ -21,7 +21,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
@@ -139,7 +139,7 @@ public class TestCompressedVectors extends RandomizedTest {
         var cv = pq.encodeAll(ravv);
 
         // compare the encoded similarities to the raw
-        for (var vsf : List.of(VectorSimilarityFunction.EUCLIDEAN, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.COSINE)) {
+        for (var vsf : List.of(VectorSimilarityType.EUCLIDEAN, VectorSimilarityType.DOT_PRODUCT, VectorSimilarityType.COSINE)) {
             double delta = 0;
             for (int i = 0; i < 10; i++) {
                 var q = TestUtil.randomVector(getRandom(), dimension);
@@ -150,7 +150,7 @@ public class TestCompressedVectors extends RandomizedTest {
             }
             // https://chat.openai.com/share/7ced3fc8-275a-4134-978c-c822275c3e1f
             // is there a better way to check for within-expected bounds?
-            var expectedDelta = vsf == VectorSimilarityFunction.EUCLIDEAN
+            var expectedDelta = vsf == VectorSimilarityType.EUCLIDEAN
                     ? 96.98 * log(3.26 + dimension) / log(1.92 + codebooks) - 112.15
                     : 152.69 * log(3.76 + dimension) / log(1.95 + codebooks) - 180.86;
             // expected is accurate to within about 10% *on average*.  experimentally 25% is not quite enough
@@ -183,7 +183,7 @@ public class TestCompressedVectors extends RandomizedTest {
         var cv = nvq.encodeAll(ravv);
 
         // compare the encoded similarities to the raw
-        for (var vsf : List.of(VectorSimilarityFunction.EUCLIDEAN, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.COSINE)) {
+        for (var vsf : List.of(VectorSimilarityType.EUCLIDEAN, VectorSimilarityType.DOT_PRODUCT, VectorSimilarityType.COSINE)) {
             double error = 0;
             for (int i = 0; i < nQueries; i++) {
                 var q = queries.get(i);
@@ -192,7 +192,7 @@ public class TestCompressedVectors extends RandomizedTest {
                 for (int j = 0; j < vectors.size(); j++) {
                     var v = vectors.get(j);
                     vsf.compare(q, v);
-                    if (vsf == VectorSimilarityFunction.DOT_PRODUCT) {
+                    if (vsf == VectorSimilarityType.DOT_PRODUCT) {
                         error += abs(f.similarityTo(j) - vsf.compare(q, v)) / abs(vsf.compare(v, v));
                     } else {
                         error += abs(f.similarityTo(j) - vsf.compare(q, v));
@@ -202,9 +202,9 @@ public class TestCompressedVectors extends RandomizedTest {
             error /= nQueries * vectors.size();
 
             float tolerance = 0.0005f * (dimension / 256.f);
-            if (vsf == VectorSimilarityFunction.COSINE) {
+            if (vsf == VectorSimilarityType.COSINE) {
                 tolerance *= 10;
-            } else if (vsf == VectorSimilarityFunction.DOT_PRODUCT) {
+            } else if (vsf == VectorSimilarityType.DOT_PRODUCT) {
                 tolerance *= 4;
             }
             // System.out.println(vsf + " error " + error + " tolerance " + tolerance);
@@ -244,7 +244,7 @@ public class TestCompressedVectors extends RandomizedTest {
             // compare the precomputed similarities to the raw
             for (int i = 0; i < 10; i++) {
                 var q = TestUtil.randomVector(getRandom(), dimension);
-                for (var vsf : List.of(VectorSimilarityFunction.EUCLIDEAN, VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.COSINE)) {
+                for (var vsf : List.of(VectorSimilarityType.EUCLIDEAN, VectorSimilarityType.DOT_PRODUCT, VectorSimilarityType.COSINE)) {
                     var precomputed = cv.precomputedScoreFunctionFor(q, vsf);
                     var raw = cv.scoreFunctionFor(q, vsf);
                     for (int j = 0; j < 10; j++) {

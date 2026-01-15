@@ -29,7 +29,7 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.Bits;
@@ -348,11 +348,11 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, AsymmetricSimilarityFunction asymmetricSimilarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
+                        float friendSimilarity = asymmetricSimilarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
@@ -502,11 +502,11 @@ public class TestUtil {
             }
 
             @Override
-            public void processNeighbors(int level, int node, SimilarityFunction similarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            public void processNeighbors(int level, int node, AsymmetricSimilarityFunction asymmetricSimilarityFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
                 for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                     var friendOrd = it.nextInt();
                     if (visited.mark(friendOrd)) {
-                        float friendSimilarity = similarityFunction.similarityTo(friendOrd);
+                        float friendSimilarity = asymmetricSimilarityFunction.similarityTo(friendOrd);
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }

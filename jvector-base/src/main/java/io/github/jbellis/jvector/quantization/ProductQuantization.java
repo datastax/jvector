@@ -22,7 +22,7 @@ import io.github.jbellis.jvector.graph.representations.RandomAccessVectorReprese
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -575,7 +575,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      *
      * @return a vector to hold partial sums for a single codebook
      */
-    public VectorFloat<?> createCodebookPartialSums(VectorSimilarityFunction vectorSimilarityFunction) {
+    public VectorFloat<?> createCodebookPartialSums(VectorSimilarityType vectorSimilarityType) {
         VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(getSubspaceCount() * getClusterCount() * (getClusterCount() + 1) / 2);
         int index = 0;
         for (int m = 0; m < M; m++) {
@@ -584,7 +584,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             for (int i = 0; i < clusterCount; i++) {
                 for (int j = i; j < clusterCount; j++) {
 
-                    float sum = vectorSimilarityFunction == VectorSimilarityFunction.EUCLIDEAN ?
+                    float sum = vectorSimilarityType == VectorSimilarityType.EUCLIDEAN ?
                             VectorUtil.squareL2Distance(codebook, i * size, codebook, j * size, size) :
                             VectorUtil.dotProduct(codebook, i * size, codebook, j * size, size);
 

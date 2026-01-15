@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorRepresentations;
 import io.github.jbellis.jvector.quantization.NVQuantization;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -30,7 +30,7 @@ import static java.lang.Math.abs;
 
 // this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
 public class DistancesNVQ {
-    public static void testNVQEncodings(String filenameBase, String filenameQueries, VectorSimilarityFunction vsf) throws IOException {
+    public static void testNVQEncodings(String filenameBase, String filenameQueries, VectorSimilarityType vsf) throws IOException {
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
 
@@ -116,7 +116,7 @@ public class DistancesNVQ {
 
         var baseVectors = "siftsmall/siftsmall_base.fvecs";
         var queryVectors = "siftsmall/siftsmall_query.fvecs";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityType.COSINE);
     }
 
     public static void runADA() throws IOException {
@@ -124,7 +124,7 @@ public class DistancesNVQ {
 
         var baseVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_base_vectors.fvec";
         var queryVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_query_vectors_10000.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityType.COSINE);
     }
 
     public static void runColbert() throws IOException {
@@ -132,7 +132,7 @@ public class DistancesNVQ {
 
         var baseVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_base_vectors_1000000.fvec";
         var queryVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_query_vectors_100000.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityType.COSINE);
     }
 
     public static void runOpenai3072() throws IOException {
@@ -140,7 +140,7 @@ public class DistancesNVQ {
 
         var baseVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
         var queryVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityType.COSINE);
     }
 
     public static void main(String[] args) throws IOException {

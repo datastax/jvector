@@ -34,8 +34,8 @@ import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction.Approximate;
-import io.github.jbellis.jvector.graph.similarity.SimilarityFunction.Exact;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction.Approximate;
+import io.github.jbellis.jvector.graph.similarity.AsymmetricSimilarityFunction.Exact;
 import io.github.jbellis.jvector.quantization.MutablePQVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -43,7 +43,7 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExceptionUtils;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -75,7 +75,7 @@ public class SiftSmall {
         RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
         // score provider using the raw, in-memory vectors
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                                ravv.dimension(),
                                                                16, // graph degree
@@ -93,7 +93,7 @@ public class SiftSmall {
             SearchResult sr = GraphSearcher.search(q,
                                                    10, // number of results
                                                    ravv, // vectors we're searching, used for scoring
-                                                   VectorSimilarityFunction.EUCLIDEAN, // how to score
+                                                   VectorSimilarityType.EUCLIDEAN, // how to score
                                                    index,
                                                    Bits.ALL); // valid ordinals to consider
             for (SearchResult.NodeScore ns : sr.getNodes()) {
@@ -107,14 +107,14 @@ public class SiftSmall {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             ImmutableGraphIndex index = builder.build(ravv);
 
             // search for a random vector using a GraphSearcher and SearchScoreProvider
             VectorFloat<?> q = randomVector(originalDimension);
             try (GraphSearcher searcher = new GraphSearcher(index)) {
-                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
+                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, VectorSimilarityType.EUCLIDEAN, ravv);
                 SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
                 for (SearchResult.NodeScore ns : sr.getNodes()) {
                     System.out.println(ns);
@@ -128,11 +128,11 @@ public class SiftSmall {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             ImmutableGraphIndex index = builder.build(ravv);
             // measure our recall against the (exactly computed) ground truth
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
+            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityType.EUCLIDEAN, ravv);
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }
     }
@@ -142,7 +142,7 @@ public class SiftSmall {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             // build the index (in memory)
@@ -156,7 +156,7 @@ public class SiftSmall {
         try (ReaderSupplier rs = ReaderSupplierFactory.open(indexPath)) {
             OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
             // measure our recall against the (exactly computed) ground truth
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, index.getView());
+            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityType.EUCLIDEAN, index.getView());
             testRecall(index, queryVectors, groundTruth, sspFactory);
         }
     }
@@ -166,7 +166,7 @@ public class SiftSmall {
         int originalDimension = baseVectors.get(0).length();
         RandomAccessVectorRepresentations ravv = new ListRandomAccessVectorRepresentations(baseVectors, originalDimension);
 
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityType.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             ImmutableGraphIndex index = builder.build(ravv);
@@ -196,8 +196,8 @@ public class SiftSmall {
                 // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
                 // then reranks with the exact vectors that are stored on disk in the index
                 Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
-                    Approximate asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                    Exact reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                    Approximate asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityType.EUCLIDEAN);
+                    Exact reranker = index.getView().rerankerFor(q, VectorSimilarityType.EUCLIDEAN);
                     return new DefaultSearchScoreProvider(asf, reranker);
                 };
                 // measure our recall against the (exactly computed) ground truth
@@ -216,7 +216,7 @@ public class SiftSmall {
         // as we build the index we'll compress the new vectors and add them to this List backing a PQVectors;
         // this is used to score the construction searches
         var pqv = new MutablePQVectors(pq);
-        BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqv);
+        BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityType.EUCLIDEAN, pqv);
 
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
@@ -259,8 +259,8 @@ public class SiftSmall {
         {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
-                Approximate asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                Exact reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                Approximate asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityType.EUCLIDEAN);
+                Exact reranker = index.getView().rerankerFor(q, VectorSimilarityType.EUCLIDEAN);
                 return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);
@@ -279,7 +279,7 @@ public class SiftSmall {
         // as we build the index we'll compress the new vectors and add them to this List backing a PQVectors;
         // this is used to score the construction searches
         var pqv = new MutablePQVectors(pq);
-        BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqv);
+        BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityType.EUCLIDEAN, pqv);
 
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
@@ -322,8 +322,8 @@ public class SiftSmall {
         {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
-                Approximate asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                Exact reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                Approximate asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityType.EUCLIDEAN);
+                Exact reranker = index.getView().rerankerFor(q, VectorSimilarityType.EUCLIDEAN);
                 return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);

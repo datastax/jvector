@@ -33,7 +33,7 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityType;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -59,11 +59,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestVectorGraph extends LuceneTestCase {
-    private VectorSimilarityFunction similarityFunction;
+    private VectorSimilarityType similarityFunction;
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     @Before
     public void setup() {
-        similarityFunction = RandomizedTest.randomFrom(VectorSimilarityFunction.values());
+        similarityFunction = RandomizedTest.randomFrom(VectorSimilarityType.values());
     }
 
     VectorFloat<?> randomVector(int dim) {
@@ -94,7 +94,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     public void testSearchWithSkewedAcceptOrds(boolean addHierarchy) {
         int nDoc = 1000;
-        similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
+        similarityFunction = VectorSimilarityType.EUCLIDEAN;
         RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         getRandom().nextInt();
         GraphIndexBuilder builder = new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.0f, addHierarchy);
@@ -220,7 +220,7 @@ public class TestVectorGraph extends LuceneTestCase {
     // If an exception is thrown during search, the next search should still function
     public void testExceptionalTermination(boolean addHierarchy) {
         int nDoc = 100;
-        similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        similarityFunction = VectorSimilarityType.DOT_PRODUCT;
         RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
@@ -321,7 +321,7 @@ public class TestVectorGraph extends LuceneTestCase {
     // oriented in the right directions
     public void testAknnDiverse(boolean addHierarchy) {
         int nDoc = 100;
-        similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        similarityFunction = VectorSimilarityType.DOT_PRODUCT;
         RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 20, 100, 1.0f, 1.4f, addHierarchy);
@@ -355,7 +355,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testSearchWithAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
         RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
-        similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        similarityFunction = VectorSimilarityType.DOT_PRODUCT;
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
@@ -390,7 +390,7 @@ public class TestVectorGraph extends LuceneTestCase {
     public void testSearchWithSelectiveAcceptOrds(boolean addHierarchy) {
         int nDoc = 100;
         RandomAccessVectorRepresentations vectors = circularVectorValues(nDoc);
-        similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        similarityFunction = VectorSimilarityType.DOT_PRODUCT;
         GraphIndexBuilder builder =
                 new GraphIndexBuilder(vectors, similarityFunction, 32, 100, 1.0f, 1.4f, addHierarchy);
         var graph = TestUtil.buildSequentially(builder, vectors);
@@ -460,7 +460,7 @@ public class TestVectorGraph extends LuceneTestCase {
     }
 
     public void testDiversity(boolean addHierarchy) {
-        similarityFunction = VectorSimilarityFunction.DOT_PRODUCT;
+        similarityFunction = VectorSimilarityType.DOT_PRODUCT;
         // Some carefully checked test cases with simple 2d vectors on the unit circle:
         VectorFloat<?>[] values = {
                 unitVector2d(0.5),
@@ -531,7 +531,7 @@ public class TestVectorGraph extends LuceneTestCase {
     }
 
     public void testDiversityFallback(boolean addHierarchy) {
-        similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
+        similarityFunction = VectorSimilarityType.EUCLIDEAN;
         // Some test cases can't be exercised in two dimensions;
         // in particular if a new neighbor displaces an existing neighbor
         // by being closer to the target, yet none of the existing neighbors is closer to the new vector
@@ -577,7 +577,7 @@ public class TestVectorGraph extends LuceneTestCase {
     }
 
     public void testDiversity3d(boolean addHierarchy) {
-        similarityFunction = VectorSimilarityFunction.EUCLIDEAN;
+        similarityFunction = VectorSimilarityType.EUCLIDEAN;
         // test the case when a neighbor *becomes* non-diverse when a newer better neighbor arrives
         VectorFloat<?>[] values = {
                 vectorTypeSupport.createFloatVector(new float[]{0, 0, 0}),
@@ -717,11 +717,11 @@ public class TestVectorGraph extends LuceneTestCase {
         var rawVectors = List.of(vectorTypeSupport.createFloatVector(new float[] {-1, -1}),
                                  vectorTypeSupport.createFloatVector(new float[] {1, 1}));
         var vectors = new ListRandomAccessVectorRepresentations(rawVectors, 2);
-        var builder = new GraphIndexBuilder(vectors, VectorSimilarityFunction.COSINE, 2, 2, 1.0f, 1.0f, addHierarchy);
+        var builder = new GraphIndexBuilder(vectors, VectorSimilarityType.COSINE, 2, 2, 1.0f, 1.0f, addHierarchy);
         try (var graph = builder.build(vectors)) {
             validateIndex(graph);
             var qv = vectorTypeSupport.createFloatVector(new float[] {0.5f, 0.5f});
-            var results = GraphSearcher.search(qv, 1, vectors, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
+            var results = GraphSearcher.search(qv, 1, vectors, VectorSimilarityType.COSINE, graph, Bits.ALL);
             assertEquals(1, results.getNodes().length);
             assertEquals(1, results.getNodes()[0].node);
         } catch (IOException e) {
