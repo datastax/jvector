@@ -85,9 +85,13 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
     }
 
     /**
-     * This method is deprecated. Please use {@link #writeFeaturesInline(int, Map) writeFeaturesInline} instead
+     * Write the inline features of the given ordinal to the output at the correct offset.
+     * Nothing else is written (no headers, no edges).  The output IS NOT flushed.
+     * <p>
+     * Note: the ordinal given is implicitly a "new" ordinal in the sense of the OrdinalMapper,
+     * but since no nodes or edges are involved (we just write the given State to the index file),
+     * the mapper is not invoked.
      */
-    @Deprecated
     public synchronized void writeInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException
     {
         writeFeaturesInline(ordinal, stateMap);

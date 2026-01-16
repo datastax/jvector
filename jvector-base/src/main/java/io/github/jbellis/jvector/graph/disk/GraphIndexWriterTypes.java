@@ -32,7 +32,14 @@ public enum GraphIndexWriterTypes {
      */
     ON_DISK_SEQUENTIAL,
 
+    /**
+     * Sequential on-disk writer that uses asynchronous I/O for improved throughput.
+     * Writes all data sequentially and is the current default implementation.
+     * Writes header as footer. Does not support incremental updates.
+     * Accepts any RandomAccessWriter.
+     */
     RANDOM_ACCESS,
+
     /**
      * Parallel on-disk writer that uses asynchronous I/O for improved throughput.
      * Builds records in parallel across multiple threads and writes them
