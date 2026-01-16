@@ -20,8 +20,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import org.slf4j.Logger;
@@ -130,7 +130,9 @@ public class AutoBenchYAML {
 
                 logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSetLoader.loadDataSet(datasetName);
+                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                            () -> new RuntimeException("Dataset " + datasetName + " not found")
+                    );
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;
