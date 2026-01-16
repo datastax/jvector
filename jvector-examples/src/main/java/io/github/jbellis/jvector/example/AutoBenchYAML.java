@@ -131,7 +131,7 @@ public class AutoBenchYAML {
                 logger.info("Loading dataset: {}", datasetName);
                 try {
                     DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                            () -> new IllegalStateException("Dataset " + datasetName + " not found")
+                            () -> new RuntimeException("Dataset " + datasetName + " not found")
                     );
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
