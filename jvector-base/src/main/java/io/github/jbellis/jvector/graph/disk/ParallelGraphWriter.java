@@ -179,7 +179,7 @@ class ParallelGraphWriter implements AutoCloseable {
 
         // Calculate optimal number of tasks based on cores and task multiplier
         int numCores = Runtime.getRuntime().availableProcessors();
-        int numTasks = Math.min((totalOrdinals / (numCores * taskMultiplier)), totalOrdinals);
+        int numTasks = Math.max(1, Math.min(numCores * taskMultiplier, totalOrdinals));
 
         // Calculate ordinals per task (ceiling division to cover all ordinals)
         int ordinalsPerTask = (totalOrdinals + numTasks - 1) / numTasks;
