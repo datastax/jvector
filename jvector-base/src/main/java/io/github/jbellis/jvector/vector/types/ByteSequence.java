@@ -70,4 +70,10 @@ public interface ByteSequence<T> extends Accountable
         }
         return result;
     }
+
+    /**
+     * @param shortIndex index (as if this was a short array) inside the sequence to set the short value
+     * @param value short value to set
+     */
+    void setLittleEndianShort(int shortIndex, short value);
 }

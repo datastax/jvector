@@ -133,4 +133,12 @@ public class ArraySliceByteSequence implements ByteSequence<byte[]> {
     public int hashCode() {
         return this.getHashCode();
     }
+
+    @Override
+    public void setLittleEndianShort(int shortIndex, short value) {
+        // Can't call setLittleEndianShort because the method shifts the index and we don't require
+        // that the slice is aligned to a short boundary
+        data.set(offset + shortIndex * 2, (byte) (value & 0xFF));
+        data.set(offset + shortIndex * 2 + 1, (byte) ((value >> 8) & 0xFF));
+    }
 }

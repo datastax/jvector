@@ -75,6 +75,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     private final float[][] centroidNormsSquared; // precomputed norms of the centroids, for encoding
     private final ThreadLocal<VectorFloat<?>> partialSums; // for dot product, euclidean, and cosine partials
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
+    private final ThreadLocal<VectorFloat<?>> partialBestDistances; // for partial best distances during fused ADC
+    private final ThreadLocal<ByteSequence<?>> partialQuantizedSums; // for quantized sums during fused ADC
+    private final AtomicReference<ByteSequence<?>> partialQuantizedSquaredMagnitudes; // for quantized squared magnitude partials during cosine fused ADC
+    protected volatile float squaredMagnitudeDelta = 0; // for cosine fused ADC squared magnitude quantization delta (since this is invariant for a given PQ)
+    protected volatile float minSquaredMagnitude = 0; // for cosine fused ADC minimum squared magnitude (invariant for a given PQ)
+
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -210,6 +216,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         this.partialSums = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(getSubspaceCount() * getClusterCount()));
         this.partialSquaredMagnitudes = new AtomicReference<>(null);
 
+        this.partialBestDistances = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(getSubspaceCount()));
+        this.partialQuantizedSums = ThreadLocal.withInitial(() -> vectorTypeSupport.createByteSequence(getSubspaceCount() * getClusterCount() * 2));
+        this.partialQuantizedSquaredMagnitudes= new AtomicReference<>(null);
 
         centroidNormsSquared = new float[M][clusterCount];
         for (int i = 0; i < M; i++) {
@@ -774,5 +783,17 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
 
         return sum / vector.length();
+    }
+
+    ByteSequence<?> reusablePartialQuantizedSums() {
+        return partialQuantizedSums.get();
+    }
+
+    VectorFloat<?> reusablePartialBestDistances() {
+        return partialBestDistances.get();
+    }
+
+    AtomicReference<ByteSequence<?>> partialQuantizedSquaredMagnitudes() {
+        return partialQuantizedSquaredMagnitudes;
     }
 }

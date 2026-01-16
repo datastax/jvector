@@ -135,4 +135,9 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
     public int hashCode() {
         return this.getHashCode();
     }
+
+    @Override
+    public void setLittleEndianShort(int shortIndex, short value) {
+        segment.set(LITTLE_ENDIAN_SHORT_LAYOUT_UNALIGNED, shortIndex * 2, value);
+    }
 }

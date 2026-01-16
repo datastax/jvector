@@ -235,4 +235,24 @@ public final class VectorUtil {
   public static float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
     return impl.nvqUniformLoss(vector, minValue, maxValue, nBits);
   }
+
+  public static void bulkShuffleQuantizedSimilarity(ByteSequence<?> shuffles, int codebookCount, ByteSequence<?> quantizedPartials, float delta, float minDistance, VectorFloat<?> results, VectorSimilarityFunction vsf) {
+    impl.bulkShuffleQuantizedSimilarity(shuffles, codebookCount, quantizedPartials, delta, minDistance, vsf, results);
+  }
+
+  public static void bulkShuffleQuantizedSimilarityCosine(ByteSequence<?> shuffles, int codebookCount,
+                                                          ByteSequence<?> quantizedPartialSums, float sumDelta, float minDistance,
+                                                          ByteSequence<?> quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude,
+                                                          float queryMagnitudeSquared, VectorFloat<?> results) {
+    impl.bulkShuffleQuantizedSimilarityCosine(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
+  }
+
+  public static void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums, VectorFloat<?> partialBestDistances) {
+    impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums, partialBestDistances);
+  }
+
+  public static void quantizePartials(float delta, VectorFloat<?> partials, VectorFloat<?> partialBase, ByteSequence<?> quantizedPartials) {
+    impl.quantizePartials(delta, partials, partialBase, quantizedPartials);
+  }
+
 }
