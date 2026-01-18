@@ -130,8 +130,8 @@ public class DistancesPQ {
         }
 //        endTime = System.nanoTime();
 //        duration = (double) (endTime - startTime) / 1_000_000_000;
-        System.out.println("\tQuickerADC Distance computations took " + duration + " seconds. " +
-                "Rate: " + (nQueries * nVectors / duration) + "distances per second");
+        String rateStr = String.format("Rate: %.2f distances per second", nQueries * nVectors / duration);
+        System.out.println("\tQuickerADC Distance computations took " + duration + " seconds. " + rateStr);
 
 //        startTime = System.nanoTime();
         duration  = 0;
@@ -157,8 +157,8 @@ public class DistancesPQ {
         }
 //        endTime = System.nanoTime();
 //        duration = (double) (endTime - startTime) / 1_000_000_000;
-        System.out.println("\tPQ Distance computations took " + duration + " seconds" +
-                "Rate: " + (nQueries * nVectors / duration) + "distances per second");
+        rateStr = String.format("Rate: %.2f distances per second", nQueries * nVectors / duration);
+        System.out.println("\tPQ Distance computations took " + duration + " seconds" + rateStr);
 
         System.out.println("\tdummyAccumulator: " + dummyAccumulator);
         System.out.println("--");
