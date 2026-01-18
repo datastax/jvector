@@ -29,26 +29,27 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.stream.IntStream;
 
 import static java.lang.Math.abs;
 
 // this class uses explicit typing instead of `var` for easier reading when excerpted for instructional use
 public class DistancesPQ {
-    public static void testNVQEncodings(String filenameBase, String filenameQueries, VectorSimilarityFunction vsf) throws IOException {
+    public static void testPQEncodings(String filenameBase, String filenameQueries, VectorSimilarityFunction vsf, int compression) throws IOException {
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
 
         int dimension = vectors.get(0).length();
         int nQueries = 100;
-        int nVectors = vectors.size();
+//        int nVectors = vectors.size();
+        int nVectors = 10_000;
+
+        int nSubspaces = dimension * 4 / compression;
+        System.out.println("PQ subspaces: " + nSubspaces);
 
         vectors = vectors.subList(0, nVectors);
 
         System.out.format("\t%d base and %d query vectors loaded, dimensions %d%n",
                 vectors.size(), queries.size(), vectors.get(0).length());
-
-        int nSubspaces = 96;
 
         // Generate a NVQ for random vectors
         var ravv = new ListRandomAccessVectorValues(vectors, dimension);
@@ -129,7 +130,8 @@ public class DistancesPQ {
         }
 //        endTime = System.nanoTime();
 //        duration = (double) (endTime - startTime) / 1_000_000_000;
-        System.out.println("\tQuickerADC Distance computations took " + duration + " seconds");
+        System.out.println("\tQuickerADC Distance computations took " + duration + " seconds. " +
+                "Rate: " + (nQueries * nVectors / duration) + "distances per second");
 
 //        startTime = System.nanoTime();
         duration  = 0;
@@ -155,48 +157,51 @@ public class DistancesPQ {
         }
 //        endTime = System.nanoTime();
 //        duration = (double) (endTime - startTime) / 1_000_000_000;
-        System.out.println("\tPQ Distance computations took " + duration + " seconds");
+        System.out.println("\tPQ Distance computations took " + duration + " seconds" +
+                "Rate: " + (nQueries * nVectors / duration) + "distances per second");
 
         System.out.println("\tdummyAccumulator: " + dummyAccumulator);
         System.out.println("--");
     }
 
-    public static void runSIFT() throws IOException {
+    public static void runSIFT(int compression) throws IOException {
         System.out.println("Running siftsmall");
 
         var baseVectors = "siftsmall/siftsmall_base.fvecs";
         var queryVectors = "siftsmall/siftsmall_query.fvecs";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT);
+        testPQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT, compression);
     }
 
-    public static void runADA() throws IOException {
+    public static void runADA(int compression) throws IOException {
         System.out.println("Running ada_002");
 
         var baseVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_base_vectors.fvec";
         var queryVectors = "./fvec/wikipedia_squad/100k/ada_002_100000_query_vectors_10000.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT);
+        testPQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT, compression);
     }
 
-    public static void runColbert() throws IOException {
+    public static void runColbert(int compression) throws IOException {
         System.out.println("Running colbertv2");
 
         var baseVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_base_vectors_1000000.fvec";
         var queryVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_query_vectors_100000.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testPQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT, compression);
     }
 
-    public static void runOpenai3072() throws IOException {
+    public static void runOpenai3072(int compression) throws IOException {
         System.out.println("Running text-embedding-3-large_3072");
 
         var baseVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
         var queryVectors = "./fvec/wikipedia_squad/100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
-        testNVQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.COSINE);
+        testPQEncodings(baseVectors, queryVectors, VectorSimilarityFunction.DOT_PRODUCT, compression);
     }
 
     public static void main(String[] args) throws IOException {
-//        runSIFT();
-        runADA();
-//        runColbert();
-//        runOpenai3072();
+        for (int compression : List.of(32, 64, 128)) {
+    //        runSIFT(compression);
+                runADA(compression);
+    //        runColbert(compression);
+    //        runOpenai3072(compression);
+        }
     }
 }
