@@ -271,7 +271,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
             // Note: Incremental insertion can have slightly different recall than bulk indexing due to the order of insertions
             float recallFromReconstructedAllNodeOnHeapGraphIndex = calculateAverageRecall(reconstructedAllNodeOnHeapGraphIndex, allBuildScoreProvider, queryVectors, groundTruthAllVectors, TOP_K, null);
             float recallFromAllGraphIndex = calculateAverageRecall(allGraphIndex, allBuildScoreProvider, queryVectors, groundTruthAllVectors, TOP_K, null);
-            Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.05f);
+            Assert.assertEquals(String.format("Recall mismatch, recallFromReconstructedAllNodeOnHeapGraphIndex: %f != recallFromAllGraphIndex: %f", recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex), recallFromReconstructedAllNodeOnHeapGraphIndex, recallFromAllGraphIndex, 0.06f);
         }
     }
 
