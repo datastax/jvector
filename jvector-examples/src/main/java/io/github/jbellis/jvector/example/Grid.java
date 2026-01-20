@@ -183,7 +183,7 @@ public class Grid {
                         } else {
                             long start = System.nanoTime();
                             cv = compressor.encodeAll(ds.getBaseRavv());
-                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                         }
                     }
 
@@ -218,7 +218,7 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
 
         var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
@@ -284,7 +284,7 @@ public class Grid {
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
-        indexBuildTimes.put(ds.name, totalTime);
+        indexBuildTimes.put(ds.getName(), totalTime);
 
         // open indexes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
@@ -377,7 +377,7 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                           floatVectors.dimension(),
                                                           M,
@@ -598,9 +598,9 @@ public class Grid {
                                                         );
                                                         for (Metric metric : metricsList) {
                                                             Map<String, Object> metrics = java.util.Map.of(metric.getHeader(), metric.getValue());
-                                                            results.add(new BenchResult(ds.name, params, metrics));
+                                                            results.add(new BenchResult(ds.getName(), params, metrics));
                                                         }
-                                                       results.add(new BenchResult(ds.name, params, Map.of("Index Build Time", indexBuildTimes.get(ds.name))));
+                                                       results.add(new BenchResult(ds.getName(), params, Map.of("Index Build Time", indexBuildTimes.get(ds.getName()))));
                                                     }
                                                 }
                                             }
@@ -684,16 +684,16 @@ public class Grid {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
+            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
         }
 

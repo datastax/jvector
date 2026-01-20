@@ -88,7 +88,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
 
         // execute all queries in parallel and collect results
         List<SearchResult> results = IntStream.range(0, totalQueries)
@@ -101,14 +101,14 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         if (computeRecall) {
             // compute recall for this run
             double recall = AccuracyMetrics.recallFromSearchResults(
-                            cs.getDataSet().groundTruth, results, topK, topK
+                    cs.getDataSet().getGroundTruth(), results, topK, topK
             );
             list.add(Metric.of("Recall@" + topK, formatRecall, recall));
         }
         if (computeMAP) {
             // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
-                            cs.getDataSet().groundTruth, results, topK
+                    cs.getDataSet().getGroundTruth(), results, topK
             );
             list.add(Metric.of("MAP@" + topK, formatMAP, map));
         }
