@@ -43,11 +43,6 @@ public interface AsymmetricSimilarityFunction<Vec extends VectorRepresentation> 
     float similarityTo(Vec other);
 
     /**
-     * @return the similarity between vec1 and vec2. This method is stateless, it does not use the fixQuery path.
-     */
-    float similarity(Vec vec1, Vec vec2);
-
-    /**
      * @return the VectorSimilarityFunction used by this score function
      */
     VectorSimilarityType getSimilarityFunction();
