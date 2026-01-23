@@ -32,14 +32,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Map;
 import java.util.ArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
@@ -50,7 +48,11 @@ import java.util.function.IntFunction;
  * - A thread pool for building node records in parallel
  * - Per-thread ImmutableGraphIndex.View instances for thread-safe neighbor iteration
  * - A buffer pool to avoid excessive allocation
- * - Asynchronous file channel writes that maintain correct ordering
+ * - Asynchronous file channel writes using position-based writes
+ * <p>
+ * The new architecture writes directly to the AsynchronousFileChannel using position-based
+ * writes, which allows it to handle pre-written features the same way as the sequential
+ * writer: by checking for null suppliers and skipping those features.
  * <p>
  * Usage:
  * <pre>
@@ -155,25 +157,26 @@ class ParallelGraphWriter implements AutoCloseable {
 
     /**
      * Writes all L0 node records in parallel using asynchronous file I/O with range-based task batching.
-     * Records are written in order to maintain index correctness. The implementation divides the ordinal
-     * space into ranges that are processed by a fixed number of tasks, reducing overhead compared to
-     * per-ordinal task creation.
+     * Records are written using position-based writes to maintain index correctness. The implementation
+     * divides the ordinal space into ranges that are processed by a fixed number of tasks, reducing
+     * overhead compared to per-ordinal task creation.
      * <p>
      * The number of tasks is determined by available CPU cores multiplied by a configurable multiplier.
      * This provides good load balancing while minimizing task creation and management overhead.
+     * <p>
+     * Features that have been pre-written (via writeInline) are detected by null suppliers and skipped
+     * during the write process, similar to how the sequential writer handles this case.
      *
      * @param ordinalMapper maps between old and new ordinals
      * @param inlineFeatures the inline features to write
-     * @param featureStateSuppliers suppliers for feature state
+     * @param featureStateSuppliers suppliers for feature state (null = feature already written)
      * @param baseOffset the file offset where L0 records start
-     * @param featuresPreWritten whether features have already been written via writeInline
      * @throws IOException if an IO error occurs
      */
     public void writeL0Records(OrdinalMapper ordinalMapper,
                                List<Feature> inlineFeatures,
                                Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
-                               long baseOffset,
-                               boolean featuresPreWritten) throws IOException {
+                               long baseOffset) throws IOException {
         int maxOrdinal = ordinalMapper.maxOrdinal();
         int totalOrdinals = maxOrdinal + 1;
 
@@ -184,124 +187,72 @@ class ParallelGraphWriter implements AutoCloseable {
         // Calculate ordinals per task (ceiling division to cover all ordinals)
         int ordinalsPerTask = (totalOrdinals + numTasks - 1) / numTasks;
 
-        List<Future<List<NodeRecordTask.Result>>> futures = new ArrayList<>(numTasks);
-
-        // Submit range-based tasks
-        for (int i = 0; i < numTasks; i++) {
-            int startOrdinal = i * ordinalsPerTask;
-            int endOrdinal = Math.min(startOrdinal + ordinalsPerTask, totalOrdinals);
-
-            // Skip if range is empty (can happen with final task)
-            if (startOrdinal >= totalOrdinals) {
-                break;
-            }
-
-            final int start = startOrdinal;
-            final int end = endOrdinal;
-
-            Future<List<NodeRecordTask.Result>> future = executor.submit(() -> {
-                var view = viewPerThread.get();
-                var buffer = bufferPerThread.get();
-
-                var task = new NodeRecordTask(
-                        start,                    // Start of range (inclusive)
-                        end,                      // End of range (exclusive)
-                        ordinalMapper,
-                        graph,
-                        view,
-                        inlineFeatures,
-                        featureStateSuppliers,
-                        recordSize,
-                        baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                        buffer,
-                        featuresPreWritten
-                );
-
-                return task.call();
-            });
-
-            futures.add(future);
-        }
-
-        // Write all records async
-        writeRecordsAsync(futures);
-    }
-
-
-    /**
-     * Writes records asynchronously using AsynchronousFileChannel for improved throughput.
-     * Records are written in sequential order by iterating through the task futures and their
-     * results, which ensures that even though record building is parallelized, writes occur in
-     * the correct order. Creates a dedicated thread pool for async I/O operations and properly
-     * cleans up resources.
-     *
-     * @param futures the completed record building tasks (each containing a list of results)
-     * @throws IOException if an I/O error occurs
-     */
-    private void writeRecordsAsync(List<Future<List<NodeRecordTask.Result>>> futures) throws IOException {
+        // Open the async file channel for position-based writes
         var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
-        int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), 32);
-        ExecutorService fileWritePool = null;
+        
+        try (var channel = AsynchronousFileChannel.open(filePath, opts, executor)) {
+            List<Future<List<Future<Integer>>>> taskFutures = new ArrayList<>(numTasks);
 
-        try {
-            fileWritePool = new ThreadPoolExecutor(
-                    numThreads, numThreads,
-                    0L, TimeUnit.MILLISECONDS,
-                    new LinkedBlockingQueue<>(),
-                    r -> {
-                        var t = new Thread(r, "graphnode-writer");
-                        t.setDaemon(true);
-                        return t;
-                    });
+            // Submit range-based tasks
+            for (int i = 0; i < numTasks; i++) {
+                int startOrdinal = i * ordinalsPerTask;
+                int endOrdinal = Math.min(startOrdinal + ordinalsPerTask, totalOrdinals);
 
-            // Use a bounded list to allow multiple concurrent async writes while providing backpressure
-            // Buffer size is 2x the I/O thread pool size to keep the pipeline full
-            int maxConcurrentWrites = numThreads * 2;
-            List<Future<Integer>> pendingWrites = new ArrayList<>(maxConcurrentWrites);
-
-            try (var afc = AsynchronousFileChannel.open(filePath, opts, fileWritePool)) {
-                // Iterate through task futures (in order)
-                for (Future<List<NodeRecordTask.Result>> future : futures) {
-                    List<NodeRecordTask.Result> results = future.get();
-
-                    // Write each result in the batch
-                    for (NodeRecordTask.Result result : results) {
-                        // Submit async write and track the future
-                        // result.data is already a copy made in NodeRecordTask to avoid
-                        // race conditions with thread-local buffer reuse
-                        Future<Integer> writeFuture = afc.write(result.data, result.fileOffset);
-                        pendingWrites.add(writeFuture);
-
-                        // When buffer is full, wait for all pending writes to complete
-                        if (pendingWrites.size() >= maxConcurrentWrites) {
-                            for (Future<Integer> wf : pendingWrites) {
-                                wf.get(); // Wait for write completion
-                            }
-                            pendingWrites.clear();
-                        }
-                    }
+                // Skip if range is empty (can happen with final task)
+                if (startOrdinal >= totalOrdinals) {
+                    break;
                 }
 
-                // Wait for any remaining pending writes
-                for (Future<Integer> wf : pendingWrites) {
-                    wf.get();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while writing records", e);
-            } catch (ExecutionException e) {
-                throw unwrapExecutionException(e);
+                final int start = startOrdinal;
+                final int end = endOrdinal;
+
+                Future<List<Future<Integer>>> future = executor.submit(() -> {
+                    var view = viewPerThread.get();
+                    var buffer = bufferPerThread.get();
+
+                    var task = new NodeRecordTask(
+                            start,                    // Start of range (inclusive)
+                            end,                      // End of range (exclusive)
+                            ordinalMapper,
+                            graph,
+                            view,
+                            inlineFeatures,
+                            featureStateSuppliers,
+                            recordSize,
+                            baseOffset,               // Base offset (task calculates per-ordinal offsets)
+                            channel,                  // Async file channel for position-based writes
+                            buffer                    // Thread-local buffer
+                    );
+
+                    return task.call();
+                });
+
+                taskFutures.add(future);
             }
-        } finally {
-            if (fileWritePool != null) {
-                fileWritePool.shutdown();
+
+            // Collect all write futures from all tasks
+            List<Future<Integer>> allWriteFutures = new ArrayList<>();
+            for (Future<List<Future<Integer>>> taskFuture : taskFutures) {
                 try {
-                    if (!fileWritePool.awaitTermination(60, TimeUnit.SECONDS)) {
-                        fileWritePool.shutdownNow();
-                    }
+                    List<Future<Integer>> writeFutures = taskFuture.get();
+                    allWriteFutures.addAll(writeFutures);
                 } catch (InterruptedException e) {
-                    fileWritePool.shutdownNow();
                     Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while building records", e);
+                } catch (ExecutionException e) {
+                    throw unwrapExecutionException(e);
+                }
+            }
+
+            // Wait for all writes to complete
+            for (Future<Integer> writeFuture : allWriteFutures) {
+                try {
+                    writeFuture.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while writing records", e);
+                } catch (ExecutionException e) {
+                    throw unwrapExecutionException(e);
                 }
             }
         }
@@ -359,3 +310,5 @@ class ParallelGraphWriter implements AutoCloseable {
         }
     }
 }
+
+// Made with Bob

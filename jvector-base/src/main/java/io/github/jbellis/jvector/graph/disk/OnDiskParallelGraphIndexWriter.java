@@ -66,7 +66,6 @@ import java.util.function.IntFunction;
  * allows writing features for individual nodes without writing the entire graph.
  */
 public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
-    private volatile boolean featuresPreWritten = false;
     private final Path filePath;
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;
@@ -101,15 +100,6 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         this.filePath = filePath;
         this.parallelWorkerThreads = parallelWorkerThreads;
         this.parallelUseDirectBuffers = parallelUseDirectBuffers;
-    }
-
-    /**
-     * Override to track when features have been pre-written via writeFeaturesInline.
-     */
-    @Override
-    public synchronized void writeFeaturesInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException {
-        super.writeFeaturesInline(ordinal, stateMap);
-        featuresPreWritten = true;
     }
 
     /**
@@ -154,8 +144,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                 ordinalMapper,
                 inlineFeatures,
                 featureStateSuppliers,
-                baseOffset,
-                featuresPreWritten
+                baseOffset
             );
 
             // Update maxOrdinalWritten
