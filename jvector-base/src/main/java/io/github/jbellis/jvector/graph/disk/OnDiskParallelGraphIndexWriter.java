@@ -20,7 +20,6 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -72,7 +71,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     private final boolean parallelUseDirectBuffers;
 
     /**
-     * Constructs an OnDiskParallelGraphIndexWriter with all parameters including optional file path
+     * Constructs an OnDiskParallelGraphIndexWriter with all parameters including file path
      * and parallel write configuration.
      *
      * @param randomAccessWriter the writer to use for output
@@ -82,7 +81,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
      * @param oldToNewOrdinals mapper for ordinal renumbering
      * @param dimension the vector dimension
      * @param features the features to include
-     * @param filePath file path required for parallel writes (can be null for sequential writes)
+     * @param filePath file path required for parallel writes
      * @param parallelWorkerThreads number of worker threads for parallel writes (0 = use available processors)
      * @param parallelUseDirectBuffers whether to use direct ByteBuffers for parallel writes
      */

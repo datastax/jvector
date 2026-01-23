@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -67,8 +66,7 @@ import java.util.function.IntFunction;
 public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
 
     /**
-     * Constructs an OnDiskGraphIndexWriter with all parameters including optional file path
-     * and parallel write configuration.
+     * Constructs an OnDiskGraphIndexWriter.
      *
      * @param randomAccessWriter the writer to use for output
      * @param version the format version to write

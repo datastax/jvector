@@ -55,18 +55,11 @@ public interface GraphIndexWriter extends Closeable {
     void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
 
     /**
-     * Factory method to obtain a builder for the specified writer type with an IndexWriter.
-     * <p>
-     * This overload accepts any IndexWriter but certain types have specific requirements:
-     * <ul>
-     *   <li>ON_DISK requires a RandomAccessWriter (will throw IllegalArgumentException otherwise)</li>
-     *   <li>ON_DISK_SEQUENTIAL accepts any IndexWriter</li>
-     *   <li>ON_DISK_PARALLEL is not supported via this method (use the Path overload instead)</li>
-     * </ul>
+     * Factory method to obtain a builder for the specified writer type.
      *
      * @param type the type of writer to create
      * @param graphIndex the graph index to write
-     * @param out the output writer
+     * @param out the Path to the output file
      * @return a builder for the specified writer type
      * @throws IllegalArgumentException if the type requires a specific writer type that wasn't provided
      */
