@@ -16,8 +16,8 @@
 package io.github.jbellis.jvector.microbench;
 
 
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.Hdf5Loader;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderHDF5;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -44,8 +44,10 @@ public class GraphBuildBench {
         final ListRandomAccessVectorValues ravv;
 
         public Parameters() {
-            this.ds = Hdf5Loader.load("hdf5/glove-100-angular.hdf5");
-            this.ravv = new ListRandomAccessVectorValues(ds.baseVectors, ds.baseVectors.get(0).length());
+            this.ds = new DataSetLoaderHDF5().loadDataSet("hdf5/glove-100-angular.hdf5").orElseThrow(
+                    () -> new RuntimeException("Unable to load dataset: hdf5/glove-100-angular.hdf5" )
+            );
+            this.ravv = new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
         }
     }
 
@@ -54,7 +56,7 @@ public class GraphBuildBench {
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuild(Blackhole bh, Parameters p) {
         long start = System.nanoTime();
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.similarityFunction, 8, 60, 1.2f, 1.4f, false);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, false);
         graphIndexBuilder.build(p.ravv);
         System.out.format("Build M=%d ef=%d in %.2fs%n",
                 32, 600, (System.nanoTime() - start) / 1_000_000_000.0);
@@ -65,7 +67,7 @@ public class GraphBuildBench {
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) {
         long start = System.nanoTime();
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.similarityFunction, 8, 60, 1.2f, 1.4f, true);
+        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, true);
         graphIndexBuilder.build(p.ravv);
         System.out.format("Build M=%d ef=%d in %.2fs%n",
                 32, 600, (System.nanoTime() - start) / 1_000_000_000.0);

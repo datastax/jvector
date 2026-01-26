@@ -16,8 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
@@ -52,12 +52,15 @@ public class BenchYAML {
         if (!datasetNames.isEmpty()) {
             System.out.println("Executing the following datasets: " + datasetNames);
 
-            for (var datasetName : datasetNames) {
-                DataSet ds = DataSetLoader.loadDataSet(datasetName);
+            String hdf5 = ".hdf5";
+            for (var rawname : datasetNames) {
+                String datasetName =
+                        rawname.endsWith(hdf5) ? rawname.substring(0, rawname.length() - hdf5.length() -1) : rawname;
+                // pre-loading and early error phase
+                DataSets.loadDataSet(datasetName).orElseThrow(
+                        () -> new RuntimeException("Could not load dataset:" + datasetName)
+                );
 
-                if (datasetName.endsWith(".hdf5")) {
-                    datasetName = datasetName.substring(0, datasetName.length() - ".hdf5".length());
-                }
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
                 allConfigs.add(config);
             }
@@ -76,7 +79,9 @@ public class BenchYAML {
         for (var config : allConfigs) {
             String datasetName = config.dataset;
 
-            DataSet ds = DataSetLoader.loadDataSet(datasetName);
+            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                    () -> new RuntimeException("Could not load dataset:" + datasetName)
+            );
 
             Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,

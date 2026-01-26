@@ -20,12 +20,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
-import io.github.jbellis.jvector.example.yaml.ConstructionParameters;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
-import io.github.jbellis.jvector.example.yaml.SearchParameters;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -133,8 +130,10 @@ public class AutoBenchYAML {
 
                 logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSetLoader.loadDataSet(datasetName);
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.baseVectors.size());
+                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                            () -> new RuntimeException("Dataset " + datasetName + " not found")
+                    );
+                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {
@@ -193,7 +192,7 @@ public class AutoBenchYAML {
             // Write CSV data
             try (FileWriter writer = new FileWriter(outputFile)) {
                 // Write CSV header
-                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time\n");
+                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited\n");
 
                 // Write one row per dataset with average metrics
                 for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
@@ -205,7 +204,8 @@ public class AutoBenchYAML {
                     writer.write(datasetStats.getQpsStdDev() + ",");
                     writer.write(datasetStats.getAvgLatency() + ",");
                     writer.write(datasetStats.getAvgRecall() + ",");
-                    writer.write(datasetStats.getIndexConstruction() + "\n");
+                    writer.write(datasetStats.getIndexConstruction() + ",");
+                    writer.write(datasetStats.getAvgNodesVisited() + "\n");
                 }
             }
 

@@ -34,7 +34,7 @@ import java.util.List;
 public class SiftLoader {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
+    public static List<VectorFloat<?>> readFvecs(String filePath) {
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
             while (dis.available() > 0) {
@@ -49,6 +49,8 @@ public class SiftLoader {
                 floatBuffer.get(vector);
                 vectors.add(vectorTypeSupport.createFloatVector(vector));
             }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
         }
         return vectors;
     }
@@ -56,7 +58,7 @@ public class SiftLoader {
     public static List<List<Integer>> readIvecs(String filename) {
         var groundTruthTopK = new ArrayList<List<Integer>>();
 
-        try (var dis = new DataInputStream(new FileInputStream(filename))) {
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filename)))) {
             while (dis.available() > 0) {
                 var numNeighbors = Integer.reverseBytes(dis.readInt());
                 var neighbors = new ArrayList<Integer>(numNeighbors);

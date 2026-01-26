@@ -16,13 +16,13 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 
 /**
@@ -59,12 +59,12 @@ public class InlineVectors extends AbstractFeature {
     }
 
     @Override
-    public void writeHeader(DataOutput out) {
+    public void writeHeader(IndexWriter out) {
         // common header contains dimension, which is sufficient
     }
 
     @Override
-    public void writeInline(DataOutput out, Feature.State state) throws IOException {
+    public void writeInline(IndexWriter out, Feature.State state) throws IOException {
         vectorTypeSupport.writeFloatVector(out, ((InlineVectors.State) state).vector);
     }
 

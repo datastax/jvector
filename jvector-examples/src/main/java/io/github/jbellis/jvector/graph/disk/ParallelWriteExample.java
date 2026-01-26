@@ -17,8 +17,8 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
@@ -304,15 +304,17 @@ public class ParallelWriteExample {
         String datasetName = args.length > 0 ? args[0] : "cohere-english-v3-100k";
 
         System.out.println("Loading dataset: " + datasetName);
-        DataSet ds = DataSetLoader.loadDataSet(datasetName);
-        System.out.printf("Loaded %d vectors of dimension %d%n", ds.baseVectors.size(), ds.getDimension());
+        DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                () -> new RuntimeException("Dataset " + datasetName + " not found")
+        );
+        System.out.printf("Loaded %d vectors of dimension %d%n", ds.getBaseVectors().size(), ds.getDimension());
 
         var floatVectors = ds.getBaseRavv();
 
         // Build PQ compression (matching Grid.buildOnDisk pattern)
         System.out.println("Computing PQ compression...");
         int pqM = floatVectors.dimension() / 8; // m = dimension / 8
-        boolean centerData = ds.similarityFunction == io.github.jbellis.jvector.vector.VectorSimilarityFunction.EUCLIDEAN;
+        boolean centerData = ds.getSimilarityFunction() == io.github.jbellis.jvector.vector.VectorSimilarityFunction.EUCLIDEAN;
         var pq = ProductQuantization.compute(floatVectors, pqM, 256, centerData, UNWEIGHTED);
         var pqVectors = (PQVectors) pq.encodeAll(floatVectors);
         System.out.printf("PQ compression: %d subspaces, 256 clusters%n", pqM);
@@ -328,7 +330,7 @@ public class ParallelWriteExample {
         System.out.printf("Building graph with PQ-compressed vectors (M=%d, efConstruction=%d)...%n", M, efConstruction);
         long buildStart = System.nanoTime();
 
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pqVectors);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pqVectors);
         var builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction,
                 neighborOverflow, alpha, addHierarchy, refineFinalGraph);
 

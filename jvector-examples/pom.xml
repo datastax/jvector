@@ -163,7 +163,7 @@
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -212,7 +212,7 @@
                                         <classpath/>
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -306,7 +306,7 @@
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>

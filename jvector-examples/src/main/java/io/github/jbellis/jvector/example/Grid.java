@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
@@ -27,7 +28,7 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -54,8 +55,6 @@ import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -198,7 +197,7 @@ public class Grid {
                         } else {
                             long start = System.nanoTime();
                             cv = compressor.encodeAll(ds.getBaseRavv());
-                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.baseVectors.size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
                         }
                     }
 
@@ -238,7 +237,7 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
 
         var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.similarityFunction, pq);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
@@ -304,7 +303,7 @@ public class Grid {
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
-        indexBuildTimes.put(ds.name, totalTime);
+        indexBuildTimes.put(ds.getName(), totalTime);
 
         // open indexes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
@@ -397,7 +396,7 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                           floatVectors.dimension(),
                                                           M,
@@ -459,7 +458,7 @@ public class Grid {
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
         var benchmarks = setupBenchmarks(benchmarkSpec);
-        QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.name);
+        QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
         // 2) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
@@ -608,9 +607,10 @@ public class Grid {
                                                             ThroughputBenchmark.createDefault()),
                                                     LatencyBenchmark.createDefault(),
                                                     CountBenchmark.createDefault(),
-                                                    AccuracyBenchmark.createDefault()
+                                                    AccuracyBenchmark.createDefault(),
+                                                    CountBenchmark.createDefault()
                                             );
-                                            QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.name);
+                                            QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.getName());
                                             for (int topK : topKGrid.keySet()) {
                                                 for (boolean usePruning : usePruningGrid) {
                                                     for (double overquery : topKGrid.get(topK)) {
@@ -633,12 +633,12 @@ public class Grid {
                                                         for (Metric metric : metricsList) {
                                                             allMetrics.put(metric.getHeader(), metric.getValue());
                                                         }
-                                                        
+
                                                         // Add build time if available
-                                                        if (indexBuildTimes.containsKey(ds.name)) {
-                                                            allMetrics.put("Index Build Time", indexBuildTimes.get(ds.name));
+                                                        if (indexBuildTimes.containsKey(ds.getName())) {
+                                                            allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
                                                         }
-                                                        
+
                                                         // Add memory metrics if available
                                                         if (buildSnapshot != null) {
                                                             allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
@@ -647,14 +647,14 @@ public class Grid {
                                                             allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
                                                             allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
                                                         }
-                                                        
+
                                                         // Add disk metrics if available
                                                         if (buildDiskSnapshot != null) {
                                                             allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.totalBytes / 1024.0 / 1024.0);
                                                             allMetrics.put("File Count", buildDiskSnapshot.fileCount);
                                                         }
-                                                        
-                                                        results.add(new BenchResult(ds.name, params, allMetrics));
+
+                                                        results.add(new BenchResult(ds.getName(), params, allMetrics));
                                                     }
                                                 }
                                             }
@@ -706,7 +706,7 @@ public class Grid {
             if (cp.supportsCaching()) {
                 try {
                     Files.createDirectories(path.getParent());
-                    try (var writer = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(path)))) {
+                    try (var writer = new BufferedRandomAccessWriter(path)) {
                         compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
                     }
                 } catch (IOException e) {
@@ -738,16 +738,16 @@ public class Grid {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.similarityFunction, ds.getBaseRavv());
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.similarityFunction);
+                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.similarityFunction);
+            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
         }
 

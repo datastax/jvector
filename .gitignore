@@ -2,6 +2,7 @@ target/
 local/
 .mvn/wrapper/maven-wrapper.jar
 .java-version
+.bob/
 
 ### Bench caches
 pq_cache/
@@ -13,6 +14,12 @@ replay_pid*
 ### IntelliJ IDEA ###
 .idea
 *.iml
+
+### Eclipse/JDTLS ###
+.settings/
+.classpath
+.project
+.factorypath
 
 ### VS Code ###
 .vscode/
