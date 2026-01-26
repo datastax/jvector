@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
@@ -89,7 +90,7 @@ public class Grid {
     /**
      * Get the index build time for a dataset
      */
-    public static Double getIndexBuildTime(String datasetName) {
+    public static Double getIndexBuildTimeSeconds(String datasetName) {
         return indexBuildTimes.get(datasetName);
     }
 
@@ -165,7 +166,7 @@ public class Grid {
                             Path testDirectory) throws IOException
     {
         // Capture initial memory and disk state
-        var diagnostics = new io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics(getDiagnosticLevel());
+        var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
         diagnostics.setMonitoredDirectory(testDirectory);
         diagnostics.capturePrePhaseSnapshot("Graph Build");
 

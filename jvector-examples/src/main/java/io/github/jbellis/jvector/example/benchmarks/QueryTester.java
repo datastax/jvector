@@ -16,11 +16,10 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import io.github.jbellis.jvector.example.Grid;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
@@ -84,7 +83,11 @@ public class QueryTester {
         // Use NONE level to suppress logging output that would break the table
         var diagnostics = new BenchmarkDiagnostics(io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel.NONE);
         if (monitoredDirectory != null) {
-            diagnostics.setMonitoredDirectory(monitoredDirectory);
+            try {
+                diagnostics.setMonitoredDirectory(monitoredDirectory);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }
         diagnostics.capturePrePhaseSnapshot("Query");
 
@@ -121,9 +124,9 @@ public class QueryTester {
         }
         
         // Add index build time if available
-        if (datasetName != null && Grid.getIndexBuildTime(datasetName) != null) {
+        if (datasetName != null && Grid.getIndexBuildTimeSeconds(datasetName) != null) {
             results.add(Metric.of("Index build time", ".2f",
-                Grid.getIndexBuildTime(datasetName)));
+                Grid.getIndexBuildTimeSeconds(datasetName)));
         }
 
         return results;

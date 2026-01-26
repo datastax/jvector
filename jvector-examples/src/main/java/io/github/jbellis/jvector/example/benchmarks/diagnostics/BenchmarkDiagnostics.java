@@ -25,8 +25,11 @@ import java.util.function.Supplier;
 /**
  * Main diagnostics coordinator for benchmarks. Provides a unified interface
  * for collecting system metrics, performance data, disk usage, and analyzing benchmark results.
+ *
+ * <p>This class now uses an event-driven DiskUsageMonitor that must be properly started
+ * and closed. Use try-with-resources or explicitly call close() when done.
  */
-public class BenchmarkDiagnostics {
+public class BenchmarkDiagnostics implements AutoCloseable {
 
     private final DiagnosticLevel level;
     private final SystemMonitor systemMonitor;
@@ -36,6 +39,7 @@ public class BenchmarkDiagnostics {
     private final List<DiskUsageMonitor.DiskUsageSnapshot> diskSnapshots;
     private final List<PerformanceAnalyzer.TimingAnalysis> timingAnalyses;
     private Path monitoredDirectory;
+    private boolean diskMonitorStarted = false;
 
     public BenchmarkDiagnostics(DiagnosticLevel level) {
         this.level = level;
@@ -70,10 +74,18 @@ public class BenchmarkDiagnostics {
     }
 
     /**
-     * Sets the directory to monitor for disk usage
+     * Sets the directory to monitor for disk usage and starts event-driven monitoring.
+     * This should be called before capturing any snapshots for optimal performance.
+     *
+     * @param directory the directory to monitor
+     * @throws IOException if unable to start monitoring
      */
-    public void setMonitoredDirectory(Path directory) {
+    public void setMonitoredDirectory(Path directory) throws IOException {
         this.monitoredDirectory = directory;
+        if (directory != null && !diskMonitorStarted) {
+            diskUsageMonitor.start(directory);
+            diskMonitorStarted = true;
+        }
     }
 
     /**
@@ -351,6 +363,18 @@ public class BenchmarkDiagnostics {
         }
 
         System.out.println("====================================\n");
+    }
+    
+    /**
+     * Closes the diagnostics system and releases resources.
+     * This must be called to properly shut down the disk usage monitor.
+     */
+    @Override
+    public void close() throws IOException {
+        if (diskMonitorStarted) {
+            diskUsageMonitor.close();
+            diskMonitorStarted = false;
+        }
     }
 
     /**
