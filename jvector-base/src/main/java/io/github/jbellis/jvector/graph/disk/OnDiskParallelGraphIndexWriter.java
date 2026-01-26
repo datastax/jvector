@@ -97,6 +97,9 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                                    boolean parallelUseDirectBuffers)
     {
         super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
+        if (filePath == null) {
+            throw new IllegalStateException("Parallel writes require a file path");
+        }
         this.filePath = filePath;
         this.parallelWorkerThreads = parallelWorkerThreads;
         this.parallelUseDirectBuffers = parallelUseDirectBuffers;
@@ -127,10 +130,6 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     @Override
     protected void writeL0Records(ImmutableGraphIndex.View view,
                                 Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
-        if (filePath == null) {
-            throw new IllegalStateException("Parallel writes require a file path. Use Builder(ImmutableGraphIndex, Path) constructor.");
-        }
-
         // Flush writer before async writes to ensure buffered data is on disk
         // This is critical when using AsynchronousFileChannel in parallel with BufferedRandomAccessWriter
         out.flush();
