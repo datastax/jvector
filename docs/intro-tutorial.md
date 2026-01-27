@@ -37,7 +37,7 @@ RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, di
 ```
 
 > [!TIP]
-> In this example, all vectors are loaded in-memory, but RAAVs are quite versatile. For example, you might have a RAVV backed by disk (check out `MMapRandomAccessVectorValues.java`) or write your own custom RAAV that transfers data over a network interface.
+> In this example, all vectors are loaded in-memory, but RAVVs are quite versatile. For example, you might have a RAVV backed by disk (check out `MMapRandomAccessVectorValues.java`) or write your own custom RAVV that transfers data over a network interface.
 
 > [!NOTE]
 > A note on terminology:
@@ -69,7 +69,7 @@ VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.EUCLIDEAN
 BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
 ```
 
-Let's also initialize the graph parameters. For now we won't worry about the exact function of the parameters, except to note that the below is a reasonable set of defaults. Refer the DiskANN and HNSW papers for more details.
+Let's also initialize the graph parameters. For now we will not worry about the exact function of the parameters, except to note that these are reasonable defaults. Refer the DiskANN and HNSW papers for more details.
 
 <!-- TODO describe graph parameters in a separate doc -->
 
@@ -102,12 +102,12 @@ ImmutableGraphIndex graph = builder.build(ravv);
 > [!NOTE]
 > You may notice that we supplied the same `ravv` to `builder.build`, even though we'd already passed in the RAVV while creating the `BuildScoreProvider`. This is necessary since generally speaking, the `BuildScoreProvider` won't keep a reference to the actual base vectors, it just so happens that we're using an "exact" score provider that does so.
 
-At this point, you have a completed Graph Index that's entirely fully in-memory.
+At this point, you have a completed Graph Index that resides in-memory.
 
 To perform a search operation, you need to first create a `GraphSearcher`.
 
 > [!IMPORTANT]
-> The graph index itself can be shared between threads, but `GraphSearcher`s maintain internal state and are therefore NOT thread-safe.
+> The graph index itself can be shared between threads, but `GraphSearcher`s maintain internal state and are therefore NOT thread-safe. To run concurrent searches across multiple threads, each thread should have it's own `GraphSearcher`. The same searcher can be re-used across different queries in the same thread.
 
 ```java
 // Remember to close the searcher using searcher.close() or a try-with-resources block
