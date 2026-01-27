@@ -1,3 +1,19 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.github.jbellis.jvector.example;
 
 import java.io.IOException;
@@ -19,6 +35,10 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
+// This file provides the entirety of the code used in introductory tutorial.
+// Changes to this file should be applied to `intro-tutorial.md` as well.
+// If you're looking through this file to learn JVector,
+// you may want to go through `docs/intro-tutorial.md` as well.
 public class VectorIntro {
     public static void main(String[] args) throws IOException {
         // `VectorizationProvider` is automatically picked based on the system, language version and runtime flags
