@@ -125,7 +125,7 @@ public abstract class PQVectors implements CompressedVectors {
                             var localRavv = ravvCopy.get();
                             var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
                             int mappedOrdinal = ordinalsMapping.applyAsInt(ordinal);
-                            if (mappedOrdinal < 0 || mappedOrdinal >= vectorCount) {
+                            if (mappedOrdinal < 0 || mappedOrdinal >= ravv.size()) {
                                 throw new IllegalArgumentException(
                                         String.format("ordinalsMapping returned out-of-bounds ordinal %d for input %d (vectorCount=%d)",
                                                 mappedOrdinal, ordinal, vectorCount));
