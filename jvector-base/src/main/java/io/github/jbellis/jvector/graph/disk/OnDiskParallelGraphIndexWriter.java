@@ -188,6 +188,13 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                 config,
                 filePath)) {
 
+            // Pre-allocate the L0 region to ensure the file is large enough for position-based writes
+            // This is critical for AsynchronousFileChannel writes to work correctly across all file systems
+            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
+            out.seek(endOffset - 1);
+            out.writeByte(0);  // Write a single byte at the end to extend the file
+            out.flush();
+            
             parallelWriter.writeL0Records(
                 ordinalMapper,
                 inlineFeatures,
@@ -199,7 +206,6 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             maxOrdinalWritten = ordinalMapper.maxOrdinal();
 
             // Seek to end of L0 region
-            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
             out.seek(endOffset);
         }
     }
