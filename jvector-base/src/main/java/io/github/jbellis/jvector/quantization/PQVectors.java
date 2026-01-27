@@ -102,6 +102,8 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        assert vectorCount < Integer.MAX_VALUE : "vectorCount=" + vectorCount;
+
         int compressedDimension = pq.compressedVectorSize();
         PQLayout layout = new PQLayout(vectorCount, compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
@@ -122,7 +124,13 @@ public abstract class PQVectors implements CompressedVectors {
                             // Retrieve the slice and mutate it.
                             var localRavv = ravvCopy.get();
                             var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
+                            int mappedOrdinal = ordinalsMapping.applyAsInt(ordinal);
+                            if (mappedOrdinal < 0 || mappedOrdinal >= vectorCount) {
+                                throw new IllegalArgumentException(
+                                        String.format("ordinalsMapping returned out-of-bounds ordinal %d for input %d (vectorCount=%d)",
+                                                mappedOrdinal, ordinal, vectorCount));
+                            }
+                            var vector = localRavv.getVector(mappedOrdinal);
                             if (vector != null)
                                 pq.encodeTo(vector, slice);
                             else
