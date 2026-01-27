@@ -37,8 +37,7 @@ import java.util.function.IntFunction;
  * owning its own ImmutableGraphIndex.View for thread-safe neighbor iteration.
  * Each task processes a contiguous range of ordinals to reduce task creation overhead.
  * <p>
- * Unlike the previous implementation that built records in memory, this version writes
- * directly to the AsynchronousFileChannel using position-based writes. This allows it
+ * This writes directly to the AsynchronousFileChannel using position-based writes, allowing it
  * to handle pre-written features the same way as the sequential writer: by checking
  * for null suppliers and skipping those features (not writing to those positions).
  */
@@ -179,4 +178,3 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
     }
 }
 
-// Made with Bob

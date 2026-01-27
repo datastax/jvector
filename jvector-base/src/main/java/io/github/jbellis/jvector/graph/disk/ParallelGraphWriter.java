@@ -311,4 +311,3 @@ class ParallelGraphWriter implements AutoCloseable {
     }
 }
 
-// Made with Bob
