@@ -111,8 +111,9 @@ public abstract class PQVectors implements CompressedVectors {
         // Note that the total vector count cannot exceed 2B as that is Integer.MAX_VALUE
         if (log.isDebugEnabled() || System.getProperties().containsKey("VECTOR_DEBUG")) {
             IntStream.range(0, vectorCount).forEach(i -> {
-                if (ordinalsMapping.applyAsInt(i) > vectorCount)
-                    throw new IllegalArgumentException("vectorCount=" + vectorCount + " exceeds maximum " + vectorCount);
+                int mappedOrdinal = ordinalsMapping.applyAsInt(i);
+                if (mappedOrdinal > vectorCount)
+                    throw new IllegalArgumentException("vectorCount=" + mappedOrdinal + " exceeds maximum " + vectorCount);
             });
             log.info("Range check completed for encodeAndBuild with vectorCount={}", vectorCount);
         }
