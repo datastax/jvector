@@ -105,6 +105,56 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     }
 
     /**
+     * Writes inline features using AsynchronousFileChannel for consistency with parallel writes.
+     * This avoids the need for expensive sync() operations and ensures data is visible
+     * to the AsynchronousFileChannel used in writeL0Records.
+     *
+     * @param ordinal the ordinal to write features for
+     * @param stateMap the feature states to write
+     * @throws IOException if an I/O error occurs
+     */
+    @Override
+    public synchronized void writeFeaturesInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException {
+        for (var featureId : stateMap.keySet()) {
+            if (!featureMap.containsKey(featureId)) {
+                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
+            }
+        }
+
+        // Flush any buffered data before using async channel
+        out.flush();
+        
+        long featureOffset = featureOffsetForOrdinal(ordinal);
+        
+        // Use AsynchronousFileChannel for writes to ensure consistency with parallel writes
+        try (var channel = java.nio.channels.AsynchronousFileChannel.open(
+                filePath,
+                java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.READ)) {
+            
+            long currentPosition = featureOffset;
+            var writer = new io.github.jbellis.jvector.disk.ByteBufferIndexWriter(
+                java.nio.ByteBuffer.allocate(8192).order(java.nio.ByteOrder.BIG_ENDIAN));
+            
+            for (var feature : inlineFeatures) {
+                var state = stateMap.get(feature.id());
+                if (state != null) {
+                    writer.reset();
+                    feature.writeInline(writer, state);
+                    java.nio.ByteBuffer buffer = writer.cloneBuffer();
+                    // Synchronous write for simplicity in this method
+                    channel.write(buffer, currentPosition).get();
+                }
+                currentPosition += feature.featureSize();
+            }
+        } catch (java.util.concurrent.ExecutionException | InterruptedException e) {
+            throw new IOException("Error writing inline features", e);
+        }
+
+        maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
+    }
+
+    /**
      * Writes L0 records using parallel workers with asynchronous file I/O.
      * <p>
      * Records are written asynchronously using AsynchronousFileChannel for improved throughput
