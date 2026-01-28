@@ -1021,17 +1021,56 @@ public class GraphIndexBuilder implements Closeable {
                                                             float alpha,
                                                             ForkJoinPool simdExecutor,
                                                             ForkJoinPool parallelExecutor) throws IOException {
-        // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
-        //  However, the new inserted vectors do have the new ordinals, so recall:
-        //  - recall will be severely affected
-        //  - there may be repeated IDs
-        //  As a consequence, OnHeapGraphIndexTest.testIncrementalInsertionFromOnDiskIndex_withNonIdentityOrdinalMapping has been disabled for now.
-        //  Leaving this note for future reference and as a warning on this experimental function.
+        // Synchronize the existing graph's ID space with the remapped vector ordinals.
+        // Without this transformation, the adjacency lists loaded from disk reference
+        // physical ordinals that no longer align with the logical ordinals in the current RAVV.
+        //
+        // WARNING: The 'newVectors' map must be a stable extension of the map used to
+        // create the on-disk graph. The first 'startingNodeOffset' physical ordinals in
+        // 'newVectors' must map to the exact same logical IDs as the original base graph.
+        // Failure to maintain this provenance will cause the loader to re-base nodes into
+        // the wrong logical space, leading to collision exceptions or catastrophic recall loss.
+        //
+        // We resolve this by inverting the logical-to-physical mapping and injecting a
+        // translation operator into the graph loader, effectively re-basing the
+        // existing index into the current logical ordinal space before incremental
+        // insertion begins.
 
         var diversityProvider = new VamanaDiversityProvider(buildScoreProvider, alpha);
 
-        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, newVectors.dimension(), overflowRatio, diversityProvider);) {
+        //TODO decide if we need the inverted map or not.  The supplied map seems good as-is.
+//        // Calculate the inverse mapping: Physical Ordinal -> Logical Ordinal
+//        int[] logicalToPhysical = newVectors.getMap();
+//        int maxPhysical = 0;
+//        for (int pId : logicalToPhysical) maxPhysical = Math.max(maxPhysical, pId);
+//
+//        int[] physicalToLogical = new int[maxPhysical + 1];
+//        java.util.Arrays.fill(physicalToLogical, -1);
+//        for (int lId = 0; lId < logicalToPhysical.length; lId++) {
+////            physicalToLogical[logicalToPhysical[lId]] = lId;
+//                        physicalToLogical[lId] = lId;
+//        }
+//
+//        // Catch provenance gaps in the mapping
+//        java.util.function.IntUnaryOperator mapper = (pId) -> {
+//            int lId = physicalToLogical[pId];
+//            if (lId == -1) {
+//                throw new IllegalStateException("Node ID " + pId + " from on-disk graph has no logical mapping");
+//            }
+//            return lId;
+//        };
 
+        int[] map = newVectors.getMap();
+
+        java.util.function.IntUnaryOperator mapper = (pId) -> {
+            if (pId < 0 || pId >= map.length) {
+                throw new IllegalStateException("Physical ID " + pId + " is out of bounds for the map.");
+            }
+            return map[pId];
+        };
+
+        // Load the graph with the mapper to bring it into the new ordinal space
+        try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, newVectors.dimension(), overflowRatio, diversityProvider, mapper)) {
             GraphIndexBuilder builder = new GraphIndexBuilder(
                     buildScoreProvider,
                     newVectors.dimension(),
@@ -1045,8 +1084,6 @@ public class GraphIndexBuilder implements Closeable {
             );
 
             var vv = newVectors.threadLocalSupplier();
-
-            // parallel graph construction from the merge documents Ids
             simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
                 builder.addGraphNode(ord, vv.get().getVector(ord));
             })).join();

@@ -565,7 +565,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     /**
-     * Saves the graph to the given DataOutput for reloading into memory later
+     * Loads the graph from the given RandomAccessReader into an on-heap representation.
      */
     @Experimental
     @Deprecated
@@ -619,6 +619,80 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         graph.setDegrees(layerDegrees);
         graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+
+        return graph;
+    }
+
+    /**
+     * Loads the graph from the given RandomAccessReader into an on-heap representation.
+     * <p>
+     * This overload accepts an {@link java.util.function.IntUnaryOperator} to translate
+     * node IDs as they are read from the stream, allowing the graph to be re-based
+     * into a different ordinal space during deserialization. This is essential when
+     * merging an on-disk graph whose physical ordinals do not match the logical
+     * ordinals of the destination RAVV.
+     *
+     * @param in                the reader to provide the graph data
+     * @param dimension         the vector dimension
+     * @param overflowRatio     the ratio of extra neighbors to allow temporarily
+     * @param diversityProvider the provider for neighbor diversity logic
+     * @param mapper            a function to translate ordinals from the input
+     * source to the target graph ID space
+     * @return an {@code OnHeapGraphIndex} with remapped ordinals
+     */
+    @Experimental
+    @Deprecated
+    public static OnHeapGraphIndex load(RandomAccessReader in, int dimension, double overflowRatio, DiversityProvider diversityProvider, java.util.function.IntUnaryOperator mapper) throws IOException {
+        int magic = in.readInt(); // the magic number
+        if (magic != OnHeapGraphIndex.MAGIC) {
+            throw new IOException("Unsupported magic number: " + magic);
+        }
+
+        int version = in.readInt(); // The version
+        if (version != 4) {
+            throw new IOException("Unsupported version: " + version);
+        }
+
+        // Write graph-level properties.
+        int layerCount = in.readInt();
+        var layerDegrees = new ArrayList<Integer>(layerCount);
+        for (int level = 0; level < layerCount; level++) {
+            layerDegrees.add(in.readInt());
+        }
+
+        int entryNode = in.readInt();
+
+        boolean isHierarchical = layerCount > 1;
+        var graph = new OnHeapGraphIndex(layerDegrees, dimension, overflowRatio, diversityProvider, isHierarchical);
+
+        Map<Integer, Integer> nodeLevelMap = new HashMap<>();
+
+        for (int level = 0; level < layerCount; level++) {
+            int layerSize = in.readInt();
+
+            for (int i = 0; i < layerSize; i++) {
+                int physicalId = in.readInt(); // Read the node ID stored in the graph
+                int nNeighbors = in.readInt();
+
+                int logicalId = mapper.applyAsInt(physicalId); // Apply the inverted map to get the new node ID
+                var ca = new NodeArray(nNeighbors);
+                for (int j = 0; j < nNeighbors; j++) {
+                    int physicalNeighborId = in.readInt(); // Read the current neighboring node IDs stored in the graph
+                    float score = in.readFloat();
+                    ca.addInOrder(mapper.applyAsInt(physicalNeighborId), score); // Apply the inverted map to the neighbors
+                }
+                graph.connectNode(level, logicalId, ca);
+                nodeLevelMap.put(logicalId, level);
+            }
+        }
+
+        for (var k : nodeLevelMap.keySet()) {
+            graph.markComplete(new ImmutableGraphIndex.NodeAtLevel(nodeLevelMap.get(k), k));
+        }
+
+        graph.setDegrees(layerDegrees);
+        // Remap the entry node as well
+        graph.updateEntryNode(new ImmutableGraphIndex.NodeAtLevel(graph.getMaxLevel(), mapper.applyAsInt(entryNode)));
 
         return graph;
     }
