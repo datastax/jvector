@@ -27,6 +27,7 @@ import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
@@ -88,6 +89,13 @@ public class Grid {
     private static final Map<String,Double> indexBuildTimes = new HashMap<>();
 
     private static int diagnostic_level;
+
+    /**
+     * Get the index build time for a dataset
+     */
+    public static Double getIndexBuildTimeSeconds(String datasetName) {
+        return indexBuildTimes.get(datasetName);
+    }
 
     static void runAll(DataSet ds,
                        List<Integer> mGrid,
@@ -163,6 +171,11 @@ public class Grid {
                             DataSet ds,
                             Path testDirectory) throws IOException
     {
+        // Capture initial memory and disk state
+        var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
+        diagnostics.setMonitoredDirectory(testDirectory);
+        diagnostics.capturePrePhaseSnapshot("Graph Build");
+
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
         ImmutableGraphIndex compactIndex = null;
 
@@ -176,6 +189,9 @@ public class Grid {
             // currently only support inline vectors
             compactIndex = buildCompaction(M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, numSplits);
         }
+
+        // Capture post-build memory and disk state
+        diagnostics.capturePostPhaseSnapshot("Graph Build");
 
         try {
             //for (var cpSupplier : compressionGrid) {
@@ -200,7 +216,7 @@ public class Grid {
                     //}
 
                     //try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                        //testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                        //testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, testDirectory);
                     //} catch (Exception e) {
                         //throw new RuntimeException(e);
                     //}
@@ -213,11 +229,16 @@ public class Grid {
                 CompressedVectors cv = null;
                 final Set<FeatureId> featureSetForIndex = Set.of();
                 try (var cs = new ConfiguredSystem(ds, compactIndex, cv, featureSetForIndex)) {
-                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, testDirectory);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
                 compactIndex.close();
+            }
+
+            // Log final diagnostics summary
+            if (diagnostic_level > 0) {
+                diagnostics.logSummary();
             }
         } finally {
             for (int n = 0; n < featureSets.size(); n++) {
@@ -517,13 +538,14 @@ public class Grid {
                                           int efConstruction,
                                           float neighborOverflow,
                                           boolean addHierarchy,
-                                          Map<String, List<String>> benchmarkSpec) {
+                                          Map<String, List<String>> benchmarkSpec,
+                                          Path testDirectory) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
         var benchmarks = setupBenchmarks(benchmarkSpec);
-        QueryTester tester = new QueryTester(benchmarks);
+        QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
         // 2) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
@@ -648,11 +670,22 @@ public class Grid {
                                 for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
                                     Path testDirectory = Files.createTempDirectory("bench");
                                     try {
+                                        // Capture initial state
+                                        var diagnostics = new io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics(getDiagnosticLevel());
+                                        diagnostics.setMonitoredDirectory(testDirectory);
+                                        diagnostics.capturePrePhaseSnapshot("Build");
+
                                         var compressor = getCompressor(buildCompressor, ds);
                                         var searchCompressorObj = getCompressor(searchCompressor, ds);
                                         CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
                                         var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
                                         ImmutableGraphIndex index = indexes.get(features);
+
+                                        // Capture post-build state
+                                        diagnostics.capturePostPhaseSnapshot("Build");
+                                        var buildSnapshot = diagnostics.getLatestSystemSnapshot();
+                                        var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
+
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                             int queryRuns = 2;
                                             List<QueryBenchmark> benchmarks = List.of(
@@ -664,7 +697,7 @@ public class Grid {
                                                     AccuracyBenchmark.createDefault(),
                                                     CountBenchmark.createDefault()
                                             );
-                                            QueryTester tester = new QueryTester(benchmarks);
+                                            QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.getName());
                                             for (int topK : topKGrid.keySet()) {
                                                 for (boolean usePruning : usePruningGrid) {
                                                     for (double overquery : topKGrid.get(topK)) {
@@ -682,11 +715,33 @@ public class Grid {
                                                                 "overquery", overquery,
                                                                 "usePruning", usePruning
                                                         );
+                                                        // Collect all metrics including memory and disk usage
+                                                        Map<String, Object> allMetrics = new HashMap<>();
                                                         for (Metric metric : metricsList) {
-                                                            Map<String, Object> metrics = java.util.Map.of(metric.getHeader(), metric.getValue());
-                                                            results.add(new BenchResult(ds.getName(), params, metrics));
+                                                            allMetrics.put(metric.getHeader(), metric.getValue());
                                                         }
-                                                       results.add(new BenchResult(ds.getName(), params, Map.of("Index Build Time", indexBuildTimes.get(ds.getName()))));
+
+                                                        // Add build time if available
+                                                        if (indexBuildTimes.containsKey(ds.getName())) {
+                                                            allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
+                                                        }
+
+                                                        // Add memory metrics if available
+                                                        if (buildSnapshot != null) {
+                                                            allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
+                                                            allMetrics.put("Heap Memory Max (MB)", buildSnapshot.memoryStats.heapMax / 1024.0 / 1024.0);
+                                                            allMetrics.put("Off-Heap Direct (MB)", buildSnapshot.memoryStats.directBufferMemory / 1024.0 / 1024.0);
+                                                            allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
+                                                            allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
+                                                        }
+
+                                                        // Add disk metrics if available
+                                                        if (buildDiskSnapshot != null) {
+                                                            allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.totalBytes / 1024.0 / 1024.0);
+                                                            allMetrics.put("File Count", buildDiskSnapshot.fileCount);
+                                                        }
+
+                                                        results.add(new BenchResult(ds.getName(), params, allMetrics));
                                                     }
                                                 }
                                             }

@@ -16,28 +16,40 @@
 
 package io.github.jbellis.jvector.example.benchmarks.diagnostics;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
 /**
  * Main diagnostics coordinator for benchmarks. Provides a unified interface
- * for collecting system metrics, performance data, and analyzing benchmark results.
+ * for collecting system metrics, performance data, disk usage, and analyzing benchmark results.
+ *
+ * <p>This class now uses an event-driven DiskUsageMonitor that must be properly started
+ * and closed. Use try-with-resources or explicitly call close() when done.
  */
-public class BenchmarkDiagnostics {
+public class BenchmarkDiagnostics implements AutoCloseable {
 
     private final DiagnosticLevel level;
     private final SystemMonitor systemMonitor;
+    private final DiskUsageMonitor diskUsageMonitor;
     private final PerformanceAnalyzer performanceAnalyzer;
     private final List<SystemMonitor.SystemSnapshot> snapshots;
+    private final List<DiskUsageMonitor.DiskUsageSnapshot> diskSnapshots;
     private final List<PerformanceAnalyzer.TimingAnalysis> timingAnalyses;
+    private Path monitoredDirectory;
+    private boolean diskMonitorStarted = false;
 
     public BenchmarkDiagnostics(DiagnosticLevel level) {
         this.level = level;
         this.systemMonitor = new SystemMonitor();
+        this.diskUsageMonitor = new DiskUsageMonitor();
         this.performanceAnalyzer = new PerformanceAnalyzer();
         this.snapshots = new ArrayList<>();
+        this.diskSnapshots = new ArrayList<>();
         this.timingAnalyses = new ArrayList<>();
+        this.monitoredDirectory = null;
     }
 
     /**
@@ -62,13 +74,38 @@ public class BenchmarkDiagnostics {
     }
 
     /**
+     * Sets the directory to monitor for disk usage and starts event-driven monitoring.
+     * This should be called before capturing any snapshots for optimal performance.
+     *
+     * @param directory the directory to monitor
+     * @throws IOException if unable to start monitoring
+     */
+    public void setMonitoredDirectory(Path directory) throws IOException {
+        this.monitoredDirectory = directory;
+        if (directory != null && !diskMonitorStarted) {
+            diskUsageMonitor.start(directory);
+            diskMonitorStarted = true;
+        }
+    }
+
+    /**
      * Captures system state before starting a benchmark phase
      */
     public void capturePrePhaseSnapshot(String phase) {
-        if (level == DiagnosticLevel.NONE) return;
-
         SystemMonitor.SystemSnapshot snapshot = systemMonitor.captureSnapshot();
         snapshots.add(snapshot);
+
+        // Capture disk usage if directory is set
+        if (monitoredDirectory != null) {
+            try {
+                DiskUsageMonitor.DiskUsageSnapshot diskSnapshot = diskUsageMonitor.captureSnapshot(monitoredDirectory);
+                diskSnapshots.add(diskSnapshot);
+            } catch (IOException e) {
+                if (level != DiagnosticLevel.NONE) {
+                    System.err.printf("[%s] Failed to capture disk usage: %s%n", phase, e.getMessage());
+                }
+            }
+        }
 
         if (level == DiagnosticLevel.VERBOSE) {
             System.out.printf("[%s] Pre-phase system snapshot captured%n", phase);
@@ -80,16 +117,30 @@ public class BenchmarkDiagnostics {
      * Captures system state after completing a benchmark phase and logs changes
      */
     public void capturePostPhaseSnapshot(String phase) {
-        if (level == DiagnosticLevel.NONE) return;
-
         SystemMonitor.SystemSnapshot postSnapshot = systemMonitor.captureSnapshot();
 
-        if (!snapshots.isEmpty()) {
+        if (!snapshots.isEmpty() && level != DiagnosticLevel.NONE) {
             SystemMonitor.SystemSnapshot preSnapshot = snapshots.get(snapshots.size() - 1);
             systemMonitor.logDifference(phase, preSnapshot, postSnapshot);
         }
 
         snapshots.add(postSnapshot);
+
+        // Capture and log disk usage changes
+        if (monitoredDirectory != null) {
+            try {
+                DiskUsageMonitor.DiskUsageSnapshot postDiskSnapshot = diskUsageMonitor.captureSnapshot(monitoredDirectory);
+                if (!diskSnapshots.isEmpty() && level != DiagnosticLevel.NONE) {
+                    DiskUsageMonitor.DiskUsageSnapshot preDiskSnapshot = diskSnapshots.get(diskSnapshots.size() - 1);
+                    diskUsageMonitor.logDifference(phase, preDiskSnapshot, postDiskSnapshot);
+                }
+                diskSnapshots.add(postDiskSnapshot);
+            } catch (IOException e) {
+                if (level != DiagnosticLevel.NONE) {
+                    System.err.printf("[%s] Failed to capture disk usage: %s%n", phase, e.getMessage());
+                }
+            }
+        }
 
         if (level == DiagnosticLevel.VERBOSE) {
             systemMonitor.logDetailedGCStats(phase + "-Post");
@@ -163,6 +214,20 @@ public class BenchmarkDiagnostics {
     }
 
     /**
+     * Gets the latest system snapshot, or null if none captured
+     */
+    public SystemMonitor.SystemSnapshot getLatestSystemSnapshot() {
+        return snapshots.isEmpty() ? null : snapshots.get(snapshots.size() - 1);
+    }
+
+    /**
+     * Gets the latest disk usage snapshot, or null if none captured
+     */
+    public DiskUsageMonitor.DiskUsageSnapshot getLatestDiskSnapshot() {
+        return diskSnapshots.isEmpty() ? null : diskSnapshots.get(diskSnapshots.size() - 1);
+    }
+
+    /**
      * Compares performance between different phases
      */
     public void comparePhases(String baselinePhase, String currentPhase) {
@@ -194,6 +259,7 @@ public class BenchmarkDiagnostics {
         System.out.println("\n=== BENCHMARK DIAGNOSTICS SUMMARY ===");
         System.out.printf("Diagnostic Level: %s%n", level);
         System.out.printf("System Snapshots: %d%n", snapshots.size());
+        System.out.printf("Disk Snapshots: %d%n", diskSnapshots.size());
         System.out.printf("Timing Analyses: %d%n", timingAnalyses.size());
 
         if (!snapshots.isEmpty()) {
@@ -208,6 +274,28 @@ public class BenchmarkDiagnostics {
                 System.out.printf("Total GC Impact: %d collections, %d ms%n",
                     totalGC.totalCollections, totalGC.totalCollectionTime);
             }
+
+            // Memory usage summary
+            System.out.printf("\nMemory Usage Summary:%n");
+            System.out.printf("  Final Heap: %s / %s%n",
+                DiskUsageMonitor.formatBytes(last.memoryStats.heapUsed),
+                DiskUsageMonitor.formatBytes(last.memoryStats.heapMax));
+            System.out.printf("  Final Off-Heap: Direct=%s, Mapped=%s%n",
+                DiskUsageMonitor.formatBytes(last.memoryStats.directBufferMemory),
+                DiskUsageMonitor.formatBytes(last.memoryStats.mappedBufferMemory));
+        }
+
+        // Disk usage summary
+        if (!diskSnapshots.isEmpty()) {
+            DiskUsageMonitor.DiskUsageSnapshot firstDisk = diskSnapshots.get(0);
+            DiskUsageMonitor.DiskUsageSnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
+            DiskUsageMonitor.DiskUsageSnapshot totalDisk = lastDisk.subtract(firstDisk);
+
+            System.out.printf("\nDisk Usage Summary:%n");
+            System.out.printf("  Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.totalBytes));
+            System.out.printf("  Total Files: %d%n", lastDisk.fileCount);
+            System.out.printf("  Net Change: %s, %+d files%n",
+                DiskUsageMonitor.formatBytes(totalDisk.totalBytes), totalDisk.fileCount);
         }
 
         // Performance variance analysis
@@ -275,6 +363,18 @@ public class BenchmarkDiagnostics {
         }
 
         System.out.println("====================================\n");
+    }
+    
+    /**
+     * Closes the diagnostics system and releases resources.
+     * This must be called to properly shut down the disk usage monitor.
+     */
+    @Override
+    public void close() throws IOException {
+        if (diskMonitorStarted) {
+            diskUsageMonitor.close();
+            diskMonitorStarted = false;
+        }
     }
 
     /**
