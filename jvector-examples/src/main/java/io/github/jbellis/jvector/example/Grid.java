@@ -163,7 +163,6 @@ public class Grid {
         } else {
             indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
         }
-
         try {
             for (var cpSupplier : compressionGrid) {
                 indexes.forEach((features, index) -> {
