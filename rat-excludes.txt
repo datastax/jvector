@@ -26,3 +26,4 @@ scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/*.yml
 src/main/resources/logback.xml
+docs/*.md
