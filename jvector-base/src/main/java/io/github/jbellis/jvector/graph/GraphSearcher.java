@@ -51,7 +51,7 @@ public class GraphSearcher implements Closeable {
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
     private final NodeQueue candidates;
-    final NodeQueue approximateResults;
+    public final NodeQueue approximateResults;
     private final NodeQueue rerankedResults;
     private final IntHashSet visited;
     private final NodesUnsorted evictedResults;
@@ -307,7 +307,7 @@ public class GraphSearcher implements Closeable {
         return search(scoreProvider, topK, 0.0f, acceptOrds);
     }
 
-    void setEntryPointsFromPreviousLayer() {
+    public void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
         approximateResults.foreach(candidates::push);
@@ -316,7 +316,7 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
-    void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
+    public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
@@ -384,7 +384,7 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
+    public void searchOneLayer(SearchScoreProvider scoreProvider,
                         int rerankK,
                         float threshold,
                         int level,

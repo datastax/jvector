@@ -1,0 +1,156 @@
+package io.github.jbellis.jvector.graph.disk;
+
+import com.carrotsearch.randomizedtesting.RandomizedTest;
+import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.disk.ReaderSupplier;
+import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.example.util.AccuracyMetrics;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.BoundedLongHeap;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+import software.amazon.awssdk.services.s3.endpoints.internal.Value;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
+
+public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
+    private List<TestUtil.RandomlyConnectedGraphIndex> randomlyConnectedGraphs;
+    private List<TestVectorGraph.CircularFloatVectorValues> ravvs;
+    private ImmutableGraphIndex golden;
+    private Path testDirectory;
+    List<VectorFloat<?>> allVecs = new ArrayList<>();
+    List<OnDiskGraphIndex> graphs = new ArrayList<>();
+    int dimension = 32;
+    int numVectorsPerGraph = 10000;
+    int numGraphs = 5;
+    int numQueries = 10;
+    VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
+    RandomAccessVectorValues allravv;
+
+    @Before
+    public void setup() throws IOException {
+        //testDirectory = Files.createTempDirectory(this.getClass().getSimpleName());
+        testDirectory = Files.createTempDirectory("jvector_test");
+
+        for(int i = 0; i < numGraphs; ++i) {
+            List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
+            RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
+            var builder = new GraphIndexBuilder(ravv, similarityFunction, 10, 100, 1.0f, 1.0f, true);
+            var graph = TestUtil.buildSequentially(builder, ravv);
+
+            var outputPath = testDirectory.resolve("test_graph_" + i);
+            TestUtil.writeGraph(graph, ravv, outputPath);
+            allVecs.addAll(vecs);
+        }
+        buildGolden();
+
+    }
+    void buildGolden() throws IOException {
+        // golden
+        allravv = new ListRandomAccessVectorValues(allVecs, dimension);
+        var builder = new GraphIndexBuilder(allravv, similarityFunction, 10, 100, 1.0f, 1.0f, true);
+        golden = TestUtil.buildSequentially(builder, allravv);
+    }
+    List<SearchResult> searchFromAll(List<VectorFloat<?>> queries, int topK) {
+        List<SearchResult> srs = new ArrayList<>();
+        try (GraphSearcher searcher = new GraphSearcher(golden)) {
+            for(VectorFloat<?> q: queries) {
+                var row = new ArrayList<Integer>();
+                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+                srs.add(sr);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return srs;
+    }
+    List<List<Integer>> buildGT(List<VectorFloat<?>> queries, int topK) {
+        List<List<Integer>> rows = new ArrayList<>();
+
+        for(int i = 0; i < queries.size(); ++i) {
+            NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
+            for (int j = 0; j < allVecs.size(); j++) {
+                expected.push(j, similarityFunction.compare(queries.get(i), allVecs.get(j)));
+            }
+
+            var row = new ArrayList<Integer>();
+            for(int k = 0; k < topK; ++k) {
+                row.add(expected.pop());
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    @After
+    public void tearDown() {
+        TestUtil.deleteQuietly(testDirectory);
+    }
+
+    @Test
+    public void testCompact() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        for(int i = 0; i < numGraphs; ++i) {
+            var outputPath = testDirectory.resolve("test_graph_" + i);
+            rss.add(ReaderSupplierFactory.open(outputPath.toAbsolutePath()));
+            var onDiskGraph = OnDiskGraphIndex.load(rss.get(i));
+            graphs.add(onDiskGraph);
+        }
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs);
+        int topK = 10;
+        int globalOrdinal = 0;
+        for(int n = 0; n < numGraphs; ++n) {
+            Map<Integer, Integer> map = new HashMap<>();
+            for(int i = 0; i < numVectorsPerGraph; ++i) {
+                map.put(i, globalOrdinal++);
+            }
+            var remapper = new OrdinalMapper.MapMapper(map);
+            compactor.setRemapper(graphs.get(n), remapper);
+        }
+        var outputPath = testDirectory.resolve("test_compact_graph_");
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for(int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<SearchResult> srs = searchFromAll(queries, topK);
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+
+        List<SearchResult> csrs = new ArrayList<>();
+        compactor.compact(outputPath, similarityFunction);
+
+        ReaderSupplier rs;
+        try {
+            rs = ReaderSupplierFactory.open(outputPath);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        var compactGraph = OnDiskGraphIndex.load(rs);
+        GraphSearcher searcher = new GraphSearcher(compactGraph);
+
+        for(VectorFloat<?> q: queries) {
+            SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+            csrs.add(searcher.search(ssp, topK, Bits.ALL));
+        }
+        var recall = AccuracyMetrics.recallFromSearchResults(groundTruth, srs, topK, topK);
+        var crecall = AccuracyMetrics.recallFromSearchResults(groundTruth, csrs, topK, topK);
+        System.out.printf("Recall: %.4f%n", recall);
+        System.out.printf("Compacted Recall: %.4f%n", crecall);
+    }
+}

@@ -66,7 +66,7 @@ import java.util.function.IntFunction;
  * allows writing features for individual nodes without writing the entire graph.
  */
 public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
-    private final long startOffset;
+    final long startOffset;
     private volatile boolean useParallelWrites = false;
     private final Path filePath; // Required for parallel writes
     private final int parallelWorkerThreads;
@@ -178,7 +178,7 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
     }
 
-    private long featureOffsetForOrdinal(int ordinal) {
+    long featureOffsetForOrdinal(int ordinal) {
         return super.featureOffsetForOrdinal(startOffset, ordinal);
     }
 

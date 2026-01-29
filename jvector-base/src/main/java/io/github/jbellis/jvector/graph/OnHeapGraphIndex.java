@@ -84,7 +84,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private final boolean isHierarchical;
 
-    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
+    public OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         this.dimension = dimension;
