@@ -56,14 +56,15 @@
                 </configuration>
                 <executions>
                     <execution>
-                        <id>intro</id>
+                        <id>example</id>
                         <configuration>
                             <arguments>
                                 <argument>-classpath</argument>
                                 <classpath/>
                                 <argument>--add-modules=jdk.incubator.vector</argument>
                                 <argument>-ea</argument>
-                                <argument>io.github.jbellis.jvector.example.VectorIntro</argument>
+                                <argument>io.github.jbellis.jvector.example.Example</argument>
+                                <argument>${example}</argument>
                             </arguments>
                         </configuration>
                     </execution>
@@ -178,13 +179,14 @@
                         </configuration>
                         <executions>
                             <execution>
-                                <id>intro</id>
+                                <id>example</id>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.VectorIntro</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -237,14 +239,15 @@
                         </configuration>
                         <executions>
                             <execution>
-                                <id>intro</id>
+                                <id>example</id>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.VectorIntro</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -341,7 +344,7 @@
                         </configuration>
                         <executions>
                             <execution>
-                                <id>intro</id>
+                                <id>example</id>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -350,7 +353,8 @@
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.VectorIntro</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
                                     </arguments>
                                 </configuration>
                             </execution>

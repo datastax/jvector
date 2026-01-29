@@ -140,7 +140,10 @@ for (NodeScore ns : result.getNodes()) {
 }
 ```
 
-For the full example, refer `jvector-examples/../VectorIntro.java`.
+For the full example, refer `jvector-examples/../VectorIntro.java`. Run it using
+```sh
+mvn compile exec:exec@example -Dexample=intro -pl jvector-examples -am
+```
 
 Next steps:
 - Understand index construction parameters
