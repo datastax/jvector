@@ -255,6 +255,12 @@ class ParallelGraphWriter implements AutoCloseable {
                     throw unwrapExecutionException(e);
                 }
             }
+
+            // Force all writes to disk before closing the channel.
+            // This is critical: Future.get() only guarantees the write was submitted to the OS buffer cache,
+            // not that it has been persisted to disk. Without force(), subsequent reads may see stale data
+            // or zeros if the OS hasn't flushed the buffers yet, causing intermittent test failures.
+            channel.force(true);
         }
     }
 
