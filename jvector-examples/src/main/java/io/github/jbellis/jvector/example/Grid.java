@@ -625,19 +625,19 @@ public class Grid {
                                                         for (double overquery : topKGrid.get(topK)) {
                                                             int rerankK = (int) (topK * overquery);
                                                             List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                                                            Map<String, Object> params = Map.of(
-                                                                    "M", m,
-                                                                    "efConstruction", ef,
-                                                                    "neighborOverflow", neighborOverflow,
-                                                                    "addHierarchy", addHierarchy,
-                                                                    "features", features.toString(),
-                                                                    "buildCompressor", buildCompressor.toString(),
-                                                                    "searchCompressor", searchCompressor.toString(),
-                                                                    "topK", topK,
-                                                                    "overquery", overquery,
-                                                                    "usePruning", usePruning
+                                                            Map<String, Object> params = Map.ofEntries(
+                                                                    Map.entry("M", m),
+                                                                    Map.entry("efConstruction", ef),
+                                                                    Map.entry("neighborOverflow", neighborOverflow),
+                                                                    Map.entry("addHierarchy", addHierarchy),
+                                                                    Map.entry("features", features.toString()),
+                                                                    Map.entry("buildCompressor", buildCompressor.toString()),
+                                                                    Map.entry("searchCompressor", searchCompressor.toString()),
+                                                                    Map.entry("topK", topK),
+                                                                    Map.entry("overquery", overquery),
+                                                                    Map.entry("usePruning", usePruning),
+                                                                    Map.entry("refineFinalGraph", refineFinalGraph)
                                                             );
-                                                            params.put("refineFinalGraph", refineFinalGraph);
                                                             // Collect all metrics including memory and disk usage
                                                             Map<String, Object> allMetrics = new HashMap<>();
                                                             for (Metric metric : metricsList) {
