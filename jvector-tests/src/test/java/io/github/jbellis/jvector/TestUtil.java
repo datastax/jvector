@@ -213,6 +213,8 @@ public class TestUtil {
         // construct these up front since they call seek which will mess up our test loop
         String prettyG = ImmutableGraphIndex.prettyPrint(g);
         String prettyH = ImmutableGraphIndex.prettyPrint(h);
+        System.out.println(prettyG);
+        System.out.println(prettyH);
         assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
                                    prettyG,
                                    prettyH),
@@ -224,6 +226,8 @@ public class TestUtil {
             // assert equal nodes in each graph
             List<Integer> hNodes = sortedNodes(h, level);
             List<Integer> gNodes = sortedNodes(g, level);
+            System.out.println(hNodes);
+            System.out.println(gNodes);
             assertEquals(String.format("nodes in the graphs are different:%n%s%n%s",
                                        prettyG,
                                        prettyH),
