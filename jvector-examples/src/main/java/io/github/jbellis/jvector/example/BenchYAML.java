@@ -85,7 +85,7 @@ public class BenchYAML {
 
             Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
+                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(), config.compaction.numSplits,
                     config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
         }
     }

@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
@@ -33,6 +34,7 @@ import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -41,6 +43,7 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
@@ -94,6 +97,7 @@ public class Grid {
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
+                       Integer numSplits,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
@@ -108,7 +112,7 @@ public class Grid {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
                                     var compressor = getCompressor(bc, ds);
-                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
+                                    runOneGraph(featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, numSplits, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, testDirectory);
                                 }
                             }
                         }
@@ -136,11 +140,12 @@ public class Grid {
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
+                       Integer numSplits,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, numSplits, compressionGrid, topKGrid, usePruningGrid, null);
     }
 
     static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
@@ -150,6 +155,7 @@ public class Grid {
                             boolean addHierarchy,
                             boolean refineFinalGraph,
                             VectorCompressor<?> buildCompressor,
+                            Integer numSplits,
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
@@ -158,43 +164,60 @@ public class Grid {
                             Path testDirectory) throws IOException
     {
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
-        if (buildCompressor == null) {
-            indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory);
-        } else {
-            indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+        ImmutableGraphIndex compactIndex = null;
+
+        //if (buildCompressor == null) {
+            //indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory);
+        //} else {
+            //indexes = buildOnDisk(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, buildCompressor);
+        //}
+
+        if(numSplits > 1) {
+            // currently only support inline vectors
+            compactIndex = buildCompaction(M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, numSplits);
         }
 
         try {
-            for (var cpSupplier : compressionGrid) {
-                indexes.forEach((features, index) -> {
-                    final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
+            //for (var cpSupplier : compressionGrid) {
+                //indexes.forEach((features, index) -> {
+                    //final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
-                    CompressedVectors cv;
-                    if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
-                        cv = null;
-                        System.out.format("Fused graph index%n");
-                    } else {
-                        var compressor = getCompressor(cpSupplier, ds);
+                    //CompressedVectors cv;
+                    //if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
+                        //cv = null;
+                        //System.out.format("Fused graph index%n");
+                    //} else {
+                        //var compressor = getCompressor(cpSupplier, ds);
 
-                        if (compressor == null) {
-                            cv = null;
-                            System.out.format("Uncompressed vectors%n");
-                        } else {
-                            long start = System.nanoTime();
-                            cv = compressor.encodeAll(ds.getBaseRavv());
-                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                        }
-                    }
+                        //if (compressor == null) {
+                            //cv = null;
+                            //System.out.format("Uncompressed vectors%n");
+                        //} else {
+                            //long start = System.nanoTime();
+                            //cv = compressor.encodeAll(ds.getBaseRavv());
+                            //System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        //}
+                    //}
 
-                    try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-            }
-            for (var index : indexes.values()) {
-                index.close();
+                    //try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
+                        //testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                    //} catch (Exception e) {
+                        //throw new RuntimeException(e);
+                    //}
+                //});
+            //}
+            //for (var index : indexes.values()) {
+                //index.close();
+            //}
+            if(numSplits > 1) {
+                CompressedVectors cv = null;
+                final Set<FeatureId> featureSetForIndex = Set.of();
+                try (var cs = new ConfiguredSystem(ds, compactIndex, cv, featureSetForIndex)) {
+                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                compactIndex.close();
             }
         } finally {
             for (int n = 0; n < featureSets.size(); n++) {
@@ -202,6 +225,69 @@ public class Grid {
             }
         }
     }
+    protected static ImmutableGraphIndex buildCompaction(int M,
+                                                         int efConstruction,
+                                                         float neighborOverflow,
+                                                         boolean addHierarchy,
+                                                         boolean refineFinalGraph,
+                                                         DataSet ds,
+                                                         Path testDirectory,
+                                                         Integer numSplits) throws IOException
+    {
+        long start;
+
+        var numVectorsPerSource = ds.getBaseVectors().size() / numSplits;
+        for(int i = 0; i < numSplits; i++) {
+          System.out.format("Building splitted dataset %s...$n", i);
+            List<VectorFloat<?>> vectorsPerSource = new ArrayList<>(ds.getBaseVectors().subList(i * numVectorsPerSource, (i + 1) * numVectorsPerSource));
+            Path outputPath = testDirectory.resolve("per-source-graph-" + i);
+            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
+            BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, ds.getSimilarityFunction());
+
+            GraphIndexBuilder builderPerSource = new GraphIndexBuilder(bspPerSource,
+                    ds.getDimension(),
+                    M,
+                    efConstruction,
+                    neighborOverflow,
+                    1.2f,
+                    addHierarchy,
+                    refineFinalGraph,
+                    PhysicalCoreExecutor.pool(),
+                    FilteredForkJoinPool.createFilteredPool());
+            var graph = builderPerSource.build(ravvPerSource);
+            OnDiskGraphIndex.write(graph, ravvPerSource, outputPath);
+        }
+        System.out.format("done%n");
+
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        for(int i = 0; i < numSplits; ++i) {
+            var outputPathPerSource = testDirectory.resolve("per-source-graph-" + i);
+            rss.add(ReaderSupplierFactory.open(outputPathPerSource.toAbsolutePath()));
+            var onDiskGraph = OnDiskGraphIndex.load(rss.get(i));
+            graphs.add(onDiskGraph);
+        }
+
+        var outputPath = testDirectory.resolve("compact-graph");
+        var compactor = new OnDiskGraphIndexCompactor(graphs);
+        int globalOrdinal = 0;
+        for(int n = 0; n < numSplits; ++n) {
+            Map<Integer, Integer> map = new HashMap<>();
+            for(int i = 0; i < numVectorsPerSource; ++i) {
+                map.put(i, globalOrdinal++);
+            }
+            var remapper = new OrdinalMapper.MapMapper(map);
+            compactor.setRemapper(graphs.get(n), remapper);
+        }
+        System.out.format("Compacting...%n");
+        compactor.compact(outputPath, ds.getSimilarityFunction());
+        System.out.format("done%n");
+
+        var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(outputPath));
+
+        return index;
+    }
+
 
     private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
                                                                         int M,

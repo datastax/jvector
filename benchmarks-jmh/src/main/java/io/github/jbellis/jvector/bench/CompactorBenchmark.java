@@ -42,9 +42,9 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Thread)
 @Fork(1)
-@Warmup(iterations = 2)
-@Measurement(iterations = 5)
-@Threads(1)
+@Warmup(iterations = 0)
+@Measurement(iterations = 1)
+@Threads(16)
 public class CompactorBenchmark {
     private static final Logger log = LoggerFactory.getLogger(CompactorBenchmark.class);
     private RandomAccessVectorValues ravv;
@@ -63,30 +63,33 @@ public class CompactorBenchmark {
 
     @Setup(Level.Iteration)
     public void setup() throws IOException {
-        var siftPath = "siftsmall";
-        baseVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_base.fvecs", siftPath));
-        queryVectors = SiftLoader.readFvecs(String.format("%s/siftsmall_query.fvecs", siftPath));
-        groundTruth = SiftLoader.readIvecs(String.format("%s/siftsmall_groundtruth.ivecs", siftPath));
+        var siftPath = "/home/ubuntu/fvec/ibm_datapile";
+        baseVectors = SiftLoader.readFvecs(String.format("%s/datapile_base_250m.fvec", siftPath));
+        queryVectors = SiftLoader.readFvecs(String.format("%s/datapile_query.fvec", siftPath));
+        groundTruth = SiftLoader.readIvecs(String.format("%s/datapile_indices_d384_5m.ivec", siftPath));
         log.info("base vectors size: {}, query vectors size: {}, loaded, dimensions {}",
                 baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
         originalDimension = baseVectors.get(0).length();
         // wrap the raw vectors in a RandomAccessVectorValues
         ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
         // score provider using the raw, in-memory vectors
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        //BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
 
-        graphIndexBuilder = new GraphIndexBuilder(bsp,
-                ravv.dimension(),
-                16, // graph degree
-                100, // construction search depth
-                1.2f, // allow degree overflow during construction by this factor
-                1.2f, // relax neighbor diversity requirement by this factor
-                true); // add the hierarchy
-        graphIndex = graphIndexBuilder.build(ravv);
+        //graphIndexBuilder = new GraphIndexBuilder(bsp,
+                //ravv.dimension(),
+                //32, // graph degree
+                //100, // construction search depth
+                //1.2f, // allow degree overflow during construction by this factor
+                //1.2f, // relax neighbor diversity requirement by this factor
+                //true); // add the hierarchy
+        //log.info("Building the graph using the whole dataset...");
+        //graphIndex = graphIndexBuilder.build(ravv);
+        //log.info("done.");
 
         tempDir = Files.createTempDirectory("compact-bench");
-        numSources = 2;
+        numSources = 10;
         numVectorsPerSource = baseVectors.size() / numSources;
+        log.info("splitting datasets into {} datasets and builing graphs...", numSources);
         for(int i = 0; i < numSources; i++) {
             List<VectorFloat<?>> vectorsPerSource = new ArrayList<>(baseVectors.subList(i * numVectorsPerSource, (i + 1) * numVectorsPerSource));
             Path outputPath = tempDir.resolve("per-source-graph-" + i);
@@ -94,7 +97,7 @@ public class CompactorBenchmark {
             BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, VectorSimilarityFunction.EUCLIDEAN);
             var graphIndexBuilderPerSource = new GraphIndexBuilder(bspPerSource,
                     ravv.dimension(),
-                    16, // graph degree
+                    32, // graph degree
                     100, // construction search depth
                     1.2f, // allow degree overflow during construction by this factor
                     1.2f, // relax neighbor diversity requirement by this factor
@@ -102,6 +105,7 @@ public class CompactorBenchmark {
             var graph = graphIndexBuilderPerSource.build(ravvPerSource);
             OnDiskGraphIndex.write(graph, ravvPerSource, outputPath);
         }
+        log.info("done");
 
 
 
@@ -119,7 +123,6 @@ public class CompactorBenchmark {
 
     @Benchmark
     public void testCompactWithRandomQueryVectors(Blackhole blackhole) throws IOException {
-        log.info("compactWithRandomQueryVectors");
         List<ReaderSupplier> rss = new ArrayList<>();
         for(int i = 0; i < numSources; ++i) {
             var outputPathPerSource = tempDir.resolve("per-source-graph-" + i);
@@ -139,7 +142,9 @@ public class CompactorBenchmark {
             var remapper = new OrdinalMapper.MapMapper(map);
             compactor.setRemapper(graphs.get(n), remapper);
         }
+        log.info("start compacting graphs...");
         compactor.compact(outputPath, similarityFunction);
+        log.info("done.");
 
         ReaderSupplier rs;
         try {
@@ -149,15 +154,15 @@ public class CompactorBenchmark {
         }
         var compactGraph = OnDiskGraphIndex.load(rs);
         // Your benchmark code here
-        List<SearchResult> retrieved = new ArrayList<>();
-        for(int n = 0; n < queryVectors.size(); ++n) {
-            retrieved.add(GraphSearcher.search(queryVectors.get(n),
-                    10, // number of results
-                    ravv, // vectors we're searching, used for scoring
-                    VectorSimilarityFunction.EUCLIDEAN, // how to score
-                    graphIndex,
-                    Bits.ALL)); // valid ordinals to consider
-        }
+        //List<SearchResult> retrieved = new ArrayList<>();
+        //for(int n = 0; n < queryVectors.size(); ++n) {
+            //retrieved.add(GraphSearcher.search(queryVectors.get(n),
+                    //10, // number of results
+                    //ravv, // vectors we're searching, used for scoring
+                    //VectorSimilarityFunction.EUCLIDEAN, // how to score
+                    //graphIndex,
+                    //Bits.ALL)); // valid ordinals to consider
+        //}
         List<SearchResult> compactedRetrieved = new ArrayList<>();
         for(int n = 0; n < queryVectors.size(); ++n) {
             compactedRetrieved.add(GraphSearcher.search(queryVectors.get(n),
@@ -167,11 +172,11 @@ public class CompactorBenchmark {
                     compactGraph,
                     Bits.ALL)); // valid ordinals to consider
         }
-        var recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10);
+        //var recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10);
         var crecall = AccuracyMetrics.recallFromSearchResults(groundTruth, compactedRetrieved, 10, 10);
-        log.info("Whole Graph Recall: {}", recall);
+        //log.info("Whole Graph Recall: {}", recall);
         log.info("Compacted Graph Recall: {}", crecall);
-        blackhole.consume(retrieved);
+        //blackhole.consume(retrieved);
         graphs.clear();
     }
 }
