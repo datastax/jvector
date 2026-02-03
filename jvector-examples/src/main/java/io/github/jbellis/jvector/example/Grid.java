@@ -568,6 +568,7 @@ public class Grid {
             List<Integer> efConstructionGrid,
             List<Float> neighborOverflowGrid,
             List<Boolean> addHierarchyGrid,
+            List<Boolean> refineFinalGraphGrid,
             List<? extends Set<FeatureId>> featureSets,
             List<Function<DataSet, CompressorParameters>> buildCompressors,
             List<Function<DataSet, CompressorParameters>> compressionGrid,
@@ -579,94 +580,107 @@ public class Grid {
             for (int ef : efConstructionGrid) {
                 for (float neighborOverflow : neighborOverflowGrid) {
                     for (boolean addHierarchy : addHierarchyGrid) {
-                        for (Set<FeatureId> features : featureSets) {
-                            for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
-                                for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
-                                    Path testDirectory = Files.createTempDirectory("bench");
-                                    try {
-                                        // Capture initial state
-                                        var diagnostics = new io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics(getDiagnosticLevel());
-                                        diagnostics.setMonitoredDirectory(testDirectory);
-                                        diagnostics.capturePrePhaseSnapshot("Build");
+                        for (boolean refineFinalGraph : refineFinalGraphGrid) {
+                            for (Set<FeatureId> features : featureSets) {
+                                for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
+                                    for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
+                                        Path testDirectory = Files.createTempDirectory("bench");
+                                        try {
+                                            // Capture initial state
+                                            var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
+                                            diagnostics.setMonitoredDirectory(testDirectory);
+                                            diagnostics.capturePrePhaseSnapshot("Build");
 
-                                        var compressor = getCompressor(buildCompressor, ds);
-                                        var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                        CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
-                                        var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
-                                        ImmutableGraphIndex index = indexes.get(features);
+                                            var compressor = getCompressor(buildCompressor, ds);
+                                            var searchCompressorObj = getCompressor(searchCompressor, ds);
+                                            CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
 
-                                        // Capture post-build state
-                                        diagnostics.capturePostPhaseSnapshot("Build");
-                                        var buildSnapshot = diagnostics.getLatestSystemSnapshot();
-                                        var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
+                                            Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+                                            if (compressor == null) {
+                                                indexes = buildInMemory(featureSets, m, ef, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory);
+                                            } else {
+                                                indexes = buildOnDisk(featureSets, m, ef, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, compressor);
+                                            }
+                                            //var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, refineFinalGraph, ds, testDirectory, compressor);
+                                            ImmutableGraphIndex index = indexes.get(features);
 
-                                        try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
-                                            int queryRuns = 2;
-                                            List<QueryBenchmark> benchmarks = List.of(
-                                                    (diagnostic_level > 0 ?
-                                                            ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
-                                                            ThroughputBenchmark.createDefault()),
-                                                    LatencyBenchmark.createDefault(),
-                                                    CountBenchmark.createDefault(),
-                                                    AccuracyBenchmark.createDefault(),
-                                                    CountBenchmark.createDefault()
-                                            );
-                                            QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.getName());
-                                            for (int topK : topKGrid.keySet()) {
-                                                for (boolean usePruning : usePruningGrid) {
-                                                    for (double overquery : topKGrid.get(topK)) {
-                                                        int rerankK = (int) (topK * overquery);
-                                                        List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                                                        Map<String, Object> params = Map.of(
-                                                                "M", m,
-                                                                "efConstruction", ef,
-                                                                "neighborOverflow", neighborOverflow,
-                                                                "addHierarchy", addHierarchy,
-                                                                "features", features.toString(),
-                                                                "buildCompressor", buildCompressor.toString(),
-                                                                "searchCompressor", searchCompressor.toString(),
-                                                                "topK", topK,
-                                                                "overquery", overquery,
-                                                                "usePruning", usePruning
-                                                        );
-                                                        // Collect all metrics including memory and disk usage
-                                                        Map<String, Object> allMetrics = new HashMap<>();
-                                                        for (Metric metric : metricsList) {
-                                                            allMetrics.put(metric.getHeader(), metric.getValue());
+                                            // Capture post-build state
+                                            diagnostics.capturePostPhaseSnapshot("Build");
+                                            var buildSnapshot = diagnostics.getLatestSystemSnapshot();
+                                            var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
+
+                                            try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
+                                                int queryRuns = 2;
+                                                List<QueryBenchmark> benchmarks = List.of(
+                                                        (diagnostic_level > 0 ?
+                                                                ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
+                                                                ThroughputBenchmark.createDefault()),
+                                                        LatencyBenchmark.createDefault(),
+                                                        CountBenchmark.createDefault(),
+                                                        AccuracyBenchmark.createDefault()
+                                                );
+                                                QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.getName());
+                                                for (int topK : topKGrid.keySet()) {
+                                                    for (boolean usePruning : usePruningGrid) {
+                                                        for (double overquery : topKGrid.get(topK)) {
+                                                            int rerankK = (int) (topK * overquery);
+                                                            List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                                                            Map<String, Object> params = Map.of(
+                                                                    "M", m,
+                                                                    "efConstruction", ef,
+                                                                    "neighborOverflow", neighborOverflow,
+                                                                    "addHierarchy", addHierarchy,
+                                                                    "features", features.toString(),
+                                                                    "buildCompressor", buildCompressor.toString(),
+                                                                    "searchCompressor", searchCompressor.toString(),
+                                                                    "topK", topK,
+                                                                    "overquery", overquery,
+                                                                    "usePruning", usePruning
+                                                            );
+                                                            params.put("refineFinalGraph", refineFinalGraph);
+                                                            // Collect all metrics including memory and disk usage
+                                                            Map<String, Object> allMetrics = new HashMap<>();
+                                                            for (Metric metric : metricsList) {
+                                                                allMetrics.put(metric.getHeader(), metric.getValue());
+                                                            }
+
+                                                            // Add build time if available
+                                                            if (indexBuildTimes.containsKey(ds.getName())) {
+                                                                allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
+                                                            }
+
+                                                            // Add memory metrics if available
+                                                            if (buildSnapshot != null) {
+                                                                allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
+                                                                allMetrics.put("Heap Memory Max (MB)", buildSnapshot.memoryStats.heapMax / 1024.0 / 1024.0);
+                                                                allMetrics.put("Off-Heap Direct (MB)", buildSnapshot.memoryStats.directBufferMemory / 1024.0 / 1024.0);
+                                                                allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
+                                                                allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
+                                                            }
+
+                                                            // Add disk metrics if available
+                                                            if (buildDiskSnapshot != null) {
+                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.totalBytes / 1024.0 / 1024.0);
+                                                                allMetrics.put("File Count", buildDiskSnapshot.fileCount);
+                                                            }
+
+                                                            results.add(new BenchResult(ds.getName(), params, allMetrics));
                                                         }
-
-                                                        // Add build time if available
-                                                        if (indexBuildTimes.containsKey(ds.getName())) {
-                                                            allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
-                                                        }
-
-                                                        // Add memory metrics if available
-                                                        if (buildSnapshot != null) {
-                                                            allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
-                                                            allMetrics.put("Heap Memory Max (MB)", buildSnapshot.memoryStats.heapMax / 1024.0 / 1024.0);
-                                                            allMetrics.put("Off-Heap Direct (MB)", buildSnapshot.memoryStats.directBufferMemory / 1024.0 / 1024.0);
-                                                            allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
-                                                            allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
-                                                        }
-
-                                                        // Add disk metrics if available
-                                                        if (buildDiskSnapshot != null) {
-                                                            allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.totalBytes / 1024.0 / 1024.0);
-                                                            allMetrics.put("File Count", buildDiskSnapshot.fileCount);
-                                                        }
-
-                                                        results.add(new BenchResult(ds.getName(), params, allMetrics));
                                                     }
                                                 }
+                                            } catch (Exception e) {
+                                                throw new RuntimeException(e);
                                             }
-                                        } catch (Exception e) {
-                                            throw new RuntimeException(e);
+                                        } finally {
+                                            for (int n = 0; n < 1; n++) {
+                                                try {
+                                                    Files.deleteIfExists(testDirectory.resolve("graph" + n));
+                                                } catch (IOException e) { /* ignore */ }
+                                            }
+                                            try {
+                                                Files.deleteIfExists(testDirectory);
+                                            } catch (IOException e) { /* ignore */ }
                                         }
-                                    } finally {
-                                        for (int n = 0; n < 1; n++) {
-                                            try { Files.deleteIfExists(testDirectory.resolve("graph" + n)); } catch (IOException e) { /* ignore */ }
-                                        }
-                                        try { Files.deleteIfExists(testDirectory); } catch (IOException e) { /* ignore */ }
                                     }
                                 }
                             }
