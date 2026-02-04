@@ -279,7 +279,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
             }
             
             // Phase 2: Write complete graph with parallel workers
-            writer.write(suppliers);
+            writer.write(Map.of());
         }
 
         // Verify the graph loads correctly
