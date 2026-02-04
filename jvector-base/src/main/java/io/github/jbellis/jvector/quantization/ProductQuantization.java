@@ -29,27 +29,24 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.agrona.collections.IntHashSet;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.SplittableRandom;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
 import static io.github.jbellis.jvector.vector.VectorUtil.dotProduct;
 import static io.github.jbellis.jvector.vector.VectorUtil.sub;
-import static java.lang.Math.min;
 import static java.lang.Math.sqrt;
 
 /**
@@ -139,11 +136,36 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        // limit the number of vectors we train on
-        var P = min(1.0f, MAX_PQ_TRAINING_SET_SIZE / (float) ravv.size());
+        final IntStream ordinalStream;
+
+        if (ravv.size() <= MAX_PQ_TRAINING_SET_SIZE) {
+            ordinalStream = IntStream.range(0, ravv.size());
+        } else {
+            // Uses Floyd’s sampling algorithm to select MAX_PQ_TRAINING_SET_SIZE random ordinals from 0 to ravv.size()
+            // while only iterating MAX_PQ_TRAINING_SET_SIZE times.
+            SplittableRandom rng = new SplittableRandom(1);
+            IntHashSet ordinals = new IntHashSet(MAX_PQ_TRAINING_SET_SIZE);
+            // j runs from (ravv.size() - MAX_PQ_TRAINING_SET_SIZE + 1) to ravv.size() (inclusive)
+            for (int j = ravv.size() - MAX_PQ_TRAINING_SET_SIZE + 1; j <= ravv.size(); j++) {
+                int t = 1 + rng.nextInt(j); // uniform in [1, j]
+
+                if (ordinals.contains(t)) {
+                    ordinals.add(j);
+                } else {
+                    ordinals.add(t);
+                }
+            }
+            int[] ordinalArray = new int[ordinals.size()];
+            IntHashSet.IntIterator it = ordinals.iterator();
+            for (int i = 0; i < ordinals.size(); i++) {
+                assert it.hasNext();
+                ordinalArray[i] = it.next();
+            }
+            ordinalStream = IntStream.of(ordinalArray);
+        }
+
         var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> IntStream.range(0, ravv.size()).parallel()
-                        .filter(i -> ThreadLocalRandom.current().nextFloat() < P)
+        return parallelExecutor.submit(() -> ordinalStream.parallel()
                         .mapToObj(targetOrd -> {
                             var localRavv = ravvCopy.get();
                             VectorFloat<?> v = localRavv.getVector(targetOrd);
