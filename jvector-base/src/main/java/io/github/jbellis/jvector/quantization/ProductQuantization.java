@@ -145,10 +145,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             // while only iterating MAX_PQ_TRAINING_SET_SIZE times.
             SplittableRandom rng = new SplittableRandom(1);
             IntHashSet ordinals = new IntHashSet(MAX_PQ_TRAINING_SET_SIZE);
-            // j runs from (ravv.size() - MAX_PQ_TRAINING_SET_SIZE + 1) to ravv.size() (inclusive)
-            for (int j = ravv.size() - MAX_PQ_TRAINING_SET_SIZE + 1; j <= ravv.size(); j++) {
-                int t = 1 + rng.nextInt(j); // uniform in [1, j]
-
+            // j runs from (ravv.size() - MAX_PQ_TRAINING_SET_SIZE) to ravv.size() (exclusive)
+            for (int j = ravv.size() - MAX_PQ_TRAINING_SET_SIZE; j < ravv.size(); j++) {
+                int t = rng.nextInt(j + 1); // uniform in [0, j]
                 if (ordinals.contains(t)) {
                     ordinals.add(j);
                 } else {
