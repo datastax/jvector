@@ -160,6 +160,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                 assert it.hasNext();
                 ordinalArray[i] = it.next();
             }
+            assert !it.hasNext();
             ordinalStream = IntStream.of(ordinalArray);
         }
 
