@@ -188,10 +188,15 @@ class ParallelGraphWriter implements AutoCloseable {
         int ordinalsPerTask = (totalOrdinals + numTasks - 1) / numTasks;
 
         // Open the async file channel for position-based writes
-        var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+        // Important: Don't pass our executor to the channel - it would cause deadlock since
+        // worker threads would block waiting for writes that need threads from the same pool.
+        // Using the default system thread pool for I/O operations avoids this issue.
+        var opts = new java.util.HashSet<java.nio.file.OpenOption>();
+        opts.add(StandardOpenOption.WRITE);
+        opts.add(StandardOpenOption.READ);
         
-        try (var channel = AsynchronousFileChannel.open(filePath, opts, executor)) {
-            List<Future<List<Future<Integer>>>> taskFutures = new ArrayList<>(numTasks);
+        try (var channel = AsynchronousFileChannel.open(filePath, opts, null)) {
+            List<Future<Void>> taskFutures = new ArrayList<>(numTasks);
 
             // Submit range-based tasks
             for (int i = 0; i < numTasks; i++) {
@@ -206,7 +211,7 @@ class ParallelGraphWriter implements AutoCloseable {
                 final int start = startOrdinal;
                 final int end = endOrdinal;
 
-                Future<List<Future<Integer>>> future = executor.submit(() -> {
+                Future<Void> future = executor.submit(() -> {
                     var view = viewPerThread.get();
                     var buffer = bufferPerThread.get();
 
@@ -230,24 +235,10 @@ class ParallelGraphWriter implements AutoCloseable {
                 taskFutures.add(future);
             }
 
-            // Collect all write futures from all tasks
-            List<Future<Integer>> allWriteFutures = new ArrayList<>();
-            for (Future<List<Future<Integer>>> taskFuture : taskFutures) {
+            // Wait for all tasks to complete - each task writes synchronously using writeFully
+            for (Future<Void> taskFuture : taskFutures) {
                 try {
-                    List<Future<Integer>> writeFutures = taskFuture.get();
-                    allWriteFutures.addAll(writeFutures);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while building records", e);
-                } catch (ExecutionException e) {
-                    throw unwrapExecutionException(e);
-                }
-            }
-
-            // Wait for all writes to complete
-            for (Future<Integer> writeFuture : allWriteFutures) {
-                try {
-                    writeFuture.get();
+                    taskFuture.get();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IOException("Interrupted while writing records", e);
@@ -257,9 +248,10 @@ class ParallelGraphWriter implements AutoCloseable {
             }
 
             // Force all writes to disk before closing the channel.
-            // This is critical: Future.get() only guarantees the write was submitted to the OS buffer cache,
-            // not that it has been persisted to disk. Without force(), subsequent reads may see stale data
-            // or zeros if the OS hasn't flushed the buffers yet, causing intermittent test failures.
+            // Even though writeFully ensures each write completes, force() ensures the OS
+            // flushes all data from its buffer cache to the physical storage device.
+            // This guarantees data durability and prevents intermittent test failures where
+            // subsequent reads might see stale data or zeros.
             channel.force(true);
         }
     }

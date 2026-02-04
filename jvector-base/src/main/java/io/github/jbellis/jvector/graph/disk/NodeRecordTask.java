@@ -21,27 +21,27 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
 import java.util.function.IntFunction;
 
 /**
- * A task that writes L0 records for a range of nodes directly to disk using position-based writes.
+ * A task that writes L0 records for a range of nodes directly to disk using synchronous position-based writes.
  * <p>
  * This task is designed to be executed in a thread pool, with each worker thread
  * owning its own ImmutableGraphIndex.View for thread-safe neighbor iteration.
  * Each task processes a contiguous range of ordinals to reduce task creation overhead.
  * <p>
- * This writes directly to the AsynchronousFileChannel using position-based writes, allowing it
- * to handle pre-written features the same way as the sequential writer: by checking
- * for null suppliers and skipping those features (not writing to those positions).
+ * This writes directly to the AsynchronousFileChannel using position-based writes with writeFully
+ * to ensure all bytes are written before returning. This eliminates race conditions where the OS
+ * buffer cache hasn't flushed data before subsequent reads occur.
  */
-class NodeRecordTask implements Callable<List<Future<Integer>>> {
+class NodeRecordTask implements Callable<Void> {
     private final int startOrdinal;  // Inclusive
     private final int endOrdinal;    // Exclusive
     private final OrdinalMapper ordinalMapper;
@@ -78,10 +78,32 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
         this.buffer = buffer;
     }
 
-    @Override
-    public List<Future<Integer>> call() throws Exception {
-        List<Future<Integer>> writeFutures = new ArrayList<>();
+    /**
+     * Writes a buffer fully to the channel at the specified position.
+     * Ensures all bytes are written by looping until the buffer is empty.
+     * This is critical for correctness as AsynchronousFileChannel.write() may not write all bytes in one call.
+     *
+     * @param channel the channel to write to
+     * @param buffer the buffer to write (will be fully consumed)
+     * @param position the file position to write at
+     * @throws IOException if an I/O error occurs
+     * @throws ExecutionException if the write operation fails
+     * @throws InterruptedException if interrupted while waiting for write completion
+     */
+    private static void writeFully(AsynchronousFileChannel channel, ByteBuffer buffer, long position)
+            throws IOException, ExecutionException, InterruptedException {
+        long currentPosition = position;
+        while (buffer.hasRemaining()) {
+            int written = channel.write(buffer, currentPosition).get();
+            if (written < 0) {
+                throw new IOException("Channel closed while writing");
+            }
+            currentPosition += written;
+        }
+    }
 
+    @Override
+    public Void call() throws Exception {
         // Reuse writer and buffer across all ordinals in this range
         var writer = new ByteBufferIndexWriter(buffer);
 
@@ -96,7 +118,7 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
             // Write node ordinal
             writer.writeInt(newOrdinal);
             ByteBuffer ordinalData = writer.cloneBuffer();
-            writeFutures.add(channel.write(ordinalData, currentPosition));
+            writeFully(channel, ordinalData, currentPosition);
             currentPosition += Integer.BYTES;
 
             // Handle OMITTED nodes (holes in ordinal space)
@@ -110,7 +132,7 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
                     }
                 }
                 ByteBuffer featureData = writer.cloneBuffer();
-                writeFutures.add(channel.write(featureData, currentPosition));
+                writeFully(channel, featureData, currentPosition);
                 currentPosition += featureData.remaining();
 
                 // Write empty neighbor list
@@ -120,7 +142,7 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
                     writer.writeInt(-1); // padding
                 }
                 ByteBuffer neighborData = writer.cloneBuffer();
-                writeFutures.add(channel.write(neighborData, currentPosition));
+                writeFully(channel, neighborData, currentPosition);
             } else {
                 // Validate node exists
                 if (!graph.containsNode(originalOrdinal)) {
@@ -137,7 +159,7 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
                         writer.reset();
                         feature.writeInline(writer, supplier.apply(originalOrdinal));
                         ByteBuffer featureData = writer.cloneBuffer();
-                        writeFutures.add(channel.write(featureData, currentPosition));
+                        writeFully(channel, featureData, currentPosition);
                     }
                     // Skip to next feature position (whether we wrote it or not)
                     currentPosition += feature.featureSize();
@@ -170,11 +192,11 @@ class NodeRecordTask implements Callable<List<Future<Integer>>> {
                 }
 
                 ByteBuffer neighborData = writer.cloneBuffer();
-                writeFutures.add(channel.write(neighborData, currentPosition));
+                writeFully(channel, neighborData, currentPosition);
             }
         }
 
-        return writeFutures;
+        return null;
     }
 }
 
