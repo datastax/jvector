@@ -1,7 +1,6 @@
 version: 6
 
 dataset: ada002-100k
-indexDirectory: indexes
 
 construction:
   outDegree: [32]
