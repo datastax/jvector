@@ -26,11 +26,13 @@ import java.io.InputStream;
 
 public class MultiConfig {
     private static final String defaultDirectory = "./jvector-examples/yaml-configs/";
+    private static final String defaultIndexDirectory = "bench";
 
     private int version;
     public String dataset;
     public ConstructionParameters construction;
     public SearchParameters search;
+    public String indexDirectory;
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
         var name = defaultDirectory + datasetName;
@@ -77,5 +79,9 @@ public class MultiConfig {
             throw new IllegalArgumentException("Invalid version: " + version);
         }
         this.version = version;
+    }
+
+    public String getIndexDirectory() {
+        return indexDirectory == null ? defaultIndexDirectory : indexDirectory;
     }
 }

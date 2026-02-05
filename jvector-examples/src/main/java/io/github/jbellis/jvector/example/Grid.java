@@ -105,9 +105,11 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
-                       Map<String, List<String>> benchmarks) throws IOException
+                       Map<String, List<String>> benchmarks,
+                       String indexDirectory) throws IOException
     {
-        var testDirectory = Files.createTempDirectory(dirPrefix);
+        var testDirectory = indexDirectory == null  ? Files.createTempDirectory(dirPrefix) : Files.createDirectories(Paths.get(indexDirectory));
+
         try {
             for (var addHierarchy :  addHierarchyGrid) {
                 for (var refineFinalGraph : refineFinalGraphGrid) {
@@ -148,7 +150,7 @@ public class Grid {
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, compressionGrid, topKGrid, usePruningGrid, null, null);
     }
 
     static void runOneGraph(List<? extends Set<FeatureId>> featureSets,
@@ -573,7 +575,8 @@ public class Grid {
             List<Function<DataSet, CompressorParameters>> buildCompressors,
             List<Function<DataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
-            List<Boolean> usePruningGrid) throws IOException {
+            List<Boolean> usePruningGrid,
+            String indexDirectory) throws IOException {
 
         List<BenchResult> results = new ArrayList<>();
         for (int m : mGrid) {
@@ -584,7 +587,7 @@ public class Grid {
                             for (Set<FeatureId> features : featureSets) {
                                 for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
                                     for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
-                                        Path testDirectory = Files.createTempDirectory("bench");
+                                        var testDirectory = indexDirectory == null  ? Files.createTempDirectory(dirPrefix) : Files.createDirectories(Paths.get(indexDirectory));
                                         try {
                                             // Capture initial state
                                             var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());

@@ -163,7 +163,8 @@ public class AutoBenchYAML {
                             config.construction.getCompressorParameters(),
                             config.search.getCompressorParameters(), 
                             config.search.topKOverquery, 
-                            config.search.useSearchPruning);
+                            config.search.useSearchPruning,
+                            config.indexDirectory);
                     results.addAll(datasetResults);
 
                     logger.info("Benchmark completed for dataset: {}", datasetName);
