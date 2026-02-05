@@ -48,6 +48,28 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <configuration>
+                    <skip>false</skip>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>example</id>
+                        <configuration>
+                            <arguments>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>--add-modules=jdk.incubator.vector</argument>
+                                <argument>-ea</argument>
+                                <argument>io.github.jbellis.jvector.example.Example</argument>
+                                <argument>${example}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
     <dependencies>
@@ -157,6 +179,18 @@
                         </configuration>
                         <executions>
                             <execution>
+                                <id>example</id>
+                                <configuration>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>-ea</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
                                 <id>sift</id>
                                 <goals>
                                     <goal>exec</goal>
@@ -222,6 +256,19 @@
                             <skip>false</skip>
                         </configuration>
                         <executions>
+                            <execution>
+                                <id>example</id>
+                                <configuration>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>--add-modules=jdk.incubator.vector</argument>
+                                        <argument>-ea</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
                             <execution>
                                 <id>sift</id>
                                 <goals>
@@ -338,6 +385,21 @@
                             <skip>false</skip>
                         </configuration>
                         <executions>
+                            <execution>
+                                <id>example</id>
+                                <configuration>
+                                    <arguments>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                        <argument>--add-modules=jdk.incubator.vector</argument>
+                                        <argument>-ea</argument>
+                                        <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
+                                        <argument>io.github.jbellis.jvector.example.Example</argument>
+                                        <argument>${example}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
                             <execution>
                                 <id>sift</id>
                                 <goals>
