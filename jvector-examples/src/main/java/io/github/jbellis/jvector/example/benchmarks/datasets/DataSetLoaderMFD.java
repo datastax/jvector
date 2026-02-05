@@ -62,9 +62,10 @@ public class DataSetLoaderMFD implements DataSetLoader {
         String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
         if (mfd == null) {
-            throw new IllegalArgumentException("Unknown dataset: " + name);
+            logger.debug("MultiFileDatasource not found for name: [" + name + "]");
+            return Optional.empty();
         }
-        logger.info("found dataset definintion for {}", name);
+        logger.info("found dataset definition for {}", name);
 
         // TODO how to detect and recover from incomplete downloads?
 

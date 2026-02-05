@@ -75,6 +75,7 @@
                 <configuration>
                     <skip>true</skip>
                     <executable>${java.home}/bin/java</executable>
+                    <mainClass>io.github.jbellis.jvector.example.BenchYAML</mainClass>
                 </configuration>
             </plugin>
             <plugin>

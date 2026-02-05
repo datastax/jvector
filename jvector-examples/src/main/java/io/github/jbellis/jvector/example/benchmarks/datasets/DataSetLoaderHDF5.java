@@ -41,25 +41,25 @@ import java.util.stream.IntStream;
  * This dataset loader will get and load hdf5 files from <a href="https://ann-benchmarks.com/">ann-benchmarks</a>.
  */
 public class DataSetLoaderHDF5 implements DataSetLoader {
-    public static final String HDF5_DIR = "hdf5/";
+    public static final Path HDF5_DIR = Path.of("hdf5");
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    public static final String HDF5_EXTN = ".hdf5";
 
     /**
      * {@inheritDoc}
      */
-    public Optional<DataSet> loadDataSet(String filename) {
-        return maybeDownloadHdf5(filename).map(this::readHdf5Data);
+    public Optional<DataSet> loadDataSet(String datasetName) {
+        return maybeDownloadHdf5(datasetName).map(this::readHdf5Data);
     }
 
-    private DataSet readHdf5Data(Path filename) {
+    private DataSet readHdf5Data(Path path) {
 
         // infer the similarity
-        VectorSimilarityFunction similarityFunction = getVectorSimilarityFunction(filename);
+        VectorSimilarityFunction similarityFunction = getVectorSimilarityFunction(path);
 
         // read the data
         VectorFloat<?>[] baseVectors;
         VectorFloat<?>[] queryVectors;
-        Path path = Path.of(HDF5_DIR).resolve(filename);
         var gtSets = new ArrayList<List<Integer>>();
         try (HdfFile hdf = new HdfFile(path)) {
             var baseVectorsArray =
@@ -115,14 +115,14 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
 
     private Optional<Path> maybeDownloadHdf5(String datasetName) {
 
-        Path hdf5DirPath = Path.of(DataSetLoaderHDF5.HDF5_DIR);
-        var localPath = hdf5DirPath.resolve(datasetName);
-        if (Files.exists(localPath)) {
-            return Optional.of(localPath);
+        var dsFilePath = HDF5_DIR.resolve(datasetName+HDF5_EXTN);
+
+        if (Files.exists(dsFilePath)) {
+            return Optional.of(dsFilePath);
         }
 
         // Download from https://ann-benchmarks.com/datasetName
-        var url = "https://ann-benchmarks.com/" + datasetName;
+        var url = "https://ann-benchmarks.com/" + datasetName + HDF5_EXTN;
         System.out.println("Downloading: " + url);
 
         HttpURLConnection connection;
@@ -147,12 +147,12 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
         }
 
         try (InputStream in = connection.getInputStream()) {
-            Files.createDirectories(hdf5DirPath);
-            Files.copy(in, localPath, StandardCopyOption.REPLACE_EXISTING);
+            Files.createDirectories(dsFilePath.getParent());
+            Files.copy(in, dsFilePath, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             throw new RuntimeException("Error downloading data:" + e.getMessage(),e);
         }
-        return Optional.of(localPath);
+        return Optional.of(dsFilePath);
     }
 
 }
