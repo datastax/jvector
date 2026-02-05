@@ -180,6 +180,18 @@
                                     </arguments>
                                 </configuration>
                             </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
                         </executions>
                     </plugin>
                 </plugins>
@@ -228,6 +240,18 @@
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
                                         <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -323,6 +347,18 @@
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
                                         <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
