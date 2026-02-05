@@ -58,7 +58,7 @@ public class BenchYAML {
             String hdf5 = ".hdf5";
             for (var rawname : datasetNames) {
                 String datasetName =
-                        rawname.endsWith(hdf5) ? rawname.substring(0, rawname.length() - hdf5.length() -1) : rawname;
+                        rawname.endsWith(hdf5) ? rawname.substring(0, rawname.length() - hdf5.length()) : rawname;
                 // pre-loading and early error phase
                 DataSets.loadDataSet(datasetName).orElseThrow(
                         () -> new RuntimeException("Could not load dataset:" + datasetName)
