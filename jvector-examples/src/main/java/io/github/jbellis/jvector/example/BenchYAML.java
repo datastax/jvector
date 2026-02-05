@@ -32,6 +32,9 @@ import java.util.stream.Collectors;
  * Tests GraphIndexes against vectors from various datasets
  */
 public class BenchYAML {
+
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BenchYAML.class);
+
     public static void main(String[] args) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.
