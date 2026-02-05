@@ -158,6 +158,7 @@ public class AutoBenchYAML {
                             config.construction.efConstruction,
                             config.construction.neighborOverflow, 
                             config.construction.addHierarchy,
+                            config.construction.refineFinalGraph,
                             config.construction.getFeatureSets(), 
                             config.construction.getCompressorParameters(),
                             config.search.getCompressorParameters(), 

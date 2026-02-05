@@ -112,22 +112,6 @@ public class QueryTester {
             results.add(Metric.of("Max offheap usage", ".1f",
                 systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
         }
-        
-        if (diskSnapshot != null) {
-            // Total file size in MB
-            results.add(Metric.of("Total file size", ".1f",
-                diskSnapshot.totalBytes / (1024.0 * 1024.0)));
-            
-            // Number of files
-            results.add(Metric.of("Number of files", ".0f",
-                (double) diskSnapshot.fileCount));
-        }
-        
-        // Add index build time if available
-        if (datasetName != null && Grid.getIndexBuildTimeSeconds(datasetName) != null) {
-            results.add(Metric.of("Index build time", ".2f",
-                Grid.getIndexBuildTimeSeconds(datasetName)));
-        }
 
         return results;
     }
