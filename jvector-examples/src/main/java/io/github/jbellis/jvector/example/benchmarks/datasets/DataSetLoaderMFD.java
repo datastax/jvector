@@ -64,7 +64,7 @@ public class DataSetLoaderMFD implements DataSetLoader {
         if (mfd == null) {
             throw new IllegalArgumentException("Unknown dataset: " + name);
         }
-        logger.info("found dataset definintion for {}", name);
+        logger.info("found dataset definition for {}", name);
 
         // TODO how to detect and recover from incomplete downloads?
 

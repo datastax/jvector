@@ -6,6 +6,7 @@ local/
 
 ### Bench caches
 pq_cache/
+index_cache/
 
 ### JVM crashes
 hs_err_pid*
