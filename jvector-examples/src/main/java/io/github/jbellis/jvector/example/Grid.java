@@ -180,6 +180,9 @@ public class Grid {
         // Capture post-build memory and disk state
         diagnostics.capturePostPhaseSnapshot("Graph Build");
 
+        diagnostics.printDiskStatistics("Graph Index Build");
+        System.out.printf("Index build time: %f seconds%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+
         try {
             for (var cpSupplier : compressionGrid) {
                 indexes.forEach((features, index) -> {
@@ -606,6 +609,7 @@ public class Grid {
 
                                             // Capture post-build state
                                             diagnostics.capturePostPhaseSnapshot("Build");
+                                            diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
                                             var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 
