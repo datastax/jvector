@@ -251,7 +251,6 @@ public class ParallelWriteExample {
         System.out.printf("Writing with NVQ + FUSED_ADC features...%n");
         long sequentialStart = System.nanoTime();
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, sequentialPath)
-                .withParallelWrites(false)
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)
@@ -270,8 +269,7 @@ public class ParallelWriteExample {
 
         // Parallel write
         long parallelStart = System.nanoTime();
-        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, parallelPath)
-                .withParallelWrites(true)
+        try (var writer = new OnDiskParallelGraphIndexWriter.Builder(graph, parallelPath)
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)

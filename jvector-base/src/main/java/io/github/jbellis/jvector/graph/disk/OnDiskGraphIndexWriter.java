@@ -16,11 +16,9 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -35,14 +33,14 @@ import java.util.function.IntFunction;
  * Writes a graph index to disk in a format that can be loaded as an OnDiskGraphIndex.
  * <p>
  * The serialization process follows these steps:
- * 
+ * <p>
  * 1. File Layout:
  *    - CommonHeader: Contains version, dimension, entry node, and layer information
  *    - Header with Features: Contains feature-specific headers
  *    - Layer 0 data: Contains node ordinals, inline features, and edges for all nodes
  *    - Higher layer data (levels 1..N): Contains sparse node ordinals and edges
  *    - Separated features: Contains feature data stored separately from nodes
- * 
+ * <p>
  * 2. Serialization Process:
  *    - First, a placeholder header is written to reserve space
  *    - For each node in layer 0:
@@ -55,26 +53,20 @@ import java.util.function.IntFunction;
  *    - For each separated feature:
  *      - Write feature data for all nodes sequentially
  *    - Finally, rewrite the header with correct offsets
- * 
+ * <p>
  * 3. Ordinal Mapping:
  *    - The writer uses an OrdinalMapper to map between original node IDs and 
  *      the sequential IDs used in the on-disk format
  *    - This allows for compaction (removing "holes" from deleted nodes)
  *    - It also enables custom ID mapping schemes for specific use cases
- * 
+ * <p>
  * The class supports incremental writing through the writeInline method, which
  * allows writing features for individual nodes without writing the entire graph.
  */
-public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
-    private final long startOffset;
-    private volatile boolean useParallelWrites = false;
-    private final Path filePath; // Required for parallel writes
-    private final int parallelWorkerThreads;
-    private final boolean parallelUseDirectBuffers;
+public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
 
     /**
-     * Constructs an OnDiskGraphIndexWriter with all parameters including optional file path
-     * and parallel write configuration.
+     * Constructs an OnDiskGraphIndexWriter.
      *
      * @param randomAccessWriter the writer to use for output
      * @param version the format version to write
@@ -83,9 +75,6 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
      * @param oldToNewOrdinals mapper for ordinal renumbering
      * @param dimension the vector dimension
      * @param features the features to include
-     * @param filePath file path required for parallel writes (can be null for sequential writes)
-     * @param parallelWorkerThreads number of worker threads for parallel writes (0 = use available processors)
-     * @param parallelUseDirectBuffers whether to use direct ByteBuffers for parallel writes
      */
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
@@ -93,199 +82,16 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
                                    ImmutableGraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
-                                   EnumMap<FeatureId, Feature> features,
-                                   Path filePath,
-                                   int parallelWorkerThreads,
-                                   boolean parallelUseDirectBuffers)
+                                   EnumMap<FeatureId, Feature> features)
     {
-        super(randomAccessWriter, version, graph, oldToNewOrdinals, dimension, features);
-        this.startOffset = startOffset;
-        this.filePath = filePath;
-        this.parallelWorkerThreads = parallelWorkerThreads;
-        this.parallelUseDirectBuffers = parallelUseDirectBuffers;
+        super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
     }
 
     /**
-     * Constructs an OnDiskGraphIndexWriter without a file path.
-     * Parallel writes will not be available without a file path.
-     * Uses default parallel write configuration.
-     *
-     * @param randomAccessWriter the writer to use for output
-     * @param version the format version to write
-     * @param startOffset the starting offset in the file
-     * @param graph the graph to write
-     * @param oldToNewOrdinals mapper for ordinal renumbering
-     * @param dimension the vector dimension
-     * @param features the features to include
-     */
-    OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
-                           int version,
-                           long startOffset,
-                           ImmutableGraphIndex graph,
-                           OrdinalMapper oldToNewOrdinals,
-                           int dimension,
-                           EnumMap<FeatureId, Feature> features)
-    {
-        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features, null, 0, false);
-    }
-
-    /**
-     * Close the view and the output stream. Unlike the super method, for backwards compatibility reasons,
-     * this method assumes ownership of the output stream.
+     * Writes L0 records sequentially
      */
     @Override
-    public synchronized void close() throws IOException {
-        out.close();
-    }
-
-    /**
-     * Caller should synchronize on this OnDiskGraphIndexWriter instance if mixing usage of the
-     * output with calls to any of the synchronized methods in this class.
-     * <p>
-     * Provided for callers (like Cassandra) that want to add their own header/footer to the output.
-     */
-    public RandomAccessWriter getOutput() {
-        return out;
-    }
-
-    /**
-     * Write the inline features of the given ordinal to the output at the correct offset.
-     * Nothing else is written (no headers, no edges).  The output IS NOT flushed.
-     * <p>
-     * Note: the ordinal given is implicitly a "new" ordinal in the sense of the OrdinalMapper,
-     * but since no nodes or edges are involved (we just write the given State to the index file),
-     * the mapper is not invoked.
-     */
-    public synchronized void writeInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException
-    {
-        for (var featureId : stateMap.keySet()) {
-            if (!featureMap.containsKey(featureId)) {
-                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
-            }
-        }
-
-        out.seek(featureOffsetForOrdinal(ordinal));
-
-        for (var feature : inlineFeatures) {
-            var state = stateMap.get(feature.id());
-            if (state == null) {
-                out.seek(out.position() + feature.featureSize());
-            } else {
-                feature.writeInline(out, state);
-            }
-        }
-
-        maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
-    }
-
-    private long featureOffsetForOrdinal(int ordinal) {
-        return super.featureOffsetForOrdinal(startOffset, ordinal);
-    }
-
-    public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
-    {
-        if (graph instanceof OnHeapGraphIndex) {
-            var ohgi = (OnHeapGraphIndex) graph;
-            if (ohgi.getDeletedNodes().cardinality() > 0) {
-                throw new IllegalArgumentException("Run builder.cleanup() before writing the graph");
-            }
-        }
-        for (var featureId : featureStateSuppliers.keySet()) {
-            if (!featureMap.containsKey(featureId)) {
-                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
-            }
-        }
-        if (ordinalMapper.maxOrdinal() < graph.size(0) - 1) {
-            var msg = String.format("Ordinal mapper from [0..%d] does not cover all nodes in the graph of size %d",
-                    ordinalMapper.maxOrdinal(), graph.size(0));
-            throw new IllegalStateException(msg);
-        }
-
-        var view = graph.getView();
-
-        writeHeader(view); // sets position to start writing features
-
-        // Write L0 records (either parallel or sequential)
-        if (useParallelWrites) {
-            writeL0RecordsParallel(featureStateSuppliers);
-        } else {
-            writeL0RecordsSequential(view, featureStateSuppliers);
-        }
-
-        // We will use the abstract method because no random access is needed
-        writeSparseLevels(view, featureStateSuppliers);
-
-        // We will use the abstract method because no random access is needed
-        writeSeparatedFeatures(featureStateSuppliers);
-
-        if (version >= 5) {
-            writeFooter(view, out.position());
-        }
-        final var endOfGraphPosition = out.position();
-
-        // Write the header again with updated offsets
-        writeHeader(view);
-        out.seek(endOfGraphPosition);
-        out.flush();
-        view.close();
-    }
-
-    /**
-     * Writes L0 records using parallel workers with asynchronous file I/O.
-     * <p>
-     * Records are written asynchronously using AsynchronousFileChannel for improved throughput
-     * while maintaining correct ordering. This method parallelizes record building across
-     * multiple threads and writes results in sequential order.
-     * <p>
-     * Requires filePath to have been provided during construction.
-     *
-     * @param featureStateSuppliers suppliers for feature state data
-     * @throws IOException if an I/O error occurs
-     */
-    @Experimental
-    private void writeL0RecordsParallel(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
-        if (filePath == null) {
-            throw new IllegalStateException("Parallel writes require a file path. Use Builder(ImmutableGraphIndex, Path) constructor.");
-        }
-
-        // Flush writer before async writes to ensure buffered data is on disk
-        // This is critical when using AsynchronousFileChannel in parallel with BufferedRandomAccessWriter
-        out.flush();
-        long baseOffset = out.position();
-
-        var config = new ParallelGraphWriter.Config(
-            parallelWorkerThreads,
-            parallelUseDirectBuffers,
-            4  // Default task multiplier (4x cores)
-        );
-
-        try (var parallelWriter = new ParallelGraphWriter(
-                out,
-                graph,
-                inlineFeatures,
-                config,
-                filePath)) {
-
-            parallelWriter.writeL0Records(
-                ordinalMapper,
-                inlineFeatures,
-                featureStateSuppliers,
-                baseOffset
-            );
-
-            // Update maxOrdinalWritten
-            maxOrdinalWritten = ordinalMapper.maxOrdinal();
-
-            // Seek to end of L0 region
-            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
-            out.seek(endOffset);
-        }
-    }
-
-    /**
-     * Writes L0 records sequentially (original implementation).
-     */
-    private void writeL0RecordsSequential(ImmutableGraphIndex.View view,
+    protected void writeL0Records(ImmutableGraphIndex.View view,
                                           Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -346,63 +152,13 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
     }
 
     /**
-     * Write the index header and completed edge lists to the given output.
-     * Unlike the super method, this method flushes the output and also assumes it's using a RandomAccessWriter that can
-     * seek to the startOffset and re-write the header.
-     * @throws IOException if there is an error writing the header
-     */
-    public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
-        // graph-level properties
-        out.seek(startOffset);
-        super.writeHeader(view, startOffset);
-        out.flush();
-    }
-
-    /** CRC32 checksum of bytes written since the starting offset
-     * Note on parallel writes and footer handling:
-     * When parallel writes are enabled (via {@link #setParallelWrites(boolean)}), it is the caller's responsibility
-     * to ensure that all parallel write operations have fully completed before writing the footer (e.g., checksum).
-     * The footer must only be written after all data has been flushed and no further writes are in progress,
-     * to avoid data corruption or incomplete checksums. This class does not currently coordinate or synchronize
-     * footer writing with parallel operations.
-     */
-    public synchronized long checksum() throws IOException {
-        long endOffset = out.position();
-        return out.checksum(startOffset, endOffset);
-    }
-
-    /**
-     * Enables parallel writes for L0 records. This can significantly improve throughput
-     * for large graphs by parallelizing record building across multiple cores.
-     * <p>
-     * @param enabled whether to enable parallel writes
-     */
-    public void setParallelWrites(boolean enabled) {
-        this.useParallelWrites = enabled;
-    }
-
-    /**
      * Builder for {@link OnDiskGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
-        private boolean useParallelWrites = false;
-        /**
-         * The current implementation of this Builder allows for a RandomAccessWriter to be passed to the constructor in
-         * order to allow the backing of any IndexWriter and not tying to a particular implementation. However in this
-         * case the class we are in is literally named "OnDiskGraphIndexWriter" and is built to store the graph index
-         * on a file on disk. As RandomAccessWriter does not allow for the extraction of the backing Path there is no way
-         * to use async i/o to write the file without modifying the way the OnDiskGraphIndexWriter.Builder is constructed.
-         * Hence the addition here of a Path variable. In the future it would be an optimization to deprecate the constructor
-         * that uses a RandomAccessWriter and only allow the one that takes a Path. For now this allows for backwards compatibility.
-         */
-        private Path filePath = null;
-        private int parallelWorkerThreads = 0;
-        private boolean parallelUseDirectBuffers = false;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
-            this.filePath = outPath;
         }
 
         public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
@@ -418,45 +174,9 @@ public class OnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAcces
             return this;
         }
 
-        /**
-         * Enable parallel writes for L0 records. Can significantly improve throughput for large graphs.
-         */
-        public Builder withParallelWrites(boolean enabled) {
-            this.useParallelWrites = enabled;
-            return this;
-        }
-
-        /**
-         * Set the number of worker threads for parallel writes.
-         *
-         * @param workerThreads number of worker threads (0 = use available processors)
-         * @return this builder
-         */
-        public Builder withParallelWorkerThreads(int workerThreads) {
-            this.parallelWorkerThreads = workerThreads;
-            return this;
-        }
-
-        /**
-         * Set whether to use direct ByteBuffers for parallel writes.
-         * Direct buffers can provide better performance for large records but use off-heap memory.
-         *
-         * @param useDirectBuffers whether to use direct ByteBuffers
-         * @return this builder
-         */
-        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
-            this.parallelUseDirectBuffers = useDirectBuffers;
-            return this;
-        }
-
         @Override
         protected OnDiskGraphIndexWriter reallyBuild(int dimension) {
-            var writer = new OnDiskGraphIndexWriter(
-                out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath,
-                parallelWorkerThreads, parallelUseDirectBuffers
-            );
-            writer.setParallelWrites(useParallelWrites);
-            return writer;
+            return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
         }
     }
 }
