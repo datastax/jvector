@@ -60,11 +60,11 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -111,6 +111,8 @@ public class Grid {
                        List<Boolean> usePruningGrid,
                        Map<String, List<String>> benchmarks) throws IOException
     {
+        boolean success = false;
+
         // Always use a fresh temp directory for per-run artifacts
         final Path workDir = Files.createTempDirectory(dirPrefix);
 
@@ -135,19 +137,49 @@ public class Grid {
                     }
                 }
             }
+            success = true; // Helps with Exception attribution
         } finally {
-            // Always delete the work directory (never the cache)
             try {
-                Files.delete(workDir);
-            } catch (DirectoryNotEmptyException e) {
-                // swallow to avoid masking original exception
+                // Final attempt to wipe workDir and its children
+                wipeDirectory(workDir);
+            } catch (IOException e) {
+                if (success) {
+                    // The run was fine, but cleanup failed
+                    throw new IOException("Run succeeded, but cleanup failed: " + workDir, e);
+                } else {
+                    // If crashing, don't mask another Exception.
+                    System.err.println("Warning: Cleanup failed during crash: " + e.getMessage());
+                }
             }
 
             if (enableIndexCache) {
                 System.out.println("Preserving index cache directory: " + indexCacheDir);
             }
-
             cachedCompressors.clear();
+        }
+    }
+
+    /**
+     * Iterates through the path and deletes everything inside, then the path itself.
+     */
+    private static void wipeDirectory(Path path) throws IOException {
+        if (path == null || !Files.exists(path)) return;
+
+        final IOException[] lastError = { null };
+
+        try (var stream = Files.walk(path)) {
+            stream.sorted(Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try {
+                            Files.deleteIfExists(p);
+                        } catch (IOException e) {
+                            lastError[0] = e; // Capture the last reason for failure
+                        }
+                    });
+        }
+        // Final Check: If the directory still exists, the wipe failed.
+        if (Files.exists(path)) {
+            throw new IOException("Failed to completely delete index directory: " + path, lastError[0]);
         }
     }
 
@@ -184,7 +216,7 @@ public class Grid {
             Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new HashMap<>();
 
             for (Set<FeatureId> fs : featureSets) {
-                var key = cache.key(ds.getName(), fs, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressor);
+                var key = cache.key(ds.getName(), fs, M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, buildCompressor);
                 var cached = cache.tryLoad(key);
 
                 if (cached.isPresent()) {
@@ -255,10 +287,14 @@ public class Grid {
                 diagnostics.logSummary();
             }
         } finally {
-            // Only non-cached builds write graphN files into the work directory.
-            if (!cache.isEnabled()) {
-                for (int n = 0; n < featureSets.size(); n++) {
-                    Files.deleteIfExists(workDirectory.resolve("graph" + n));
+            // Clean up the tmp files for this run
+            for (int n = 0; n < featureSets.size(); n++) {
+                Path p = workDirectory.resolve("graph" + n);
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    // Log and move on; don't let a delete-fail mask a real exception
+                    System.err.println("Cleanup Failed: Could not delete " + p.getFileName() + " -> " + e.getMessage());
                 }
             }
         }
@@ -291,8 +327,6 @@ public class Grid {
         int n = 0;
         for (var features : featureSets) {
             // if we are using index caching, use cache names instead of tmp names for index files....
-            // DETERMINISTIC PATH SELECTION:
-            // Use the cache's temp path if available, otherwise fallback to work dir
             Path graphPath;
             if (handles.containsKey(features)) {
                 graphPath = handles.get(features).writePath();

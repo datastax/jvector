@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -50,6 +51,7 @@ import java.util.stream.Stream;
  * {@code graph_<signature>} (sanitized to be filesystem-safe). When writing, the cache uses a temp filename
  * (e.g. {@code tmp_graph_<signature>}) and commits via rename so partial writes never match cache lookups.</p>
  */
+@Experimental
 public final class OnDiskGraphIndexCache {
 
     public enum Overwrite {
@@ -75,13 +77,13 @@ public final class OnDiskGraphIndexCache {
     public static OnDiskGraphIndexCache initialize(Path cacheDir) throws IOException {
         Files.createDirectories(cacheDir);
         OnDiskGraphIndexCache cache = new OnDiskGraphIndexCache(true, cacheDir);
-        cache.cleanupStaleTemps();
 
         System.out.println(
                 "Index caching enabled: " + cacheDir.toAbsolutePath() + ". " +
                         "\nDelete this directory to remove saved indices and free up disk space."
         );
 
+        cache.cleanupStaleTemps();
         return cache;
     }
 
@@ -123,6 +125,7 @@ public final class OnDiskGraphIndexCache {
         public final int M;
         public final int efConstruction;
         public final float neighborOverflow;
+        public final float alpha;
         public final boolean addHierarchy;
         public final boolean refineFinalGraph;
         public final String compressorId;
@@ -132,6 +135,7 @@ public final class OnDiskGraphIndexCache {
                          int M,
                          int efConstruction,
                          float neighborOverflow,
+                         float alpha,
                          boolean addHierarchy,
                          boolean refineFinalGraph,
                          String compressorId) {
@@ -140,6 +144,7 @@ public final class OnDiskGraphIndexCache {
             this.M = M;
             this.efConstruction = efConstruction;
             this.neighborOverflow = neighborOverflow;
+            this.alpha = alpha;
             this.addHierarchy = addHierarchy;
             this.refineFinalGraph = refineFinalGraph;
             this.compressorId = compressorId;
@@ -155,6 +160,7 @@ public final class OnDiskGraphIndexCache {
                         int M,
                         int efConstruction,
                         float neighborOverflow,
+                        float alpha,
                         boolean addHierarchy,
                         boolean refineFinalGraph,
                         VectorCompressor<?> buildCompressor) {
@@ -162,7 +168,7 @@ public final class OnDiskGraphIndexCache {
         Objects.requireNonNull(featureSet, "featureSet");
         Objects.requireNonNull(buildCompressor, "buildCompressor");
         String compressorId = buildCompressor.toString().replaceAll("\\s+", "");
-        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, compressorId);
+        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph, compressorId);
     }
 
     /**
@@ -195,7 +201,9 @@ public final class OnDiskGraphIndexCache {
         try {
             return Optional.of(OnDiskGraphIndex.load(ReaderSupplierFactory.open(e.finalPath)));
         } catch (RuntimeException | IOException ex) {
-            // treat as miss; leave cleanup policy to the caller (or call invalidate(key) if desired)
+            // File exists but is corrupted or partial
+            System.err.println("Cache Load Failed (Corrupted File): " + e.finalPath.getFileName());
+
             return Optional.empty();
         }
     }
@@ -224,11 +232,6 @@ public final class OnDiskGraphIndexCache {
 
         // Ensure any previous temp is gone
         Files.deleteIfExists(e.tmpPath);
-
-        // If overwriting, remove the final first (best-effort)
-        if (overwrite == Overwrite.ALLOW) {
-            Files.deleteIfExists(e.finalPath);
-        }
 
         return new WriteHandle(this, e);
     }
@@ -267,12 +270,23 @@ public final class OnDiskGraphIndexCache {
             if (committed) return;
 
             try {
+                // Attempt atomic move with replace
                 Files.move(entry.tmpPath, entry.finalPath,
                         StandardCopyOption.REPLACE_EXISTING,
                         StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                // Still safe against partial reads: final name appears only after move.
-                Files.move(entry.tmpPath, entry.finalPath, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                // If atomic is not supported, try a standard move
+                try {
+                    Files.move(entry.tmpPath, entry.finalPath, StandardCopyOption.REPLACE_EXISTING);
+
+                    // Standard move succeeded. Warn and continue.
+                    System.err.printf("Warning: Cache for %s committed, but the operation was not atomic. " +
+                            "Platform may not support atomic replaces.%n", entry.signature);
+                } catch (IOException fatal) {
+                    // Standard move failed
+                    throw new IOException(String.format("Failed to commit cache index %s to final destination.",
+                            entry.signature), fatal);
+                }
             }
 
             committed = true;
@@ -312,6 +326,7 @@ public final class OnDiskGraphIndexCache {
             return new Entry(true, "", Path.of(""), Path.of(""));
         }
 
+        // TODO include index and quantization version(s) in signature
         static Entry compute(Path cacheDir, CacheKey key) {
             String rawName = Paths.get(key.datasetName).getFileName().toString();
             String datasetBase = rawName.replaceFirst("\\.[^.]+$", "");
@@ -327,6 +342,7 @@ public final class OnDiskGraphIndexCache {
                     "M" + key.M,
                     "ef" + key.efConstruction,
                     "of" + key.neighborOverflow,
+                    "alpha" + key.alpha,
                     key.addHierarchy ? "H1" : "H0",
                     key.refineFinalGraph ? "R1" : "R0",
                     key.compressorId
