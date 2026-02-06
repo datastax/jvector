@@ -196,8 +196,6 @@ class ParallelGraphWriter implements AutoCloseable {
         opts.add(StandardOpenOption.READ);
         
         try (var channel = AsynchronousFileChannel.open(filePath, opts, null)) {
-            channel.force(true);
-
             List<Future<Void>> taskFutures = new ArrayList<>(numTasks);
 
             // Submit range-based tasks
