@@ -236,6 +236,7 @@ public class ByteBufferIndexWriter implements IndexWriter {
     @Override
     public void writeFloats(float[] floats, int offset, int count) throws IOException {
         buffer.asFloatBuffer().put(floats, offset, count);
+        buffer.position(buffer.position() + count * Float.BYTES);
     }
 
     @Override

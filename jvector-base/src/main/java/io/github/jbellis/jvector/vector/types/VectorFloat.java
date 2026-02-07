@@ -16,7 +16,10 @@
 
 package io.github.jbellis.jvector.vector.types;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.Accountable;
+
+import java.io.IOException;
 
 public interface VectorFloat<T> extends Accountable
 {
@@ -30,6 +33,8 @@ public interface VectorFloat<T> extends Accountable
     default int offset(int i) {
         return i;
     }
+
+    void writeTo(IndexWriter indexWriter) throws IOException;
 
     VectorFloat<T> copy();
 

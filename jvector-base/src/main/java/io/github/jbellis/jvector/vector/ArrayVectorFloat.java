@@ -16,9 +16,11 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.IOException;
 import java.util.Arrays;
 
 /**
@@ -63,6 +65,11 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>
     public int length()
     {
         return data.length;
+    }
+
+    @Override
+    public void writeTo(IndexWriter writer) throws IOException {
+        writer.writeFloats(this.get(), 0, data.length);
     }
 
     @Override
