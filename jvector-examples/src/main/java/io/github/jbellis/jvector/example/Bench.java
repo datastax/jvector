@@ -25,10 +25,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.IOException;
-import java.util.Arrays;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -41,6 +38,10 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class Bench {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+
+        // When enabled, caches built indices for reuse in future runs.
+        // Useful for large indexes and repeated testing.
+        boolean enableIndexCache = false;
 
         var mGrid = List.of(32); // List.of(16, 24, 32, 48, 64, 96, 128);
         var efConstructionGrid = List.of(100); // List.of(60, 80, 100, 120, 160, 200, 400, 600, 800);
@@ -81,10 +82,10 @@ public class Bench {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        execute(pattern, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
+        execute(pattern, enableIndexCache, buildCompression, featureSets, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
     }
 
-    private static void execute(Pattern pattern, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+    private static void execute(Pattern pattern, boolean enableIndexCache, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
@@ -93,7 +94,7 @@ public class Bench {
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Dataset " + datasetName + " not found")
             );
-            Grid.runAll(ds, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
+            Grid.runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid, null);
         }
     }
 }

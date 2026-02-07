@@ -94,7 +94,7 @@ public class BenchYAML {
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             );
 
-            Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+            Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                     config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
                     config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);

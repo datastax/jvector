@@ -30,10 +30,10 @@ public class HelloVectorWorld {
         String datasetName = "ada002-100k";
         var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
                 .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
-        MultiConfig config = MultiConfig.getConfig(datasetName);
-        Grid.runAll(ds, config.construction.outDegree, config.construction.efConstruction,
+        MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
+        Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
                 config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                 config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning);
+                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
     }
 }
