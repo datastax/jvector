@@ -153,11 +153,13 @@ public class AutoBenchYAML {
                     }
                     logger.info("Using configuration: {}", config);
 
-                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds, 
+                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
+                            config.construction.useSavedIndexIfExists,
                             config.construction.outDegree, 
                             config.construction.efConstruction,
                             config.construction.neighborOverflow, 
                             config.construction.addHierarchy,
+                            config.construction.refineFinalGraph,
                             config.construction.getFeatureSets(), 
                             config.construction.getCompressorParameters(),
                             config.search.getCompressorParameters(), 
