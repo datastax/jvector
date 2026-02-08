@@ -583,7 +583,12 @@ public class Grid {
 
         List<QueryBenchmark> benchmarks = new ArrayList<>();
 
-        for (var benchType : benchmarkSpec.keySet()) {
+        // Ensure a deterministic ordering of the benchmarks regardless of how they are provided (by YAML, etc.)
+        List<String> orderedTypes = List.of("throughput", "latency", "count", "accuracy");
+        for (var benchType : orderedTypes) {
+            if (!benchmarkSpec.containsKey(benchType)) {
+                continue;
+            }
             if (benchType.equals("throughput")) {
                 var bench = ThroughputBenchmark.createEmpty(3, 3);
                 for (var stat : benchmarkSpec.get(benchType)) {

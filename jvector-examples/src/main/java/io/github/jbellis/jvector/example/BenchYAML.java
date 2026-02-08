@@ -94,6 +94,30 @@ public class BenchYAML {
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             );
 
+            // search.console.benchmarks is a *selection* of search.benchmarks.
+            // TODO remove the strict equality requirement
+            Map<String, List<String>> computeBenchmarks =
+                    (config.search == null) ? null : config.search.benchmarks;
+
+            Map<String, List<String>> consoleSelectionBenchmarks =
+                    (config.search != null && config.search.console != null)
+                            ? config.search.console.benchmarks
+                            : null;
+
+            if (computeBenchmarks != null
+                    && consoleSelectionBenchmarks != null
+                    && !computeBenchmarks.equals(consoleSelectionBenchmarks)) {
+                throw new IllegalArgumentException(
+                        "Both search.benchmarks (compute) and search.console.benchmarks (selection) are specified but differ. " +
+                                "For now, they must match.\n " +
+                                "search.benchmarks=" + computeBenchmarks + "\n" +
+                                "search.console.benchmarks=" + consoleSelectionBenchmarks
+                );
+            }
+
+            Map<String, List<String>> effectiveBenchmarks =
+                    (consoleSelectionBenchmarks != null) ? consoleSelectionBenchmarks : computeBenchmarks;
+
             Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
                     config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
                     config.construction.getFeatureSets(), config.construction.getCompressorParameters(),

@@ -121,7 +121,7 @@ public class DataSetLoaderMFD implements DataSetLoader {
         return S3AsyncClient.builder()
                 .region(Region.US_EAST_1)
                 .httpClient(AwsCrtAsyncHttpClient.builder()
-                        .maxConcurrency(1)
+                        .maxConcurrency(16)
                         .build())
                 .credentialsProvider(AnonymousCredentialsProvider.create());
     }
