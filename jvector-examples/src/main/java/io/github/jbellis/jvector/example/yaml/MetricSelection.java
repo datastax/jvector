@@ -16,16 +16,21 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * A sink-agnostic selection of benchmark stats and related metrics, using the same schema
- * as SearchParameters.benchmarks (Map<String, List<String>>).
+ * Named metric selection, organized by category.
  *
- * Used for console projections now, and logging (CSV/Parquet/etc) later.
+ * YAML shape:
+ * metrics:
+ *   system: [max_heap_mb, max_offheap_mb]
+ *   disk: [total_file_size_mb, file_count]
+ *   construction: [index_build_time_s]
+ *
+ * This is intentionally a map subtype so we can deserialize the YAML
+ * mapping directly into this type without extra nesting.
  */
-public class BenchmarkSelection {
-    public Map<String, List<String>> benchmarks;
-    public MetricSelection metrics;
+public class MetricSelection extends LinkedHashMap<String, List<String>> {
 }
+

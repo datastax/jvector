@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
+import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
@@ -39,7 +41,7 @@ public class BenchYAML {
         // - a list of regexes, possibly needing to be split by whitespace.
         // - a list of YAML files
         // defensively create an argv regex, to avoid NPE from possibly malformed argv from maven exec:java
-        if (args==null) {
+        if (args == null) {
             throw new InvalidParameterException("argv[] is null, check your maven exec config");
         }
         String regex = Arrays.stream(args)
@@ -95,33 +97,45 @@ public class BenchYAML {
             );
 
             // search.console.benchmarks is a *selection* of search.benchmarks.
-            // TODO remove the strict equality requirement
-            Map<String, List<String>> computeBenchmarks =
+            Map<String, List<String>> benchmarksToCompute =
                     (config.search == null) ? null : config.search.benchmarks;
 
-            Map<String, List<String>> consoleSelectionBenchmarks =
+            Map<String, List<String>> benchmarksToDisplay =
                     (config.search != null && config.search.console != null)
                             ? config.search.console.benchmarks
                             : null;
 
-            if (computeBenchmarks != null
-                    && consoleSelectionBenchmarks != null
-                    && !computeBenchmarks.equals(consoleSelectionBenchmarks)) {
-                throw new IllegalArgumentException(
-                        "Both search.benchmarks (compute) and search.console.benchmarks (selection) are specified but differ. " +
-                                "For now, they must match.\n " +
-                                "search.benchmarks=" + computeBenchmarks + "\n" +
-                                "search.console.benchmarks=" + consoleSelectionBenchmarks
-                );
-            }
+            var metricsToDisplay =
+                    (config.search != null && config.search.console != null)
+                            ? config.search.console.metrics
+                            : null;
 
-            Map<String, List<String>> effectiveBenchmarks =
-                    (consoleSelectionBenchmarks != null) ? consoleSelectionBenchmarks : computeBenchmarks;
+            ReportingSelectionResolver.validateBenchmarkSelectionSubset(
+                    benchmarksToCompute,
+                    benchmarksToDisplay,
+                    SearchReportingCatalog.defaultComputeBenchmarks()
+            );
 
-            Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
-                    config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
+            ReportingSelectionResolver.validateNamedMetricSelectionNames(
+                    metricsToDisplay,
+                    SearchReportingCatalog.catalog()
+            );
+
+            Grid.runAll(ds,
+                    config.construction.useSavedIndexIfExists,
+                    config.construction.outDegree,
+                    config.construction.efConstruction,
+                    config.construction.neighborOverflow,
+                    config.construction.addHierarchy,
+                    config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(),
+                    config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(),
+                    config.search.topKOverquery,
+                    config.search.useSearchPruning,
+                    benchmarksToCompute,
+                    benchmarksToDisplay,
+                    metricsToDisplay);
         }
     }
 }

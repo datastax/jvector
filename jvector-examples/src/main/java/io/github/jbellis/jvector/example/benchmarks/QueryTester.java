@@ -102,34 +102,33 @@ public class QueryTester {
         // Add memory and disk metrics to results
         var systemSnapshot = diagnostics.getLatestSystemSnapshot();
         var diskSnapshot = diagnostics.getLatestDiskSnapshot();
-        
+
         if (systemSnapshot != null) {
             // Max heap usage in MB
-            results.add(Metric.of("Max heap usage", ".1f",
-                systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
-            
+            results.add(Metric.of("search.system.max_heap_mb", "Max heap usage", ".1f",
+                    systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+
             // Max off-heap usage (direct + mapped) in MB
-            results.add(Metric.of("Max offheap usage", ".1f",
-                systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+            results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage", ".1f",
+                    systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
         }
-        
+
         if (diskSnapshot != null) {
             // Total file size in MB
-            results.add(Metric.of("Total file size", ".1f",
-                diskSnapshot.totalBytes / (1024.0 * 1024.0)));
-            
+            results.add(Metric.of("search.disk.total_file_size_mb", "Total file size", ".1f",
+                    diskSnapshot.totalBytes / (1024.0 * 1024.0)));
+
             // Number of files
-            results.add(Metric.of("Number of files", ".0f",
-                (double) diskSnapshot.fileCount));
+            results.add(Metric.of("search.disk.file_count", "Number of files", ".0f",
+                    (double) diskSnapshot.fileCount));
         }
-        
+
         // Add index build time if available
         if (datasetName != null && Grid.getIndexBuildTimeSeconds(datasetName) != null) {
-            results.add(Metric.of("Index build time", ".2f",
-                Grid.getIndexBuildTimeSeconds(datasetName)));
+            results.add(Metric.of("construction.index_build_time_s", "Index build time", ".2f",
+                    Grid.getIndexBuildTimeSeconds(datasetName)));
         }
 
         return results;
     }
 }
-

@@ -28,10 +28,14 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
-import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
+import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
+import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
+import io.github.jbellis.jvector.example.yaml.BenchmarkSelection;
+import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
@@ -102,7 +106,9 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
-                       Map<String, List<String>> benchmarks) throws IOException
+                       Map<String, List<String>> benchmarksToCompute,
+                       Map<String, List<String>> benchmarksToDisplay,
+                       MetricSelection metricsToDisplay) throws IOException
     {
         boolean success = false;
 
@@ -123,7 +129,8 @@ public class Grid {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
                                     var compressor = getCompressor(bc, ds);
-                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, compressionGrid, topKGrid, usePruningGrid, benchmarks,ds, workDir);
+                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
+                                            compressor, compressionGrid, topKGrid, usePruningGrid, benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, ds, workDir);
                                 }
                             }
                         }
@@ -150,6 +157,37 @@ public class Grid {
             }
             cachedCompressors.clear();
         }
+    }
+
+    // Overload for legacy callers that do not use yaml-configs
+    static void runAll(DataSet ds,
+                       boolean enableIndexCache,
+                       List<Integer> mGrid,
+                       List<Integer> efConstructionGrid,
+                       List<Float> neighborOverflowGrid,
+                       List<Boolean> addHierarchyGrid,
+                       List<Boolean> refineFinalGraphGrid,
+                       List<? extends Set<FeatureId>> featureSets,
+                       List<Function<DataSet, CompressorParameters>> buildCompressors,
+                       List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       Map<Integer, List<Double>> topKGrid,
+                       List<Boolean> usePruningGrid) throws IOException
+    {
+        runAll(ds,
+                enableIndexCache,
+                mGrid,
+                efConstructionGrid,
+                neighborOverflowGrid,
+                addHierarchyGrid,
+                refineFinalGraphGrid,
+                featureSets,
+                buildCompressors,
+                compressionGrid,
+                topKGrid,
+                usePruningGrid,
+                null,
+                null,   // benchmarksToDisplay
+                null);  // metricsToDisplay
     }
 
     /**
@@ -187,7 +225,9 @@ public class Grid {
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
-                            Map<String, List<String>> benchmarks,
+                            Map<String, List<String>> benchmarksToCompute,
+                            Map<String, List<String>> benchmarksToDisplay,
+                            MetricSelection metricsToDisplay,
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
@@ -265,7 +305,8 @@ public class Grid {
                     }
 
                     try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, workDirectory);
+                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy,
+                                benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, workDirectory);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -539,13 +580,28 @@ public class Grid {
                                           int efConstruction,
                                           float neighborOverflow,
                                           boolean addHierarchy,
-                                          Map<String, List<String>> benchmarkSpec,
+                                          Map<String, List<String>> benchmarksToCompute,
+                                          Map<String, List<String>> benchmarksToDisplay,
+                                          MetricSelection metricsToDisplay,
                                           Path testDirectory) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
         // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
-        var benchmarks = setupBenchmarks(benchmarkSpec);
+        // Display benchmark stats must be a subset of computed stats (fail fast)
+        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
+                benchmarksToCompute,
+                benchmarksToDisplay,
+                SearchReportingCatalog.defaultComputeBenchmarks()
+        );
+
+        // Named metrics must be recognized (availability is best-effort, checked via warning at runtime)
+        ReportingSelectionResolver.validateNamedMetricSelectionNames(
+                metricsToDisplay,
+                SearchReportingCatalog.catalog()
+        );
+
+        var benchmarks = setupBenchmarks(benchmarksToCompute);
         QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
         // 2) Setup benchmark table for printing
@@ -559,11 +615,22 @@ public class Grid {
                         "addHierarchy",       addHierarchy,
                         "usePruning",         usePruning
                 ));
+
+                Set<String> warnedMissingKeys = new HashSet<>();
+
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    printer.printRow(overquery, results);
+                    BenchmarkSelection selection = new BenchmarkSelection();
+                    selection.benchmarks = benchmarksToDisplay;
+                    selection.metrics = metricsToDisplay;
+
+                    var ctx = ReportingSelectionResolver.Context.of("topK", Integer.toString(topK));
+                    var resolved = ReportingSelectionResolver.resolve(selection, SearchReportingCatalog.catalog(), ctx);
+
+                    var displayResults = applyConsoleSelection(results, resolved, warnedMissingKeys);
+                    printer.printRow(overquery, displayResults);
                 }
                 printer.printFooter();
             }
@@ -652,6 +719,41 @@ public class Grid {
         }
 
         return benchmarks;
+    }
+
+    private static List<Metric> applyConsoleSelection(List<Metric> results,
+                                                      ReportingSelectionResolver.ResolvedSelection resolved,
+                                                      Set<String> warnedMissingKeys) {
+
+        Set<String> allowed = resolved.keys();
+        if (allowed.isEmpty()) {
+            return results;
+        }
+
+        Set<String> present = new HashSet<>();
+        for (Metric m : results) {
+            present.add(m.getKey());
+        }
+
+        // Warn once per missing key, but in YAML-ish terms
+        for (String k : allowed) {
+            if (!present.contains(k) && warnedMissingKeys.add(k)) {
+                System.err.println("WARNING: selected output not available; skipping "
+                        + resolved.selectorForKey(k) + " (" + k + ")");
+            }
+        }
+
+        // Display intersection only
+        Set<String> allowedAndPresent = new HashSet<>(allowed);
+        allowedAndPresent.retainAll(present);
+
+        List<Metric> out = new ArrayList<>(results.size());
+        for (Metric m : results) {
+            if (allowedAndPresent.contains(m.getKey())) {
+                out.add(m);
+            }
+        }
+        return out;
     }
 
     public static List<BenchResult> runAllAndCollectResults(

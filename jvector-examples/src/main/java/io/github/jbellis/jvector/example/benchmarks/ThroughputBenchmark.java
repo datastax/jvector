@@ -253,16 +253,37 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgQps) {
-            list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
-            list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
-            list.add(Metric.of("CV %", ".1f", coefficientOfVariation));
+            list.add(Metric.of("search.throughput.avg_qps",
+                    "Avg QPS (of " + numTestRuns + ")",
+                    formatAvgQps,
+                    avgQps));
+
+            list.add(Metric.of("search.throughput.stddev_qps",
+                    "± Std Dev",
+                    formatAvgQps,
+                    stdDevQps));
+
+            list.add(Metric.of("search.throughput.cv_pct",
+                    "CV %",
+                    ".1f",
+                    coefficientOfVariation));
         }
         if (computeMedianQps) {
-            list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
+            list.add(Metric.of("search.throughput.median_qps",
+                    "Median QPS (of " + numTestRuns + ")",
+                    formatMedianQps,
+                    medianQps));
         }
         if (computeMaxQps) {
-            list.add(Metric.of("Max QPS (of " + numTestRuns + ")", formatMaxQps, maxQps));
-            list.add(Metric.of("Min QPS (of " + numTestRuns + ")", formatMaxQps, minQps));
+            list.add(Metric.of("search.throughput.max_qps",
+                    "Max QPS (of " + numTestRuns + ")",
+                    formatMaxQps,
+                    maxQps));
+
+            list.add(Metric.of("search.throughput.min_qps",
+                    "Min QPS (of " + numTestRuns + ")",
+                    formatMaxQps,
+                    minQps));
         }
         return list;
     }

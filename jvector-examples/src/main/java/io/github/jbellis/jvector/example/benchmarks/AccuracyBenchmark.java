@@ -99,21 +99,18 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeRecall) {
-            // compute recall for this run
             double recall = AccuracyMetrics.recallFromSearchResults(
                     cs.getDataSet().getGroundTruth(), results, topK, topK
             );
-            list.add(Metric.of("Recall@" + topK, formatRecall, recall));
+            list.add(Metric.of("search.accuracy.recall_at_" + topK, "Recall@" + topK, formatRecall, recall));
         }
         if (computeMAP) {
-            // compute recall for this run
             double map = AccuracyMetrics.meanAveragePrecisionAtK(
                     cs.getDataSet().getGroundTruth(), results, topK
             );
-            list.add(Metric.of("MAP@" + topK, formatMAP, map));
+            list.add(Metric.of("search.accuracy.map_at_" + topK, "MAP@" + topK, formatMAP, map));
         }
         return list;
+
     }
 }
-
-

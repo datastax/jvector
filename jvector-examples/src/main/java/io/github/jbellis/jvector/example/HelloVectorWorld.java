@@ -31,9 +31,30 @@ public class HelloVectorWorld {
         var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
                 .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
         MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-        Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
-                config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
+
+        var benchmarksToCompute = config.search.benchmarks;
+
+        var benchmarksToDisplay =
+                (config.search.console != null) ? config.search.console.benchmarks : null;
+
+        var metricsToDisplay =
+                (config.search.console != null) ? config.search.console.metrics : null;
+
+        Grid.runAll(ds,
+                config.construction.useSavedIndexIfExists,
+                config.construction.outDegree,
+                config.construction.efConstruction,
+                config.construction.neighborOverflow,
+                config.construction.addHierarchy,
+                config.construction.refineFinalGraph,
+                config.construction.getFeatureSets(),
+                config.construction.getCompressorParameters(),
+                config.search.getCompressorParameters(),
+                config.search.topKOverquery,
+                config.search.useSearchPruning,
+                benchmarksToCompute,
+                benchmarksToDisplay,
+                metricsToDisplay);
+
     }
 }

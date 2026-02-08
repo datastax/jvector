@@ -38,9 +38,3 @@ search:
     latency: [AVG] # [AVG, STD, P999]
     count: [visited] # [visited, expanded, expanded base layer]
     accuracy: [recall]
-  console: # Choose any subset of the benchmarks run (above), or omit / leave console blank for all benchmarks
-    benchmarks:
-      throughput: [ AVG ]
-      latency: [ AVG ]
-      count: [ visited ]
-      accuracy: [ recall ]
