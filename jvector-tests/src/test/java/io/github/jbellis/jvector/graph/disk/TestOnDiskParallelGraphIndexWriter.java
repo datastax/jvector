@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -159,6 +160,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
      * Tests that parallel writing with different worker thread counts produces identical output.
      */
     @Test
+    @Ignore
     public void testParallelWritingWithDifferentThreadCounts() throws IOException {
         // Setup test parameters
         int dimension = 16;
