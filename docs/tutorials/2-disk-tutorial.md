@@ -6,7 +6,9 @@ Unlike the previous example, this time we'll use a proper ANN dataset based on O
 
 ```java
 // This is a preconfigured dataset that will be downloaded automatically.
-DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow();
+DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
+    new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
+);
 ```
 
 > [!TIP]
@@ -80,7 +82,8 @@ Now we can perform searches exactly as with the in-memory index, with one minor 
 ```java
 GraphSearcher searcher = new GraphSearcher(graph);
 // Views of an OnDiskGraphIndex with inline or separated vectors can be used as RAVVs!
-// Create a new searcher and extract a separate RAVV for each thread
+// In multi-threaded scenarios you should have one searcher per thread
+// and extract a view for each thread from the associated searcher.
 RandomAccessVectorValues graphRavv = (RandomAccessVectorValues) searcher.getView();
 
 // number of search results we want

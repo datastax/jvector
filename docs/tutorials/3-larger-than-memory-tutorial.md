@@ -4,7 +4,7 @@ In the previous tutorials, we built indexes in-memory then wrote them to disk. H
 - Write vectors to disk as they are streamed in
 - Keep compressed versions of the vectors in the memory to allow JVector to compute similarities during construction. We'll use Product Quantization (PQ).
 
-> ![TIP]
+> [!TIP]
 > Product Quantization is a lossy compression technique that works by:
 > 1. Dividing each vector into subspaces (e.g., a 128-dimensional vector into 16 subspaces of 8 dimensions each)
 > 2. Learning a codebook of centroids for each subspace
@@ -22,7 +22,9 @@ We'll change things up with a different dataset:
 // The DataSet provided by loadDataSet is in-memory,
 // but you can apply the same technique even when you don't have
 // the base vectors in-memory.
-DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow();
+DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
+    new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
+);
 
 // Remember that RAVVs need not be in-memory in the general case.
 // We will sample from this RAVV to compute the PQ codebooks.
@@ -104,7 +106,7 @@ for (int ordinal = 0; ordinal < ravv.size(); ordinal++) {
 }
 ```
 
-> ![TIP]
+> [!TIP]
 > When you call `builder.build(ravv)`, vectors from the RAVV are added to the graph in parallel. There's no parallelization if you add vectors one by one in the same thread. But you can parallelize manually by inserting from multiple threads at once, see the full example in LargerThanMemory.java.
 
 Once we've added all the vectors we can write the graph structure to disk:
@@ -130,7 +132,7 @@ try (var pqOut = new BufferedRandomAccessWriter(pqPath)) {
 }
 ```
 
-> ![NOTE]
+> [!NOTE]
 > JVector supports a Graph feature called "Fused PQ" using which you can embed the PQ vectors and codebooks in the on-disk graph, similar to how full-resolution vectors are embedded. This saves you from the need to store them separately, but we won't cover that in this tutorial.
 
 ## Searching with Two-Pass Approach

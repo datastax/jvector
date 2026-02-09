@@ -60,7 +60,9 @@ public class LargerThanMemory {
         // The DataSet provided by loadDataSet is in-memory,
         // but you can apply the same technique even when you don't have
         // the base vectors in-memory.
-        DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow();
+        DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
+            new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
+        );
 
         // Remember that RAVVs need not be in-memory in the general case.
         // We will sample from this RAVV to compute the PQ codebooks.

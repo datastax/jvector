@@ -50,7 +50,9 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 public class DiskIntro {
     public static void main(String[] args) throws IOException {
         // This is a preconfigured dataset that will be downloaded automatically.
-        DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow();
+        DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
+            new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
+        );
 
         // The loaded DataSet provides a RAVV over the base vectors
         RandomAccessVectorValues ravv = dataset.getBaseRavv();
@@ -107,11 +109,14 @@ public class DiskIntro {
             int rerankK = (int) (topK * overqueryFactor);
 
             try (GraphSearcher searcher = new GraphSearcher(graph)) {
-                // use the RAVV from the graph instead of the one from the original dataSet
+                // Views of an OnDiskGraphIndex with inline or separated vectors can be used as RAVVs!
+                // In multi-threaded scenarios you should have one searcher per thread
+                // and extract a view for each thread from the associated searcher.
                 var graphRavv = (RandomAccessVectorValues) searcher.getView();
 
                 List<SearchResult> results = new ArrayList<>();
                 for (VectorFloat<?> query : dataset.getQueryVectors()) {
+                    // use the RAVV from the graph instead of the one from the original dataSet
                     SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, graphRavv);
                     // A slightly more complex overload of `search` which adds three extra parameters.
                     // Right now we only care about `rerankK`.
