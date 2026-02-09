@@ -118,7 +118,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
             }
             
             // Phase 2: Write the complete graph (including edges and metadata)
-            writer.write(suppliers);
+            writer.write(Map.of());
         }
 
         // SINGLE-PHASE APPROACH: just write
@@ -279,7 +279,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
             }
             
             // Phase 2: Write complete graph with parallel workers
-            writer.write(suppliers);
+            writer.write(Map.of());
         }
 
         // Verify the graph loads correctly
@@ -308,4 +308,3 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
     }
 }
 
-// Made with Bob
