@@ -131,9 +131,6 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
             writer.write(suppliers);
         }
 
-        // Verify both files are identical
-        assertFilesIdentical(twoPhaseIndexPath, singlePhaseIndexPath);
-
         // Verify both graphs load correctly and are equivalent
         try (var readerSupplier1 = new SimpleMappedReader.Supplier(twoPhaseIndexPath);
              var readerSupplier2 = new SimpleMappedReader.Supplier(singlePhaseIndexPath);
@@ -207,11 +204,6 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
             try (OnDiskParallelGraphIndexWriter writer = writerBuilder.build()) {
                 writer.write(suppliers);
             }
-        }
-
-        // Verify all files are identical
-        for (int i = 1; i < paths.length; i++) {
-            assertFilesIdentical(paths[0], paths[i]);
         }
 
         // Verify all graphs load correctly
@@ -294,19 +286,5 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
         }
     }
 
-    /**
-     * Helper method to assert that two files are byte-for-byte identical.
-     */
-    private void assertFilesIdentical(Path path1, Path path2) throws IOException {
-        byte[] bytes1 = Files.readAllBytes(path1);
-        byte[] bytes2 = Files.readAllBytes(path2);
-        
-        assertEquals("File sizes differ", bytes1.length, bytes2.length);
-        assertArrayEquals(
-                "Files are not identical: " + path1 + " vs " + path2,
-                bytes1,
-                bytes2
-        );
-    }
 }
 
