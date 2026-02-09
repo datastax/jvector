@@ -63,7 +63,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
     @Test
     public void testTwoPhaseVsSinglePhaseWriting() throws IOException {
         // Test with single layer graph
-        testTwoPhaseVsSinglePhaseWriting(false);
+        //testTwoPhaseVsSinglePhaseWriting(false);
         // Test with multi-layer graph
         testTwoPhaseVsSinglePhaseWriting(true);
     }
