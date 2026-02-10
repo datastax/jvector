@@ -41,14 +41,58 @@ import java.util.stream.IntStream;
  * This dataset loader will get and load hdf5 files from <a href="https://ann-benchmarks.com/">ann-benchmarks</a>.
  */
 public class DataSetLoaderHDF5 implements DataSetLoader {
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DataSetLoaderHDF5.class);
     public static final Path HDF5_DIR = Path.of("hdf5");
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     public static final String HDF5_EXTN = ".hdf5";
+
+    public static final String NAME = "HDF5";
+    public String getName() {
+        return NAME;
+    }
+
+    private static final java.util.Set<String> KNOWN_DATASETS = java.util.Set.of(
+            "deep-image-96-angular",
+            "fashion-mnist-784-euclidean",
+            "gist-960-euclidean",
+            "glove-25-angular",
+            "glove-50-angular",
+            "glove-100-angular",
+            "glove-200-angular",
+            "kosarak-jaccard",
+            "mnist-784-euclidean",
+            "movielens10m-jaccard",
+            "nytimes-256-angular",
+            "sift-128-euclidean",
+            "lastfm-64-dot",
+            "coco-i2i-512-angular",
+            "coco-t2i-512-angular"
+    );
 
     /**
      * {@inheritDoc}
      */
     public Optional<DataSet> loadDataSet(String datasetName) {
+
+        // HDF5 loader does not support profiles
+        if (datasetName.contains(":")) {
+            logger.trace("Dataset '{}' has a profile, which is not supported by the HDF5 loader.", datasetName);
+            return Optional.empty();
+        }
+
+        // If not local, only download if it's explicitly known to be on ann-benchmarks.com
+        if (!KNOWN_DATASETS.contains(datasetName)) {
+            logger.trace("Dataset '{}' not in known list, skipping HDF5 download.", datasetName);
+            return Optional.empty();
+        }
+
+        // If it exists locally, we're good
+        var dsFilePath = HDF5_DIR.resolve(datasetName + HDF5_EXTN);
+        if (Files.exists(dsFilePath)) {
+            logger.trace("Dataset '{}' already downloaded.", datasetName);
+            return Optional.of(readHdf5Data(dsFilePath));
+        }
+
         return maybeDownloadHdf5(datasetName).map(this::readHdf5Data);
     }
 
@@ -114,16 +158,11 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
     }
 
     private Optional<Path> maybeDownloadHdf5(String datasetName) {
-
-        var dsFilePath = HDF5_DIR.resolve(datasetName+HDF5_EXTN);
-
-        if (Files.exists(dsFilePath)) {
-            return Optional.of(dsFilePath);
-        }
+        var dsFilePath = HDF5_DIR.resolve(datasetName + HDF5_EXTN);
 
         // Download from https://ann-benchmarks.com/datasetName
         var url = "https://ann-benchmarks.com/" + datasetName + HDF5_EXTN;
-        System.out.println("Downloading: " + url);
+        logger.info("Downloading: {}", url);
 
         HttpURLConnection connection;
         while (true) {
@@ -139,7 +178,7 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
             }
             if (responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP) {
                 String newUrl = connection.getHeaderField("Location");
-                System.out.println("Redirect detected to URL: " + newUrl);
+                logger.info("Redirect detected to URL: {}", newUrl);
                 url = newUrl;
             } else {
                 break;

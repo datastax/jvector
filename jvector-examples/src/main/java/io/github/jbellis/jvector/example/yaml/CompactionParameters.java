@@ -19,4 +19,8 @@ package io.github.jbellis.jvector.example.yaml;
 
 public class CompactionParameters extends CommonParameters {
     public Integer numSplits;
+    public CompactionParameters() {}
+    public CompactionParameters(int numSplits) {
+        this.numSplits = numSplits;
+    }
 }

@@ -38,4 +38,6 @@ public interface DataSetLoader {
      * @return a {@link DataSet}, if found
      */
     Optional<DataSet> loadDataSet(String dataSetName);
+
+    String getName();
 }

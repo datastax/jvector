@@ -31,7 +31,7 @@ public class MultiConfig {
     public String dataset;
     public ConstructionParameters construction;
     public SearchParameters search;
-    public CompactionParameters compaction;
+    public CompactionParameters compaction = new CompactionParameters(1);
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
         var name = defaultDirectory + datasetName;

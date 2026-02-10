@@ -20,7 +20,7 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <configuration>
-                    <skip>false</skip>
+                    <skip>true</skip>
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
@@ -126,6 +126,11 @@
             <version>2.17.1</version>
         </dependency>
         <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>datatools-vectordata</artifactId>
+            <version>0.1.16</version>
+        </dependency>
+        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <version>4.13.1</version>
@@ -153,7 +158,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -219,7 +224,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -335,7 +340,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>

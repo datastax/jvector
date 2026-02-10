@@ -16,6 +16,8 @@
         <maven.compiler.release>22</maven.compiler.release>
         <jmh.version>1.37</jmh.version>
         <awssdk.version>2.21.10</awssdk.version>
+        <!-- Default benchmark arguments (empty) -->
+        <args></args>
     </properties>
 
     <dependencies>
@@ -108,11 +110,12 @@
                     <execution>
                         <id>compactor</id>
                         <goals>
-                            <goal>java</goal>
+                            <goal>exec</goal>
                         </goals>
                         <configuration>
                             <skip>false</skip>
-                            <mainClass>io.github.jbellis.jvector.bench.CompactorBenchmark</mainClass>
+                            <executable>java</executable>
+                            <commandlineArgs>--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector -Djvector.experimental.enable_native_vectorization=true -cp %classpath io.github.jbellis.jvector.bench.CompactorBenchmark ${args}</commandlineArgs>
                         </configuration>
                     </execution>
                 </executions>
