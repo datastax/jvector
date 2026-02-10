@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -42,11 +43,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.apache.commons.lang3.ArrayUtils.shuffle;
 import static org.junit.Assert.assertEquals;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
@@ -79,8 +81,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private ArrayList<int[]> groundTruthAllVectors;
     private BuildScoreProvider baseBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
-    private ImmutableGraphIndex baseGraphIndex;
-    private ImmutableGraphIndex allGraphIndex;
+    private OnHeapGraphIndex baseGraphIndex;
+    private OnHeapGraphIndex allGraphIndex;
 
     @Before
     public void setup() throws IOException {
@@ -118,23 +120,30 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         // score provider using the raw, in-memory vectors
         baseBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(baseVectorsRavv, SIMILARITY_FUNCTION);
         allBuildScoreProvider = BuildScoreProvider.randomAccessScoreProvider(allVectorsRavv, SIMILARITY_FUNCTION);
-        var baseGraphIndexBuilder = new GraphIndexBuilder(baseBuildScoreProvider,
+        try (
+            var baseGraphIndexBuilder = new GraphIndexBuilder(baseBuildScoreProvider,
                 baseVectorsRavv.dimension(),
                 M, // graph degree
                 BEAM_WIDTH, // construction search depth
                 NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy
-        var allGraphIndexBuilder = new GraphIndexBuilder(allBuildScoreProvider,
+        ) {
+            baseGraphIndex = (OnHeapGraphIndex) baseGraphIndexBuilder.build(baseVectorsRavv);
+        }
+
+        try (
+            var allGraphIndexBuilder = new GraphIndexBuilder(allBuildScoreProvider,
                 allVectorsRavv.dimension(),
                 M, // graph degree
                 BEAM_WIDTH, // construction search depth
                 NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
                 ALPHA, // relax neighbor diversity requirement by this factor
                 ADD_HIERARCHY); // add the hierarchy
+        ) {
+            allGraphIndex = (OnHeapGraphIndex) allGraphIndexBuilder.build(allVectorsRavv);
+        }
 
-        baseGraphIndex = baseGraphIndexBuilder.build(baseVectorsRavv);
-        allGraphIndex = allGraphIndexBuilder.build(allVectorsRavv);
     }
 
     @After
@@ -148,7 +157,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
      * @throws IOException exception
      */
     @Test
-    public void testGraphConstructionWithNonIdentityOrdinalMapping() throws IOException {
+    public void testGraphConstructionWithRemappedRavv() throws IOException {
         // create reversed mapping from graph node id to ravv ordinal
         int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
         final RemappedRandomAccessVectorValues remappedBaseVectorsRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
@@ -212,35 +221,33 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
      */
     @Test
     public void testReconstructionOfOnHeapGraphIndex_withNonIdentityOrdinalMapping() throws IOException {
-        var graphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName());
         var heapGraphOutputPath = testDirectory.resolve("testReconstructionOfOnHeapGraphIndex_" + baseGraphIndex.getClass().getSimpleName() + "_onHeap");
 
-        // create reversed mapping from graph node id to ravv ordinal
-        int[] graphToRavvOrdMap = IntStream.range(0, baseVectorsRavv.size()).map(i -> baseVectorsRavv.size() - 1 - i).toArray();
-        final RemappedRandomAccessVectorValues remmappedRavv = new RemappedRandomAccessVectorValues(baseVectorsRavv, graphToRavvOrdMap);
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(remmappedRavv, SIMILARITY_FUNCTION);
-        try (var baseGraphIndexBuilder = new GraphIndexBuilder(bsp,
-                baseVectorsRavv.dimension(),
-                M, // graph degree
-                BEAM_WIDTH, // construction search depth
-                NEIGHBOR_OVERFLOW, // allow degree overflow during construction by this factor
-                ALPHA, // relax neighbor diversity requirement by this factor
-                ADD_HIERARCHY); // add the hierarchy) {
-             var baseGraphIndex = baseGraphIndexBuilder.build(remmappedRavv)) {
-            log.info("Writing graph to {}", graphOutputPath);
-            TestUtil.writeGraph(baseGraphIndex, baseVectorsRavv, graphOutputPath);
+        // shuffle the ordinals arbitrarily, ensuring the output ordinal space is sparse (with high probability)
+        int[] oldToNewOrds = getRandom().ints(0, (int) (1.5 * baseVectorsRavv.size())).distinct().limit(baseVectorsRavv.size()).toArray();
 
-            log.info("Writing on-heap graph to {}", heapGraphOutputPath);
-            try (SimpleWriter writer = new SimpleWriter(heapGraphOutputPath.toAbsolutePath())) {
-                ((OnHeapGraphIndex) baseGraphIndex).save(writer);
-            }
+        Map<Integer, Integer> oldToNewOrdMap = IntStream.range(0, oldToNewOrds.length).boxed().collect(Collectors.toMap(i -> i, i -> oldToNewOrds[i]));
+        OrdinalMapper ordinalMapper = new OrdinalMapper.MapMapper(oldToNewOrdMap);
 
-            log.info("Reading on-heap graph from {}", heapGraphOutputPath);
-            try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
-                MutableGraphIndex reconstructedOnHeapGraphIndex = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(bsp, ALPHA));
-                TestUtil.assertGraphEquals(baseGraphIndex, reconstructedOnHeapGraphIndex);
-            }
+        var shuffledRavv = new OrdinalMappedRavv(baseVectorsRavv, ordinalMapper);
+        var shuffledBsp = BuildScoreProvider.randomAccessScoreProvider(shuffledRavv, SIMILARITY_FUNCTION);
+        var shuffledGt = transformGroundTruth(groundTruthBaseVectors, ordinalMapper);
+
+        log.info("Writing on-heap graph to {}, with ordinal shuffling", heapGraphOutputPath);
+        try (SimpleWriter writer = new SimpleWriter(heapGraphOutputPath.toAbsolutePath())) {
+            ((OnHeapGraphIndex) baseGraphIndex).save(writer, new OrdinalMapper.MapMapper(oldToNewOrdMap));
         }
+
+        log.info("Reading on-heap graph from {}", heapGraphOutputPath);
+        OnHeapGraphIndex deserializedGraph;
+        try (var readerSupplier = new SimpleMappedReader.Supplier(heapGraphOutputPath.toAbsolutePath())) {
+            deserializedGraph = OnHeapGraphIndex.load(readerSupplier.get(), baseVectorsRavv.dimension(), NEIGHBOR_OVERFLOW, new VamanaDiversityProvider(shuffledBsp, ALPHA));
+        }
+
+        var baseRecall = calculateAverageRecall(baseGraphIndex, baseBuildScoreProvider, queryVectors, groundTruthBaseVectors, TOP_K, null);
+        var deserializedRecall = calculateAverageRecall(deserializedGraph, shuffledBsp, queryVectors, shuffledGt, TOP_K, null);
+
+        assertEquals(baseRecall, deserializedRecall, 1e-6);
     }
 
     /**
@@ -336,7 +343,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private VectorFloat<?> createRandomVector(int dimension) {
         VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
         for (int i = 0; i < dimension; i++) {
-            vector.set(i, (float) Math.random());
+            vector.set(i, randomFloat());
         }
         return vector;
     }
@@ -360,6 +367,10 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         return exactResults.stream().limit(topK).mapToInt(nodeScore -> nodeScore.node).toArray();
     }
 
+    private static List<int[]> transformGroundTruth(List<int[]> groundTruth, OrdinalMapper mapper) {
+        return groundTruth.stream().map(gt -> Arrays.stream(gt).map(mapper::oldToNew).toArray()).collect(Collectors.toList());
+    }
+
     /**
      * Calculate average recall across multiple query vectors for more stable measurements
      * @param graphIndex the graph index to search
@@ -371,7 +382,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
      * @return the average recall across all queries
      */
     private static float calculateAverageRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider,
-                                                ArrayList<VectorFloat<?>> queryVectors, ArrayList<int[]> groundTruths,
+                                                List<VectorFloat<?>> queryVectors, List<int[]> groundTruths,
                                                 int k, int[] graphToRavvOrdMap) throws IOException {
         float totalRecall = 0.0f;
         for (int i = 0; i < queryVectors.size(); i++) {
@@ -423,5 +434,40 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         }
 
         return ((float) hits) / (float) actualK;
+    }
+
+    class OrdinalMappedRavv implements RandomAccessVectorValues {
+        private final RandomAccessVectorValues ravv;
+        private final OrdinalMapper ordinalMapper;
+
+        public OrdinalMappedRavv(RandomAccessVectorValues ravv, OrdinalMapper ordinalMapper) {
+            this.ravv = ravv;
+            this.ordinalMapper = ordinalMapper;
+        }
+
+        @Override
+        public int size() {
+            throw new UnsupportedOperationException("This RAVV doesn't know it's size");
+        }
+
+        @Override
+        public int dimension() {
+            return ravv.dimension();
+        }
+
+        @Override
+        public VectorFloat<?> getVector(int nodeId) {
+            return ravv.getVector(ordinalMapper.newToOld(nodeId));
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return ravv.isValueShared();
+        }
+
+        @Override
+        public RandomAccessVectorValues copy() {
+            return new OrdinalMappedRavv(ravv.copy(), ordinalMapper);
+        }
     }
 }
