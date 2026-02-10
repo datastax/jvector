@@ -148,8 +148,18 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             // Update maxOrdinalWritten
             maxOrdinalWritten = ordinalMapper.maxOrdinal();
 
-            // Seek to end of L0 region
+            // Calculate end offset
             long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
+            
+            // CRITICAL: After parallel writes via AsynchronousFileChannel, we must invalidate
+            // the BufferedRandomAccessWriter's buffer cache. The parallel writes bypassed the
+            // writer's buffer, so any subsequent reads through the writer would see stale data.
+            // This prevents reading zeros from the buffer cache instead of the actual written data.
+            if (out instanceof BufferedRandomAccessWriter) {
+                ((BufferedRandomAccessWriter) out).invalidateCache();
+            }
+            
+            // Seek to end of L0 region
             out.seek(endOffset);
         }
     }

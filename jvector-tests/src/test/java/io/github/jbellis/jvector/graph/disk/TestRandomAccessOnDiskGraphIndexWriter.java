@@ -65,7 +65,7 @@ public class TestRandomAccessOnDiskGraphIndexWriter extends LuceneTestCase {
         testGraphWrite(true, true);
     }
     @Test
-    public void testMultiLayerSinglePhase() throws IOException {
+    public void testMultiLayerOnePhase() throws IOException {
         testGraphWrite(true, false);
     }
 
