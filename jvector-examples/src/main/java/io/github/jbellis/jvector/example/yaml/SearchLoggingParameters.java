@@ -17,15 +17,24 @@
 package io.github.jbellis.jvector.example.yaml;
 
 /**
- * Search logging sink configuration
+ * Search logging sink configuration.
  *
  * YAML shape:
  * search:
  *   logging:
  *     type: csv
+ *     dir: logging
  *     benchmarks: ...
+ *     metrics: ...
  */
-public class SearchLoggingParameters {
-    public String type; // e.g. "csv", "parquet" (future)
-    public BenchmarkSelection benchmarks;
+public class SearchLoggingParameters extends BenchmarkSelection {
+    /**
+     * Logging sink type: "csv", "parquet", etc.
+     */
+    public String type;
+
+    /**
+     * Output directory for logs. If null, a default will be used.
+     */
+    public String dir;
 }

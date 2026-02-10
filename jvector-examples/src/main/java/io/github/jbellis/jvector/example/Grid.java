@@ -34,6 +34,7 @@ import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
+import io.github.jbellis.jvector.example.reporting.SearchSelection;
 import io.github.jbellis.jvector.example.yaml.BenchmarkSelection;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -108,7 +109,9 @@ public class Grid {
                        List<Boolean> usePruningGrid,
                        Map<String, List<String>> benchmarksToCompute,
                        Map<String, List<String>> benchmarksToDisplay,
-                       MetricSelection metricsToDisplay) throws IOException
+                       MetricSelection metricsToDisplay,
+                       Map<String, List<String>> benchmarksToLog,
+                       MetricSelection metricsToLog) throws IOException
     {
         boolean success = false;
 
@@ -130,7 +133,7 @@ public class Grid {
                                 for (var bc : buildCompressors) {
                                     var compressor = getCompressor(bc, ds);
                                     runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
-                                            compressor, compressionGrid, topKGrid, usePruningGrid, benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, ds, workDir);
+                                            compressor, compressionGrid, topKGrid, usePruningGrid, benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, benchmarksToLog, metricsToLog, ds, workDir);
                                 }
                             }
                         }
@@ -185,9 +188,11 @@ public class Grid {
                 compressionGrid,
                 topKGrid,
                 usePruningGrid,
-                null,
-                null,   // benchmarksToDisplay
-                null);  // metricsToDisplay
+                null, // benchmarksToCompute
+                null,  // benchmarksToDisplay
+                null,  // metricsToDisplay
+                null,  //
+                null);  // metricsToLog
     }
 
     /**
@@ -228,6 +233,8 @@ public class Grid {
                             Map<String, List<String>> benchmarksToCompute,
                             Map<String, List<String>> benchmarksToDisplay,
                             MetricSelection metricsToDisplay,
+                            Map<String, List<String>> benchmarksToLog,
+                            MetricSelection metricsToLog,
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
@@ -306,7 +313,7 @@ public class Grid {
 
                     try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                         testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy,
-                                benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, workDirectory);
+                                benchmarksToCompute, benchmarksToDisplay, metricsToDisplay, benchmarksToLog, metricsToLog, workDirectory);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
@@ -583,29 +590,34 @@ public class Grid {
                                           Map<String, List<String>> benchmarksToCompute,
                                           Map<String, List<String>> benchmarksToDisplay,
                                           MetricSelection metricsToDisplay,
+                                          Map<String, List<String>> benchmarksToLog,
+                                          MetricSelection metricsToLog,
                                           Path testDirectory) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
-        // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
-        // Display benchmark stats must be a subset of computed stats (fail fast)
-        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
-                benchmarksToCompute,
-                benchmarksToDisplay,
-                SearchReportingCatalog.defaultComputeBenchmarks()
-        );
+        // 1) Select what to report (console + logging)
+        SearchSelection consoleSel = SearchSelection.forConsole(benchmarksToDisplay, metricsToDisplay);
+        SearchSelection logSel = SearchSelection.forLogging(benchmarksToLog, metricsToLog);
 
-        // Named metrics must be recognized (availability is best-effort, checked via warning at runtime)
-        ReportingSelectionResolver.validateNamedMetricSelectionNames(
-                metricsToDisplay,
-                SearchReportingCatalog.catalog()
-        );
+        // Fail-fast validations once per configuration
+        consoleSel.validate(benchmarksToCompute);
+        logSel.validate(benchmarksToCompute);
 
+        // 2) Select benchmarks to run (compute spec)
         var benchmarks = setupBenchmarks(benchmarksToCompute);
         QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
-        // 2) Setup benchmark table for printing
+        // 3) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
+            // Resolving selections depends on topK
+            var consoleResolved = consoleSel.resolveForTopK(topK);
+            var logResolved = logSel.resolveForTopK(topK);
+
+            if (!logResolved.keys().isEmpty()) {
+                System.out.println("Logging enabled: selected " + logResolved.keys().size() + " keys");
+            }
+
             for (var usePruning : usePruningGrid) {
                 BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
                 printer.printConfig(Map.of(
@@ -616,21 +628,21 @@ public class Grid {
                         "usePruning",         usePruning
                 ));
 
-                Set<String> warnedMissingKeys = new HashSet<>();
-
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    BenchmarkSelection selection = new BenchmarkSelection();
-                    selection.benchmarks = benchmarksToDisplay;
-                    selection.metrics = metricsToDisplay;
 
-                    var ctx = ReportingSelectionResolver.Context.of("topK", Integer.toString(topK));
-                    var resolved = ReportingSelectionResolver.resolve(selection, SearchReportingCatalog.catalog(), ctx);
+                    // Best-effort runtime availability warnings (warn once per key)
+                    consoleSel.warnMissing(results, consoleResolved);
+                    logSel.warnMissing(results, logResolved);
 
-                    var displayResults = applyConsoleSelection(results, resolved, warnedMissingKeys);
+                    // Apply console selection and print
+                    var displayResults = consoleSel.apply(results, consoleResolved);
                     printer.printRow(overquery, displayResults);
+
+                    // Apply log selection and log
+                    // logSel.apply(results, logResolved);
                 }
                 printer.printFooter();
             }
@@ -719,41 +731,6 @@ public class Grid {
         }
 
         return benchmarks;
-    }
-
-    private static List<Metric> applyConsoleSelection(List<Metric> results,
-                                                      ReportingSelectionResolver.ResolvedSelection resolved,
-                                                      Set<String> warnedMissingKeys) {
-
-        Set<String> allowed = resolved.keys();
-        if (allowed.isEmpty()) {
-            return results;
-        }
-
-        Set<String> present = new HashSet<>();
-        for (Metric m : results) {
-            present.add(m.getKey());
-        }
-
-        // Warn once per missing key, but in YAML-ish terms
-        for (String k : allowed) {
-            if (!present.contains(k) && warnedMissingKeys.add(k)) {
-                System.err.println("WARNING: selected output not available; skipping "
-                        + resolved.selectorForKey(k) + " (" + k + ")");
-            }
-        }
-
-        // Display intersection only
-        Set<String> allowedAndPresent = new HashSet<>(allowed);
-        allowedAndPresent.retainAll(present);
-
-        List<Metric> out = new ArrayList<>(results.size());
-        for (Metric m : results) {
-            if (allowedAndPresent.contains(m.getKey())) {
-                out.add(m);
-            }
-        }
-        return out;
     }
 
     public static List<BenchResult> runAllAndCollectResults(

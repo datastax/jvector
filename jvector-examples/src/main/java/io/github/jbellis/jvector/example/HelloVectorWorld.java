@@ -17,9 +17,13 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderMFD;
+import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
+import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Tests GraphIndexes against vectors from various datasets
@@ -40,6 +44,39 @@ public class HelloVectorWorld {
         var metricsToDisplay =
                 (config.search.console != null) ? config.search.console.metrics : null;
 
+        Map<String, List<String>> benchmarksToLog =
+                (config.search != null && config.search.logging != null)
+                        ? config.search.logging.benchmarks
+                        : null;
+
+        var metricsToLog =
+                (config.search != null && config.search.logging != null)
+                        ? config.search.logging.metrics
+                        : null;
+
+        // Validate display / console selection
+        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
+                benchmarksToCompute,
+                benchmarksToDisplay,
+                SearchReportingCatalog.defaultComputeBenchmarks()
+        );
+
+        ReportingSelectionResolver.validateNamedMetricSelectionNames(
+                metricsToDisplay,
+                SearchReportingCatalog.catalog()
+        );
+
+        // Validate logging selection
+        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
+                benchmarksToCompute,
+                benchmarksToLog,
+                SearchReportingCatalog.defaultComputeBenchmarks()
+        );
+        ReportingSelectionResolver.validateNamedMetricSelectionNames(
+                metricsToLog,
+                SearchReportingCatalog.catalog()
+        );
+
         Grid.runAll(ds,
                 config.construction.useSavedIndexIfExists,
                 config.construction.outDegree,
@@ -54,7 +91,9 @@ public class HelloVectorWorld {
                 config.search.useSearchPruning,
                 benchmarksToCompute,
                 benchmarksToDisplay,
-                metricsToDisplay);
+                metricsToDisplay,
+                benchmarksToLog,
+                metricsToLog);
 
     }
 }

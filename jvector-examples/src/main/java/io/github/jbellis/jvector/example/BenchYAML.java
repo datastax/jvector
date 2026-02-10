@@ -110,6 +110,17 @@ public class BenchYAML {
                             ? config.search.console.metrics
                             : null;
 
+            Map<String, List<String>> benchmarksToLog =
+                    (config.search != null && config.search.logging != null)
+                            ? config.search.logging.benchmarks
+                            : null;
+
+            var metricsToLog =
+                    (config.search != null && config.search.logging != null)
+                            ? config.search.logging.metrics
+                            : null;
+
+            // Validate display / console selection
             ReportingSelectionResolver.validateBenchmarkSelectionSubset(
                     benchmarksToCompute,
                     benchmarksToDisplay,
@@ -118,6 +129,17 @@ public class BenchYAML {
 
             ReportingSelectionResolver.validateNamedMetricSelectionNames(
                     metricsToDisplay,
+                    SearchReportingCatalog.catalog()
+            );
+
+            // Validate logging selection
+            ReportingSelectionResolver.validateBenchmarkSelectionSubset(
+                    benchmarksToCompute,
+                    benchmarksToLog,
+                    SearchReportingCatalog.defaultComputeBenchmarks()
+            );
+            ReportingSelectionResolver.validateNamedMetricSelectionNames(
+                    metricsToLog,
                     SearchReportingCatalog.catalog()
             );
 
@@ -135,7 +157,9 @@ public class BenchYAML {
                     config.search.useSearchPruning,
                     benchmarksToCompute,
                     benchmarksToDisplay,
-                    metricsToDisplay);
+                    metricsToDisplay,
+                    benchmarksToLog,
+                    metricsToLog);
         }
     }
 }
