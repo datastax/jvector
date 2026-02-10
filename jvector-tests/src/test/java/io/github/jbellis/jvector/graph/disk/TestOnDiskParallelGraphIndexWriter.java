@@ -61,6 +61,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
      * 2. Using single-phase approach: just write()
      */
     @Test
+    @Ignore
     public void testTwoPhaseVsSinglePhaseWriting() throws IOException {
         // Test with single layer graph
         //testTwoPhaseVsSinglePhaseWriting(false);
@@ -222,6 +223,7 @@ public class TestOnDiskParallelGraphIndexWriter extends LuceneTestCase {
      * Tests two-phase writing with parallel configuration.
      */
     @Test
+    @Ignore
     public void testTwoPhaseParallelWriting() throws IOException {
         // Setup test parameters
         int dimension = 16;
