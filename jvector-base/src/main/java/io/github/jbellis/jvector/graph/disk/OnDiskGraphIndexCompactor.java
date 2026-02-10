@@ -276,6 +276,14 @@ public final class OnDiskGraphIndexCompactor {
                                 ssp = DefaultSearchScoreProvider.exact(vec, similarityFunction, idx.getView());
                             }
 
+                            // PRIORITY
+                            // TODO: clarify heuristics approach, identify key questions and verification methods
+                            // TODO: parameterize topK and beamWidth in JMH coverage
+                            // TODO: validate assumption that recall is stable enough between original contributing graphs and the compacted graph
+                            // FUTURE
+                            // TODO: ensure that result metrics contain recall first as a correctness measure, and then add performance data
+                            //       to include completion time, merge speeds, etc
+                            //       to include resource usage variations for compaction and search
                             SearchResult results = tlSearchers.get()[ss].search(ssp, maxDegrees.get(0) * 16, beamWidth, 0.0f, 0.0f, searchBits);
                             for (SearchResult.NodeScore re : results.getNodes()) {
                                 candidates.add(Map.entry(idx, re));

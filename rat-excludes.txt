@@ -26,3 +26,6 @@ scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/*.yml
 src/main/resources/logback.xml
+jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/OnDiskGraphIndexCompactor.md
+jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/AbstractGraphIndexWriter.md
+benchmarks-jmh/src/main/java/io/github/jbellis/jvector/bench/CompactorBenchmark.md
