@@ -57,7 +57,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final int dimension;
     final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
-    int headerSize;
+    final int headerSize;
     volatile int maxOrdinalWritten = -1;
     final List<Feature> inlineFeatures;
 
