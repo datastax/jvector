@@ -3,7 +3,8 @@
     <Appenders>
         <!-- Console Appender -->
         <Console name="Console" target="SYSTEM_OUT">
-            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+            <PatternLayout disableAnsi="${sys:compactor.disableAnsi:-true}"
+                          pattern="%d{HH:mm:ss.SSS} %style{[%t]}{cyan} %highlight{%-5level}{FATAL=red bold, ERROR=red, WARN=yellow, INFO=green, DEBUG=blue, TRACE=white} %style{%logger{1}}{bright_white} - %msg%n"/>
         </Console>
     </Appenders>
     <Loggers>
