@@ -19,6 +19,9 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousFileChannel;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -28,6 +31,7 @@ import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.disk.ByteBufferIndexWriter;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodeArray;
@@ -38,6 +42,8 @@ import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
@@ -46,22 +52,41 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+
 
 import static java.lang.Math.*;
 
+final class NodeWrite {
+    final int ordinal;
+    final VectorFloat<?> vec;
+    final NodeArray neighbors;
+    final List<ByteSequence<?>> neighborPQs;
+
+    NodeWrite(int ordinal, VectorFloat<?> vec, NodeArray neighbors, List<ByteSequence<?>> neighborPQs) {
+        this.ordinal = ordinal;
+        this.vec = vec;
+        this.neighbors = neighbors;
+        this.neighborPQs = neighborPQs;
+    }
+};
+final class WriteResult {
+    final int newOrdinal;
+    final long fileOffset;
+    final ByteBuffer data;
+
+    WriteResult(int newOrdinal, long fileOffset, ByteBuffer data) {
+        this.newOrdinal = newOrdinal;
+        this.fileOffset = fileOffset;
+        this.data = data;
+    }
+};
+
 public final class OnDiskGraphIndexCompactor {
-
-    static final class NodeWrite {
-        final int newOrdinal;
-        final VectorFloat<?> vec;
-        final NodeArray neighbors;
-
-        NodeWrite(int newOrdinal, VectorFloat<?> vec, NodeArray neighbors) {
-            this.newOrdinal = newOrdinal;
-            this.vec = vec;
-            this.neighbors = neighbors;
-        }
-    };
 
     private final List<OnDiskGraphIndex> sources;
     private final Map<OnDiskGraphIndex, FixedBitSet> liveNodes;
@@ -74,7 +99,7 @@ public final class OnDiskGraphIndexCompactor {
     private final int dimension;
     private final Random rng;
     private int maxOrdinal = -1;
-    private int numNodes;
+    private int numTotalNodes;
     private final ForkJoinPool executor;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
     private final int beamWidth = 1000;
@@ -98,7 +123,7 @@ public final class OnDiskGraphIndexCompactor {
             var bits = new FixedBitSet(source.size(0));
             bits.set(0, source.size(0));
             liveNodes.put(source, bits);
-            numNodes += source.size(0);
+            numTotalNodes += source.size(0);
         }
 
         addHierarchy = this.sources.get(0).getMaxLevel() != 1;
@@ -106,6 +131,7 @@ public final class OnDiskGraphIndexCompactor {
         dimension = this.sources.get(0).getDimension();
         this.rng = new Random(0);
         this.executor = executor;
+
     }
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources) {
         this(sources, ForkJoinPool.commonPool());
@@ -165,48 +191,68 @@ public final class OnDiskGraphIndexCompactor {
             }
         }
 
-        int window = executor.getPoolSize() * 8;
-        Deque<Future<NodeWrite>> inFlight = new ArrayDeque<>(window);
-
         // second stage: construct the upper layer graph without base layer
-        OnHeapGraphIndex upperLayerGraph = constructUpperLayerGraph(similarityFunction);
+        UpperLayerOrdinalMapper upperLayerOrdinalMapper = new UpperLayerOrdinalMapper(upperLayerNodeList);
+        var ulravv = new UpperLayerRandomAccessVectorValues(upperLayerOrdinalMapper);
+        OnHeapGraphIndex upperLayerGraph = constructUpperLayerGraph(upperLayerOrdinalMapper, ulravv, similarityFunction);
+
+        // leverage the first source for PQ codebook and encode upperlayer nodes
+        var fpq = (FusedPQ)this.sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
+        ProductQuantization pq = fpq.getPQ();
+        var ulpq = (PQVectors) pq.encodeAll(ulravv);
+        var iv = new InlineVectors(dimension);
 
         // third stage: write base layer nodes, then let writer handle upper layers
-        try(CompactWriter writer = new CompactWriter.Builder(upperLayerGraph, outputPath, numNodes).withMapper(new OrdinalMapper.IdentityMapper(maxOrdinal)).with(new InlineVectors(dimension)).build()) {
-            writer.writeHeader(upperLayerGraph.getView());
+        try(CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, upperLayerGraph, dimension, iv, fpq)) {
+        writer.writeHeader();
 
-            ExplicitThreadLocal<GraphSearcher[]> tlSearchers = ExplicitThreadLocal.withInitial(() -> {
-                GraphSearcher[] gs = new GraphSearcher[sources.size()];
-                for (int i = 0; i < sources.size(); i++) {
-                    gs[i] = new GraphSearcher(sources.get(i));
-                }
-                return gs;
-            });
-            CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
+        ExplicitThreadLocal<GraphSearcher[]> tlSearchers = ExplicitThreadLocal.withInitial(() -> {
+            GraphSearcher[] gs = new GraphSearcher[sources.size()];
+            for (int i = 0; i < sources.size(); i++) {
+                gs[i] = new GraphSearcher(sources.get(i));
+            }
+            return gs;
+        });
+        CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
+        List<Future<List<WriteResult>>> writeFutures = new ArrayList<>();
 
-            // Write base layer (level 0) nodes
-            for (int s = 0; s < sources.size(); s++) {
-                NodesIterator sourceNodes = sources.get(s).getNodes(0);
-                FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
-                OnDiskGraphIndex.View sourceView = sources.get(s).getView();
+        // Write base layer (level 0) nodes to buffer
+        for (int s = 0; s < sources.size(); s++) {
+            NodesIterator sourceNodes = sources.get(s).getNodes(0);
+            int numNodes = sourceNodes.size();
+            int[] nodes = new int[numNodes];
+            // materialize
+            for(int i = 0; i < numNodes; ++i) nodes[i] = sourceNodes.nextInt(); 
+            FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
+            OnDiskGraphIndex.View sourceView = sources.get(s).getView();
 
-                while (sourceNodes.hasNext()) {
-                    int node = sourceNodes.next();
-                    if (!sourceAlive.get(node)) continue;
+            int numBatches = Math.max(40, (numNodes + 1024 - 1) / 1024); 
+            if(numBatches > numNodes) {
+                numBatches = numNodes;
+            }
+            int batchSize = (numNodes + numBatches - 1) / numBatches;
 
-                    int finalS = s;
-                    inFlight.addLast(executor.submit(() -> {
+            for(int b = 0; b < numBatches; ++b) {
+                final int start = Math.min(numNodes, batchSize * b);
+                final int end = Math.min(numNodes, batchSize * (b + 1));
+                final int finalS = s;
+
+                writeFutures.add(executor.submit(() -> {
+                    List<NodeWrite> nws = new ArrayList<>(end - start);
+                    for(int i = start; i < end; ++i) {
+                        int node = nodes[i];
+                        if (!sourceAlive.get(node)) continue;
                         VectorFloat<?> vec = sourceView.getVector(node);
-
                         List<Map.Entry<OnDiskGraphIndex, SearchResult.NodeScore>> candidates =
                                 new ArrayList<>();
 
-                        for (int i = 0; i < sources.size(); ++i) {
-                            OnDiskGraphIndex idx = sources.get(i);
+                        for (int ss = 0; ss < sources.size(); ++ss) {
+                            OnDiskGraphIndex idx = sources.get(ss);
                             FixedBitSet indexAlive = liveNodes.get(idx);
                             Bits searchBits;
 
-                            if (finalS == i) {
+                            // exclude the node itself
+                            if (finalS == ss) {
                                 FixedBitSet indexAliveCopy = new FixedBitSet(indexAlive.length());
                                 indexAliveCopy.or(indexAlive);
                                 indexAliveCopy.clear(node);
@@ -216,21 +262,21 @@ public final class OnDiskGraphIndexCompactor {
                             }
 
                             SearchScoreProvider ssp =
-                                    DefaultSearchScoreProvider.exact(vec, similarityFunction, idx.getView());
+                              new DefaultSearchScoreProvider(idx.getView().approximateScoreFunctionFor(vec, similarityFunction));
 
-                            SearchResult results = tlSearchers.get()[i].search(ssp, maxDegrees.get(0) * 16, beamWidth, 0.0f, 0.0f, searchBits);
+                            SearchResult results = tlSearchers.get()[ss].search(ssp, maxDegrees.get(0) * 16, beamWidth, 0.0f, 0.0f, searchBits);
                             for (SearchResult.NodeScore re : results.getNodes()) {
                                 candidates.add(Map.entry(idx, re));
                             }
-
                         }
 
-                        candidates.sort((a, b) -> Float.compare(b.getValue().score, a.getValue().score));
+                        candidates.sort((a1, a2) -> Float.compare(a2.getValue().score, a1.getValue().score));
 
                         BitSet selected = new FixedBitSet(candidates.size());
                         vdp.retainDiverse(candidates, maxDegrees.get(0), 0, selected);
 
                         NodeArray neighbors = new NodeArray(maxDegrees.get(0));
+                        List<ByteSequence<?>> neighborPQs = new ArrayList<>();
                         Set<Integer> seenTargetOrdinals = new HashSet<>();
 
                         for (int k = 0; k < candidates.size(); k++) {
@@ -243,33 +289,43 @@ public final class OnDiskGraphIndexCompactor {
 
                             if (seenTargetOrdinals.add(targetOrdinal)) {
                                 neighbors.addInOrder(targetOrdinal, candidate.getValue().score);
+                                neighborPQs.add(pq.encode(cSource.getView().getVector(candidate.getValue().node)));
                             }
                         }
 
                         int newOrdinal = remappers.get(sources.get(finalS)).oldToNew(node);
-                        return new NodeWrite(newOrdinal, vec, neighbors);
+                        nws.add(new NodeWrite(newOrdinal, vec, neighbors, neighborPQs));
+                    }
+                    return writer.writeInlineNodeRecord(nws);
+                }));
+            }
+        }
 
-                    }));
-                    // If window is full, drain one result IN ORDER and write it
-                    if (inFlight.size() >= window) {
-                        NodeWrite out = inFlight.removeFirst().get();
-                        writer.writeInlineNode(
-                                out.newOrdinal,
-                                Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(out.vec)),
-                                out.neighbors);
+        var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+        int maxConcurrentWrites = executor.getPoolSize() * 2;
+        List<Future<Integer>> pendingWrites = new ArrayList<>(maxConcurrentWrites);
+            var afc = AsynchronousFileChannel.open(outputPath, opts, executor);
+            for(Future<List<WriteResult>> future : writeFutures) {
+                List<WriteResult> results = future.get();
+                for(WriteResult result: results) {
+                    Future<Integer> writeFuture = afc.write(result.data, result.fileOffset);
+                    pendingWrites.add(writeFuture);
+
+                    if (pendingWrites.size() >= maxConcurrentWrites) {
+                        for (Future<Integer> wf : pendingWrites) {
+                            wf.get();
+                        }
+                        pendingWrites.clear();
                     }
                 }
-                // Drain remaining
-                while (!inFlight.isEmpty()) {
-                    NodeWrite out = inFlight.removeFirst().get();
-                    writer.writeInlineNode(
-                            out.newOrdinal,
-                            Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(out.vec)),
-                            out.neighbors);
-                }
             }
-            writer.write(Map.of());
-            writer.writeHeader(upperLayerGraph.getView());
+
+            for (Future<Integer> wf : pendingWrites) {
+                wf.get();
+            }
+            writer.writeUpperLayers(ulpq);
+            writer.write();
+            writer.writeHeader();
             writer.close();
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -277,82 +333,216 @@ public final class OnDiskGraphIndexCompactor {
         finally {
             executor.shutdownNow();
         }
-    }
-    public OnHeapGraphIndex constructUpperLayerGraphV2(VectorSimilarityFunction similarityFunction) {
-        UpperLayerOrdinalMapper upperLayerOrdinalMapper = new UpperLayerOrdinalMapper(upperLayerNodeList);
-        var ulravv = new UpperLayerRandomAccessVectorValues(upperLayerOrdinalMapper);
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ulravv, similarityFunction);
-        OnHeapGraphIndex upperLayerGraph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(bsp, 1.2f), addHierarchy);
-        ConcurrentSkipListSet<OnDiskGraphIndex.NodeAtLevel> insertionsInProgress = new ConcurrentSkipListSet<>();
-        ExplicitThreadLocal<NodeArray> naturalScratch;
-        ExplicitThreadLocal<NodeArray> concurrentScratch;
-        naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, maxDegrees.get(0) + 1)));
-        concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, maxDegrees.get(0) + 1)));
 
-        ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            var gs = new GraphSearcher(upperLayerGraph);
-            gs.usePruning(false);
-            return gs;
-        });
-        var inProgressBefore = insertionsInProgress.clone();
-
-        for(var node: upperLayerNodeList) {
-            var nodeLevel = node.getValue();
-            int newOrdinal = upperLayerOrdinalMapper.oldToNew(node);
-            var newNodeLevel = new OnDiskGraphIndex.NodeAtLevel(nodeLevel.level, newOrdinal);
-            upperLayerGraph.addNode(newNodeLevel);
-            insertionsInProgress.add(nodeLevel);
-            try (var gs = searchers.get()) {
-                var view = upperLayerGraph.getView();
-                gs.setView(view);
-                var naturalScratchPooled = naturalScratch.get();
-                var concurrentScratchPooled = concurrentScratch.get();
-
-                VectorFloat<?> vec = node.getKey().getView().getVector(node.getValue().node);
-                SearchScoreProvider upperLayerGraphSsp = DefaultSearchScoreProvider.exact(vec, similarityFunction, ulravv);
-
-                var bits = new OnDiskGraphIndexCompactor.ExcludingBits(newNodeLevel.node);
-
-                var entry = upperLayerGraph.entryNode();
-                if (entry != null) {
-                    gs.initializeInternal(upperLayerGraphSsp, entry, bits);
-
-                    // Move downward from entry.level to 1
-                    for (int lvl = entry.level; lvl > 0; lvl--) {
-                        if (lvl > newNodeLevel.level) {
-                            gs.searchOneLayer(upperLayerGraphSsp, 1, 0.0f, lvl, gs.getView().liveNodes());
-                        } else {
-                            gs.searchOneLayer(upperLayerGraphSsp, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
-                            SearchResult.NodeScore[] neighbors = new SearchResult.NodeScore[gs.approximateResults.size()];
-                            AtomicInteger index = new AtomicInteger();
-                            gs.approximateResults.foreach((neighbor, score) -> {
-                                neighbors[index.getAndIncrement()] = new SearchResult.NodeScore(neighbor, score);
-                            });
-                            Arrays.sort(neighbors);
-                            updateNeighborsOneLayer(upperLayerGraph, lvl, newNodeLevel.node, neighbors);
-                        }
-                        gs.setEntryPointsFromPreviousLayer();
-                    }
-                }
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            upperLayerGraph.markComplete(newNodeLevel);
-
-        }
-
-        // Enforce degree limits for all nodes in the upper layer graph
-        for (int i = 0; i < upperLayerNodeList.size(); i++) {
-            int newOrdinal = upperLayerOrdinalMapper.oldToNew(upperLayerNodeList.get(i));
-            upperLayerGraph.enforceDegree(newOrdinal);
-        }
-
-        return upperLayerGraph;
     }
 
-    public OnHeapGraphIndex constructUpperLayerGraph(VectorSimilarityFunction similarityFunction) {
-        UpperLayerOrdinalMapper upperLayerOrdinalMapper = new UpperLayerOrdinalMapper(upperLayerNodeList);
-        var ulravv = new UpperLayerRandomAccessVectorValues(upperLayerOrdinalMapper);
+    //public void compactV2(Path outputPath, VectorSimilarityFunction similarityFunction) throws FileNotFoundException {
+
+        //for(OnDiskGraphIndex source : sources) {
+            //if(source.getDimension() != dimension) {
+                //throw new IllegalArgumentException("sources must have the same dimension");
+            //}
+            //if(!remappers.containsKey(source)) {
+                //throw new IllegalArgumentException("Each source must set a remapper");
+            //}
+        //}
+
+        //// first stage: find the nodes for upper layer graph
+        //for(int s = 0; s < sources.size(); s++) {
+            //OnDiskGraphIndex source = sources.get(s);
+            //NodesIterator sourceNodes = source.getNodes(0);
+            //FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
+            //while(sourceNodes.hasNext()) {
+                //int node = sourceNodes.next();
+                //if(!sourceAlive.get(node)) continue;
+                //int level = getRandomGraphLevel();
+                //if(level > 0) {
+                    //var nodeLevel = new OnDiskGraphIndex.NodeAtLevel(level, node);
+                    //upperLayerNodeList.add(Map.entry(source, nodeLevel));
+                //}
+            //}
+        //}
+
+        //int window = executor.getPoolSize() * 16;
+        //Deque<Future<NodeWrite>> inFlight = new ArrayDeque<>(window);
+
+        //// second stage: construct the upper layer graph without base layer
+        //OnHeapGraphIndex upperLayerGraph = constructUpperLayerGraph(similarityFunction);
+
+        //// third stage: write base layer nodes, then let writer handle upper layers
+        //try(CompactWriter writer = new CompactWriter.Builder(upperLayerGraph, outputPath, numNodes).withMapper(new OrdinalMapper.IdentityMapper(maxOrdinal)).with(new InlineVectors(dimension)).with(new FusedPQ(maxDegrees.get(0), pq)).build()) {
+            //writer.writeHeader(upperLayerGraph.getView());
+
+            //ExplicitThreadLocal<GraphSearcher[]> tlSearchers = ExplicitThreadLocal.withInitial(() -> {
+                //GraphSearcher[] gs = new GraphSearcher[sources.size()];
+                //for (int i = 0; i < sources.size(); i++) {
+                    //gs[i] = new GraphSearcher(sources.get(i));
+                //}
+                //return gs;
+            //});
+            //CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
+
+            //// Write base layer (level 0) nodes
+            //for (int s = 0; s < sources.size(); s++) {
+                //NodesIterator sourceNodes = sources.get(s).getNodes(0);
+                //FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
+                //OnDiskGraphIndex.View sourceView = sources.get(s).getView();
+
+                //while (sourceNodes.hasNext()) {
+                    //int node = sourceNodes.next();
+                    //if (!sourceAlive.get(node)) continue;
+
+                    //int finalS = s;
+                    //inFlight.addLast(executor.submit(() -> {
+                        //VectorFloat<?> vec = sourceView.getVector(node);
+
+                        //List<Map.Entry<OnDiskGraphIndex, SearchResult.NodeScore>> candidates =
+                                //new ArrayList<>();
+
+                        //for (int i = 0; i < sources.size(); ++i) {
+                            //OnDiskGraphIndex idx = sources.get(i);
+                            //FixedBitSet indexAlive = liveNodes.get(idx);
+                            //Bits searchBits;
+
+                            //if (finalS == i) {
+                                //FixedBitSet indexAliveCopy = new FixedBitSet(indexAlive.length());
+                                //indexAliveCopy.or(indexAlive);
+                                //indexAliveCopy.clear(node);
+                                //searchBits = indexAliveCopy;
+                            //} else {
+                                //searchBits = indexAlive;
+                            //}
+
+                            //SearchScoreProvider ssp =
+                                    //DefaultSearchScoreProvider.exact(vec, similarityFunction, idx.getView());
+
+                            //SearchResult results = tlSearchers.get()[i].search(ssp, maxDegrees.get(0) * 16, beamWidth, 0.0f, 0.0f, searchBits);
+                            //for (SearchResult.NodeScore re : results.getNodes()) {
+                                //candidates.add(Map.entry(idx, re));
+                            //}
+
+                        //}
+
+                        //candidates.sort((a, b) -> Float.compare(b.getValue().score, a.getValue().score));
+
+                        //BitSet selected = new FixedBitSet(candidates.size());
+                        //vdp.retainDiverse(candidates, maxDegrees.get(0), 0, selected);
+
+                        //NodeArray neighbors = new NodeArray(maxDegrees.get(0));
+                        //Set<Integer> seenTargetOrdinals = new HashSet<>();
+
+                        //for (int k = 0; k < candidates.size(); k++) {
+                            //if (!selected.get(k)) continue;
+
+                            //var candidate = candidates.get(k);
+                            //OnDiskGraphIndex cSource = candidate.getKey();
+                            //int targetOrdinal =
+                                    //remappers.get(cSource).oldToNew(candidate.getValue().node);
+
+                            //if (seenTargetOrdinals.add(targetOrdinal)) {
+                                //neighbors.addInOrder(targetOrdinal, candidate.getValue().score);
+                            //}
+                        //}
+
+                        //int newOrdinal = remappers.get(sources.get(finalS)).oldToNew(node);
+                        //return new NodeWrite(newOrdinal, vec, neighbors);
+
+                    //}));
+                    //if (inFlight.size() >= window) {
+                        //NodeWrite out = inFlight.removeFirst().get();
+                        //writer.writeInlineNode(out);
+                    //}
+                //}
+                //// Drain remaining
+                //while (!inFlight.isEmpty()) {
+                    //NodeWrite out = inFlight.removeFirst().get();
+                    //writer.writeInlineNode(out);
+                //}
+            //}
+            //writer.write(Map.of());
+            //writer.writeHeader(upperLayerGraph.getView());
+            //writer.close();
+        //} catch (IOException | ExecutionException | InterruptedException e) {
+            //throw new RuntimeException(e);
+        //}
+        //finally {
+            //executor.shutdownNow();
+        //}
+    //}
+    //public OnHeapGraphIndex constructUpperLayerGraphV2(VectorSimilarityFunction similarityFunction) {
+        //UpperLayerOrdinalMapper upperLayerOrdinalMapper = new UpperLayerOrdinalMapper(upperLayerNodeList);
+        //var ulravv = new UpperLayerRandomAccessVectorValues(upperLayerOrdinalMapper);
+        //BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ulravv, similarityFunction);
+        //OnHeapGraphIndex upperLayerGraph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(bsp, 1.2f), addHierarchy);
+        //ConcurrentSkipListSet<OnDiskGraphIndex.NodeAtLevel> insertionsInProgress = new ConcurrentSkipListSet<>();
+        //ExplicitThreadLocal<NodeArray> naturalScratch;
+        //ExplicitThreadLocal<NodeArray> concurrentScratch;
+        //naturalScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, maxDegrees.get(0) + 1)));
+        //concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, maxDegrees.get(0) + 1)));
+
+        //ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
+            //var gs = new GraphSearcher(upperLayerGraph);
+            //gs.usePruning(false);
+            //return gs;
+        //});
+        //var inProgressBefore = insertionsInProgress.clone();
+
+        //for(var node: upperLayerNodeList) {
+            //var nodeLevel = node.getValue();
+            //int newOrdinal = upperLayerOrdinalMapper.oldToNew(node);
+            //var newNodeLevel = new OnDiskGraphIndex.NodeAtLevel(nodeLevel.level, newOrdinal);
+            //upperLayerGraph.addNode(newNodeLevel);
+            //insertionsInProgress.add(nodeLevel);
+            //try (var gs = searchers.get()) {
+                //var view = upperLayerGraph.getView();
+                //gs.setView(view);
+                //var naturalScratchPooled = naturalScratch.get();
+                //var concurrentScratchPooled = concurrentScratch.get();
+
+                //VectorFloat<?> vec = node.getKey().getView().getVector(node.getValue().node);
+                //SearchScoreProvider upperLayerGraphSsp = DefaultSearchScoreProvider.exact(vec, similarityFunction, ulravv);
+
+                //var bits = new OnDiskGraphIndexCompactor.ExcludingBits(newNodeLevel.node);
+
+                //var entry = upperLayerGraph.entryNode();
+                //if (entry != null) {
+                    //gs.initializeInternal(upperLayerGraphSsp, entry, bits);
+
+                    //// Move downward from entry.level to 1
+                    //for (int lvl = entry.level; lvl > 0; lvl--) {
+                        //if (lvl > newNodeLevel.level) {
+                            //gs.searchOneLayer(upperLayerGraphSsp, 1, 0.0f, lvl, gs.getView().liveNodes());
+                        //} else {
+                            //gs.searchOneLayer(upperLayerGraphSsp, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
+                            //SearchResult.NodeScore[] neighbors = new SearchResult.NodeScore[gs.approximateResults.size()];
+                            //AtomicInteger index = new AtomicInteger();
+                            //gs.approximateResults.foreach((neighbor, score) -> {
+                                //neighbors[index.getAndIncrement()] = new SearchResult.NodeScore(neighbor, score);
+                            //});
+                            //Arrays.sort(neighbors);
+                            //updateNeighborsOneLayer(upperLayerGraph, lvl, newNodeLevel.node, neighbors);
+                        //}
+                        //gs.setEntryPointsFromPreviousLayer();
+                    //}
+                //}
+            //} catch (IOException e) {
+                //throw new RuntimeException(e);
+            //}
+            //upperLayerGraph.markComplete(newNodeLevel);
+
+        //}
+
+        //// Enforce degree limits for all nodes in the upper layer graph
+        //for (int i = 0; i < upperLayerNodeList.size(); i++) {
+            //int newOrdinal = upperLayerOrdinalMapper.oldToNew(upperLayerNodeList.get(i));
+            //upperLayerGraph.enforceDegree(newOrdinal);
+        //}
+
+        //return upperLayerGraph;
+    //}
+
+    public OnHeapGraphIndex constructUpperLayerGraph(UpperLayerOrdinalMapper upperLayerOrdinalMapper, UpperLayerRandomAccessVectorValues ulravv, VectorSimilarityFunction similarityFunction) {
+
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ulravv, similarityFunction);
         OnHeapGraphIndex upperLayerGraph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(bsp, 1.2f), addHierarchy);
         GraphSearcher searchers = new GraphSearcher(upperLayerGraph);
@@ -561,142 +751,219 @@ public final class OnDiskGraphIndexCompactor {
     }
 }
 
-final class CompactWriter extends OnDiskGraphIndexWriter {
-    int numBaseLayerNodes;
+final class CompactWriter implements AutoCloseable {
 
-    CompactWriter(RandomAccessWriter randomAccessWriter,
-                  int numNodes,
-                  int version,
+    private static final int FOOTER_MAGIC = 0x4a564244;
+    private static final int FOOTER_OFFSET_SIZE = Long.BYTES;
+    private static final int FOOTER_MAGIC_SIZE = Integer.BYTES;
+    private static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
+
+    private final RandomAccessWriter writer;
+    private final ImmutableGraphIndex upperLayerGraph;
+    private final int numBaseLayerNodes;
+    private final int dimension;
+    private final int recordSize;
+    private final long startOffset;
+    private final int headerSize;
+    private final Header header;
+    private final int version;
+    private final FusedPQ fusedPQFeature;
+    private final InlineVectors inlineVectorFeature;
+    private final int baseDegree;
+    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    private final ThreadLocal<ByteBuffer> bufferPerThread;
+
+    CompactWriter(Path outputPath,
+                  int maxOrdinal,
+                  int numBaseLayerNodes,
                   long startOffset,
-                  ImmutableGraphIndex graph,
-                  OrdinalMapper oldToNewOrdinals,
+                  ImmutableGraphIndex upperLayerGraph,
                   int dimension,
-                  EnumMap<FeatureId, Feature> features)
-    {
-        super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
-        this.numBaseLayerNodes = numNodes;
+                  InlineVectors inlineVectorFeature,
+                  FusedPQ fusedPQFeature)
+    throws IOException {
+        this.version = OnDiskGraphIndex.CURRENT_VERSION;
+        this.writer = new BufferedRandomAccessWriter(outputPath);
+        this.numBaseLayerNodes = numBaseLayerNodes;
+        this.startOffset = startOffset;
+        this.upperLayerGraph = upperLayerGraph;
+        this.baseDegree = upperLayerGraph.getDegree(0);
+        this.inlineVectorFeature = inlineVectorFeature;
+        this.fusedPQFeature = fusedPQFeature;
+        this.dimension = dimension;
+        int rsize = Integer.BYTES // node ordinal
+            + inlineVectorFeature.featureSize()
+            + Integer.BYTES // neighbor count
+            + baseDegree * Integer.BYTES; // neighbors + padding
+                                          //
+        if(fusedPQFeature != null) {
+            rsize += fusedPQFeature.featureSize();
+        }
+        this.recordSize = rsize;
+
+        // header
+        List<CommonHeader.LayerInfo> layerInfo = IntStream.rangeClosed(0, upperLayerGraph.getMaxLevel())
+                    .mapToObj(i -> new CommonHeader.LayerInfo(upperLayerGraph.size(i), upperLayerGraph.getDegree(i)))
+                    .collect(Collectors.toList());
+        layerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
+
+        var commonHeader = new CommonHeader(this.version,
+                dimension,
+                upperLayerGraph.getView().entryNode().node,
+                layerInfo,
+                maxOrdinal + 1);
+        Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
+        featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
+        featureMap.put(FeatureId.FUSED_PQ, fusedPQFeature);
+        this.header = new Header(commonHeader, featureMap);
+        this.headerSize = header.size();
+
+        this.bufferPerThread = ThreadLocal.withInitial(() -> {
+            ByteBuffer buffer = ByteBuffer.allocate(recordSize);
+            buffer.order(java.nio.ByteOrder.BIG_ENDIAN);
+            return buffer;
+        });
     }
 
-    @Override
-    public void writeHeader(ImmutableGraphIndex.View view) throws IOException {
-        out.seek(startOffset);
-        // graph-level properties
-        var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
-        layerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, graph.getDegree(0)));
-
-        var commonHeader = new CommonHeader(version,
-                dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
-                layerInfo,
-                ordinalMapper.maxOrdinal() + 1);
-        var header = new Header(commonHeader, featureMap);
-        headerSize = header.size();
-        header.write(out);
-        assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
+    public void writeHeader() throws IOException {
+        writer.seek(startOffset);
+        header.write(writer);
+        assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
+        writer.flush();
+        return;
     }
 
-    @Override
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
-        var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
-        layerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, graph.getDegree(0)));
-        var commonHeader = new CommonHeader(version,
-                dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
-                layerInfo,
-                ordinalMapper.maxOrdinal() + 1);
-        var header = new Header(commonHeader, featureMap);
-        header.write(out); // write the header
-        out.writeLong(headerOffset); // We write the offset of the header at the end of the file
-        out.writeInt(FOOTER_MAGIC);
+    void writeFooter(long headerOffset) throws IOException {
+        header.write(writer); // write the header
+        writer.writeLong(headerOffset); // We write the offset of the header at the end of the file
+        writer.writeInt(FOOTER_MAGIC);
         final long expectedPosition = headerOffset + headerSize + FOOTER_SIZE;
-        assert out.position() == expectedPosition : String.format("%d != %d", out.position(), expectedPosition);
+        assert writer.position() == expectedPosition : String.format("%d != %d", writer.position(), expectedPosition);
     }
 
-    public static List<CommonHeader.LayerInfo> fromGraph(ImmutableGraphIndex graph, OrdinalMapper mapper) {
-        return IntStream.rangeClosed(0, graph.getMaxLevel())
-                .mapToObj(i -> new CommonHeader.LayerInfo(graph.size(i), graph.getDegree(i)))
-                .collect(Collectors.toList());
-    }
-
-    @Override
-    public void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
-
-        var view = graph.getView();
-        writeSparseLevels(view, featureStateSuppliers);
-        // We will use the abstract method because no random access is needed
-        writeSeparatedFeatures(featureStateSuppliers);
-
+    public void write() throws IOException {
         if (version >= 5) {
-            writeFooter(view, out.position());
+            writeFooter(writer.position());
+        }
+    }
+
+    public void writeUpperLayers(PQVectors ulpq) throws IOException {
+        var view = upperLayerGraph.getView();
+        // write sparse levels
+        for (int level = 1; level <= upperLayerGraph.getMaxLevel(); level++) {
+            int layerSize = upperLayerGraph.size(level);
+            int layerDegree = upperLayerGraph.getDegree(level);
+            int nodesWritten = 0;
+            for (var it = upperLayerGraph.getNodes(level); it.hasNext(); ) {
+                int ordinal = it.nextInt();
+                // node id
+                writer.writeInt(ordinal);
+                // neighbors
+                var neighbors = view.getNeighborsIterator(level, ordinal);
+                writer.writeInt(neighbors.size());
+                int n = 0;
+                for ( ; n < neighbors.size(); n++) {
+                    writer.writeInt(neighbors.nextInt());
+                }
+                assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
+                // pad out to degree
+                for (; n < layerDegree; n++) {
+                    writer.writeInt(-1);
+                }
+                nodesWritten++;
+            }
+            if (nodesWritten != layerSize) {
+                throw new IllegalStateException("Mismatch between layer size and nodes written");
+            }
+        }
+
+        if (version == 6) {
+            if (ulpq != null && fusedPQFeature != null) {
+                IntFunction<Feature.State> fusedPQFeatureStateSupplier = ordinal -> new FusedPQ.State(view, ulpq, ordinal);
+
+                if (upperLayerGraph.getMaxLevel() >= 1) {
+                    int level = 1;
+                    int layerSize = upperLayerGraph.size(level);
+                    int nodesWritten = 0;
+                    for (var it = upperLayerGraph.getNodes(level); it.hasNext(); ) {
+                        int ordinal = it.nextInt();
+
+                        writer.writeInt(ordinal);
+                        fusedPQFeature.writeSourceFeature(writer, fusedPQFeatureStateSupplier.apply(ordinal));
+                        nodesWritten++;
+                    }
+                    if (nodesWritten != layerSize) {
+                        throw new IllegalStateException("Mismatch between layer 1 size and features written");
+                    }
+                } else {
+                    // Write the source feature of the entry node
+                    final int entryNode = view.entryNode().node;
+                    writer.writeInt(entryNode);
+                    fusedPQFeature.writeSourceFeature(writer, fusedPQFeatureStateSupplier.apply(entryNode));
+                }
+            }
         }
     }
 
     public void close() throws IOException {
-        var view = graph.getView();
-        final var endOfGraphPosition = out.position();
-        out.seek(endOfGraphPosition);
-        out.flush();
+        var view = upperLayerGraph.getView();
+        final var endOfGraphPosition = writer.position();
+        writer.seek(endOfGraphPosition);
+        writer.flush();
         view.close();
     }
 
-    public void writeInlineNode(int ordinal, Map<FeatureId, Feature.State> stateMap, NodeArray neighbors) throws IOException
+
+    public List<WriteResult> writeInlineNodeRecord(List<NodeWrite> nws) throws IOException
     {
-        writeInline(ordinal, stateMap);
+        List<WriteResult> results = new ArrayList<>();
+        var writer = new ByteBufferIndexWriter(bufferPerThread.get());
 
-        // write neighbors list
-        out.writeInt(neighbors.size());
-        int n = 0;
-        for (; n < neighbors.size(); n++) {
-            out.writeInt(neighbors.getNode(n));
-        }
+        for(NodeWrite nw: nws) {
+            long fileOffset = nw.ordinal * recordSize; 
+            writer.reset();
+            writer.writeInt(nw.ordinal);
+            //TODO: handle omitted nodes?
+            // write inline vector
+            inlineVectorFeature.writeInline(writer, new InlineVectors.State(nw.vec));
 
-        // pad out to maxEdgesPerNode
-        for (; n < graph.getDegree(0); n++) {
-            out.writeInt(-1);
-        }
-    }
-    /**
-     * Builder for {@link CompactWriter}, with optional features.
-     */
-    static class Builder extends AbstractGraphIndexWriter.Builder<CompactWriter, RandomAccessWriter> {
-        private long startOffset = 0L;
-        private final int numBaseLayerNodes;
+            // write fused PQ
+            // since we build a graph in a streaming way,
+            // we cannot use fusedPQfeature.writeInline
+            int i = 0;
+            for(; i < nw.neighbors.size(); ++i) {
+                vectorTypeSupport.writeByteSequence(writer, nw.neighborPQs.get(i).copy());
+            }
+            int length = nw.neighborPQs.get(i).length();
+            ByteSequence<?> zeros = vectorTypeSupport.createByteSequence(length);
+            zeros.zero();
+            for(; i < baseDegree; i++) {
+                vectorTypeSupport.writeByteSequence(writer, zeros);
+            }
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath, int numBaseLayerNodes) throws FileNotFoundException {
-            this(graphIndex, new BufferedRandomAccessWriter(outPath), numBaseLayerNodes);
-        }
+            // write neighbors list
+            writer.writeInt(nw.neighbors.size());
+            int n = 0;
+            for (; n < nw.neighbors.size(); n++) {
+                writer.writeInt(nw.neighbors.getNode(n));
+            }
 
-        public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out, int numBaseLayerNodes) {
-            super(graphIndex, out);
-            this.numBaseLayerNodes = numBaseLayerNodes;
-        }
+            // pad out to base layer degree
+            for (; n < baseDegree; n++) {
+                writer.writeInt(-1);
+            }
 
-        /**
-         * Set the starting offset for the graph index in the output file.  This is useful if you want to
-         * append the index to an existing file.
-         */
-        public CompactWriter.Builder withStartOffset(long startOffset) {
-            this.startOffset = startOffset;
-            return this;
-        }
+            // TODO:verify we wrote exactly the expected amount
+            if (writer.bytesWritten() != recordSize) {
+                throw new IllegalStateException(
+                    String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes",
+                                  nw.ordinal, recordSize, writer.bytesWritten()));
+            }
 
-        @Override
-        protected CompactWriter reallyBuild(int dimension) throws IOException {
-            return new CompactWriter(out, numBaseLayerNodes, version, startOffset, graphIndex, ordinalMapper, dimension, features);
+            ByteBuffer dataCopy = writer.cloneBuffer();
+            results.add(new WriteResult(nw.ordinal, fileOffset, dataCopy));
         }
+        return results;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
