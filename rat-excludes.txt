@@ -29,3 +29,6 @@ src/main/resources/logback.xml
 jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/OnDiskGraphIndexCompactor.md
 jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/AbstractGraphIndexWriter.md
 benchmarks-jmh/src/main/java/io/github/jbellis/jvector/bench/CompactorBenchmark.md
+local/*
+compactor-results.jsonl
+compactor-results-jmh.json

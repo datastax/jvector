@@ -4,6 +4,10 @@ local/
 .java-version
 .bob/
 
+### Testing Results
+**results**.json
+**results**.jsonl
+
 ### Bench caches
 pq_cache/
 index_cache/
