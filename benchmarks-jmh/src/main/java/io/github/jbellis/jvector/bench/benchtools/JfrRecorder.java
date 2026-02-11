@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.ParseException;
+import java.time.Duration;
 
 /**
  * Manages the lifecycle of a JFR (Java Flight Recorder) recording for benchmarks.
@@ -50,6 +51,10 @@ public final class JfrRecorder {
         recording = new Recording(Configuration.getConfiguration("profile"));
         recording.setToDisk(true);
         recording.setDestination(jfrPath);
+        // Flush to disk every minute so data is available for inspection during long benchmarks
+        var settings = recording.getSettings();
+        settings.put("flush-interval", Duration.ofMinutes(1).toMillis() + "ms");
+        recording.setSettings(settings);
         recording.start();
         this.fileName = fileName;
         System.out.println("JFR recording started, saving to: " + jfrPath);
@@ -60,9 +65,9 @@ public final class JfrRecorder {
     /** Stops and closes the recording, logging the saved path. */
     public void stop() {
         if (recording != null) {
+            Path jfrPath = recording.getDestination();
             recording.stop();
             recording.close();
-            Path jfrPath = recording.getDestination();
             recording = null;
             System.out.println("JFR recording saved to: " + jfrPath);
             log.info("JFR recording saved to: {}", jfrPath);

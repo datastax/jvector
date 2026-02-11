@@ -58,6 +58,8 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static java.lang.Math.*;
 
@@ -87,6 +89,7 @@ final class WriteResult {
 };
 
 public final class OnDiskGraphIndexCompactor {
+    private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
     private final List<OnDiskGraphIndex> sources;
     private final Map<OnDiskGraphIndex, FixedBitSet> liveNodes;
@@ -191,10 +194,13 @@ public final class OnDiskGraphIndexCompactor {
             }
         }
 
+        log.info("Upper layer candidates selected: {} nodes across {} sources", upperLayerNodeList.size(), sources.size());
+
         // second stage: construct the upper layer graph without base layer
         UpperLayerOrdinalMapper upperLayerOrdinalMapper = new UpperLayerOrdinalMapper(upperLayerNodeList);
         var ulravv = new UpperLayerRandomAccessVectorValues(upperLayerOrdinalMapper);
         OnHeapGraphIndex upperLayerGraph = constructUpperLayerGraph(upperLayerOrdinalMapper, ulravv, similarityFunction);
+        log.info("Upper layer graph constructed");
 
         // leverage the first source for PQ codebook and encode upperlayer nodes
         var fpq = (FusedPQ)this.sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
@@ -210,6 +216,8 @@ public final class OnDiskGraphIndexCompactor {
         }
 
         // third stage: write base layer nodes, then let writer handle upper layers
+        log.info("Writing compacted graph: {} total nodes, maxOrdinal={}, dimension={}, degree={}",
+                numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
         try(CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, upperLayerGraph, dimension, iv, fpq)) {
         writer.writeHeader();
 
@@ -222,6 +230,8 @@ public final class OnDiskGraphIndexCompactor {
         });
         CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
         List<Future<List<WriteResult>>> writeFutures = new ArrayList<>();
+        AtomicInteger batchesCompleted = new AtomicInteger(0);
+        int totalBatches = 0; // counted below
 
         // Write base layer (level 0) nodes to buffer
         for (int s = 0; s < sources.size(); s++) {
@@ -233,10 +243,11 @@ public final class OnDiskGraphIndexCompactor {
             FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
             OnDiskGraphIndex.View sourceView = sources.get(s).getView();
 
-            int numBatches = Math.max(40, (numNodes + 1024 - 1) / 1024); 
+            int numBatches = Math.max(40, (numNodes + 1024 - 1) / 1024);
             if(numBatches > numNodes) {
                 numBatches = numNodes;
             }
+            totalBatches += numBatches;
             int batchSize = (numNodes + numBatches - 1) / numBatches;
 
             for(int b = 0; b < numBatches; ++b) {
@@ -318,15 +329,24 @@ public final class OnDiskGraphIndexCompactor {
                         int newOrdinal = remappers.get(sources.get(finalS)).oldToNew(node);
                         nws.add(new NodeWrite(newOrdinal, vec, neighbors, neighborPQs));
                     }
-                    return writer.writeInlineNodeRecord(nws);
+                    var writeResults = writer.writeInlineNodeRecord(nws);
+                    int done = batchesCompleted.incrementAndGet();
+                    if (done % 10 == 0) {
+                        log.info("Compaction progress: {} batches computed so far ({} nodes in this batch)",
+                                done, nws.size());
+                    }
+                    return writeResults;
                 }));
             }
         }
+        log.info("Submitted {} compute batches across {} sources to thread pool (parallelism={})",
+                totalBatches, sources.size(), executor.getParallelism());
 
         var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
         int maxConcurrentWrites = executor.getPoolSize() * 2;
         List<Future<Integer>> pendingWrites = new ArrayList<>(maxConcurrentWrites);
             var afc = AsynchronousFileChannel.open(outputPath, opts, executor);
+            int batchesWritten = 0;
             for(Future<List<WriteResult>> future : writeFutures) {
                 List<WriteResult> results = future.get();
                 for(WriteResult result: results) {
@@ -340,15 +360,21 @@ public final class OnDiskGraphIndexCompactor {
                         pendingWrites.clear();
                     }
                 }
+                batchesWritten++;
+                if (batchesWritten % 10 == 0) {
+                    log.info("Compaction I/O progress: {}/{} batches written to disk", batchesWritten, totalBatches);
+                }
             }
 
             for (Future<Integer> wf : pendingWrites) {
                 wf.get();
             }
+            log.info("All {} batches written to disk, writing upper layers and footer", totalBatches);
             writer.offsetAfterInline();
             writer.writeUpperLayers(ulpq);
             writer.writeFooter();
             writer.close();
+            log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
