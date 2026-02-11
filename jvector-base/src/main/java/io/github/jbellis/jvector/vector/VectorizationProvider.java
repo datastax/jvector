@@ -77,6 +77,28 @@ public abstract class VectorizationProvider {
 
   // visible for tests
   static VectorizationProvider lookup(boolean testMode) {
+    String forcedProvider = System.getProperty("jvector.vectorization_provider");
+    if (forcedProvider != null) {
+      switch (forcedProvider.toLowerCase(Locale.ROOT)) {
+        case "default":
+          return new DefaultVectorizationProvider();
+        case "panama":
+          try {
+            return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProvider").getConstructor().newInstance();
+          } catch (Throwable e) {
+            throw new RuntimeException("Failed to load forced PanamaVectorizationProvider", e);
+          }
+        case "native":
+          try {
+            return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider").getConstructor().newInstance();
+          } catch (Throwable e) {
+            throw new RuntimeException("Failed to load forced NativeVectorizationProvider", e);
+          }
+        default:
+          throw new IllegalArgumentException("Unknown vectorization provider: " + forcedProvider);
+      }
+    }
+
     final int runtimeVersion = Runtime.version().feature();
     if (runtimeVersion >= 20) {
       // is locale sane (only buggy in Java 20)

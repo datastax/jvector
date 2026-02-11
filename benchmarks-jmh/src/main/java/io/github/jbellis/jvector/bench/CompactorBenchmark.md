@@ -39,6 +39,7 @@ You can tune the benchmark using the following JMH parameters via `-Dargs="-p <p
 | `beamWidth` | `100` | The search depth used when building the source segments. |
 | `storageDirectories` | *(empty)* | Comma-separated list of directories to use for storing segments. Used in round-robin fashion. |
 | `storageClasses` | *(empty)* | Comma-separated list of expected `StorageClass` values. Must match the count of `storageDirectories`. |
+| `vectorizationProvider` | `default, panama, native` | Explicitly selects the SIMD runtime. Use `default` for scalar, `panama` for Java Vector API, and `native` for native SIMD. |
 
 ## Parameter Validation
 
@@ -68,6 +69,11 @@ To attach a debugger or inspect logs in the same process, disable JMH forking:
 ### Run with a Specific Dataset
 ```bash
 ./mvnw -pl benchmarks-jmh exec:exec@compactor -Dargs="-p datasetNames=ibm_datapile:1m"
+```
+
+### Force a Specific Vectorization Provider
+```bash
+./mvnw -pl benchmarks-jmh exec:exec@compactor -Dargs="-p vectorizationProvider=default"
 ```
 
 ### Run with Storage Validation
