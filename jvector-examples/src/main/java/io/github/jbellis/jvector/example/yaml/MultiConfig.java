@@ -27,7 +27,9 @@ import java.io.InputStream;
 public class MultiConfig {
     private static final String defaultDirectory = "jvector-examples/yaml-configs/";
 
-    private int version;
+    private int yamlSchemaVersion;
+    private int onDiskIndexVersion;
+
     public String dataset;
     public ConstructionParameters construction;
     public SearchParameters search;
@@ -68,14 +70,22 @@ public class MultiConfig {
         return yaml.loadAs(inputStream, MultiConfig.class);
     }
 
-    public int getVersion() {
-        return version;
+    public int getYamlSchemaVersion() {
+        return yamlSchemaVersion;
     }
 
-    public void setVersion(int version) {
-        if (version != OnDiskGraphIndex.CURRENT_VERSION) {
-            throw new IllegalArgumentException("Invalid version: " + version);
+    public void setYamlSchemaVersion(int yamlSchemaVersion) {
+        this.yamlSchemaVersion = yamlSchemaVersion;
+    }
+
+    public int getOnDiskIndexVersion() {
+        return onDiskIndexVersion;
+    }
+
+    public void setOnDiskIndexVersion(int onDiskIndexVersion) {
+        if (onDiskIndexVersion != OnDiskGraphIndex.CURRENT_VERSION) {
+            throw new IllegalArgumentException("Invalid onDiskIndexVersion: " + onDiskIndexVersion);
         }
-        this.version = version;
+        this.onDiskIndexVersion = onDiskIndexVersion;
     }
 }

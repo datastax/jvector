@@ -26,8 +26,11 @@ import java.util.*;
  * Encapsulates selection + resolution + warning + application for a single sink (console/logging)
  * in the search phase, using {@link ReportingSelectionResolver} and {@link SearchReportingCatalog}.
  *
+ * Selections are typically run-level (from run.yml via {@link io.github.jbellis.jvector.example.yaml.RunConfig}).
+ *
  * This prevents call-site ordering mistakes (validate -> resolve -> warn -> apply).
  */
+
 public final class SearchSelection {
     private final String purpose; // "console" or "logging" (used in warnings)
     private final BenchmarkSelection selection;

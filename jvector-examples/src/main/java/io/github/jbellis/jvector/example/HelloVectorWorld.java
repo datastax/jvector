@@ -17,66 +17,34 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderMFD;
-import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
-import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 
-/**
- * Tests GraphIndexes against vectors from various datasets
- */
 public class HelloVectorWorld {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+
         String datasetName = "ada002-100k";
-        var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
-                .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
+
+        // Dataset-tuned config (construction/search grids)
         MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
 
-        var benchmarksToCompute = config.search.benchmarks;
+        // Run-level policy config (benchmarks/console/logging + run metadata)
+        RunConfig runCfg = RunConfig.loadDefault();
 
-        var benchmarksToDisplay =
-                (config.search.console != null) ? config.search.console.benchmarks : null;
+        // Load dataset
+        var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
+                .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
 
-        var metricsToDisplay =
-                (config.search.console != null) ? config.search.console.metrics : null;
+        // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
+        RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));
+        artifacts.registerDataset(datasetName, ds);
 
-        Map<String, List<String>> benchmarksToLog =
-                (config.search != null && config.search.logging != null)
-                        ? config.search.logging.benchmarks
-                        : null;
-
-        var metricsToLog =
-                (config.search != null && config.search.logging != null)
-                        ? config.search.logging.metrics
-                        : null;
-
-        // Validate display / console selection
-        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
-                benchmarksToCompute,
-                benchmarksToDisplay,
-                SearchReportingCatalog.defaultComputeBenchmarks()
-        );
-
-        ReportingSelectionResolver.validateNamedMetricSelectionNames(
-                metricsToDisplay,
-                SearchReportingCatalog.catalog()
-        );
-
-        // Validate logging selection
-        ReportingSelectionResolver.validateBenchmarkSelectionSubset(
-                benchmarksToCompute,
-                benchmarksToLog,
-                SearchReportingCatalog.defaultComputeBenchmarks()
-        );
-        ReportingSelectionResolver.validateNamedMetricSelectionNames(
-                metricsToLog,
-                SearchReportingCatalog.catalog()
-        );
-
+        // Run
         Grid.runAll(ds,
                 config.construction.useSavedIndexIfExists,
                 config.construction.outDegree,
@@ -89,11 +57,6 @@ public class HelloVectorWorld {
                 config.search.getCompressorParameters(),
                 config.search.topKOverquery,
                 config.search.useSearchPruning,
-                benchmarksToCompute,
-                benchmarksToDisplay,
-                metricsToDisplay,
-                benchmarksToLog,
-                metricsToLog);
-
+                artifacts);
     }
 }

@@ -18,10 +18,10 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
-import io.github.jbellis.jvector.example.reporting.ReportingSelectionResolver;
-import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.io.IOException;
 import java.security.InvalidParameterException;
@@ -33,8 +33,6 @@ import java.util.stream.Collectors;
  * Tests GraphIndexes against vectors from various datasets
  */
 public class BenchYAML {
-
-    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BenchYAML.class);
 
     public static void main(String[] args) throws IOException {
         // args is one of:
@@ -65,12 +63,6 @@ public class BenchYAML {
             for (var rawname : datasetNames) {
                 String datasetName =
                         rawname.endsWith(hdf5) ? rawname.substring(0, rawname.length() - hdf5.length()) : rawname;
-                // pre-loading and early error phase
-                // TODO: There are some housekeeping stages which get invoked as part of "loading" which should be deferred to avoid double processing
-                DataSets.loadDataSet(datasetName).orElseThrow(
-                        () -> new RuntimeException("Could not load dataset:" + datasetName)
-                );
-
                 MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
                 allConfigs.add(config);
             }
@@ -89,59 +81,23 @@ public class BenchYAML {
             }
         }
 
-        for (var config : allConfigs) {
-            String datasetName = config.dataset;
+        if (allConfigs.isEmpty()) {
+            System.out.println("No datasets matched. Exiting.");
+            return;
+        }
 
+        // Set up reporting for run
+        RunConfig runCfg = RunConfig.loadDefault();
+        RunArtifacts artifacts = RunArtifacts.open(runCfg, allConfigs);
+
+        for (var config : allConfigs) {
+
+            String datasetName = config.dataset;
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             );
-
-            // search.console.benchmarks is a *selection* of search.benchmarks.
-            Map<String, List<String>> benchmarksToCompute =
-                    (config.search == null) ? null : config.search.benchmarks;
-
-            Map<String, List<String>> benchmarksToDisplay =
-                    (config.search != null && config.search.console != null)
-                            ? config.search.console.benchmarks
-                            : null;
-
-            var metricsToDisplay =
-                    (config.search != null && config.search.console != null)
-                            ? config.search.console.metrics
-                            : null;
-
-            Map<String, List<String>> benchmarksToLog =
-                    (config.search != null && config.search.logging != null)
-                            ? config.search.logging.benchmarks
-                            : null;
-
-            var metricsToLog =
-                    (config.search != null && config.search.logging != null)
-                            ? config.search.logging.metrics
-                            : null;
-
-            // Validate display / console selection
-            ReportingSelectionResolver.validateBenchmarkSelectionSubset(
-                    benchmarksToCompute,
-                    benchmarksToDisplay,
-                    SearchReportingCatalog.defaultComputeBenchmarks()
-            );
-
-            ReportingSelectionResolver.validateNamedMetricSelectionNames(
-                    metricsToDisplay,
-                    SearchReportingCatalog.catalog()
-            );
-
-            // Validate logging selection
-            ReportingSelectionResolver.validateBenchmarkSelectionSubset(
-                    benchmarksToCompute,
-                    benchmarksToLog,
-                    SearchReportingCatalog.defaultComputeBenchmarks()
-            );
-            ReportingSelectionResolver.validateNamedMetricSelectionNames(
-                    metricsToLog,
-                    SearchReportingCatalog.catalog()
-            );
+            // Register dataset info the first time we actually load the dataset for benchmarking
+            artifacts.registerDataset(datasetName, ds);
 
             Grid.runAll(ds,
                     config.construction.useSavedIndexIfExists,
@@ -155,11 +111,7 @@ public class BenchYAML {
                     config.search.getCompressorParameters(),
                     config.search.topKOverquery,
                     config.search.useSearchPruning,
-                    benchmarksToCompute,
-                    benchmarksToDisplay,
-                    metricsToDisplay,
-                    benchmarksToLog,
-                    metricsToLog);
+                    artifacts);
         }
     }
 }
