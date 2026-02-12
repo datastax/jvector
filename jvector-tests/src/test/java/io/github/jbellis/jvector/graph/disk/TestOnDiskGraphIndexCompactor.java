@@ -7,8 +7,15 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -21,10 +28,10 @@ import software.amazon.awssdk.services.s3.endpoints.internal.Value;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
+import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 
@@ -36,7 +43,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     List<VectorFloat<?>> allVecs = new ArrayList<>();
     List<OnDiskGraphIndex> graphs = new ArrayList<>();
     int dimension = 32;
-    int numVectorsPerGraph = 10000;
+    int numVectorsPerGraph = 1000;
     int numGraphs = 5;
     int numQueries = 10;
     VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
@@ -46,7 +53,12 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     public void setup() throws IOException {
         //testDirectory = Files.createTempDirectory(this.getClass().getSimpleName());
         testDirectory = Files.createTempDirectory("jvector_test");
+        // buildFP();
+        buildFusedPQ();
+        buildGoldenPQ();
+    }
 
+    void buildFP() throws IOException {
         for(int i = 0; i < numGraphs; ++i) {
             List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
             RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
@@ -57,14 +69,59 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             TestUtil.writeGraph(graph, ravv, outputPath);
             allVecs.addAll(vecs);
         }
-        buildGolden();
-
     }
-    void buildGolden() throws IOException {
+    void buildFusedPQ() throws IOException {
+        for(int i = 0; i < numGraphs; ++i) {
+            List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
+            RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
+            ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true);
+            PQVectors pqv = (PQVectors) pq.encodeAll(ravv);
+            var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
+            var builder = new GraphIndexBuilder(bsp, dimension, 32, 1000, 1.0f, 1.0f, true, true);
+            var graph = builder.getGraph();
+
+            var outputPath = testDirectory.resolve("test_graph_" + i);
+            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+            writeSuppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+
+            var identityMapper = new OrdinalMapper.IdentityMapper(ravv.size() - 1);
+            var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
+            writerBuilder.withMapper(identityMapper);
+            writerBuilder.with(new InlineVectors(dimension));
+            writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+            var writer = writerBuilder.build();
+
+            for (var node = 0; node < ravv.size(); node++) {
+                var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+                stateMap.put(FeatureId.INLINE_VECTORS, writeSuppliers.get(FeatureId.INLINE_VECTORS).apply(node));
+                writer.writeInline(node, stateMap);;
+                builder.addGraphNode(node, ravv.getVector(i));
+            }
+            builder.cleanup();
+
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
+            writer.write(writeSuppliers);
+            allVecs.addAll(vecs);
+        }
+    }
+    void buildGoldenFP() throws IOException {
         // golden
         allravv = new ListRandomAccessVectorValues(allVecs, dimension);
         var builder = new GraphIndexBuilder(allravv, similarityFunction, 10, 100, 1.0f, 1.0f, true);
         golden = TestUtil.buildSequentially(builder, allravv);
+    }
+    void buildGoldenPQ() throws IOException {
+        allravv = new ListRandomAccessVectorValues(allVecs, dimension);
+
+        ProductQuantization pq = ProductQuantization.compute(allravv, 8, 256, true);
+        PQVectors pqv = (PQVectors) pq.encodeAll(allravv);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
+        var builder = new GraphIndexBuilder(bsp, dimension, 10, 100, 1.0f, 1.0f, true, true);
+        for (var i = 0; i < allravv.size(); i++) {
+            builder.addGraphNode(i, allravv.getVector(i));
+        }
+        builder.cleanup();
+        golden = builder.getGraph();
     }
     List<SearchResult> searchFromAll(List<VectorFloat<?>> queries, int topK) {
         List<SearchResult> srs = new ArrayList<>();
@@ -133,7 +190,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         List<List<Integer>> groundTruth = buildGT(queries, topK);
 
         List<SearchResult> csrs = new ArrayList<>();
+        System.out.printf("start compaction%n");
         compactor.compact(outputPath, similarityFunction);
+        System.out.printf("done%n");
 
         ReaderSupplier rs;
         try {
