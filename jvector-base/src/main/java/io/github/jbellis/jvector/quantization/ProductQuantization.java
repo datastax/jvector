@@ -733,11 +733,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     @Override
     public String toString() {
         if (anisotropicThreshold == UNWEIGHTED) {
-            return String.format("ProductQuantization(M=%d, clusters=%d)", M, clusterCount);
+            return String.format("ProductQuantization(M=%d, clusters=%d, centered=%s)", M, clusterCount, globalCentroid != null);
         }
-        return String.format("ProductQuantization(M=%d, clusters=%d, T=%.3f, eta=%.1f)",
+        return String.format("ProductQuantization(M=%d, clusters=%d, centered=%s, anisotropicT=%.3f, eta=%.1f)",
                              M,
                              clusterCount,
+                             globalCentroid != null,
                              anisotropicThreshold,
                              KMeansPlusPlusClusterer.computeParallelCostMultiplier(anisotropicThreshold, originalDimension));
     }
