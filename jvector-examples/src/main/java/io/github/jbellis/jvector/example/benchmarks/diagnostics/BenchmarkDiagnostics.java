@@ -259,7 +259,6 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         System.out.println("\n=== BENCHMARK DIAGNOSTICS SUMMARY ===");
         System.out.printf("Diagnostic Level: %s%n", level);
         System.out.printf("System Snapshots: %d%n", snapshots.size());
-        System.out.printf("Disk Snapshots: %d%n", diskSnapshots.size());
         System.out.printf("Timing Analyses: %d%n", timingAnalyses.size());
 
         if (!snapshots.isEmpty()) {
@@ -285,19 +284,6 @@ public class BenchmarkDiagnostics implements AutoCloseable {
                 DiskUsageMonitor.formatBytes(last.memoryStats.mappedBufferMemory));
         }
 
-        // Disk usage summary
-        if (!diskSnapshots.isEmpty()) {
-            DiskUsageMonitor.DiskUsageSnapshot firstDisk = diskSnapshots.get(0);
-            DiskUsageMonitor.DiskUsageSnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
-            DiskUsageMonitor.DiskUsageSnapshot totalDisk = lastDisk.subtract(firstDisk);
-
-            System.out.printf("\nDisk Usage Summary:%n");
-            System.out.printf("  Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.totalBytes));
-            System.out.printf("  Total Files: %d%n", lastDisk.fileCount);
-            System.out.printf("  Net Change: %s, %+d files%n",
-                DiskUsageMonitor.formatBytes(totalDisk.totalBytes), totalDisk.fileCount);
-        }
-
         // Performance variance analysis
         if (timingAnalyses.size() > 1) {
             System.out.println("\nPerformance Variance Analysis:");
@@ -307,6 +293,22 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         }
 
         System.out.println("=====================================\n");
+    }
+
+    public void printDiskStatistics(String label) {
+        // Disk usage summary
+        if (!diskSnapshots.isEmpty()) {
+            DiskUsageMonitor.DiskUsageSnapshot firstDisk = diskSnapshots.get(0);
+            DiskUsageMonitor.DiskUsageSnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
+            DiskUsageMonitor.DiskUsageSnapshot totalDisk = lastDisk.subtract(firstDisk);
+
+            System.out.printf("\nDisk Usage Summary %s:%n", label);
+            System.out.printf("  Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.totalBytes));
+            System.out.printf("  Total Files: %d%n", lastDisk.fileCount);
+            System.out.printf("  Net Change: %s, %+d files%n",
+                    DiskUsageMonitor.formatBytes(totalDisk.totalBytes), totalDisk.fileCount);
+        }
+
     }
 
     /**
