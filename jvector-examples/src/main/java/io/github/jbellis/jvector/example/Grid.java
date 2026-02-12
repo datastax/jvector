@@ -312,9 +312,9 @@ public class Grid {
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskParallelGraphIndexWriter> writers = new HashMap<>();
+        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
         Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskParallelGraphIndexWriter scoringWriter = null;
+        OnDiskGraphIndexWriter scoringWriter = null;
         int n = 0;
         for (var features : featureSets) {
             // if we are using index caching, use cache names instead of tmp names for index files....
@@ -410,7 +410,7 @@ public class Grid {
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskParallelGraphIndexWriter.Builder(onHeapGraph, outPath);
+        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
@@ -460,10 +460,10 @@ public class Grid {
     }
 
     private static class BuilderWithSuppliers {
-        public final OnDiskParallelGraphIndexWriter.Builder builder;
+        public final OnDiskGraphIndexWriter.Builder builder;
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
 
-        public BuilderWithSuppliers(OnDiskParallelGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
             this.builder = builder;
             this.suppliers = suppliers;
         }
