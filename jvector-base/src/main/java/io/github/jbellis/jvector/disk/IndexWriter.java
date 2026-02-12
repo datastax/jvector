@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.disk;
 import java.io.Closeable;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Interface for writing index data.
@@ -30,4 +32,12 @@ public interface IndexWriter extends DataOutput, Closeable {
      * @throws IOException if an I/O error occurs
      */
     long position() throws IOException;
+
+    default void writeFloats(float[] floats, int offset, int count) throws IOException {
+        ByteBuffer bb = ByteBuffer.allocate(count * Float.BYTES);
+        // DataOutput specifies BIG_ENDIAN for float
+        bb.order(ByteOrder.BIG_ENDIAN).asFloatBuffer().put(floats, offset, count);
+        bb.rewind();
+        write(bb.array());
+    }
 }

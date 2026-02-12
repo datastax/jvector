@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -26,8 +27,9 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
@@ -36,6 +38,7 @@ import java.util.function.IntUnaryOperator;
 import java.util.stream.IntStream;
 
 public abstract class PQVectors implements CompressedVectors {
+    private static final Logger log = LoggerFactory.getLogger(PQVectors.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     final ProductQuantization pq;
@@ -102,6 +105,19 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        // Verify that the mapped ordinals are packed, ie. the total range of ordinals does not exceed
+        // the total vector count as they are mapped from 0 --> vector count - 1.
+        // This assumes no duplicates are included.
+        // Note that the total vector count cannot exceed 2B as that is Integer.MAX_VALUE
+        if (log.isDebugEnabled() || System.getProperties().containsKey("VECTOR_DEBUG")) {
+            IntStream.range(0, vectorCount).forEach(i -> {
+                int mappedOrdinal = ordinalsMapping.applyAsInt(i);
+                if (mappedOrdinal > vectorCount)
+                    throw new IllegalArgumentException("vectorCount=" + mappedOrdinal + " exceeds maximum " + vectorCount);
+            });
+            log.info("Range check completed for encodeAndBuild with vectorCount={}", vectorCount);
+        }
+
         int compressedDimension = pq.compressedVectorSize();
         PQLayout layout = new PQLayout(vectorCount, compressedDimension);
         final ByteSequence<?>[] chunks = new ByteSequence<?>[layout.totalChunks];
@@ -134,7 +150,7 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     @Override
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         // pq codebooks
         pq.write(out, version);
