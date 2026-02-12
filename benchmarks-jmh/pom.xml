@@ -118,6 +118,17 @@
                             <commandlineArgs>--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector -Djvector.experimental.enable_native_vectorization=true -cp %classpath io.github.jbellis.jvector.bench.CompactorBenchmark ${args}</commandlineArgs>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>analyze</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>false</skip>
+                            <executable>java</executable>
+                            <commandlineArgs>-cp %classpath io.github.jbellis.jvector.bench.benchtools.EventLogAnalyzer ${args}</commandlineArgs>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
         </plugins>

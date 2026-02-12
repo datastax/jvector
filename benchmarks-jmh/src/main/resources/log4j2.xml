@@ -6,11 +6,16 @@
             <PatternLayout disableAnsi="${sys:compactor.disableAnsi:-true}"
                           pattern="%d{HH:mm:ss.SSS} %style{[%t]}{cyan} %highlight{%-5level}{FATAL=red bold, ERROR=red, WARN=yellow, INFO=green, DEBUG=blue, TRACE=white} %style{%logger{1}}{bright_white} - %msg%n"/>
         </Console>
+        <!-- File Appender -->
+        <File name="File" fileName="${sys:jvector.internal.runDir}/compactor.log" append="true">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{1} - %msg%n"/>
+        </File>
     </Appenders>
     <Loggers>
         <!-- Root Logger -->
         <Root level="INFO">
             <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
         </Root>
     </Loggers>
 </Configuration>

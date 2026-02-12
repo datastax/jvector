@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Append-only JSONL file writer that serializes one map per line.
@@ -39,21 +40,10 @@ public final class JsonlWriter {
 
     /** Serializes the map as a single JSON line and appends it to the output file. Preserves insertion order. */
     public void writeLine(LinkedHashMap<String, Object> result) {
-        StringBuilder json = new StringBuilder("{");
-        boolean first = true;
-        for (var entry : result.entrySet()) {
-            if (!first) json.append(", ");
-            first = false;
-            json.append('"').append(entry.getKey()).append("\": ");
-            Object val = entry.getValue();
-            if (val instanceof String) {
-                String s = (String) val;
-                json.append('"').append(s.replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
-            } else {
-                json.append(val);
-            }
-        }
-        json.append("}\n");
+        StringBuilder json = new StringBuilder();
+        appendObject(json, result);
+        json.append('\n');
+
 
         try {
             Files.writeString(outputFile, json.toString(),
@@ -61,5 +51,29 @@ public final class JsonlWriter {
         } catch (IOException e) {
             log.error("Failed to persist result to {}", outputFile, e);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void appendValue(StringBuilder sb, Object val) {
+        if (val instanceof String) {
+            String s = (String) val;
+            sb.append('"').append(s.replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+        } else if (val instanceof Map) {
+            appendObject(sb, (Map<String, Object>) val);
+        } else {
+            sb.append(val);
+        }
+    }
+
+    private static void appendObject(StringBuilder sb, Map<String, Object> map) {
+        sb.append('{');
+        boolean first = true;
+        for (var entry : map.entrySet()) {
+            if (!first) sb.append(", ");
+            first = false;
+            sb.append('"').append(entry.getKey()).append("\": ");
+            appendValue(sb, entry.getValue());
+        }
+        sb.append('}');
     }
 }
