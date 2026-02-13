@@ -16,79 +16,28 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
+/**
+ * JSON utility for writing run artifacts (e.g., sys_info.json) using the GSON library.
+ * <p>
+ * Provides structured, pretty-printed output for machine-readable logs and human debugging.
+ * Unlike manual serialization, this supports complex POJOs via reflection, while maintaining
+ * literal string integrity by disabling HTML escaping.
+ */
 public final class JsonUtil {
+    // Create a single, reusable, thread-safe instance
+    private static final Gson GSON = new GsonBuilder()
+            .disableHtmlEscaping() // Keeps characters like < and > as-is
+            .serializeNulls()      // Force nulls to show up in JSON
+            .setPrettyPrinting()
+            .create();
+
     private JsonUtil() {}
 
     public static String toJson(Object o) {
-        StringBuilder sb = new StringBuilder(1024);
-        writeValue(sb, o);
-        sb.append('\n');
-        return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void writeValue(StringBuilder sb, Object o) {
-        if (o == null) {
-            sb.append("null");
-        } else if (o instanceof String) {
-            sb.append('"').append(escape((String) o)).append('"');
-        } else if (o instanceof Number || o instanceof Boolean) {
-            sb.append(o.toString());
-        } else if (o instanceof Map) {
-            writeMap(sb, (Map<String, Object>) o);
-        } else if (o instanceof List) {
-            writeList(sb, (List<?>) o);
-        } else {
-            // fallback: stringify
-            sb.append('"').append(escape(o.toString())).append('"');
-        }
-    }
-
-    private static void writeMap(StringBuilder sb, Map<String, Object> m) {
-        sb.append('{');
-        Iterator<Map.Entry<String, Object>> it = m.entrySet().iterator();
-        while (it.hasNext()) {
-            var e = it.next();
-            sb.append('"').append(escape(e.getKey())).append('"').append(':');
-            writeValue(sb, e.getValue());
-            if (it.hasNext()) sb.append(',');
-        }
-        sb.append('}');
-    }
-
-    private static void writeList(StringBuilder sb, List<?> list) {
-        sb.append('[');
-        for (int i = 0; i < list.size(); i++) {
-            writeValue(sb, list.get(i));
-            if (i + 1 < list.size()) sb.append(',');
-        }
-        sb.append(']');
-    }
-
-    private static String escape(String s) {
-        StringBuilder out = new StringBuilder(s.length() + 16);
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"': out.append("\\\""); break;
-                case '\\': out.append("\\\\"); break;
-                case '\b': out.append("\\b"); break;
-                case '\f': out.append("\\f"); break;
-                case '\n': out.append("\\n"); break;
-                case '\r': out.append("\\r"); break;
-                case '\t': out.append("\\t"); break;
-                default:
-                    if (c < 0x20) {
-                        out.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        out.append(c);
-                    }
-            }
-        }
-        return out.toString();
+        // Gson handles Maps, Lists, POJOs, and Primitives automatically
+        return GSON.toJson(o) + "\n";
     }
 }

@@ -21,6 +21,13 @@ import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.util.*;
 
+/**
+ * Computes the ordered union of output-key columns for experiments.csv for a run.
+ *
+ * The header is derived from the run-level logging selection and the union of topK scenarios across
+ * dataset configs, so topK-dependent outputs (e.g. recall_at_K) are included when applicable.
+ * Output keys are emitted in a canonical order to keep CSV headers stable and easy to compare.
+ */
 public final class LoggingSchemaPlanner {
 
     private LoggingSchemaPlanner() {}

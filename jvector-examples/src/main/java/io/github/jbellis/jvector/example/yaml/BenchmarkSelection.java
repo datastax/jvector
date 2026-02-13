@@ -21,7 +21,7 @@ import java.util.Map;
 
 /**
  * A sink-agnostic selection of benchmark stats and related metrics, using the same schema
- * as SearchParameters.benchmarks (Map<String, List<String>>).
+ * as SearchParameters.benchmarks ({@code Map<String, List<String>>}).
  *
  * Used for console projections now, and logging (CSV/Parquet/etc) later.
  */

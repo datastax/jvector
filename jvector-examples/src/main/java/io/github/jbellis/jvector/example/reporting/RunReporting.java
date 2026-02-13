@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
-import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.io.IOException;
@@ -25,10 +24,15 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * Bootstraps a benchmark run directory and writes sys_info.json.
+ *
+ * This class creates a run_id/run_uuid, selects the logging directory from run.yml, captures basic
+ * environment metadata (OS/JVM/CPU/SIMD/threads/memory), computes a stable system_id, and returns a
+ * {@link RunContext} for downstream writers (dataset_info.csv, experiments.csv).
+ */
 public final class RunReporting {
     private static final DateTimeFormatter RUN_ID_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
 

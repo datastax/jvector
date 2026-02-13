@@ -27,7 +27,7 @@ import java.util.Set;
  * Schema definition for experiments.csv (v1).
  *
  * Fixed columns are the join keys + resolved index/search parameters that appear on every row.
- * Output-key columns (Metric.key strings) are appended after these and are computed per run.
+ * Output-key columns ({@code Metric.key} strings) are appended after these and are computed per run.
  */
 public final class ExperimentsSchemaV1 {
     private ExperimentsSchemaV1() {}

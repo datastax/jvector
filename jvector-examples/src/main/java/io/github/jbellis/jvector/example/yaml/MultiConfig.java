@@ -102,7 +102,14 @@ public class MultiConfig {
                 Constructor ctor = new Constructor(MultiConfig.class, loaderOptions);
                 Yaml yaml = new Yaml(ctor);
 
+                // Checks onDiskIndexVersion is valid (if present), among other things
                 MultiConfig cfg = yaml.loadAs(inputStream, MultiConfig.class);
+
+                // Check if onDiskIndexVersion was provided at all
+                if (cfg.getOnDiskIndexVersion() == 0) {
+                    throw new IllegalArgumentException("Required field 'onDiskIndexVersion' is missing in "
+                            + configFile.getAbsolutePath());
+                }
 
                 // Validate supported versions
                 if (cfg.getYamlSchemaVersion() != 1) {
@@ -183,7 +190,8 @@ public class MultiConfig {
 
     public void setOnDiskIndexVersion(int onDiskIndexVersion) {
         if (onDiskIndexVersion != OnDiskGraphIndex.CURRENT_VERSION) {
-            throw new IllegalArgumentException("Invalid onDiskIndexVersion: " + onDiskIndexVersion);
+            throw new IllegalArgumentException("YAML config specifies invalid onDiskIndexVersion: " + onDiskIndexVersion
+            + " (version " + OnDiskGraphIndex.CURRENT_VERSION + " expected)");
         }
         this.onDiskIndexVersion = onDiskIndexVersion;
     }

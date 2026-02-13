@@ -65,7 +65,7 @@ public final class ExperimentsCsvWriter {
      * Append one experiment row.
      *
      * @param fixedValues map for fixed columns (missing keys -> empty)
-     * @param outputs benchmark stats/metrics/telemetry produced for this row (keyed by Metric.getKey())
+     * @param outputs benchmark stats/metrics/telemetry produced for this row (keyed by {@code Metric.getKey()})
      */
     public void appendRow(Map<String, String> fixedValues, List<Metric> outputs) throws IOException {
         // Build output key -> numeric string
