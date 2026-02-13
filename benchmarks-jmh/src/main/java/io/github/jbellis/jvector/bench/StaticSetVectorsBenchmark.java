@@ -15,7 +15,6 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.example.SiftSmall;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -83,14 +82,6 @@ public class StaticSetVectorsBenchmark {
 
     @Benchmark
     public void testOnHeapWithRandomQueryVectors(Blackhole blackhole) throws IOException {
-        var queryVector = SiftSmall.randomVector(originalDimension);
-        // Your benchmark code here
-        var searchResult = GraphSearcher.search(queryVector,
-                10, // number of results
-                ravv, // vectors we're searching, used for scoring
-                VectorSimilarityFunction.EUCLIDEAN, // how to score
-                graphIndex,
-                Bits.ALL); // valid ordinals to consider
-        blackhole.consume(searchResult);
+
     }
 }

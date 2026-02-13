@@ -24,6 +24,30 @@
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <archive>
+                        <manifest>
+                            <mainClass>io.github.jbellis.jvector.example.AutoBenchYAML</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
     <dependencies>
@@ -31,6 +55,13 @@
             <groupId>io.github.jbellis</groupId>
             <artifactId>jvector-base</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <!-- Source: https://mvnrepository.com/artifact/org.yaml/snakeyaml -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>2.5</version>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.jhdf</groupId>
@@ -47,6 +78,17 @@
                     <groupId>org.slf4j</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+        <!-- Add SLF4J and Logback for logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.9</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.4.11</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -85,6 +127,29 @@
             <version>2.8.1</version>
             <type>pom</type>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.17.1</version>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <version>7.3.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <profiles>
         <profile>
@@ -100,24 +165,42 @@
                         <executions>
                             <execution>
                                 <id>sift</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>bench</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
@@ -148,18 +231,24 @@
                         <executions>
                             <execution>
                                 <id>sift</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>bench</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -169,13 +258,28 @@
                                         <argument>-XX:+HeapDumpOnOutOfMemoryError</argument>
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>ipcserve</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -190,6 +294,9 @@
                             </execution>
                             <execution>
                                 <id>ipcserve-1core</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -240,6 +347,9 @@
                         <executions>
                             <execution>
                                 <id>sift</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -248,12 +358,15 @@
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.SiftSmall</argument>
+                                        <argument>io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>bench</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -264,13 +377,28 @@
                                         <argument>-Xmx14G</argument>
                                         <argument>-ea</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
-                                        <argument>io.github.jbellis.jvector.example.Bench</argument>
+                                        <argument>io.github.jbellis.jvector.example.BenchYAML</argument>
+                                        <argument>${benchArgs}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>bench-java</id>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <arguments>
                                         <argument>${benchArgs}</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>ipcserve</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>
@@ -285,6 +413,9 @@
                             </execution>
                             <execution>
                                 <id>ipcserve-1core</id>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
                                 <configuration>
                                     <arguments>
                                         <argument>-classpath</argument>

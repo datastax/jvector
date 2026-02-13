@@ -21,12 +21,11 @@ import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
@@ -68,6 +67,7 @@ public class IPCService
         int efConstruction;
         float neighborOverflow;
         boolean addHierarchy;
+        boolean refineFinalGraph;
         VectorSimilarityFunction similarityFunction;
         RandomAccessVectorValues ravv;
         CompressedVectors cv;
@@ -112,6 +112,7 @@ public class IPCService
         int efConstruction = Integer.parseInt(args[3]);
         float neighborOverflow = Float.parseFloat(args[4]);
         boolean addHierarchy = Boolean.parseBoolean(args[5]);
+        boolean refineFinalGraph = Boolean.parseBoolean(args[6]);
 
         ctx.ravv = new UpdatableRandomAccessVectorValues(dimensions);
         ctx.indexBuilder =  new GraphIndexBuilder(ctx.ravv, sim, M, efConstruction, neighborOverflow, 1.4f, addHierarchy);
@@ -120,6 +121,8 @@ public class IPCService
         ctx.efConstruction = efConstruction;
         ctx.similarityFunction = sim;
         ctx.isBulkLoad = false;
+        ctx.addHierarchy = addHierarchy;
+        ctx.refineFinalGraph = refineFinalGraph;
     }
 
     void write(String input, SessionContext ctx) {
@@ -186,13 +189,13 @@ public class IPCService
         return cv;
     }
 
-    private static GraphIndex flushGraphIndex(OnHeapGraphIndex onHeapIndex, RandomAccessVectorValues ravv) {
+    private static GraphIndex flushGraphIndex(GraphIndex index, RandomAccessVectorValues ravv) {
         try {
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
 
-            OnDiskGraphIndex.write(onHeapIndex, ravv, graphPath);
-            return onHeapIndex;
+            OnDiskGraphIndex.write(index, ravv, graphPath);
+            return index;
         } catch (IOException e) {
             throw new IOError(e);
         }

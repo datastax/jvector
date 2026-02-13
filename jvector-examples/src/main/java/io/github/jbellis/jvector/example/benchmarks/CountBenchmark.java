@@ -1,0 +1,138 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.example.benchmarks;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.stream.IntStream;
+
+import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.SearchResult;
+
+/**
+ * Measures average node‐visit and node‐expand counts over N runs.
+ */
+public class CountBenchmark extends AbstractQueryBenchmark {
+    private static final String DEFAULT_FORMAT = ".1f";
+
+    private boolean computeAvgNodesVisited;
+    private boolean computeAvgNodesExpanded;
+    private boolean computeAvgNodesExpandedBaseLayer;
+    private String formatAvgNodesVisited;
+    private String formatAvgNodesExpanded;
+    private String formatAvgNodesExpandedBaseLayer;
+
+    public static CountBenchmark createDefault() {
+        return new CountBenchmark(true, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    public static CountBenchmark createEmpty() {
+        return new CountBenchmark(false, false, false, DEFAULT_FORMAT, DEFAULT_FORMAT, DEFAULT_FORMAT);
+    }
+
+    private CountBenchmark(boolean computeAvgNodesVisited, boolean computeAvgNodesExpanded, boolean computeAvgNodesExpandedBaseLayer,
+                          String formatAvgNodesVisited, String formatAvgNodesExpanded, String formatAvgNodesExpandedBaseLayer) {
+        this.computeAvgNodesVisited = computeAvgNodesVisited;
+        this.computeAvgNodesExpanded = computeAvgNodesExpanded;
+        this.computeAvgNodesExpandedBaseLayer = computeAvgNodesExpandedBaseLayer;
+        this.formatAvgNodesVisited = formatAvgNodesVisited;
+        this.formatAvgNodesExpanded = formatAvgNodesExpanded;
+        this.formatAvgNodesExpandedBaseLayer = formatAvgNodesExpandedBaseLayer;
+    }
+
+    public CountBenchmark displayAvgNodesVisited() {
+        return displayAvgNodesVisited(DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark displayAvgNodesVisited(String format) {
+        this.computeAvgNodesVisited = true;
+        this.formatAvgNodesVisited = format;
+        return this;
+    }
+
+    public CountBenchmark displayAvgNodesExpanded() {
+        return displayAvgNodesExpanded(DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark displayAvgNodesExpanded(String format) {
+        this.computeAvgNodesExpanded = true;
+        this.formatAvgNodesExpanded = format;
+        return this;
+    }
+
+    public CountBenchmark displayAvgNodesExpandedBaseLayer() {
+        return displayAvgNodesExpandedBaseLayer(DEFAULT_FORMAT);
+    }
+
+    public CountBenchmark displayAvgNodesExpandedBaseLayer(String format) {
+        this.computeAvgNodesExpandedBaseLayer = true;
+        this.formatAvgNodesExpandedBaseLayer = format;
+        return this;
+    }
+
+    @Override
+    public String getBenchmarkName() {
+        return "CountBenchmark";
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            ConfiguredSystem cs,
+            int topK,
+            int rerankK,
+            boolean usePruning,
+            int queryRuns) {
+
+        if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
+            throw new RuntimeException("At least one metric must be displayed");
+        }
+
+        LongAdder nodesVisited = new LongAdder();
+        LongAdder nodesExpanded = new LongAdder();
+        LongAdder nodesExpandedBaseLayer = new LongAdder();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
+
+        for (int run = 0; run < queryRuns; run++) {
+            IntStream.range(0, totalQueries)
+                    .parallel()
+                    .forEach(i -> {
+                        SearchResult sr = QueryExecutor.executeQuery(
+                                cs, topK, rerankK, usePruning, i);
+                        nodesVisited.add(sr.getVisitedCount());
+                        nodesExpanded.add(sr.getExpandedCount());
+                        nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
+                    });
+        }
+
+        double avgVisited = nodesVisited.sum() / (double) (queryRuns * totalQueries);
+        double avgExpanded = nodesExpanded.sum() / (double) (queryRuns * totalQueries);
+        double avgBase = nodesExpandedBaseLayer.sum() / (double) (queryRuns * totalQueries);
+
+        var list = new ArrayList<Metric>();
+        if (computeAvgNodesVisited) {
+            list.add(Metric.of("Avg Visited", formatAvgNodesVisited, avgVisited));
+        }
+        if (computeAvgNodesExpanded) {
+            list.add(Metric.of("Avg Expanded", formatAvgNodesExpanded, avgExpanded));
+        }
+        if (computeAvgNodesExpandedBaseLayer) {
+            list.add(Metric.of("Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
+        }
+        return list;
+    }
+}
