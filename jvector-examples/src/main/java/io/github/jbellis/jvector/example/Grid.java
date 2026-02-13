@@ -40,14 +40,12 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -277,6 +275,9 @@ public class Grid {
 
         // Capture post-build memory and disk state
         diagnostics.capturePostPhaseSnapshot("Graph Build");
+
+        diagnostics.printDiskStatistics("Graph Index Build");
+        System.out.printf("Index build time: %f seconds%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
 
         try {
             for (var cpSupplier : compressionGrid) {
@@ -769,10 +770,9 @@ public class Grid {
                                         Path testDirectory = Files.createTempDirectory("bench");
                                         try {
                                             // Capture initial state
-                                            var diagnostics = new io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics(getDiagnosticLevel());
+                                            var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
                                             diagnostics.setMonitoredDirectory(testDirectory);
                                             diagnostics.capturePrePhaseSnapshot("Build");
-
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
 
                                             var compressor = getCompressor(buildCompressor, ds);
@@ -820,6 +820,7 @@ public class Grid {
 
                                             // Capture post-build state
                                             diagnostics.capturePostPhaseSnapshot("Build");
+                                            diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
                                             var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 

@@ -113,22 +113,6 @@ public class QueryTester {
                     systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
         }
 
-        if (diskSnapshot != null) {
-            // Total file size in MB
-            results.add(Metric.of("search.disk.total_file_size_mb", "Total file size", ".1f",
-                    diskSnapshot.totalBytes / (1024.0 * 1024.0)));
-
-            // Number of files
-            results.add(Metric.of("search.disk.file_count", "Number of files", ".0f",
-                    (double) diskSnapshot.fileCount));
-        }
-
-        // Add index build time if available
-        if (datasetName != null && Grid.getIndexBuildTimeSeconds(datasetName) != null) {
-            results.add(Metric.of("construction.index_build_time_s", "Index build time", ".2f",
-                    Grid.getIndexBuildTimeSeconds(datasetName)));
-        }
-
         return results;
     }
 }
