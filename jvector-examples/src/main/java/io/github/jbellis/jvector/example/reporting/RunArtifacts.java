@@ -72,27 +72,15 @@ public final class RunArtifacts {
     }
 
     public static RunArtifacts open(RunConfig runCfg, List<MultiConfig> datasetConfigs) throws IOException {
-        // Check to see if logging is enabled....
+        Objects.requireNonNull(runCfg, "runCfg");
+        Objects.requireNonNull(datasetConfigs, "datasetConfigs");
+
         boolean loggingEnabled =
                 runCfg.logging != null &&
                         runCfg.logging.type != null &&
                         !runCfg.logging.type.isBlank();
 
-        if (!loggingEnabled) {
-            return RunArtifacts.disabled();
-        }
-
-        Objects.requireNonNull(runCfg, "runCfg");
-        Objects.requireNonNull(datasetConfigs, "datasetConfigs");
-
-        var reporting = RunReporting.open(runCfg);
-        var run = reporting.run();
-
-        System.out.println("Logging enabled: " + run.runDir().toAbsolutePath() + ".\n" +
-                "Delete this directory to remove run artifacts and free up disk space.");
-
-        var datasetInfoWriter = DatasetInfoWriter.open(run);
-
+        // Even if logging is disabled, we still want run-level compute/display selections
         Map<String, List<String>> benchmarksToCompute = runCfg.benchmarks;
 
         Map<String, List<String>> benchmarksToDisplay =
@@ -126,6 +114,29 @@ public final class RunArtifacts {
                 SearchReportingCatalog.catalog()
         );
 
+        if (!loggingEnabled) {
+            // No sys_info/dataset_info/experiments.csv when logging is disabled
+            return new RunArtifacts(
+                    null,  // run
+                    null,  // datasetInfoWriter
+                    null,  // experimentsWriter
+                    benchmarksToCompute,
+                    benchmarksToDisplay,
+                    metricsToDisplay,
+                    benchmarksToLog,
+                    metricsToLog
+            );
+        }
+
+        // Logging enabled => create run artifacts
+        var reporting = RunReporting.open(runCfg);
+        var run = reporting.run();
+
+        System.out.println("Logging enabled: " + run.runDir().toAbsolutePath() + ".\n" +
+                "Delete this directory to remove run artifacts and free up disk space.");
+
+        var datasetInfoWriter = DatasetInfoWriter.open(run);
+
         var outputKeyColumns = LoggingSchemaPlanner.unionLoggingMetricKeys(runCfg, datasetConfigs);
         var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(), outputKeyColumns);
 
@@ -141,17 +152,32 @@ public final class RunArtifacts {
         );
     }
 
-    /** No-op artifacts instance for legacy callers (no output). */
+    /** No-op artifacts instance for legacy callers (no sys_info/dataset_info/experiments output). */
     public static RunArtifacts disabled() {
         return new RunArtifacts(
-                null,   // run
-                null,   // datasetInfoWriter
-                null,   // experimentsWriter
-                null,   // benchmarksToCompute
-                null,   // benchmarksToDisplay
-                null,   // metricsToDisplay
-                null,   // benchmarksToLog
-                null    // metricsToLog
+                null, null, null,
+                null, null, null,
+                null, null
+        );
+    }
+
+    /**
+     * Legacy yamlSchemaVersion "0" behavior:
+     * - logging disabled
+     * - console selection == compute selection
+     */
+    public static RunArtifacts legacyNoLogging(Map<String, List<String>> legacyBenchmarksToCompute) {
+        Map<String, List<String>> compute = legacyBenchmarksToCompute;
+        Map<String, List<String>> display = legacyBenchmarksToCompute;
+        return new RunArtifacts(
+                null,  // run
+                null,  // datasetInfoWriter
+                null,  // experimentsWriter
+                compute,
+                display,
+                null,  // metricsToDisplay
+                null,  // benchmarksToLog
+                null   // metricsToLog
         );
     }
 

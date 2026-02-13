@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
+import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
@@ -57,15 +58,16 @@ public class BenchYAML {
         List<MultiConfig> allConfigs = new ArrayList<>();
 
         if (!datasetNames.isEmpty()) {
-            System.out.println("Executing the following datasets: " + datasetNames);
+            System.out.println("Executing the following datasets: " +
+                    wrapList(new java.util.ArrayList<>(datasetNames), 6, "  "));
 
-            String hdf5 = ".hdf5";
-            for (var rawname : datasetNames) {
-                String datasetName =
-                        rawname.endsWith(hdf5) ? rawname.substring(0, rawname.length() - hdf5.length()) : rawname;
-                MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-                allConfigs.add(config);
+            final String HDF5 = ".hdf5";
+            for (String raw : datasetNames) {
+                String name = raw.endsWith(HDF5) ? raw.substring(0, raw.length() - HDF5.length()) : raw;
+                allConfigs.add(MultiConfig.getDefaultConfig(name));
             }
+
+            MultiConfig.printDefaultConfigUsageSummary();
         }
 
         // get the list of YAML files from args
@@ -87,8 +89,31 @@ public class BenchYAML {
         }
 
         // Set up reporting for run
-        RunConfig runCfg = RunConfig.loadDefault();
-        RunArtifacts artifacts = RunArtifacts.open(runCfg, allConfigs);
+        RunArtifacts artifacts;
+        try {
+            RunConfig runCfg = RunConfig.loadDefault();
+            artifacts = RunArtifacts.open(runCfg, allConfigs);
+        } catch (java.io.FileNotFoundException e) {
+            // Legacy yamlSchemaVersion "0" behavior: no run.yml
+            // - logging disabled
+            // - console shows compute selection
+            // - compute selection comes from legacy search.benchmarks if present, else default
+            System.err.println("WARNING: run.yml not found. Falling back to deprecated legacy behavior: "
+                    + "no logging, console mirrors computed benchmarks.");
+
+            Map<String, List<String>> legacyBenchmarks = null;
+            for (MultiConfig c : allConfigs) {
+                if (c != null && c.legacySearchBenchmarks != null && !c.legacySearchBenchmarks.isEmpty()) {
+                    legacyBenchmarks = c.legacySearchBenchmarks;
+                    break;
+                }
+            }
+            if (legacyBenchmarks == null) {
+                legacyBenchmarks = SearchReportingCatalog.defaultComputeBenchmarks();
+            }
+            artifacts = RunArtifacts.legacyNoLogging(legacyBenchmarks);
+        }
+
 
         for (var config : allConfigs) {
 
@@ -113,5 +138,17 @@ public class BenchYAML {
                     config.search.useSearchPruning,
                     artifacts);
         }
+    }
+
+    private static String wrapList(java.util.List<String> items, int perLine, String indent) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[");
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) sb.append(", ");
+            if (i > 0 && (i % perLine) == 0) sb.append(System.lineSeparator()).append(indent);
+            sb.append(items.get(i));
+        }
+        sb.append("]");
+        return sb.toString();
     }
 }
