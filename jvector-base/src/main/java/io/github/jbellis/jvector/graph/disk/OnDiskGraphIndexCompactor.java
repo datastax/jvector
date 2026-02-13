@@ -97,7 +97,7 @@ public final class OnDiskGraphIndexCompactor {
     private final int dimension;
     private final Random rng;
     private int maxOrdinal = -1;
-    private int numTotalNodes;
+    private int numTotalNodes = 0;
     private final ForkJoinPool executor;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
     private final int beamWidth = 1000;
@@ -131,7 +131,6 @@ public final class OnDiskGraphIndexCompactor {
             var bits = new FixedBitSet(source.size(0));
             bits.set(0, source.size(0));
             liveNodes.put(source, bits);
-            numTotalNodes += source.size(0);
         }
 
         addHierarchy = this.sources.get(0).getMaxLevel() != 1;
@@ -171,28 +170,61 @@ public final class OnDiskGraphIndexCompactor {
         }
         return ((int) (-log(randDouble) * ml));
     }
-
-    public void compact(Path outputPath, VectorSimilarityFunction similarityFunction) throws FileNotFoundException {
-
+    private void checkBeforeCompact() {
+        if(sources.size() <= 1) {
+            throw new IllegalArgumentException("Must have at least two sources");
+        }
         for(OnDiskGraphIndex source : sources) {
             if(source.getDimension() != dimension) {
                 throw new IllegalArgumentException("sources must have the same dimension");
             }
+            for(int d = 0; d < maxDegrees.size(); d++) {
+                if(!Objects.equals(source.maxDegrees().get(d), maxDegrees.get(d))) {
+                    throw new IllegalArgumentException("sources must have the same max degrees");
+                }
+            }
+            if(addHierarchy != source.isHierarchical()) {
+                throw new IllegalArgumentException("sources must have the same hierarchical setting");
+            }
             if(!remappers.containsKey(source)) {
                 throw new IllegalArgumentException("Each source must set a remapper");
             }
+            if(!liveNodes.containsKey(source)) {
+                throw new IllegalArgumentException("Each source must set live nodes");
+            }
+        }
+
+        // check features
+        Set<FeatureId> refKeys = sources.get(0).getFeatures().keySet();
+        boolean sameFeatures = sources.stream()
+                .skip(1)
+                .map(s -> s.getFeatures().keySet())
+                .allMatch(refKeys::equals);
+
+        if(!sameFeatures) {
+            throw new IllegalArgumentException("Each source must have the same features");
+        }
+        if(!refKeys.contains(FeatureId.INLINE_VECTORS)) {
+            throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature");
+        }
+    }
+
+    public void compact(Path outputPath, VectorSimilarityFunction similarityFunction) throws FileNotFoundException {
+        checkBeforeCompact();
+        numTotalNodes = 0;
+        for(OnDiskGraphIndex source : sources) {
+            numTotalNodes += liveNodes.get(source).cardinality();
         }
 
         // first stage: find the nodes for upper layer graph
-        for(int s = 0; s < sources.size(); s++) {
-            OnDiskGraphIndex source = sources.get(s);
+        for (OnDiskGraphIndex source : sources) {
             NodesIterator sourceNodes = source.getNodes(0);
-            FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
-            while(sourceNodes.hasNext()) {
+            FixedBitSet sourceAlive = liveNodes.get(source);
+            while (sourceNodes.hasNext()) {
                 int node = sourceNodes.next();
-                if(!sourceAlive.get(node)) continue;
+                if (!sourceAlive.get(node)) continue;
                 int level = getRandomGraphLevel();
-                if(level > 0) {
+                if (level > 0) {
                     var nodeLevel = new OnDiskGraphIndex.NodeAtLevel(level, node);
                     upperLayerNodeList.add(Map.entry(source, nodeLevel));
                 }
@@ -253,7 +285,7 @@ public final class OnDiskGraphIndexCompactor {
             NodesIterator sourceNodes = sources.get(s).getNodes(0);
             int numNodes = sourceNodes.size();
             int[] nodes = new int[numNodes];
-            // materialize
+            // materialize for parallelism
             for(int i = 0; i < numNodes; ++i) nodes[i] = sourceNodes.next();
             FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
 
@@ -269,7 +301,6 @@ public final class OnDiskGraphIndexCompactor {
                 final int end = min(numNodes, batchSize * (b + 1));
                 final int finalS = s;
 
-                ProductQuantization finalPq = pq;
                 writeFutures.add(executor.submit(() -> {
                     OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) tlSearchers.get()[finalS].getView();
                     List<NodeWrite> nws = new ArrayList<>(end - start);
@@ -324,7 +355,6 @@ public final class OnDiskGraphIndexCompactor {
 
                         NodeArray neighbors = new NodeArray(maxDegrees.get(0));
                         List<ByteSequence<?>> neighborPQs = new ArrayList<>();
-                        Set<Integer> seenTargetOrdinals = new HashSet<>();
 
                         for (int k = 0; k < candidates.size(); k++) {
                             if (!selected.get(k)) continue;
@@ -334,11 +364,9 @@ public final class OnDiskGraphIndexCompactor {
                             int targetOrdinal =
                                     remappers.get(sources.get(cidx)).oldToNew(candidate.getValue().node);
 
-                            if (seenTargetOrdinals.add(targetOrdinal)) {
-                                neighbors.addInOrder(targetOrdinal, candidate.getValue().score);
-                                if(finalPq != null) {
-                                    neighborPQs.add(finalPq.encode(((OnDiskGraphIndex.View) tlSearchers.get()[cidx].getView()).getVector(candidate.getValue().node)));
-                                }
+                            neighbors.addInOrder(targetOrdinal, candidate.getValue().score);
+                            if(pq != null) {
+                                neighborPQs.add(pq.encode(((OnDiskGraphIndex.View) tlSearchers.get()[cidx].getView()).getVector(candidate.getValue().node)));
                             }
                         }
 
