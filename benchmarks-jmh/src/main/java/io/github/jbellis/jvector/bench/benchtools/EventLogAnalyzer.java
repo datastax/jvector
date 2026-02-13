@@ -241,8 +241,9 @@ public final class EventLogAnalyzer {
             testStatus.put(tid, status);
         }
 
-        // Find varying parameters (more than one distinct value across tests)
+        // Classify parameters as static (single value) or varying (multiple values)
         List<String> varyingParams = new ArrayList<>();
+        Map<String, String> staticParams = new LinkedHashMap<>();
         for (String field : PARAM_FIELDS) {
             Set<String> values = new HashSet<>();
             for (var params : testParams.values()) {
@@ -250,7 +251,21 @@ public final class EventLogAnalyzer {
             }
             if (values.size() > 1) {
                 varyingParams.add(field);
+            } else if (values.size() == 1) {
+                String value = values.iterator().next();
+                if (!value.isEmpty()) {
+                    staticParams.put(stripPrefix(field), value);
+                }
             }
+        }
+
+        // Display static parameters at the top
+        if (!staticParams.isEmpty()) {
+            System.out.println("Static parameters:");
+            for (var entry : staticParams.entrySet()) {
+                System.out.println("  " + entry.getKey() + " = " + entry.getValue());
+            }
+            System.out.println();
         }
 
         if (varyingParams.isEmpty()) {
