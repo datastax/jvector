@@ -22,18 +22,31 @@ import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import java.util.*;
 
 /**
- * Generic selection resolver for reporting sinks (console/logging/etc).
+ * Nexus class that connects three layers of the benchmark/reporting pipeline:
  *
- * Inputs:
- *  - computeBenchmarks: authoritative benchmark compute spec (YAML names)
- *  - selection: sink selection (benchmarks subset + named metrics)
- *  - catalog: mapping from YAML names -> Metric.key templates/keys
- *  - ctx: context for template substitution (e.g., topK)
+ * <ol>
+ *   <li><b>Benchmark compute policy</b> (what is actually measured): the benchmark compute spec expressed in YAML names
+ *       (e.g. throughput/latency/count/accuracy with stat lists).</li>
+ *   <li><b>Selection / projection</b> (what the user wants to display or log): a {@link BenchmarkSelection} that may
+ *       choose a subset of computed benchmark stats and/or additional named telemetry.</li>
+ *   <li><b>Concrete outputs</b> (what ends up in tables/CSV): stable {@code Metric.key} strings used to filter
+ *       produced metrics and to define CSV column headers.</li>
+ * </ol>
  *
- * Rules:
- *  - benchmark stat selection must be a subset of computed stats (fail fast)
- *  - named metric selection must use recognized names (fail fast)
- *  - runtime availability is best effort: caller can warn+omit missing produced keys
+ * <p>Data flow:</p>
+ * <ul>
+ *   <li><b>Pre-build validation</b>: enforce that selected benchmark stats are a subset of what is computed
+ *       (fail fast), and that named telemetry identifiers are recognized (fail fast). Runtime availability of
+ *       telemetry is best-effort and handled by warn-and-omit at the sink layer.</li>
+ *   <li><b>Resolution</b>: expand YAML selections into a set of concrete {@code Metric.key} strings using a
+ *       {@link Catalog}. Some keys are template-based (e.g. {@code recall_at_{topK}}) and are finalized using
+ *       the provided {@link Context}.</li>
+ *   <li><b>Sink usage</b>: console/CSV sinks use the resolved key set to intersect with produced metrics,
+ *       warn on missing keys, and emit the final projection.</li>
+ * </ul>
+ *
+ * <p>The {@link Catalog} is phase-specific data (search vs construction, etc.) but sink-neutral, so the
+ * same resolver can be reused for console and logging without duplicating mapping logic.</p>
  */
 public final class ReportingSelectionResolver {
 
