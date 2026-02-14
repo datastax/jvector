@@ -19,11 +19,11 @@ package io.github.jbellis.jvector.example.reporting;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Clock;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 
 /**
@@ -34,7 +34,6 @@ import java.util.UUID;
  * {@link RunContext} for downstream writers (dataset_info.csv, experiments.csv).
  */
 public final class RunReporting {
-    private static final DateTimeFormatter RUN_ID_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
 
     private final RunContext run;
     private final String jvectorRef;
@@ -53,26 +52,30 @@ public final class RunReporting {
     }
 
     public static RunReporting open(RunConfig runCfg) throws IOException {
+        // Resolve base logging directory (default "logging")
         String logDir = (runCfg != null && runCfg.logging != null && runCfg.logging.dir != null && !runCfg.logging.dir.isBlank())
-                ? runCfg.logging.dir
+                ? runCfg.logging.dir.trim()
                 : "logging";
 
-        String runId = (runCfg != null && runCfg.logging != null && runCfg.logging.runId != null && !runCfg.logging.runId.isBlank())
-                ? runCfg.logging.runId
-                : LocalDateTime.now().format(RUN_ID_FMT);
+        // Resolve runId from template using UTC clock (default "{ts}" inside RunIdUtil)
+        Clock clock = Clock.systemUTC();
+        String runIdTemplate = (runCfg != null && runCfg.logging != null) ? runCfg.logging.runId : null;
+        String runId = RunIdUtil.renderRunId(runIdTemplate, clock);
 
+        // Run metadata
         String jvectorRef = (runCfg != null && runCfg.logging != null && runCfg.logging.jvectorRef != null)
                 ? runCfg.logging.jvectorRef
                 : "";
 
         UUID runUuid = UUID.randomUUID();
-        Instant createdAt = Instant.now();
+        Instant createdAt = clock.instant();
+
         Path runDir = Paths.get(logDir).resolve(runId);
+        Files.createDirectories(runDir);
 
         Integer buildThreads = detectBuildThreads();
         Integer queryThreads = java.util.concurrent.ForkJoinPool.getCommonPoolParallelism();
 
-        // Threads: fill later if you want; safe to start null
         String systemId = SysInfoWriter.writeSysInfo(
                 runDir,
                 RunContext.SCHEMA_VERSION,

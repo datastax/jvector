@@ -24,7 +24,7 @@ import java.util.UUID;
 /**
  * Immutable run-scoped context for logging artifacts.
  *
- * - runId: human-friendly directory name (e.g., "2026-02-09_14-23-08")
+ * - runId: human-friendly directory name (rendered from logging.runId template; e.g., "20260209-222308Z" or "my-exp_20260209-222308Z")
  * - runUuid: collision-proof identity for the run
  * - runDir: logDir/runId
  * - schemaVersion: version of the logging artifact schema

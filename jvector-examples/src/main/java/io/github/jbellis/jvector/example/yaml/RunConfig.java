@@ -70,7 +70,7 @@ public class RunConfig {
     /** Run-level logging settings + selection for experiments.csv. */
     public static class RunLogging extends BenchmarkSelection {
         public String dir;       // e.g. "logging"
-        public String runId;     // optional override
+        public String runId;     // optional template; supports "{ts}" (UTC). Default: "{ts}"
         public String jvectorRef; // tag/commit to record
         public String type;      // e.g. "csv"
     }

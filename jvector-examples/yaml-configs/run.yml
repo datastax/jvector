@@ -25,7 +25,7 @@ console:
 logging:
 #  dir: logging # set as desired
 #  jvectorRef: "no ref"   # tag or git sha (recommended)
-#  runId: # optional override; otherwise timestamp
+#  runId: "my-experiment-{ts}"   # optional; template with {ts} (UTC timestamp). Default: "{ts}"
 #  type: csv # only csv is presently supported
 #  benchmarks:
 #    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
