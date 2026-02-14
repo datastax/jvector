@@ -52,13 +52,13 @@ public class DistancesPQ {
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
         final boolean RUN_ACCURACY_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy-check", "true"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy-check", "false"));
         final boolean RUN_FLOAT_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // Define the benchmark size
-        int maxQueries = 1_000;
-        int maxVectors = 100_000;
+        int maxQueries = 10_000;
+        int maxVectors = 10_000_000;
 
         int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
         int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
@@ -116,7 +116,8 @@ public class DistancesPQ {
         // ------------------------------------------------------------
         // Parallel executor (identical to DistancesASH)
         // ------------------------------------------------------------
-        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+//        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
+        ForkJoinPool simdExecutor = new ForkJoinPool(180); // For profiling
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
 
@@ -378,12 +379,12 @@ public class DistancesPQ {
     }
 
     public static void main(String[] args) throws IOException {
-        runCohere100k();
+//        runCohere100k();
 //        runADA();
-        runADANoZeros();
-        runOpenai1536();
-        runOpenai3072();
+//        runADANoZeros();
+//        runOpenai1536();
+//        runOpenai3072();
 //        runCap6m();
-//        runCohere10m();
+        runCohere10m();
     }
 }

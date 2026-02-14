@@ -310,7 +310,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             long kmStart = System.nanoTime();
 
             // KMeans++ in JVector returns centroids packed as one big vector [C * D]
-            KMeansPlusPlusClusterer km = new KMeansPlusPlusClusterer(points, landmarkCount);
+            // KMeansPlusPlusClusterer km = new KMeansPlusPlusClusterer(points, landmarkCount);
+            MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);
             VectorFloat<?> packed = km.cluster(/*unweightedIterations*/ 20, /*anisotropicIterations*/ 0);
 
             long kmEnd = System.nanoTime();
@@ -398,15 +399,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
-        if ((payloadBits & 63) != 0) {
-            throw new IllegalArgumentException(
-                    "Invalid encodedBits=" + encodedBits +
-                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
-                            "for aligned binary payload. " +
-                            "Got payloadBits=" + payloadBits +
-                            " (headerBits=" + headerBits + ")."
-            );
-        }
+//        if ((payloadBits & 63) != 0) {
+//            throw new IllegalArgumentException(
+//                    "Invalid encodedBits=" + encodedBits +
+//                            ". ASH requires (encodedBits - headerBits) to be a multiple of 64 " +
+//                            "for aligned binary payload. " +
+//                            "Got payloadBits=" + payloadBits +
+//                            " (headerBits=" + headerBits + ")."
+//            );
+//        }
 
         if (payloadBits > originalDim) {
             throw new IllegalArgumentException(

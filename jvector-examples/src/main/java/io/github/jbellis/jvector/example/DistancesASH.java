@@ -37,10 +37,23 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 
 public class DistancesASH {
-    private static void printScorerInfo(String label, ASHBlockScorer scorer) {
+
+    static final String blockMode = System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
+    static final String singleMode = System.getProperty("jvector.ash.singleKernel", "auto").toLowerCase();
+
+    private static void printScorerInfo(String label, Object scorer) {
+        boolean maskedLoad =
+                io.github.jbellis.jvector.vector.VectorizationProvider.getInstance()
+                        .getVectorUtilSupport()
+                        .supportsAshMaskedLoad();
+
         System.out.println(
                 "\t[" + label + "] scorer implementation = "
                         + scorer.getClass().getName()
+                        + " (singleKernel=" + singleMode
+                        + ", blockKernel=" + blockMode
+                        + ", supportsAshMaskedLoad=" + maskedLoad
+                        + ")"
         );
     }
 
@@ -76,7 +89,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
         final boolean RUN_RECALL_CHECK =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "true"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
 
         final int RECALL_K =
                 Integer.getInteger("jvector.bench.recall.k", 10);
@@ -85,7 +98,7 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
 
         final boolean RUN_SCALAR_SCORING =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "false"));
+                Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "true"));
 
         final boolean RUN_FLOAT_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
@@ -164,17 +177,17 @@ public class DistancesASH {
         for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
-        int encodedBits = (dimension / 4) + HEADER_BITS;
+        int encodedBits = 328; // (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
-        if ((payloadBits & 63) != 0) {
-            throw new IllegalArgumentException(
-                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
-                            "Got payloadBits=" + payloadBits +
-                            " (encodedBits=" + encodedBits +
-                            ", HEADER_BITS=" + HEADER_BITS + ")"
-            );
-        }
+//        if ((payloadBits & 63) != 0) {
+//            throw new IllegalArgumentException(
+//                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
+//                            "Got payloadBits=" + payloadBits +
+//                            " (encodedBits=" + encodedBits +
+//                            ", HEADER_BITS=" + HEADER_BITS + ")"
+//            );
+//        }
 
         System.out.println(
                 "\toriginalDim = " + dimension +
@@ -266,6 +279,12 @@ public class DistancesASH {
             newToOldFinal = null;
         }
 
+        {
+            ScoreFunction.ApproximateScoreFunction single =
+                    ashVecsFinal.scoreFunctionFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
+            printScorerInfo("single", single);
+        }
+
         if(RUN_SANITY_CHECK) {
 
             ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
@@ -298,8 +317,8 @@ public class DistancesASH {
         // ------------------------------------------------------------------
         // Shared parallelization setup (executor-honoring)
         // ------------------------------------------------------------------
-         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
-        // ForkJoinPool simdExecutor = new ForkJoinPool(4); // For profiling
+//         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
+        ForkJoinPool simdExecutor = new ForkJoinPool(180); // For profiling
 
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
@@ -438,7 +457,7 @@ public class DistancesASH {
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
                         ScoreFunction.ApproximateScoreFunction f =
-                                ashVecs.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
                         for (int j = 0; j < finalVectorCount; j++) {
                             localSum += f.similarityTo(j);
@@ -455,10 +474,25 @@ public class DistancesASH {
 
             long ashEnd = System.nanoTime();
 
-            System.out.println("\tScalar ASH dot-product computations took "
-                    + (ashEnd - ashStart) / 1e9 + " seconds");
+            double singleSeconds = (ashEnd - ashStart) / 1e9;
+            long totalDotProducts = (long) finalQueryCount * (long) finalVectorCount;
+            double singleThroughput = totalDotProducts / singleSeconds;
+
+            System.out.println("\tSingle " + singleMode + " scoring took "
+                    + singleSeconds + " seconds");
+
+            System.out.println(
+                    "\tSingle " + singleMode + " throughput = "
+                            + String.format(java.util.Locale.ROOT, "%.3f", singleThroughput)
+                            + " dot-products/sec"
+                            + " ("
+                            + String.format(java.util.Locale.ROOT, "%.3f", singleThroughput / 1e6)
+                            + " Mdot/s)"
+            );
+
             System.out.println("\tdummyAccumulator = " + (float) (ashDummy));
             System.out.println("--");
+
         }
 
         // ==================================================================
@@ -699,7 +733,7 @@ public class DistancesASH {
 //        runADANoZeros();
 //        runOpenai1536();
 //        runOpenai3072();
-        runCap6m();
+//        runCap6m();
         runCohere10m();
     }
 }

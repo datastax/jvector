@@ -57,6 +57,19 @@ public class ASHVectors implements CompressedVectors {
     final AsymmetricHashing.QuantizedVector[] compressedVectors;
     final ASHScorer scorer;
 
+    enum AshSingleKernel {
+        AUTO,
+        SCALAR,
+        SIMD;
+
+        static AshSingleKernel fromProperty() {
+            String v = System.getProperty("jvector.ash.singleKernel", "auto").toLowerCase();
+            if ("scalar".equals(v)) return SCALAR;
+            if ("simd".equals(v))   return SIMD;
+            return AUTO;
+        }
+    }
+
     enum AshBlockKernel {
         AUTO,
         SCALAR,
@@ -83,6 +96,10 @@ public class ASHVectors implements CompressedVectors {
     private int packedBlockSize = -1;
     private long[] packedBits = null;
     private int packedBlockCount = 0;
+
+    // Flat row-major bits for single-vector SIMD (built lazily)
+    // Layout: [v0_w0, v0_w1, ... v0_wN, v1_w0, ...]
+    private volatile long[] flatPackedVectors = null;
 
     /**
      * Initialize ASHVectors with an array of ASH-compressed vectors.
@@ -192,12 +209,171 @@ public class ASHVectors implements CompressedVectors {
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
 
-        // Scorer follows ASH paper (single landmark, DOT_PRODUCT only)
-        final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
+        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
+            throw new UnsupportedOperationException("ASH scorer supports DOT_PRODUCT only");
+        }
 
-        // Wrap QuantizedVector scorer into ordinal-based score function
+        final AshSingleKernel kernel = AshSingleKernel.fromProperty();
+        final VectorUtilSupport vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
+
+        // Scalar forced
+        if (kernel == AshSingleKernel.SCALAR) {
+            final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
+            return node -> f.similarityTo(compressedVectors[node]);
+        }
+
+        // AUTO/SIMD: use SIMD scorer only when backend supports masked-load kernel;
+        // otherwise fall back to the existing scalar behavior.
+        if ((kernel == AshSingleKernel.SIMD || kernel == AshSingleKernel.AUTO)
+                && vecUtil.supportsAshMaskedLoad()) {
+            final QueryPrecompute qp = precomputeQuery(query);
+            return new SimdASHScoreFunction(qp);
+        }
+
+        // Fallback: existing scalar behavior (stable reference)
+        final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
         return node -> f.similarityTo(compressedVectors[node]);
     }
+
+    // ============================================================================
+    // ASH single vector scoring (Optimized Zero-Copy)
+    // ============================================================================
+
+    private final class SimdASHScoreFunction implements ScoreFunction.ApproximateScoreFunction {
+        private final QueryPrecompute qp;
+        private final VectorUtilSupport vecUtil;
+
+        // Cached Arrays (Zero-Copy)
+        private final float[] tildeQPool;
+        private final long[] allPackedVectors;
+
+        private final int d;
+        private final int words;
+
+        SimdASHScoreFunction(QueryPrecompute qp) {
+            this.qp = qp;
+            this.vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
+            this.d = qp.d;
+            this.words = ASHVectors.this.words; // access outer class field
+
+            // 1. Grab direct reference to the pool
+            this.tildeQPool = qp.tildeQPool;
+
+            // 2. Trigger/Get the flat array from the outer class
+            this.allPackedVectors = getFlatPackedVectors();
+        }
+
+        @Override
+        public float similarityTo(int node2) {
+
+            final int c = landmarks[node2] & 0xFF;
+            final int qOffset = c * d;
+            final int packedBase = node2 * words;
+
+            // 2. Run existing optimized v4 Kernel
+            final float maskedAdd = vecUtil.ashMaskedAdd_512(
+                    tildeQPool,
+                    qOffset,
+                    allPackedVectors,
+                    packedBase,
+                    d,
+                    words
+            );
+
+            return scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c]) + qp.dotQMu[c] + offsets[node2];
+        }
+
+//        @Override
+//        public float similarityTo(int node2) {
+//            // A. Identify Landmark (Supports C >= 1)
+//            // 'landmarks' is a field in the outer ASHVectors class
+//            final int c = landmarks[node2] & 0xFF;
+//            final int qOffset = c * d;
+//
+//            // B. Identify Vector Location in the flat array
+//            // Integer multiply is significantly faster than object pointer chasing
+//            final int packedBase = node2 * words;
+//
+//            // C. Run Kernel (Zero-Copy)
+//            // Note: Ensure your VectorUtilSupport has the 'ashMaskedAddFlat' method signature
+//            final float maskedAdd = vecUtil.ashMaskedAddFlatOptimized(
+//                    tildeQPool,
+//                    qOffset,
+//                    allPackedVectors,
+//                    packedBase,
+//                    d,
+//                    words
+//            );
+//
+//            // D. Linear Combination
+//            // scales[] and offsets[] are fields in the outer ASHVectors class
+//            return scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c])
+//                    + qp.dotQMu[c]
+//                    + offsets[node2];
+//        }
+
+        @Override
+        public boolean isExact() {
+            return false;
+        }
+    }
+//
+//    // ============================================================================
+//    // ASH single vector scoring
+//    // ============================================================================
+//
+//    private final class SimdASHScoreFunction implements ScoreFunction.ApproximateScoreFunction {
+//        private final QueryPrecompute qp;
+//        private final VectorUtilSupport vecUtil;
+//
+//        private final int d;
+//        private final int words;
+//
+//        // Scratch for current landmark
+//        private final float[] tildeQScratch;
+//        private int lastC = -1;
+//
+//        SimdASHScoreFunction(QueryPrecompute qp) {
+//            this.qp = qp;
+//            this.vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
+//            this.d = qp.d;
+//            this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
+//            this.tildeQScratch = new float[d];
+//        }
+//
+//        @Override
+//        public float similarityTo(int node2) {
+//            final int c = landmarks[node2] & 0xFF;
+//            final int base = c * d;
+//
+//            if (c != lastC) {
+//                System.arraycopy(qp.tildeQPool, base, tildeQScratch, 0, d);
+//                lastC = c;
+//            }
+//
+//            // by-vector bits
+//            final long[] bits = compressedVectors[node2].binaryVector;
+//
+//            // Route masked add through VectorUtilSupport.
+//            // Default impl is scalar; Panama can override for SIMD.
+//            final float maskedAdd = vecUtil.ashMaskedAddAllWords(
+//                    tildeQScratch,
+//                    d,
+//                    bits,
+//                    0,      // packedBase (by-vector, so base is 0)
+//                    words
+//            );
+//
+//            return scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c])
+//                    + qp.dotQMu[c]
+//                    + offsets[node2];
+//        }
+//
+//        @Override
+//        public boolean isExact() {
+//            return false;
+//        }
+//    }
 
     // ============================================================================
     // ASH block-oriented scoring
@@ -216,12 +392,12 @@ public class ASHVectors implements CompressedVectors {
      * No block-level optimizations are applied.
      * </p>
      */
-    private static final class ScalarASHBlockScorer implements ASHBlockScorer {
+    private static final class LegacyASHBlockScorer implements ASHBlockScorer {
 
         private final ASHScorer.ASHScoreFunction scorer;
         private final AsymmetricHashing.QuantizedVector[] vectors;
 
-        ScalarASHBlockScorer(
+        LegacyASHBlockScorer(
                 ASHScorer.ASHScoreFunction scorer,
                 AsymmetricHashing.QuantizedVector[] vectors) {
             this.scorer = scorer;
@@ -268,7 +444,7 @@ public class ASHVectors implements CompressedVectors {
         ASHScorer.ASHScoreFunction f =
                 scorer.scoreFunctionFor(query, similarityFunction);
 
-        return new ScalarASHBlockScorer(f, compressedVectors);
+        return new LegacyASHBlockScorer(f, compressedVectors);
     }
 
     /**
@@ -319,7 +495,7 @@ public class ASHVectors implements CompressedVectors {
         // Forced scalar path (portable register-accumulator)
         // ------------------------------------------------------------
         if (kernel == AshBlockKernel.SCALAR) {
-            return new BlockScalarASHBlockScorer(
+            return new ScalarASHBlockScorer(
                     compressedVectors,
                     scales,
                     offsets,
@@ -336,7 +512,7 @@ public class ASHVectors implements CompressedVectors {
         // or falls back to scalar internally.
         ensurePackedBits(blockSize);
 
-        return new BlockSimdASHBlockScorer(
+        return new SimdASHBlockScorer(
                 compressedVectors,
                 scales,
                 offsets,
@@ -375,6 +551,39 @@ public class ASHVectors implements CompressedVectors {
         }
     }
 
+    /**
+     * Returns a monolithic long[] containing all quantized bits.
+     * <p>
+     * This method is thread-safe and computes the view lazily.
+     * Use this for single-vector SIMD scoring to avoid pointer chasing.
+     * </p>
+     */
+    public long[] getFlatPackedVectors() {
+        if (flatPackedVectors == null) {
+            synchronized (this) {
+                if (flatPackedVectors == null) {
+                    flatPackedVectors = createFlatPackedVectors();
+                }
+            }
+        }
+        return flatPackedVectors;
+    }
+
+    private long[] createFlatPackedVectors() {
+        final int n = compressedVectors.length;
+        if (n == 0) return new long[0];
+
+        // words is already a class field
+        long[] flat = new long[n * words];
+
+        for (int i = 0; i < n; i++) {
+            var v = compressedVectors[i];
+            if (v != null && v.binaryVector != null) {
+                System.arraycopy(v.binaryVector, 0, flat, i * words, words);
+            }
+        }
+        return flat;
+    }
 
     /**
      * Block-oriented ASH scorer using register-local accumulation.
@@ -385,7 +594,7 @@ public class ASHVectors implements CompressedVectors {
      * into scalar registers.
      * </p>
      */
-    private static final class BlockScalarASHBlockScorer implements ASHBlockScorer {
+    private static final class ScalarASHBlockScorer implements ASHBlockScorer {
 
         private final AsymmetricHashing.QuantizedVector[] vectors;
         private final float[] scales;
@@ -398,7 +607,7 @@ public class ASHVectors implements CompressedVectors {
         private final int d;
         private final int words;
 
-        BlockScalarASHBlockScorer(
+        ScalarASHBlockScorer(
                 AsymmetricHashing.QuantizedVector[] vectors,
                 float[] scales,
                 float[] offsets,
@@ -478,7 +687,7 @@ public class ASHVectors implements CompressedVectors {
      * avoiding per-lane memory traffic and restoring performance.
      * </p>
      */
-    private static final class BlockSimdASHBlockScorer implements ASHBlockScorer {
+    private static final class SimdASHBlockScorer implements ASHBlockScorer {
 
         private final AsymmetricHashing.QuantizedVector[] vectors;
         private final float[] scales;
@@ -506,7 +715,7 @@ public class ASHVectors implements CompressedVectors {
         private static final java.util.concurrent.atomic.AtomicBoolean PRINTED_MIXED_ONCE =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        BlockSimdASHBlockScorer(
+        SimdASHBlockScorer(
                 AsymmetricHashing.QuantizedVector[] vectors,
                 float[] scales,
                 float[] offsets,

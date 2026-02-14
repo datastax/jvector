@@ -140,8 +140,12 @@ public class MultiFileDatasource {
                 DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
                 DATASET_HASH + "/cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
         put("cap-6M", new MultiFileDatasource("cap-6M",
-                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
-                DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
-                DATASET_HASH + "/cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
+                "cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
+                "cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+                "cap-6m/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
+        put("cohere-10M", new MultiFileDatasource("cohere-10M",
+                "cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs",
+                "cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs",
+                "cohere-10m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs"));
     }};
 }
