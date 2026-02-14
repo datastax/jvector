@@ -298,6 +298,15 @@ public interface VectorUtilSupport {
     return maskedAdd;
   }
 
+  // In VectorUtilSupport interface
+  float ashMaskedAddFlat(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
+  // In VectorUtilSupport interface
+  float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
+  // In VectorUtilSupport interface
+  float ashMaskedAddFlat_dense(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
   /**
    * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
    * For each lane in [0, blockLen), writes:

@@ -547,4 +547,102 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
     return squaredSum;
   }
 
+  @Override
+  public float ashMaskedAddFlat(float[] tildeQ,
+                                int qOffset,
+                                long[] allPackedVectors,
+                                int packedBase,
+                                int d,
+                                int words) {
+    float sum = 0.0f;
+    int baseDim = 0;
+
+    for (int w = 0; w < words; w++) {
+      long word = allPackedVectors[packedBase + w];
+
+      // Standard bit-twiddling iteration (iterate only set bits)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+
+        // Bounds check required for the last word
+        if (idx < d) {
+          sum += tildeQ[qOffset + idx];
+        }
+
+        // Clear the lowest set bit
+        word &= (word - 1);
+      }
+
+      baseDim += 64;
+    }
+    return sum;
+  }
+
+
+  @Override
+  public float ashMaskedAddFlat_dense(float[] tildeQ,
+                                         int qOffset,
+                                         long[] allPackedVectors,
+                                         int packedBase,
+                                         int d,
+                                         int words) {
+    float sum = 0.0f;
+    int baseDim = 0;
+
+    for (int w = 0; w < words; w++) {
+      long word = allPackedVectors[packedBase + w];
+
+      // Standard bit-twiddling iteration (iterate only set bits)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+
+        // Bounds check required for the last word
+        if (idx < d) {
+          sum += tildeQ[qOffset + idx];
+        }
+
+        // Clear the lowest set bit
+        word &= (word - 1);
+      }
+
+      baseDim += 64;
+    }
+    return sum;
+  }
+
+  @Override
+  public float ashMaskedAdd_512(float[] tildeQ,
+                                         int qOffset,
+                                         long[] allPackedVectors,
+                                         int packedBase,
+                                         int d,
+                                         int words) {
+    float sum = 0.0f;
+    int baseDim = 0;
+
+    for (int w = 0; w < words; w++) {
+      long word = allPackedVectors[packedBase + w];
+
+      // Standard bit-twiddling iteration (iterate only set bits)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+
+        // Bounds check required for the last word
+        if (idx < d) {
+          sum += tildeQ[qOffset + idx];
+        }
+
+        // Clear the lowest set bit
+        word &= (word - 1);
+      }
+
+      baseDim += 64;
+    }
+    return sum;
+  }
+
+
 }

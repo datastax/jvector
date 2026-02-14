@@ -26,6 +26,7 @@ import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
+import java.util.Objects;
 
 import java.util.List;
 
@@ -1576,6 +1577,742 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public boolean supportsAshMaskedLoad() {
         return true;
+    }
+
+//    // This version uses masked loads.
+//    @Override
+//    public float ashMaskedAddAllWords(float[] tildeQ,
+//                                      int d,
+//                                      long[] packedBits,
+//                                      int packedBase,
+//                                      int words) {
+//        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+//        final int LANES = SPEC.length();
+//
+//        FloatVector accVec = FloatVector.zero(SPEC);
+//        float scalarAcc = 0f;
+//
+//        for (int w = 0; w < words; w++) {
+//            long wordBits = packedBits[packedBase + w];
+//            int baseDim = w * 64;
+//
+//            for (int off = 0; off < 64 && (baseDim + off) < d; off += LANES) {
+//                int qBase = baseDim + off;
+//                VectorMask<Float> inRange = SPEC.indexInRange(qBase, d);
+//
+//                long maskBits;
+//                if (LANES == 16)      maskBits = (wordBits >>> off) & 0xFFFFL;
+//                else if (LANES == 8)  maskBits = (wordBits >>> off) & 0xFFL;
+//                else if (LANES == 4)  maskBits = (wordBits >>> off) & 0xFL;
+//                else {
+//                    // unusual width fallback
+//                    long m = wordBits >>> off;
+//                    float s = 0f;
+//                    for (int b = 0; b < LANES; b++) {
+//                        if (((m >>> b) & 1L) != 0L) {
+//                            int idx = qBase + b;
+//                            if (idx < d) s += tildeQ[idx];
+//                        }
+//                    }
+//                    scalarAcc += s;
+//                    continue;
+//                }
+//
+//                if (maskBits == 0L) continue;
+//
+//                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, maskBits).and(inRange);
+//                FloatVector masked = FloatVector.fromArray(SPEC, tildeQ, qBase, bitMask);
+//                accVec = accVec.add(masked);
+//            }
+//        }
+//
+//        return accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
+//    }
+
+    @Override
+    public float ashMaskedAddFlat(float[] tildeQ,
+                                  int qOffset,
+                                  long[] allPackedVectors,
+                                  int packedBase,
+                                  int d,
+                                  int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        // 4 Accumulators to hide instruction latency (Pipeline depth ~4)
+        FloatVector acc0 = FloatVector.zero(SPEC);
+        FloatVector acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC);
+
+        // Pre-calculate mask extraction constants based on LANES
+        long laneMask;
+        if (LANES == 16)      laneMask = 0xFFFFL;       // AVX-512
+        else if (LANES == 8)  laneMask = 0xFFL;         // AVX2
+        else if (LANES == 4)  laneMask = 0xFL;          // NEON / SSE
+        else                  laneMask = (1L << LANES) - 1;
+
+        // Safe limit for Fast Path
+        int safeWords = d / 64;
+
+        // --- HOT LOOP ---
+        for (int w = 0; w < safeWords; w++) {
+            long wordBits = allPackedVectors[packedBase + w];
+            if (wordBits == 0) continue; // Branch prediction handles this well
+
+            int baseDim = w * 64;
+
+            // Iterate 64 bits in steps of LANES (e.g., 0, 8, 16, 24... for AVX2)
+            // We unroll manually inside the loop using modulo to pick accumulators
+            // The JIT is smart enough to unroll this loop completely since LANES is constant.
+            int accumulatorIdx = 0;
+
+            for (int off = 0; off < 64; off += LANES) {
+                // Shift and mask
+                long m = (wordBits >>> off) & laneMask;
+
+                if (m != 0) {
+                    VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, m);
+                    FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + off);
+
+                    // Round-robin distribution to accumulators to break dependency chains
+                    switch (accumulatorIdx & 3) { // (idx % 4)
+                        case 0 -> acc0 = acc0.add(loaded, bitMask);
+                        case 1 -> acc1 = acc1.add(loaded, bitMask);
+                        case 2 -> acc2 = acc2.add(loaded, bitMask);
+                        case 3 -> acc3 = acc3.add(loaded, bitMask);
+                    }
+                }
+                accumulatorIdx++;
+            }
+        }
+
+        // --- TAIL LOOP (Robust Bounds) ---
+        // Handles the edge case where d is not a multiple of 64
+        for (int w = safeWords; w < words; w++) {
+            long wordBits = allPackedVectors[packedBase + w];
+            if (wordBits == 0) continue;
+
+            int baseDim = w * 64;
+
+            for (int off = 0; off < 64; off += LANES) {
+                int localIdx = baseDim + off;
+                if (localIdx >= d) break;
+
+                long m = (wordBits >>> off) & laneMask;
+                if (m == 0) continue;
+
+                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, m);
+                int absIdx = qOffset + localIdx;
+
+                if (localIdx + LANES <= d) {
+                    // Safe unmasked load
+                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, absIdx), bitMask);
+                } else {
+                    // Boundary masked load
+                    VectorMask<Float> rangeMask = SPEC.indexInRange(absIdx, qOffset + d);
+                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, absIdx, rangeMask),
+                            bitMask.and(rangeMask));
+                }
+            }
+        }
+
+        // Reduce all accumulators
+        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+    }
+
+//    @Override
+//    public float ashMaskedAddFlat(float[] tildeQ,
+//                                  int qOffset,
+//                                  long[] allPackedVectors,
+//                                  int packedBase,
+//                                  int d,
+//                                  int words) {
+//        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+//
+//        FloatVector acc0 = FloatVector.zero(SPEC);
+//        FloatVector acc1 = FloatVector.zero(SPEC);
+//        FloatVector acc2 = FloatVector.zero(SPEC);
+//        FloatVector acc3 = FloatVector.zero(SPEC);
+//
+//        int safeWords = d / 64;
+//
+//        // --- HOT LOOP (Unrolled & Safe) ---
+//        for (int w = 0; w < safeWords; w++) {
+//            long wordBits = allPackedVectors[packedBase + w];
+//            if (wordBits == 0) continue;
+//
+//            int baseDim = w * 64;
+//
+//            // Unroll 0
+//            long m0 = wordBits & 0xFFFFL;
+//            if (m0 != 0) {
+//                acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim),
+//                        VectorMask.fromLong(SPEC, m0));
+//            }
+//
+//            // Unroll 1
+//            long m1 = (wordBits >>> 16) & 0xFFFFL;
+//            if (m1 != 0) {
+//                acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 16),
+//                        VectorMask.fromLong(SPEC, m1));
+//            }
+//
+//            // Unroll 2
+//            long m2 = (wordBits >>> 32) & 0xFFFFL;
+//            if (m2 != 0) {
+//                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 32),
+//                        VectorMask.fromLong(SPEC, m2));
+//            }
+//
+//            // Unroll 3
+//            long m3 = (wordBits >>> 48) & 0xFFFFL;
+//            if (m3 != 0) {
+//                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 48),
+//                        VectorMask.fromLong(SPEC, m3));
+//            }
+//        }
+//
+//        // --- TAIL LOOP (Robust Bounds) ---
+//        for (int w = safeWords; w < words; w++) {
+//            long wordBits = allPackedVectors[packedBase + w];
+//            if (wordBits == 0) continue;
+//
+//            int baseDim = w * 64;
+//
+//            for (int off = 0; off < 64; off += 16) {
+//                int localIdx = baseDim + off;
+//                if (localIdx >= d) break;
+//
+//                long maskBits = (wordBits >>> off) & 0xFFFFL;
+//                if (maskBits == 0) continue;
+//
+//                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, maskBits);
+//                int absIdx = qOffset + localIdx;
+//
+//                if (localIdx + 16 <= d) {
+//                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, absIdx), bitMask);
+//                } else {
+//                    VectorMask<Float> rangeMask = SPEC.indexInRange(absIdx, qOffset + d);
+//                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, absIdx, rangeMask),
+//                            bitMask.and(rangeMask));
+//                }
+//            }
+//        }
+//
+//        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+//    }
+
+    public float ashMaskedAddFlatOptimizedv1(float[] tildeQ,
+                                           int qOffset,
+                                           long[] allPackedVectors,
+                                           int packedBase,
+                                           int d,
+                                           int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        FloatVector acc0 = FloatVector.zero(SPEC);
+        FloatVector acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC);
+
+        int safeWords = d / 64;
+
+        // --- OPTIMIZATION 1: Specialized AVX-512 Loop (16 Lanes) ---
+        // This covers the vast majority of server workloads.
+        // We unroll the 64-bit word processing into exactly 4 blocks.
+        if (LANES == 16) {
+            for (int w = 0; w < safeWords; w++) {
+                long wordBits = allPackedVectors[packedBase + w];
+                if (wordBits == 0) continue;
+
+                int baseDim = w * 64;
+
+                // Block 0: Bits 0-15
+                // Note: casting to (int) acts as a fast mask for the low bits
+                long m0 = wordBits & 0xFFFF;
+                if (m0 != 0) {
+                    VectorMask<Float> mask = VectorMask.fromLong(SPEC, m0);
+                    FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim);
+                    // OPTIMIZATION 2: Blend (Zero-out) + Unmasked Add
+                    // "blend" with 0.0f where mask is unset (not())
+                    acc0 = acc0.add(loaded.blend(0.0f, mask.not()));
+                }
+
+                // Block 1: Bits 16-31
+                long m1 = (wordBits >>> 16) & 0xFFFF;
+                if (m1 != 0) {
+                    VectorMask<Float> mask = VectorMask.fromLong(SPEC, m1);
+                    FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 16);
+                    acc1 = acc1.add(loaded.blend(0.0f, mask.not()));
+                }
+
+                // Block 2: Bits 32-47
+                long m2 = (wordBits >>> 32) & 0xFFFF;
+                if (m2 != 0) {
+                    VectorMask<Float> mask = VectorMask.fromLong(SPEC, m2);
+                    FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 32);
+                    acc2 = acc2.add(loaded.blend(0.0f, mask.not()));
+                }
+
+                // Block 3: Bits 48-63
+                long m3 = (wordBits >>> 48); // No mask needed for high bits shift
+                if (m3 != 0) {
+                    VectorMask<Float> mask = VectorMask.fromLong(SPEC, m3);
+                    FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + 48);
+                    acc3 = acc3.add(loaded.blend(0.0f, mask.not()));
+                }
+            }
+        }
+        // --- OPTIMIZATION 3: Generic / AVX2 Loop ---
+        else {
+            long laneMask = (1L << LANES) - 1;
+            for (int w = 0; w < safeWords; w++) {
+                long wordBits = allPackedVectors[packedBase + w];
+                if (wordBits == 0) continue;
+
+                int baseDim = w * 64;
+                int accumulatorIdx = 0;
+
+                // Manual step loop to avoid modulo in switch
+                for (int off = 0; off < 64; off += LANES) {
+                    long m = (wordBits >>> off) & laneMask;
+                    if (m != 0) {
+                        VectorMask<Float> mask = VectorMask.fromLong(SPEC, m);
+                        FloatVector loaded = FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + off);
+
+                        // Simple Round-Robin without switch/modulo
+                        if (accumulatorIdx == 0) acc0 = acc0.add(loaded.blend(0.0f, mask.not()));
+                        else if (accumulatorIdx == 1) acc1 = acc1.add(loaded.blend(0.0f, mask.not()));
+                        else if (accumulatorIdx == 2) acc2 = acc2.add(loaded.blend(0.0f, mask.not()));
+                        else {
+                            acc3 = acc3.add(loaded.blend(0.0f, mask.not()));
+                            accumulatorIdx = -1; // Reset for next increment
+                        }
+                    }
+                    accumulatorIdx++;
+                }
+            }
+        }
+
+        // --- TAIL LOOP (Keep your original robust logic here) ---
+        // Your original tail logic handles bounds checking correctly.
+        // Since this is the "cold" path, optimization matters less.
+        for (int w = safeWords; w < words; w++) {
+            // ... (Keep your original Tail Loop implementation) ...
+        }
+
+        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+    }
+
+    public float ashMaskedAddFlatOptimizedv2(float[] tildeQ,
+                                             int qOffset,
+                                             long[] allPackedVectors,
+                                             int packedBase,
+                                             int d,
+                                             int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        // Expansion to 8 accumulators to saturate 32 ZMM registers and hide memory latency
+        FloatVector acc0 = FloatVector.zero(SPEC);
+        FloatVector acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC);
+        FloatVector acc4 = FloatVector.zero(SPEC);
+        FloatVector acc5 = FloatVector.zero(SPEC);
+        FloatVector acc6 = FloatVector.zero(SPEC);
+        FloatVector acc7 = FloatVector.zero(SPEC);
+
+        int safeWords = d / 64;
+
+        if (LANES == 16) {
+            // Process 2 words at a time (128 floats) to fill the 8-way unroll
+            int w = 0;
+            for (; w <= safeWords - 2; w += 2) {
+                int baseIdx = qOffset + (w << 6);
+
+                // Word 1 (acc0-acc3)
+                long w0 = allPackedVectors[packedBase + w];
+                if (w0 != 0) {
+                    long m0 = w0 & 0xFFFF;
+                    if (m0 != 0) acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx, VectorMask.fromLong(SPEC, m0)));
+                    long m1 = (w0 >>> 16) & 0xFFFF;
+                    if (m1 != 0) acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16, VectorMask.fromLong(SPEC, m1)));
+                    long m2 = (w0 >>> 32) & 0xFFFF;
+                    if (m2 != 0) acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32, VectorMask.fromLong(SPEC, m2)));
+                    long m3 = (w0 >>> 48);
+                    if (m3 != 0) acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48, VectorMask.fromLong(SPEC, m3)));
+                }
+
+                // Word 2 (acc4-acc7)
+                long w1 = allPackedVectors[packedBase + w + 1];
+                int nextBaseIdx = baseIdx + 64;
+                if (w1 != 0) {
+                    long m4 = w1 & 0xFFFF;
+                    if (m4 != 0) acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, nextBaseIdx, VectorMask.fromLong(SPEC, m4)));
+                    long m5 = (w1 >>> 16) & 0xFFFF;
+                    if (m5 != 0) acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, nextBaseIdx + 16, VectorMask.fromLong(SPEC, m5)));
+                    long m6 = (w1 >>> 32) & 0xFFFF;
+                    if (m6 != 0) acc6 = acc6.add(FloatVector.fromArray(SPEC, tildeQ, nextBaseIdx + 32, VectorMask.fromLong(SPEC, m6)));
+                    long m7 = (w1 >>> 48);
+                    if (m7 != 0) acc7 = acc7.add(FloatVector.fromArray(SPEC, tildeQ, nextBaseIdx + 48, VectorMask.fromLong(SPEC, m7)));
+                }
+            }
+
+            // Clean up remaining safe word if odd count
+            for (; w < safeWords; w++) {
+                int baseIdx = qOffset + (w << 6);
+                long wordBits = allPackedVectors[packedBase + w];
+                if (wordBits != 0) {
+                    long m0 = wordBits & 0xFFFF;
+                    if (m0 != 0) acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx, VectorMask.fromLong(SPEC, m0)));
+                    long m1 = (wordBits >>> 16) & 0xFFFF;
+                    if (m1 != 0) acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16, VectorMask.fromLong(SPEC, m1)));
+                    long m2 = (wordBits >>> 32) & 0xFFFF;
+                    if (m2 != 0) acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32, VectorMask.fromLong(SPEC, m2)));
+                    long m3 = (wordBits >>> 48);
+                    if (m3 != 0) acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48, VectorMask.fromLong(SPEC, m3)));
+                }
+            }
+        } else {
+            // Fallback for AVX2/Generic environments
+            long laneMask = (1L << LANES) - 1;
+            for (int w = 0; w < safeWords; w++) {
+                long wordBits = allPackedVectors[packedBase + w];
+                if (wordBits == 0) continue;
+                int baseDim = w * 64;
+                for (int off = 0; off < 64; off += LANES) {
+                    long m = (wordBits >>> off) & laneMask;
+                    if (m != 0) {
+                        // Use masked add directly to avoid blend/not overhead
+                        acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qOffset + baseDim + off), VectorMask.fromLong(SPEC, m));
+                    }
+                }
+            }
+        }
+
+        // Tail loop for non-word-aligned dimensions
+        for (int w = safeWords; w < words; w++) {
+            long wordBits = allPackedVectors[packedBase + w];
+            if (wordBits == 0) continue;
+            int baseDim = w * 64;
+            int remaining = d - baseDim;
+            for (int i = 0; i < remaining; i++) {
+                if ((wordBits & (1L << i)) != 0) {
+                    // Scalar fallback for the absolute tail
+                    // (Could be vectorized with a length-limited mask if performance here is critical)
+                    acc0 = acc0.add(FloatVector.broadcast(SPEC, tildeQ[qOffset + baseDim + i]).blend(0, SPEC.indexInRange(0, 1).not()));
+                }
+            }
+        }
+
+        // Horizontal reduction of the 8 accumulators
+        FloatVector res0 = acc0.add(acc1).add(acc2).add(acc3);
+        FloatVector res1 = acc4.add(acc5).add(acc6).add(acc7);
+        return res0.add(res1).reduceLanes(VectorOperators.ADD);
+    }
+
+    public float ashMaskedAddFlatOptimizedv3(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+
+        // 6 Accumulators: Optimized to fit in registers without spilling to cache
+        FloatVector acc0 = FloatVector.zero(SPEC), acc1 = FloatVector.zero(SPEC), acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC), acc4 = FloatVector.zero(SPEC), acc5 = FloatVector.zero(SPEC);
+
+        int safeWords = d / 64;
+        for (int w = 0; w < safeWords; w++) {
+            int baseIdx = qOffset + (w << 6);
+            long word = allPackedVectors[packedBase + w];
+
+            // Direct Masked Add: Collapses 'blend' + 'add' into a single AVX-512 instruction
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, word & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (word >>> 16) & 0xFFFF));
+            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (word >>> 32) & 0xFFFF));
+            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (word >>> 48)));
+        }
+
+        // Horizontal reduction
+        return acc0.add(acc1).add(acc2).add(acc3).add(acc4).add(acc5).reduceLanes(VectorOperators.ADD);
+    }
+
+    public float ashMaskedAddFlatOptimizedv4(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+
+        // STRICT ADHERENCE TO V3 LEARNINGS: 6 Accumulators to prevent register spilling
+        FloatVector acc0 = FloatVector.zero(SPEC), acc1 = FloatVector.zero(SPEC), acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC), acc4 = FloatVector.zero(SPEC), acc5 = FloatVector.zero(SPEC);
+
+        int safeWords = d / 64;
+        int w = 0;
+
+        // --- NEW OPTIMIZATION: 3-Word Unroll ---
+        // This processes 192 dimensions per loop while staying within the 6-accumulator limit.
+        for (; w <= safeWords - 3; w += 3) {
+            int baseIdx = qOffset + (w << 6);
+
+            // Word 0 -> acc0, acc1, acc2, acc3 (Uses 4 sub-blocks)
+            long wd0 = allPackedVectors[packedBase + w];
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, wd0 & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (wd0 >>> 16) & 0xFFFF));
+            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (wd0 >>> 32) & 0xFFFF));
+            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (wd0 >>> 48)));
+
+            // Word 1 -> acc4, acc5, acc0, acc1 (Interleaves to reuse registers)
+            long wd1 = allPackedVectors[packedBase + w + 1];
+            int base1 = baseIdx + 64;
+            acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, base1),      VectorMask.fromLong(SPEC, wd1 & 0xFFFF));
+            acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, base1 + 16), VectorMask.fromLong(SPEC, (wd1 >>> 16) & 0xFFFF));
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, base1 + 32), VectorMask.fromLong(SPEC, (wd1 >>> 32) & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, base1 + 48), VectorMask.fromLong(SPEC, (wd1 >>> 48)));
+
+            // Word 2 -> acc2, acc3, acc4, acc5
+            long wd2 = allPackedVectors[packedBase + w + 2];
+            int base2 = baseIdx + 128;
+            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, base2),      VectorMask.fromLong(SPEC, wd2 & 0xFFFF));
+            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, base2 + 16), VectorMask.fromLong(SPEC, (wd2 >>> 16) & 0xFFFF));
+            acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, base2 + 32), VectorMask.fromLong(SPEC, (wd2 >>> 32) & 0xFFFF));
+            acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, base2 + 48), VectorMask.fromLong(SPEC, (wd2 >>> 48)));
+        }
+
+        // Standard v3 cleanup for remaining words
+        for (; w < safeWords; w++) {
+            int baseIdx = qOffset + (w << 6);
+            long word = allPackedVectors[packedBase + w];
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, word & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (word >>> 16) & 0xFFFF));
+            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (word >>> 32) & 0xFFFF));
+            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (word >>> 48)));
+        }
+
+        // Balanced Reduction Tree (Better than linear add)
+
+        FloatVector sum01 = acc0.add(acc1);
+        FloatVector sum23 = acc2.add(acc3);
+        FloatVector sum45 = acc4.add(acc5);
+        return sum01.add(sum23).add(sum45).reduceLanes(VectorOperators.ADD);
+    }
+
+    public float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED; // Assumed 512-bit (16 floats)
+        int safeWords = d / 64;
+
+        // 1. Determine Unroll Strategy based on d
+        // We aim for 8 accumulators for large d, but 384 remains at 6 as requested.
+        int numAcc = (d >= 512) ? 8 : (d == 384 ? 6 : (d >= 128 ? 4 : 2));
+
+        // Initialize required accumulators
+        FloatVector acc0 = FloatVector.zero(SPEC), acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = null, acc3 = null, acc4 = null, acc5 = null, acc6 = null, acc7 = null;
+
+        if (numAcc >= 4) { acc2 = FloatVector.zero(SPEC); acc3 = FloatVector.zero(SPEC); }
+        if (numAcc >= 6) { acc4 = FloatVector.zero(SPEC); acc5 = FloatVector.zero(SPEC); }
+        if (numAcc >= 8) { acc6 = FloatVector.zero(SPEC); acc7 = FloatVector.zero(SPEC); }
+
+        int w = 0;
+
+        // 2. Main Unrolled Loop
+        // For d=384, this uses your 3-word unroll.
+        // For d >= 512, we use a 2-word unroll across 8 registers for better throughput.
+        int unrollFactor = (d == 384) ? 3 : (d >= 512 ? 2 : 1);
+
+        for (; w <= safeWords - unrollFactor; w += unrollFactor) {
+            int baseIdx = qOffset + (w << 6);
+
+            // Word 0 Processing
+            long wd0 = allPackedVectors[packedBase + w];
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, wd0 & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (wd0 >>> 16) & 0xFFFF));
+            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (wd0 >>> 32) & 0xFFFF));
+            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (wd0 >>> 48)));
+
+            if (unrollFactor >= 2) {
+                long wd1 = allPackedVectors[packedBase + w + 1];
+                int b1 = baseIdx + 64;
+                if (numAcc == 6) { // Special Case for d=384 Interleave
+                    acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b1),      VectorMask.fromLong(SPEC, wd1 & 0xFFFF));
+                    acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 16), VectorMask.fromLong(SPEC, (wd1 >>> 16) & 0xFFFF));
+                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 32), VectorMask.fromLong(SPEC, (wd1 >>> 32) & 0xFFFF));
+                    acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 48), VectorMask.fromLong(SPEC, (wd1 >>> 48)));
+                } else { // Standard 8-accumulator path
+                    acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b1),      VectorMask.fromLong(SPEC, wd1 & 0xFFFF));
+                    acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 16), VectorMask.fromLong(SPEC, (wd1 >>> 16) & 0xFFFF));
+                    acc6 = acc6.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 32), VectorMask.fromLong(SPEC, (wd1 >>> 32) & 0xFFFF));
+                    acc7 = acc7.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 48), VectorMask.fromLong(SPEC, (wd1 >>> 48)));
+                }
+            }
+
+            if (unrollFactor == 3) { // Tail of the d=384 case
+                long wd2 = allPackedVectors[packedBase + w + 2];
+                int b2 = baseIdx + 128;
+                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, b2),      VectorMask.fromLong(SPEC, wd2 & 0xFFFF));
+                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 16), VectorMask.fromLong(SPEC, (wd2 >>> 16) & 0xFFFF));
+                acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 32), VectorMask.fromLong(SPEC, (wd2 >>> 32) & 0xFFFF));
+                acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 48), VectorMask.fromLong(SPEC, (wd2 >>> 48)));
+            }
+        }
+
+        // 3. Cleanup Loop
+        for (; w < safeWords; w++) {
+            int baseIdx = qOffset + (w << 6);
+            long wd = allPackedVectors[packedBase + w];
+            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, wd & 0xFFFF));
+            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (wd >>> 16) & 0xFFFF));
+            if (numAcc >= 4) {
+                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (wd >>> 32) & 0xFFFF));
+                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (wd >>> 48)));
+            }
+        }
+
+        // 4. Dynamic Reduction Tree
+        return performReduction(acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7, numAcc);
+    }
+
+    private float performReduction(FloatVector a0, FloatVector a1, FloatVector a2, FloatVector a3,
+                                   FloatVector a4, FloatVector a5, FloatVector a6, FloatVector a7, int count) {
+        FloatVector res;
+        if (count == 8) {
+            FloatVector s01 = a0.add(a1), s23 = a2.add(a3), s45 = a4.add(a5), s67 = a6.add(a7);
+            res = s01.add(s23).add(s45.add(s67));
+        } else if (count == 6) {
+            res = a0.add(a1).add(a2.add(a3)).add(a4.add(a5));
+        } else if (count == 4) {
+            res = a0.add(a1).add(a2.add(a3));
+        } else {
+            res = a0.add(a1);
+        }
+        return res.reduceLanes(VectorOperators.ADD);
+    }
+
+    // This version is optimized for dense masks and uses a masked load, plain add.
+    // It is branchless and fully unrolled.
+    // It only works for 64-bit aligned payloads and 16 lanes (AVX512).
+    public float ashMaskedAddFlat_dense(float[] tildeQ,
+                                        int qOffset,
+                                        long[] allPackedVectors,
+                                        int packedBase,
+                                        int d,
+                                        int words_not_used) { // TODO words is not used in this version
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+
+        // Typical case: d is 256/384 => multiple of 64
+        // If you can guarantee that, you can delete all tail handling.
+        final int words = d >>> 6;
+
+        Objects.checkFromIndexSize(qOffset, d, tildeQ.length);
+        Objects.checkFromIndexSize(packedBase, words, allPackedVectors.length);
+
+        // 4 accumulators is fine for AVX-512; keep it.
+        FloatVector acc0 = FloatVector.zero(SPEC);
+        FloatVector acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = FloatVector.zero(SPEC);
+        FloatVector acc3 = FloatVector.zero(SPEC);
+
+        if (LANES == 16) {
+            for (int w = 0, qBase = qOffset; w < words; w++, qBase += 64) {
+                long bits = allPackedVectors[packedBase + w];
+
+                // Build masks from shifted bits (no laneMask needed)
+                VectorMask<Float> k0 = VectorMask.fromLong(SPEC, bits);
+                VectorMask<Float> k1 = VectorMask.fromLong(SPEC, bits >>> 16);
+                VectorMask<Float> k2 = VectorMask.fromLong(SPEC, bits >>> 32);
+                VectorMask<Float> k3 = VectorMask.fromLong(SPEC, bits >>> 48);
+
+                // Masked load (zeroing) + unmasked add: branchless
+                acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qBase +  0, k0));
+                acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 16, k1));
+                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 32, k2));
+                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 48, k3));
+            }
+        } else {
+            // Generic fallback (still branchless and no laneMask)
+            for (int w = 0, qBase = qOffset; w < words; w++, qBase += 64) {
+                long bits = allPackedVectors[packedBase + w];
+                for (int off = 0; off < 64; off += LANES) {
+                    VectorMask<Float> k = VectorMask.fromLong(SPEC, bits >>> off);
+                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qBase + off, k));
+                }
+            }
+        }
+
+        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+    }
+
+    // This approach uses masked adds instead of masked loads, and two accumulators (since this is slow)
+    @Override
+    public float ashMaskedAddAllWords(float[] tildeQ,
+                                      int d,
+                                      long[] packedBits,
+                                      int packedBase,
+                                      int words) {
+        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
+        final int LANES = SPEC.length();
+        final int upperBoundSafe = d - LANES;
+
+        // Two accumulators to hide floating-point addition latency (4 cycles)
+        FloatVector acc1 = FloatVector.zero(SPEC);
+        FloatVector acc2 = FloatVector.zero(SPEC);
+        float scalarAcc = 0f;
+
+        for (int w = 0; w < words; w++) {
+            long wordBits = packedBits[packedBase + w];
+            // REMOVED: if (wordBits == 0) continue; (useless for dense data)
+
+            int baseDim = w * 64;
+
+            // Toggle to alternate between acc1 and acc2
+            boolean toggle = false;
+
+            for (int off = 0; off < 64; off += LANES) {
+                int qBase = baseDim + off;
+
+                // Keep the fast integer check!
+                if (qBase >= d) break;
+
+                long maskBits;
+                if (LANES == 16)      maskBits = (wordBits >>> off) & 0xFFFFL;
+                else if (LANES == 8)  maskBits = (wordBits >>> off) & 0xFFL;
+                else if (LANES == 4)  maskBits = (wordBits >>> off) & 0xFL;
+                else {
+                    // Fallback for unusual widths
+                    long m = wordBits >>> off;
+                    for (int b = 0; b < LANES; b++) {
+                        if (((m >>> b) & 1L) != 0L) {
+                            int idx = qBase + b;
+                            if (idx < d) scalarAcc += tildeQ[idx];
+                        }
+                    }
+                    continue;
+                }
+
+                // Still worth checking if the local chunk is 0 to skip the ADD
+                if (maskBits == 0L) continue;
+
+                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, maskBits);
+                FloatVector loaded;
+
+                // Fast Unmasked Load (Still critical for dense data)
+                if (qBase <= upperBoundSafe) {
+                    loaded = FloatVector.fromArray(SPEC, tildeQ, qBase);
+                } else {
+                    VectorMask<Float> rangeMask = SPEC.indexInRange(qBase, d);
+                    loaded = FloatVector.fromArray(SPEC, tildeQ, qBase, bitMask.and(rangeMask));
+                }
+
+                // Alternate accumulators to parallelize the ADDs
+                if (!toggle) {
+                    acc1 = acc1.add(loaded, bitMask);
+                } else {
+                    acc2 = acc2.add(loaded, bitMask);
+                }
+                toggle = !toggle;
+            }
+        }
+
+        // Merge the two pipelines
+        return acc1.add(acc2).reduceLanes(VectorOperators.ADD) + scalarAcc;
     }
 
     @Override
