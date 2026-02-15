@@ -32,17 +32,17 @@ search:
 #    100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
-#    - type: PQ
-#      parameters:
-#        m: 97
-#        # k: 256 # optional parameter. By default, k=256
-#        centerData: No
-#        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
-    - type: ASH
+    - type: PQ
       parameters:
-        encodedBits: "776"
-        optimizer: "random"
-        landmarkCount: "1"
+        m: 97
+        # k: 256 # optional parameter. By default, k=256
+        centerData: No
+        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+#    - type: ASH
+#      parameters:
+#        encodedBits: "776"
+#        optimizer: "random"
+#        landmarkCount: "1"
   benchmarks: # full option set, if the whole "benchmarks" section is not specified, a default set will be used
     throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
     latency: [ AVG ] # additional options: [ AVG, STD, P999 ]
