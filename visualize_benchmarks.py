@@ -30,7 +30,7 @@ from matplotlib.ticker import MaxNLocator
 # Define metrics where higher values are better and lower values are better
 
 HIGHER_IS_BETTER = ["QPS", "Recall@10"]
-LOWER_IS_BETTER = ["Mean Latency", "Index Build Time"]
+LOWER_IS_BETTER = ["Mean Latency", "Index Build Time", "Average Nodes Visited"]
 
 
 class BenchmarkData:

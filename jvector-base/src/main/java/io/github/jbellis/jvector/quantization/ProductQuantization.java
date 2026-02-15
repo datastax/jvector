@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -28,27 +29,24 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.agrona.collections.IntHashSet;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.SplittableRandom;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
 import static io.github.jbellis.jvector.vector.VectorUtil.dotProduct;
 import static io.github.jbellis.jvector.vector.VectorUtil.sub;
-import static java.lang.Math.min;
 import static java.lang.Math.sqrt;
 
 /**
@@ -138,11 +136,36 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        // limit the number of vectors we train on
-        var P = min(1.0f, MAX_PQ_TRAINING_SET_SIZE / (float) ravv.size());
+        final IntStream ordinalStream;
+
+        if (ravv.size() <= MAX_PQ_TRAINING_SET_SIZE) {
+            ordinalStream = IntStream.range(0, ravv.size());
+        } else {
+            // Uses Floyd’s sampling algorithm to select MAX_PQ_TRAINING_SET_SIZE random ordinals from 0 to ravv.size()
+            // while only iterating MAX_PQ_TRAINING_SET_SIZE times.
+            SplittableRandom rng = new SplittableRandom(1);
+            IntHashSet ordinals = new IntHashSet(MAX_PQ_TRAINING_SET_SIZE);
+            // j runs from (ravv.size() - MAX_PQ_TRAINING_SET_SIZE) to ravv.size() (exclusive)
+            for (int j = ravv.size() - MAX_PQ_TRAINING_SET_SIZE; j < ravv.size(); j++) {
+                int t = rng.nextInt(j + 1); // uniform in [0, j]
+                if (ordinals.contains(t)) {
+                    ordinals.add(j);
+                } else {
+                    ordinals.add(t);
+                }
+            }
+            int[] ordinalArray = new int[ordinals.size()];
+            IntHashSet.IntIterator it = ordinals.iterator();
+            for (int i = 0; i < ordinals.size(); i++) {
+                assert it.hasNext();
+                ordinalArray[i] = it.next();
+            }
+            assert !it.hasNext();
+            ordinalStream = IntStream.of(ordinalArray);
+        }
+
         var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> IntStream.range(0, ravv.size()).parallel()
-                        .filter(i -> ThreadLocalRandom.current().nextFloat() < P)
+        return parallelExecutor.submit(() -> ordinalStream.parallel()
                         .mapToObj(targetOrd -> {
                             var localRavv = ravvCopy.get();
                             VectorFloat<?> v = localRavv.getVector(targetOrd);
@@ -183,12 +206,13 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
         var vectors = vectorsMutable; // "effectively final" to make the closure happy
 
-        var refinedCodebooks = simdExecutor.submit(() -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, codebooks[m], anisotropicThreshold);
             return clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
                                      anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
-        }).toArray(VectorFloat<?>[]::new)).join();
+        }).toArray(VectorFloat<?>[]::new);
+        var refinedCodebooks = simdExecutor.submit(callable).join();
 
         return new ProductQuantization(refinedCodebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
@@ -459,11 +483,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
         int M = subvectorSizeAndOffset.length;
-        return simdExecutor.submit(() -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizeAndOffset);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, clusters, anisotropicThreshold);
             return clusterer.cluster(K_MEANS_ITERATIONS, anisotropicThreshold == UNWEIGHTED ? 0 : K_MEANS_ITERATIONS);
-        }).toArray(VectorFloat<?>[]::new)).join();
+        }).toArray(VectorFloat<?>[]::new);
+        return simdExecutor.submit(callable).join();
     }
 
     /**
@@ -529,7 +554,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return partialSquaredMagnitudes;
     }
 
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         if (version > OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported serialization version " + version);
@@ -730,11 +755,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     @Override
     public String toString() {
         if (anisotropicThreshold == UNWEIGHTED) {
-            return String.format("ProductQuantization(M=%d, clusters=%d)", M, clusterCount);
+            return String.format("ProductQuantization(M=%d, clusters=%d, centered=%s)", M, clusterCount, globalCentroid != null);
         }
-        return String.format("ProductQuantization(M=%d, clusters=%d, T=%.3f, eta=%.1f)",
+        return String.format("ProductQuantization(M=%d, clusters=%d, centered=%s, anisotropicT=%.3f, eta=%.1f)",
                              M,
                              clusterCount,
+                             globalCentroid != null,
                              anisotropicThreshold,
                              KMeansPlusPlusClusterer.computeParallelCostMultiplier(anisotropicThreshold, originalDimension));
     }

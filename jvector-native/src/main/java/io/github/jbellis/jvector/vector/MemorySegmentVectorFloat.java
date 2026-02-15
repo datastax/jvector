@@ -16,9 +16,11 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.Buffer;
 
@@ -84,6 +86,13 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     public int offset(int i)
     {
         return i * Float.BYTES;
+    }
+
+    @Override
+    public void writeTo(IndexWriter writer) throws IOException {
+        for (int i = 0; i < length(); i++) {
+            writer.writeFloat(get(i));
+        }
     }
 
     @Override

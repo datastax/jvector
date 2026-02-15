@@ -16,12 +16,13 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
-import java.io.DataOutput;
+import io.github.jbellis.jvector.disk.IndexWriter;
+
 import java.io.IOException;
 
 public interface SeparatedFeature extends Feature {
     void setOffset(long offset);
     long getOffset();
 
-    void writeSeparately(DataOutput out, State state) throws IOException;
+    void writeSeparately(IndexWriter out, State state) throws IOException;
 }

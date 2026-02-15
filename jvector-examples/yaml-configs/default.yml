@@ -23,8 +23,8 @@ construction:
         optimizer: "random" # random, ITQ
         landmarkCount: "1"
   reranking:
-    - FP
-  useSavedIndexIfExists: No
+    - NVQ
+  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:

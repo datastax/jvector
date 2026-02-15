@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -25,7 +26,6 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 
@@ -68,13 +68,13 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
     }
 
     @Override
-    public void writeHeader(DataOutput out) throws IOException {
+    public void writeHeader(IndexWriter out) throws IOException {
         nvq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
         out.writeLong(offset);
     }
 
     @Override
-    public void writeSeparately(DataOutput out, State state_) throws IOException {
+    public void writeSeparately(IndexWriter out, State state_) throws IOException {
         var state = (NVQ.State) state_;
         if (state.vector != null) {
             state.vector.write(out);
