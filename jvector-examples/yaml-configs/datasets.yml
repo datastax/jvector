@@ -1,6 +1,6 @@
 neighborhood-watch-100k:
-  - ada002-100k
   - cohere-english-v3-100k
+  - ada002-100k
   - openai-v3-small-100k
   - gecko-100k
   - openai-v3-large-3072-100k

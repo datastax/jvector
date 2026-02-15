@@ -75,6 +75,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
         }
 
         double avgRuntimeSec = totalRuntime / queryRuns / 1e9;
-        return List.of(Metric.of("Avg Runtime (s)", format, avgRuntimeSec));
+        return List.of(Metric.of("search.execution_time.avg_runtime_s",
+                "Avg Runtime (s)", format, avgRuntimeSec));
     }
 }

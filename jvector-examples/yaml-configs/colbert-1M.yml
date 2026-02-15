@@ -1,4 +1,5 @@
-version: 6
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
 
 dataset: colbert-1M
 
@@ -33,3 +34,5 @@ search:
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+
+# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
