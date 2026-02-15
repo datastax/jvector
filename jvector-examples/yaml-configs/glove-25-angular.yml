@@ -1,0 +1,38 @@
+# This is here for loader testing purposes only, use other datasets for realistic test data
+version: 6
+
+dataset: glove-25-angular
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 4
+        centerData: No
+        anisotropicThreshold: -1.0
+  reranking:
+    - NVQ
+  useSavedIndexIfExists: Yes
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 5.0, 10.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 4
+        centerData: No
+        anisotropicThreshold: -1.0
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    count: [visited, expanded base layer]
+    accuracy: [recall]

@@ -16,13 +16,13 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
@@ -55,13 +55,13 @@ public interface VectorCompressor<T> {
     void encodeTo(VectorFloat<?> v, T dest);
 
     /**
-     * @param out DataOutput to write to
+     * @param out IndexWriter to write to
      * @param version serialization version.  Versions 2 and 3 are supported
      */
-    void write(DataOutput out, int version) throws IOException;
+    void write(IndexWriter out, int version) throws IOException;
 
     /** Write with the current serialization version */
-    default void write(DataOutput out) throws IOException {
+    default void write(IndexWriter out) throws IOException {
         write(out, OnDiskGraphIndex.CURRENT_VERSION);
     }
 

@@ -1,6 +1,6 @@
 version: 6
 
-dataset: cohere-english-v3-100k
+dataset: auto-default
 
 construction:
   outDegree: [32]
@@ -19,7 +19,7 @@ construction:
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
     - NVQ
-  useSavedIndexIfExists: Yes
+  useSavedIndexIfExists: No
 
 search:
   topKOverquery:

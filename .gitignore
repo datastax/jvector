@@ -6,6 +6,7 @@ local/
 
 ### Bench caches
 pq_cache/
+index_cache/
 
 ### JVM crashes
 hs_err_pid*
@@ -14,6 +15,12 @@ replay_pid*
 ### IntelliJ IDEA ###
 .idea
 *.iml
+
+### Eclipse/JDTLS ###
+.settings/
+.classpath
+.project
+.factorypath
 
 ### VS Code ###
 .vscode/

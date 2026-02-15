@@ -16,12 +16,12 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.nio.Buffer;
 
@@ -60,7 +60,7 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     }
 
     @Override
-    public void writeFloatVector(DataOutput out, VectorFloat<?> vector) throws IOException
+    public void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException
     {
         for (int i = 0; i < vector.length(); i++)
             out.writeFloat(vector.get(i));
@@ -96,7 +96,7 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
 
 
     @Override
-    public void writeByteSequence(DataOutput out, ByteSequence<?> sequence) throws IOException
+    public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
         for (int i = 0; i < sequence.length(); i++)
             out.writeByte(sequence.get(i));

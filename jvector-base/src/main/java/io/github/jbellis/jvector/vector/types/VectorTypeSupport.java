@@ -16,9 +16,9 @@
 
 package io.github.jbellis.jvector.vector.types;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 
-import java.io.DataOutput;
 import java.io.IOException;
 
 public interface VectorTypeSupport {
@@ -57,12 +57,12 @@ public interface VectorTypeSupport {
     void readFloatVector(RandomAccessReader r, int size, VectorFloat<?> vector, int offset) throws IOException;
 
     /**
-     * Write the given vector to the given DataOutput.
+     * Write the given vector to the given IndexWriter.
      * @param out the output to write the vector to.
      * @param vector the vector to write.
      * @throws IOException
      */
-    void writeFloatVector(DataOutput out, VectorFloat<?> vector) throws IOException;
+    void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException;
 
     /**
      * Create a sequence from the given data.
@@ -83,5 +83,5 @@ public interface VectorTypeSupport {
 
     void readByteSequence(RandomAccessReader r, ByteSequence<?> sequence) throws IOException;
 
-    void writeByteSequence(DataOutput out, ByteSequence<?> sequence) throws IOException;
+    void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException;
 }

@@ -21,9 +21,7 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
@@ -189,12 +187,17 @@ public class ParallelWriteBenchmark {
     private void writeGraph(ImmutableGraphIndex graph,
                             Path path,
                             boolean parallel) throws IOException {
-        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path)
-                .withParallelWrites(parallel)
-                .with(nvqFeature)
-                .with(fusedPQFeature)
-                .withMapper(identityMapper)
-                .build()) {
+        try (RandomAccessOnDiskGraphIndexWriter writer = parallel ?
+                new OnDiskParallelGraphIndexWriter.Builder(graph, path)
+                        .with(nvqFeature)
+                        .with(fusedPQFeature)
+                        .withMapper(identityMapper)
+                        .build() :
+                new OnDiskGraphIndexWriter.Builder(graph, path)
+                        .with(nvqFeature)
+                        .with(fusedPQFeature)
+                        .withMapper(identityMapper)
+                        .build()) {
             var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));

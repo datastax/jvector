@@ -16,13 +16,13 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
@@ -121,7 +121,7 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
     }
 
     @Override
-    public void write(DataOutput out, int version) throws IOException {
+    public void write(IndexWriter out, int version) throws IOException {
         out.writeInt(dimension);
         // We used to record the center of the dataset but this actually degrades performance.
         // Write a zero vector to maintain compatibility.

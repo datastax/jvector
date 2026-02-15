@@ -130,6 +130,21 @@ public class PQDistanceCalculationBenchmark {
         blackhole.consume(totalSimilarity);
     }
 
+    @Benchmark
+    public void diversityCalculationScoreProvider(Blackhole blackhole) {
+        float totalSimilarity = 0;
+
+        for (int q = 0; q < queryCount; q++) {
+            for (int i = 0; i < vectorCount; i++) {
+                final ScoreFunction sf = buildScoreProvider.diversityScoreFunctionFor(i);
+                float similarity = sf.similarityTo(q);
+                totalSimilarity += similarity;
+            }
+        }
+
+        blackhole.consume(totalSimilarity);
+    }
+
     private VectorFloat<?> createRandomVector(int dimension) {
         VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
         for (int i = 0; i < dimension; i++) {

@@ -19,7 +19,7 @@ construction:
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
     - NVQ
-  useSavedIndexIfExists: Yes
+  useSavedIndexIfExists: No
 
 search:
   topKOverquery:
@@ -35,6 +35,6 @@ search:
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   benchmarks:
     throughput: [AVG]
-    latency: [AVG, STD, P999]
-    count: [visited, expanded base layer]
+    latency: [AVG] # [AVG, STD, P999]
+    count: [visited] # [visited, expanded, expanded base layer]
     accuracy: [recall]

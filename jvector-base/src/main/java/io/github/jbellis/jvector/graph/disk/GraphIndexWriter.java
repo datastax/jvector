@@ -34,8 +34,7 @@ import java.util.function.IntFunction;
  * <p>
  * Implementations support different strategies for writing graph data,
  * including random access, sequential, and parallel writing modes.
- * Use {@link #getBuilderFor(GraphIndexWriterTypes, ImmutableGraphIndex, IndexWriter)}
- * or {@link #getBuilderFor(GraphIndexWriterTypes, ImmutableGraphIndex, Path)}
+ * Use {@link #getBuilderFor(GraphIndexWriterTypes, ImmutableGraphIndex, Path)}
  * factory methods to obtain appropriate builder instances.
  *
  * @see GraphIndexWriterTypes
@@ -56,58 +55,31 @@ public interface GraphIndexWriter extends Closeable {
     void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
 
     /**
-     * Factory method to obtain a builder for the specified writer type with an IndexWriter.
-     * <p>
-     * This overload accepts any IndexWriter but certain types have specific requirements:
-     * <ul>
-     *   <li>ON_DISK requires a RandomAccessWriter (will throw IllegalArgumentException otherwise)</li>
-     *   <li>ON_DISK_SEQUENTIAL accepts any IndexWriter</li>
-     *   <li>ON_DISK_PARALLEL is not supported via this method (use the Path overload instead)</li>
-     * </ul>
+     * Factory method to obtain a builder for the specified writer type.
      *
      * @param type the type of writer to create
      * @param graphIndex the graph index to write
-     * @param out the output writer
+     * @param out the Path to the output file
      * @return a builder for the specified writer type
      * @throws IllegalArgumentException if the type requires a specific writer type that wasn't provided
      */
-    static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
-            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
+    static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends RandomAccessWriter>
+            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, Path out) throws FileNotFoundException {
         switch (type) {
-            case ON_DISK_PARALLEL:
-                if (!(out instanceof RandomAccessWriter)) {
-                    throw new IllegalArgumentException("ON_DISK_PARALLEL requires a RandomAccessWriter");
-                }
-                return new OnDiskGraphIndexWriter.Builder(graphIndex, (RandomAccessWriter) out);
-            case ON_DISK_SEQUENTIAL:
-                return new OnDiskSequentialGraphIndexWriter.Builder(graphIndex, out);
+            case RANDOM_ACCESS:
+                return new OnDiskGraphIndexWriter.Builder(graphIndex, out);
+            case RANDOM_ACCESS_PARALLEL:
+                return new OnDiskParallelGraphIndexWriter.Builder(graphIndex, out);
             default:
-                throw new IllegalArgumentException("Unknown GraphIndexWriterType: " + type);
+                throw new IllegalArgumentException("Unknown RandomAccess GraphIndexWriterType: " + type);
         }
     }
 
-    /**
-     * Factory method to obtain a builder for the specified writer type with a file Path.
-     * <p>
-     * This overload accepts a Path and is required for:
-     * <ul>
-     *   <li>ON_DISK_PARALLEL - enables async I/O for improved throughput</li>
-     * </ul>
-     * Other writer types should use the {@link #getBuilderFor(GraphIndexWriterTypes, ImmutableGraphIndex, IndexWriter)}
-     * overload instead.
-     *
-     * @param type the type of writer to create (currently only ON_DISK_PARALLEL is supported)
-     * @param graphIndex the graph index to write
-     * @param out the output file path
-     * @return a builder for the specified writer type
-     * @throws FileNotFoundException if the file cannot be created or opened
-     * @throws IllegalArgumentException if the type is not supported via this method
-     */
     static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
-    getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, Path out) throws FileNotFoundException {
+            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
         switch (type) {
-            case ON_DISK_PARALLEL:
-                return new OnDiskGraphIndexWriter.Builder(graphIndex, out);
+            case ON_DISK_SEQUENTIAL:
+                return new OnDiskSequentialGraphIndexWriter.Builder(graphIndex, out);
             default:
                 throw new IllegalArgumentException("Unknown GraphIndexWriterType: " + type);
         }

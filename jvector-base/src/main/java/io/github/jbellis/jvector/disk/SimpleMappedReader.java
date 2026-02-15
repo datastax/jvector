@@ -21,6 +21,7 @@ import sun.misc.Unsafe;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
+import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -73,6 +74,7 @@ public class SimpleMappedReader extends ByteBufferReader {
                     throw new RuntimeException("SimpleMappedReader doesn't support files above 2GB");
                 }
                 this.buffer = raf.getChannel().map(FileChannel.MapMode.READ_ONLY, 0, raf.length());
+                this.buffer.order(ByteOrder.BIG_ENDIAN);
                 this.buffer.load();
             }
         }

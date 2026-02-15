@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -28,9 +29,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
 
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.List;
@@ -203,8 +202,8 @@ public class TestProductQuantization extends RandomizedTest {
 
         // Write
         var file = File.createTempFile("pqtest", ".pq");
-        try (var out = new DataOutputStream(new FileOutputStream(file))) {
-            pq.write(out);
+        try (var writer = new SimpleWriter(file.toPath())) {
+            pq.write(writer);
         }
         // Read
         try (var readerSupplier = new SimpleMappedReader.Supplier(file.toPath())) {
@@ -237,8 +236,8 @@ public class TestProductQuantization extends RandomizedTest {
             var pq = ProductQuantization.load(readerSupplier.get());
 
             // re-save, emulating version 0
-            try (var out = new DataOutputStream(new FileOutputStream(fileOut))) {
-                pq.write(out, 0);
+            try (var writer = new SimpleWriter(fileOut.toPath())) {
+                pq.write(writer, 0);
             }
         }
 
@@ -352,7 +351,7 @@ public class TestProductQuantization extends RandomizedTest {
         int[][] testCases = {
                 // Minimal cases
                 {1, 1}, {1, 2},
-                
+
                 // Power-of-2 boundaries for compressedDimension (layoutBytesPerVector changes)
                 {10, 1}, {10, 2}, {10, 3}, {10, 4}, {10, 5},
                 {10, 7}, {10, 8}, {10, 9},
@@ -360,20 +359,20 @@ public class TestProductQuantization extends RandomizedTest {
                 {10, 31}, {10, 32}, {10, 33},
                 {10, 63}, {10, 64}, {10, 65},
                 {10, 127}, {10, 128}, {10, 129},
-                
+
                 // Cases where addressableVectorsPerChunk becomes interesting
                 {1073741823, 1}, // layoutBytesPerVector=2, addressableVectorsPerChunk=1073741823
-                {1073741823, 2}, // layoutBytesPerVector=4, addressableVectorsPerChunk=536870911  
+                {1073741823, 2}, // layoutBytesPerVector=4, addressableVectorsPerChunk=536870911
                 {1073741824, 2}, // vectorCount > addressableVectorsPerChunk, creates chunks
-                
+
                 // Large dimension cases (small addressableVectorsPerChunk)
                 {1000, 1024}, // layoutBytesPerVector=2048, addressableVectorsPerChunk=1048575
                 {2000000, 1024}, // vectorCount > addressableVectorsPerChunk
-                
+
                 // Integer overflow boundary cases
                 {536870911, 4}, // layoutBytesPerVector=8, exactly fits in one chunk
                 {536870912, 4}, // one more than above, creates multiple chunks
-                
+
                 // Edge case where lastChunkVectors becomes non-zero
                 {100, 1073741824} // layoutBytesPerVector huge, addressableVectorsPerChunk=1, creates 100 chunks
         };

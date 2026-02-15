@@ -21,7 +21,7 @@ import java.util.List;
 
 /**
  * Utility class for monitoring system resources during benchmark execution.
- * Tracks GC activity, memory usage, CPU load, and thread statistics.
+ * Tracks GC activity, memory usage (on-heap and off-heap), CPU load, and thread statistics.
  */
 public class SystemMonitor {
 
@@ -30,6 +30,8 @@ public class SystemMonitor {
     private final OperatingSystemMXBean osBean;
     private final ThreadMXBean threadBean;
     private final com.sun.management.OperatingSystemMXBean sunOsBean;
+    private final List<MemoryPoolMXBean> memoryPoolBeans;
+    private final List<BufferPoolMXBean> bufferPoolBeans;
 
     public SystemMonitor() {
         this.memoryBean = ManagementFactory.getMemoryMXBean();
@@ -37,6 +39,8 @@ public class SystemMonitor {
         this.osBean = ManagementFactory.getOperatingSystemMXBean();
         this.threadBean = ManagementFactory.getThreadMXBean();
         this.sunOsBean = (com.sun.management.OperatingSystemMXBean) osBean;
+        this.memoryPoolBeans = ManagementFactory.getMemoryPoolMXBeans();
+        this.bufferPoolBeans = ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class);
     }
 
     /**
@@ -69,6 +73,17 @@ public class SystemMonitor {
         MemoryUsage nonHeapUsage = memoryBean.getNonHeapMemoryUsage();
         Runtime runtime = Runtime.getRuntime();
 
+        // Calculate detailed off-heap memory usage
+        long directBufferMemory = 0;
+        long mappedBufferMemory = 0;
+        for (BufferPoolMXBean pool : bufferPoolBeans) {
+            if (pool.getName().equals("direct")) {
+                directBufferMemory = pool.getMemoryUsed();
+            } else if (pool.getName().equals("mapped")) {
+                mappedBufferMemory = pool.getMemoryUsed();
+            }
+        }
+
         return new MemoryStats(
             heapUsage.getUsed(),
             heapUsage.getMax(),
@@ -76,7 +91,9 @@ public class SystemMonitor {
             nonHeapUsage.getUsed(),
             runtime.freeMemory(),
             runtime.totalMemory(),
-            runtime.maxMemory()
+            runtime.maxMemory(),
+            directBufferMemory,
+            mappedBufferMemory
         );
     }
 
@@ -115,8 +132,16 @@ public class SystemMonitor {
 
         // Memory changes
         MemoryStats memAfter = after.memoryStats;
-        System.out.printf("  Heap: %d MB used / %d MB max%n",
-            memAfter.heapUsed / 1024 / 1024, memAfter.heapMax / 1024 / 1024);
+        MemoryStats memBefore = before.memoryStats;
+        System.out.printf("  Heap: %d MB used / %d MB max (change: %+d MB)%n",
+            memAfter.heapUsed / 1024 / 1024,
+            memAfter.heapMax / 1024 / 1024,
+            (memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024);
+        System.out.printf("  Off-Heap: Direct=%d MB, Mapped=%d MB (change: %+d MB, %+d MB)%n",
+            memAfter.directBufferMemory / 1024 / 1024,
+            memAfter.mappedBufferMemory / 1024 / 1024,
+            (memAfter.directBufferMemory - memBefore.directBufferMemory) / 1024 / 1024,
+            (memAfter.mappedBufferMemory - memBefore.mappedBufferMemory) / 1024 / 1024);
 
         // CPU stats
         CPUStats cpuAfter = after.cpuStats;
@@ -189,9 +214,12 @@ public class SystemMonitor {
         public final long freeMemory;
         public final long totalMemory;
         public final long maxMemory;
+        public final long directBufferMemory;
+        public final long mappedBufferMemory;
 
         public MemoryStats(long heapUsed, long heapMax, long heapCommitted, long nonHeapUsed,
-                          long freeMemory, long totalMemory, long maxMemory) {
+                          long freeMemory, long totalMemory, long maxMemory,
+                          long directBufferMemory, long mappedBufferMemory) {
             this.heapUsed = heapUsed;
             this.heapMax = heapMax;
             this.heapCommitted = heapCommitted;
@@ -199,6 +227,12 @@ public class SystemMonitor {
             this.freeMemory = freeMemory;
             this.totalMemory = totalMemory;
             this.maxMemory = maxMemory;
+            this.directBufferMemory = directBufferMemory;
+            this.mappedBufferMemory = mappedBufferMemory;
+        }
+
+        public long getTotalOffHeapMemory() {
+            return directBufferMemory + mappedBufferMemory;
         }
     }
 

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -27,7 +28,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
@@ -70,11 +70,11 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         };
 
         /**
-         * Writes the BitsPerDimension to DataOutput.
-         * @param out the DataOutput into which to write the object
+         * Writes the BitsPerDimension to IndexWriter.
+         * @param out the IndexWriter into which to write the object
          * @throws IOException if there is a problem writing to out.
          */
-        public void write(DataOutput out) throws IOException {
+        public void write(IndexWriter out) throws IOException {
             out.writeInt(getInt());
         }
 
@@ -251,12 +251,12 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
     }
 
     /**
-     * Writes the instance to a DataOutput.
-     * @param out DataOutput to write to
+     * Writes the instance to a IndexWriter.
+     * @param out IndexWriter to write to
      * @param version serialization version.
-     * @throws IOException fails if we cannot write to the DataOutput
+     * @throws IOException fails if we cannot write to the IndexWriter
      */
-    public void write(DataOutput out, int version) throws IOException
+    public void write(IndexWriter out, int version) throws IOException
     {
         if (version > OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported serialization version " + version);
@@ -432,11 +432,11 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
 
         /**
-         * Write the instance to a DataOutput
-         * @param out the DataOutput
-         * @throws IOException fails if we cannot write to the DataOutput
+         * Write the instance to a IndexWriter
+         * @param out the IndexWriter
+         * @throws IOException fails if we cannot write to the IndexWriter
          */
-        public void write(DataOutput out) throws IOException {
+        public void write(IndexWriter out) throws IOException {
             out.writeInt(subVectors.length);
 
             for (var sv : subVectors) {
@@ -593,11 +593,11 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
         }
 
         /**
-         * Write the instance to a DataOutput
-         * @param out the DataOutput
-         * @throws IOException fails if we cannot write to the DataOutput
+         * Write the instance to a IndexWriter
+         * @param out the IndexWriter
+         * @throws IOException fails if we cannot write to the IndexWriter
          */
-        public void write(DataOutput out) throws IOException {
+        public void write(IndexWriter out) throws IOException {
             bitsPerDimension.write(out);
             out.writeFloat(minValue);
             out.writeFloat(maxValue);

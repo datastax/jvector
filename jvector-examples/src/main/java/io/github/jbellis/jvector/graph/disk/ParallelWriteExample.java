@@ -17,8 +17,8 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.util.DataSet;
-import io.github.jbellis.jvector.example.util.DataSetLoader;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
@@ -251,7 +251,6 @@ public class ParallelWriteExample {
         System.out.printf("Writing with NVQ + FUSED_ADC features...%n");
         long sequentialStart = System.nanoTime();
         try (var writer = new OnDiskGraphIndexWriter.Builder(graph, sequentialPath)
-                .withParallelWrites(false)
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)
@@ -270,8 +269,7 @@ public class ParallelWriteExample {
 
         // Parallel write
         long parallelStart = System.nanoTime();
-        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, parallelPath)
-                .withParallelWrites(true)
+        try (var writer = new OnDiskParallelGraphIndexWriter.Builder(graph, parallelPath)
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)
@@ -304,7 +302,9 @@ public class ParallelWriteExample {
         String datasetName = args.length > 0 ? args[0] : "cohere-english-v3-100k";
 
         System.out.println("Loading dataset: " + datasetName);
-        DataSet ds = DataSetLoader.loadDataSet(datasetName);
+        DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                () -> new RuntimeException("Dataset " + datasetName + " not found")
+        );
         System.out.printf("Loaded %d vectors of dimension %d%n", ds.getBaseVectors().size(), ds.getDimension());
 
         var floatVectors = ds.getBaseRavv();

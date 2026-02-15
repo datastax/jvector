@@ -1,4 +1,4 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns="https://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="https://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"
          child.project.url.inherit.append.path="false">
     <modelVersion>4.0.0</modelVersion>
@@ -41,7 +41,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
-        <revision>4.0.0-rc.7-SNAPSHOT</revision>
+        <revision>4.0.0-rc.9-SNAPSHOT</revision>
         <ludovic.netlib.version>3.0.3</ludovic.netlib.version>
     </properties>
     <modules>
@@ -76,6 +76,7 @@
                 <configuration>
                     <skip>true</skip>
                     <executable>${java.home}/bin/java</executable>
+                    <mainClass>io.github.jbellis.jvector.example.BenchYAML</mainClass>
                 </configuration>
             </plugin>
             <plugin>

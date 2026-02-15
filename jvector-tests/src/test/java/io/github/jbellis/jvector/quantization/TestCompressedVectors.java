@@ -20,15 +20,14 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.util.List;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
@@ -54,8 +53,8 @@ public class TestCompressedVectors extends RandomizedTest {
 
         // Write compressed vectors
         File cvFile = File.createTempFile("pqtest", ".cv");
-        try (var out = new DataOutputStream(new FileOutputStream(cvFile))) {
-            cv.write(out);
+        try (var writer = new SimpleWriter(cvFile.toPath())) {
+            cv.write(writer);
         }
         // Read compressed vectors
         try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
@@ -79,8 +78,8 @@ public class TestCompressedVectors extends RandomizedTest {
 
         // Write compressed vectors
         File cvFile = File.createTempFile("bqtest", ".cv");
-        try (var out = new DataOutputStream(new FileOutputStream(cvFile))) {
-            cv.write(out);
+        try (var writer = new SimpleWriter(cvFile.toPath())) {
+            cv.write(writer);
         }
         // Read compressed vectors
         try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
@@ -117,8 +116,8 @@ public class TestCompressedVectors extends RandomizedTest {
 
             // Write compressed vectors
             File cvFile = File.createTempFile("bqtest", ".cv");
-            try (var out = new DataOutputStream(new FileOutputStream(cvFile))) {
-                cv.write(out);
+            try (var writer = new SimpleWriter(cvFile.toPath())) {
+                cv.write(writer);
             }
             // Read compressed vectors
             try (var readerSupplier = new SimpleMappedReader.Supplier(cvFile.toPath())) {
