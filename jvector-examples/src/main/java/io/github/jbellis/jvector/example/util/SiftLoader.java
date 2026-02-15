@@ -46,7 +46,7 @@ public class SiftLoader {
      * Reads the entire file and materializes all vectors into memory.
      * </p>
      */
-    public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
+    public static List<VectorFloat<?>> readFvecs(String filePath) {
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(
                 new BufferedInputStream(new FileInputStream(filePath)))) {
@@ -68,6 +68,8 @@ public class SiftLoader {
 
                 vectors.add(vectorTypeSupport.createFloatVector(data));
             }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
         }
         return vectors;
     }

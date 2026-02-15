@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -30,7 +31,6 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import dev.ludovic.netlib.blas.BLAS;
 import dev.ludovic.netlib.lapack.LAPACK;
-import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -561,11 +561,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /**
      * TODO confirm handling versioning correctly
      * TODO confirm handling magic number correctly
-     * Writes the ASH index header to DataOutput (used for on-disk indexing)
-     * @param out the DataOutput into which to write the object
+     * Writes the ASH index header to IndexWriter (used for on-disk indexing)
+     * @param out the IndexWriter into which to write the object
      * @throws IOException if there is a problem writing to out.
      */
-    public void write(DataOutput out, int version) throws IOException {
+    public void write(IndexWriter out, int version) throws IOException {
         if (version > OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported version " + version);
         }
@@ -826,7 +826,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
-        public void write(DataOutput out, int quantizedDim) throws IOException {
+        public void write(IndexWriter out, int quantizedDim) throws IOException {
             out.writeFloat(scale);
             out.writeFloat(offset);
             out.writeByte(landmark);
@@ -1728,7 +1728,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return new Array2DRowRealMatrix(out, false);
     }
 
-    private static void writeStiefelTransform(DataOutput out, StiefelTransform st) throws IOException {
+    private static void writeStiefelTransform(IndexWriter out, StiefelTransform st) throws IOException {
         // Serialize A = W^T in float precision as a [d][D] row-major matrix.
         // This keeps the format compact and matches the encoding/scoring fast paths.
         out.writeInt(st.rows);
