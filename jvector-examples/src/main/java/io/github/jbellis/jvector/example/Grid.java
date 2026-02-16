@@ -29,15 +29,20 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
-import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.reporting.*;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
+import io.github.jbellis.jvector.example.yaml.BenchmarkSelection;
+import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
@@ -106,7 +111,8 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
-                       Map<String, List<String>> benchmarks) throws IOException
+                       RunArtifacts artifacts
+                       ) throws IOException
     {
         boolean success = false;
 
@@ -127,7 +133,8 @@ public class Grid {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
                                     var compressor = getCompressor(bc, ds);
-                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph, compressor, numSplits, compressionGrid, topKGrid, usePruningGrid, benchmarks, ds, workDir);
+                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
+                                            compressor, numSplits, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
                                 }
                             }
                         }
@@ -156,6 +163,7 @@ public class Grid {
         }
     }
 
+    // Overload for legacy callers that do not use yaml-configs
     static void runAll(DataSet ds,
                        boolean enableIndexCache,
                        List<Integer> mGrid,
@@ -170,7 +178,21 @@ public class Grid {
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
-        runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompressors, numSplits, compressionGrid, topKGrid, usePruningGrid, null);
+        runAll(ds,
+                enableIndexCache,
+                mGrid,
+                efConstructionGrid,
+                neighborOverflowGrid,
+                addHierarchyGrid,
+                refineFinalGraphGrid,
+                featureSets,
+                buildCompressors,
+                numSplits,
+                compressionGrid,
+                topKGrid,
+                usePruningGrid,
+                RunArtifacts.disabled() // legacy callers do not use reporting
+        );
     }
 
     /**
@@ -209,7 +231,7 @@ public class Grid {
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
-                            Map<String, List<String>> benchmarks,
+                            RunArtifacts artifacts,
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
@@ -271,47 +293,54 @@ public class Grid {
         // Capture post-build memory and disk state
         diagnostics.capturePostPhaseSnapshot("Graph Build");
 
+        diagnostics.printDiskStatistics("Graph Index Build");
+        System.out.printf("Index build time: %f seconds%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+
         try {
-            //for (var cpSupplier : compressionGrid) {
-                //indexes.forEach((features, index) -> {
-                    //final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
+            for (var cpSupplier : compressionGrid) {
+                indexes.forEach((features, index) -> {
+                    final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
-                    //CompressedVectors cv;
-                    //if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
-                        //cv = null;
-                        //System.out.format("Fused graph index%n");
-                    //} else {
-                        //var compressor = getCompressor(cpSupplier, ds);
+                    CompressedVectors cv;
+                    if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
+                        cv = null;
+                        System.out.format("Fused graph index%n");
+                    } else {
+                        var compressor = getCompressor(cpSupplier, ds);
 
-                        //if (compressor == null) {
-                            //cv = null;
-                            //System.out.format("Uncompressed vectors%n");
-                        //} else {
-                            //long start = System.nanoTime();
-                            //cv = compressor.encodeAll(ds.getBaseRavv());
-                            //System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
-                        //}
-                    //}
+                        if (compressor == null) {
+                            cv = null;
+                            System.out.format("Uncompressed vectors%n");
+                        } else {
+                            long start = System.nanoTime();
+                            cv = compressor.encodeAll(ds.getBaseRavv());
+                            System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                        }
+                    }
 
-                    //try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                        //testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, workDirectory);
-                    //} catch (Exception e) {
-                        //throw new RuntimeException(e);
-                    //}
-                //});
-            //}
-            //for (var index : indexes.values()) {
-                //index.close();
-            //}
+                    try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
+                        testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
+                                artifacts, workDirectory);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
+
             if(numSplits > 1) {
                 CompressedVectors cv = null;
                 final Set<FeatureId> featureSetForIndex = Set.of();
                 try (var cs = new ConfiguredSystem(ds, compactIndex, cv, featureSetForIndex)) {
-                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, benchmarks, workDirectory);
+                    testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
+                            artifacts, workDirectory);
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
                 compactIndex.close();
+            }
+
+            for (var index : indexes.values()) {
+                index.close();
             }
 
             // Log final diagnostics summary
@@ -641,17 +670,39 @@ public class Grid {
                                           int efConstruction,
                                           float neighborOverflow,
                                           boolean addHierarchy,
-                                          Map<String, List<String>> benchmarkSpec,
+                                          boolean refineFinalGraph,
+                                          Set<FeatureId> featureSetForIndex,
+                                          RunArtifacts artifacts,
                                           Path testDirectory) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
-        // 1) Select benchmarks to run.  Use .createDefault or .createEmpty (for other options)
 
-        var benchmarks = setupBenchmarks(benchmarkSpec);
+        Map<String, List<String>> benchmarksToCompute = artifacts.benchmarksToCompute();
+        Map<String, List<String>> benchmarksToDisplay = artifacts.benchmarksToDisplay();
+        MetricSelection metricsToDisplay = artifacts.metricsToDisplay();
+
+
+        Map<String, List<String>> benchmarksToLog = artifacts.benchmarksToLog();
+        MetricSelection metricsToLog = artifacts.metricsToLog();
+
+        // 1) Select what to report (console + logging)
+        SearchSelection consoleSel = SearchSelection.forConsole(benchmarksToDisplay, metricsToDisplay);
+        SearchSelection logSel = SearchSelection.forLogging(benchmarksToLog, metricsToLog);
+
+        // Fail-fast validations once per configuration
+        consoleSel.validate(benchmarksToCompute);
+        logSel.validate(benchmarksToCompute);
+
+        // 2) Select benchmarks to run (compute spec)
+        var benchmarks = setupBenchmarks(benchmarksToCompute);
         QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
-        // 2) Setup benchmark table for printing
+        // 3) Setup benchmark table for printing
         for (var topK : topKGrid.keySet()) {
+            // Resolving selections depends on topK
+            var consoleResolved = consoleSel.resolveForTopK(topK);
+            var logResolved = logSel.resolveForTopK(topK);
+
             for (var usePruning : usePruningGrid) {
                 BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
                 printer.printConfig(Map.of(
@@ -661,11 +712,36 @@ public class Grid {
                         "addHierarchy",       addHierarchy,
                         "usePruning",         usePruning
                 ));
+
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    printer.printRow(overquery, results);
+
+                    // Best-effort runtime availability warnings (warn once per key)
+                    consoleSel.warnMissing(results, consoleResolved);
+                    logSel.warnMissing(results, logResolved);
+
+                    // Apply console selection and print
+                    var displayResults = consoleSel.apply(results, consoleResolved);
+                    printer.printRow(overquery, displayResults);
+
+                    // Apply log selection and write CSV row
+                    var logOutputs = logSel.apply(results, logResolved);
+                    artifacts.logRow(
+                            cs.ds.getName(),
+                            M,
+                            efConstruction,
+                            neighborOverflow,
+                            addHierarchy,
+                            refineFinalGraph,
+                            featureSetForIndex,
+                            usePruning,
+                            topK,
+                            overquery,
+                            rerankK,
+                            logOutputs
+                    );
                 }
                 printer.printFooter();
             }
@@ -685,7 +761,12 @@ public class Grid {
 
         List<QueryBenchmark> benchmarks = new ArrayList<>();
 
-        for (var benchType : benchmarkSpec.keySet()) {
+        // Ensure a deterministic ordering of the benchmarks regardless of how they are provided (by YAML, etc.)
+        List<String> orderedTypes = List.of("throughput", "latency", "count", "accuracy");
+        for (var benchType : orderedTypes) {
+            if (!benchmarkSpec.containsKey(benchType)) {
+                continue;
+            }
             if (benchType.equals("throughput")) {
                 var bench = ThroughputBenchmark.createEmpty(3, 3);
                 for (var stat : benchmarkSpec.get(benchType)) {
@@ -783,7 +864,7 @@ public class Grid {
                                         Path testDirectory = Files.createTempDirectory("bench");
                                         try {
                                             // Capture initial state
-                                            var diagnostics = new io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics(getDiagnosticLevel());
+                                            var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
                                             diagnostics.setMonitoredDirectory(testDirectory);
                                             diagnostics.capturePrePhaseSnapshot("Build");
 
@@ -834,6 +915,8 @@ public class Grid {
 
                                             // Capture post-build state
                                             diagnostics.capturePostPhaseSnapshot("Build");
+                                            diagnostics.printDiskStatistics("Graph Index Build");
+
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
                                             var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 

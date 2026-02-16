@@ -19,10 +19,13 @@ package io.github.jbellis.jvector.example.yaml;
 import java.util.List;
 import java.util.Map;
 
-public class SearchParameters extends CommonParameters {
-    public Map<Integer, List<Double>> topKOverquery;
-    public List<Boolean> useSearchPruning;
-
-    // NOTE: benchmark compute + console/logging selection are now run-level (run.yml)
-    // and are no longer recognized in dataset configs.
+/**
+ * A sink-agnostic selection of benchmark stats and related metrics, using the same schema
+ * as SearchParameters.benchmarks ({@code Map<String, List<String>>}).
+ *
+ * Used for console projections now, and logging (CSV/Parquet/etc) later.
+ */
+public class BenchmarkSelection {
+    public Map<String, List<String>> benchmarks;
+    public MetricSelection metrics;
 }

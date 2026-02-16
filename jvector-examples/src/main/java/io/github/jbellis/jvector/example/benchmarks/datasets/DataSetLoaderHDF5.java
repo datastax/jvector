@@ -69,6 +69,7 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
             "coco-t2i-512-angular"
     );
 
+
     /**
      * {@inheritDoc}
      */
@@ -95,6 +96,7 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
 
         return maybeDownloadHdf5(datasetName).map(this::readHdf5Data);
     }
+
 
     private DataSet readHdf5Data(Path path) {
 
@@ -163,6 +165,7 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
         // Download from https://ann-benchmarks.com/datasetName
         var url = "https://ann-benchmarks.com/" + datasetName + HDF5_EXTN;
         logger.info("Downloading: {}", url);
+
 
         HttpURLConnection connection;
         while (true) {

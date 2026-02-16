@@ -36,7 +36,7 @@ public class DataSets {
         return loadDataSet(dataSetName, defaultLoaders);
     }
 
-    public static Optional<DataSet> loadDataSet(String dataSetName, List<DataSetLoader> loaders) {
+    public static Optional<DataSet> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
         logger.info("loading dataset [{}]", dataSetName);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
@@ -53,4 +53,6 @@ public class DataSets {
         logger.warn("Unable to find dataset [{}] with any dataset loader. Loaders tried:{}", dataSetName, loaders.stream().map(DataSetLoader::getName).collect(Collectors.joining(",")));
         return Optional.empty();
     }
+}
+
 }

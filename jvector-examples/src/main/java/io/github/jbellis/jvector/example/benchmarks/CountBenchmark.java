@@ -125,13 +125,13 @@ public class CountBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgNodesVisited) {
-            list.add(Metric.of("Avg Visited", formatAvgNodesVisited, avgVisited));
+            list.add(Metric.of("search.count.avg_visited", "Avg Visited", formatAvgNodesVisited, avgVisited));
         }
         if (computeAvgNodesExpanded) {
-            list.add(Metric.of("Avg Expanded", formatAvgNodesExpanded, avgExpanded));
+            list.add(Metric.of("search.count.avg_expanded", "Avg Expanded", formatAvgNodesExpanded, avgExpanded));
         }
         if (computeAvgNodesExpandedBaseLayer) {
-            list.add(Metric.of("Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
+            list.add(Metric.of("search.count.avg_expanded_base_layer", "Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
         }
         return list;
     }
