@@ -16,11 +16,14 @@
 
 package io.github.jbellis.jvector.bench;
 
+import io.github.jbellis.jvector.example.reporting.GitInfo;
+import io.github.jbellis.jvector.example.reporting.JfrRecorder;
+import io.github.jbellis.jvector.example.reporting.JsonlWriter;
+import io.github.jbellis.jvector.example.reporting.RunReporting;
+import io.github.jbellis.jvector.example.reporting.SystemStatsCollector;
+import io.github.jbellis.jvector.example.yaml.TestDataPartition;
+import io.github.jbellis.jvector.example.yaml.RunConfig;
 import io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter;
-import io.github.jbellis.jvector.bench.benchtools.GitInfo;
-import io.github.jbellis.jvector.bench.benchtools.JfrRecorder;
-import io.github.jbellis.jvector.bench.benchtools.JsonlWriter;
-import io.github.jbellis.jvector.bench.benchtools.SystemStatsCollector;
 import io.github.jbellis.jvector.bench.storage.CloudStorageLayoutUtil;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
@@ -29,13 +32,14 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -62,7 +66,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.text.ParseException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -108,54 +111,6 @@ public class CompactorBenchmark {
     public enum IndexPrecision {
         FULLPRECISION,
         FUSEDPQ
-    }
-
-    public enum SplitDistribution {
-        UNIFORM,
-        FIBONACCI,
-        LOG2N;
-
-        /**
-         * Returns split sizes for the given total and number of splits.
-         */
-        public List<Integer> computeSplitSizes(int total, int numSplits) {
-            int[] weights = new int[numSplits];
-            switch (this) {
-                case UNIFORM:
-                    for (int i = 0; i < numSplits; i++) weights[i] = 1;
-                    break;
-                case FIBONACCI:
-                    int a = 1, b = 2;
-                    weights[0] = 1;
-                    for (int i = 1; i < numSplits; i++) {
-                        weights[i] = b;
-                        int next = a + b;
-                        a = b;
-                        b = next;
-                    }
-                    break;
-                case LOG2N:
-                    for (int i = 0; i < numSplits; i++) weights[i] = 1 << i;
-                    break;
-            }
-
-            long weightSum = 0;
-            for (int w : weights) weightSum += w;
-
-            List<Integer> sizes = new ArrayList<>(numSplits);
-            int assigned = 0;
-            for (int i = 0; i < numSplits; i++) {
-                int size;
-                if (i == numSplits - 1) {
-                    size = total - assigned;
-                } else {
-                    size = (int) (((long) weights[i] * total) / weightSum);
-                }
-                sizes.add(size);
-                assigned += size;
-            }
-            return sizes;
-        }
     }
 
     private static final Path RESULTS_FILE = RUN_DIR.resolve("compactor-results.jsonl");
@@ -270,7 +225,7 @@ public class CompactorBenchmark {
     public String storageClasses;
 
     @Param({"UNIFORM"})
-    public SplitDistribution splitDistribution;
+    public TestDataPartition.Distribution splitDistribution;
 
     @Param({"FULLPRECISION"})
     public IndexPrecision indexPrecision;
@@ -473,10 +428,12 @@ public class CompactorBenchmark {
             var graph = builder.build(ravvPerSource);
 
             // Build the on-disk writer with configurable features
-            var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
-
+            AbstractGraphIndexWriter.Builder<?, ?> writerBuilder;
             if (parallelWriteThreads > 1) {
-                writerBuilder.withParallelWrites(true).withParallelWorkerThreads(parallelWriteThreads);
+                writerBuilder = new OnDiskParallelGraphIndexWriter.Builder(graph, outputPath)
+                        .withParallelWorkerThreads(parallelWriteThreads);
+            } else {
+                writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
             }
 
             writerBuilder.with(new InlineVectors(ds.getDimension()));
@@ -738,10 +695,24 @@ public class CompactorBenchmark {
     }
 
     public static void main(String[] args) throws Exception {
-        Files.createDirectories(RUN_DIR);
-        String jmhResultFile = RUN_DIR.resolve("compactor-jmh.json").toString();
-        log.info("Benchmark run directory: {}", RUN_DIR.toAbsolutePath());
-        log.info("Progressive results will be written to: {}", RESULTS_FILE.toAbsolutePath());
+        // Initialize RunReporting if not already in a run directory
+        // This produces sys_info.json and sets up the standard directory structure
+        if (System.getProperty("jvector.internal.runDir") == null) {
+            RunConfig runCfg = new RunConfig();
+            runCfg.logging = new RunConfig.RunLogging();
+            runCfg.logging.dir = "target/benchmark-results";
+            runCfg.logging.runId = "compactor-{ts}";
+            runCfg.logging.type = "csv"; // Enable artifacts
+
+            var reporting = RunReporting.open(runCfg);
+            System.setProperty("jvector.internal.runDir", reporting.run().runDir().toString());
+        }
+
+        Path runDir = Path.of(System.getProperty("jvector.internal.runDir"));
+        Files.createDirectories(runDir);
+        String jmhResultFile = runDir.resolve("compactor-jmh.json").toString();
+        log.info("Benchmark run directory: {}", runDir.toAbsolutePath());
+        log.info("Progressive results will be written to: {}", runDir.resolve("compactor-results.jsonl").toAbsolutePath());
         log.info("JMH results will be written to: {}", Path.of(jmhResultFile).toAbsolutePath());
 
         org.openjdk.jmh.runner.options.CommandLineOptions cmdOptions = new org.openjdk.jmh.runner.options.CommandLineOptions(args);
@@ -761,7 +732,7 @@ public class CompactorBenchmark {
         // Collect all JVM args for the forked process in one list,
         // because jvmArgsAppend() replaces (not appends) on each call.
         var jvmArgs = new ArrayList<String>();
-        jvmArgs.add("-Djvector.internal.runDir=" + RUN_DIR);
+        jvmArgs.add("-Djvector.internal.runDir=" + runDir);
         jvmArgs.add("-Djvector.internal.totalTests=" + totalTests);
         jvmArgs.add(log4j2Arg);
         jvmArgs.add("-Dcompactor.disableAnsi=" + disableAnsi);

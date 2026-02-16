@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.bench.benchtools;
+package io.github.jbellis.jvector.example.reporting;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

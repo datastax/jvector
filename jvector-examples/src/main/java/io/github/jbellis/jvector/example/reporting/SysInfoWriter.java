@@ -52,6 +52,7 @@ public final class SysInfoWriter {
         root.put("run_uuid", runUuid.toString());
         root.put("created_at", DateTimeFormatter.ISO_INSTANT.format(createdAt));
         root.put("jvector_ref", jvectorRef == null ? "" : jvectorRef);
+        root.put("jvector_git_hash", GitInfo.getShortHash());
 
         // Host / OS / JVM
         root.put("host", hostInfo());
@@ -257,6 +258,7 @@ public final class SysInfoWriter {
         subset.put("cpu", root.get("cpu"));
         subset.put("memory", root.get("memory"));
         subset.put("jvector_ref", root.get("jvector_ref"));
+        subset.put("jvector_git_hash", root.get("jvector_git_hash"));
         return JsonUtil.toJson(subset);
     }
 

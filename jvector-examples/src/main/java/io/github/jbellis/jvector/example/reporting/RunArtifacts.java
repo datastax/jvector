@@ -41,11 +41,13 @@ import java.util.Set;
  * - experiments.csv (ExperimentsCsvWriter)
  * - run-level compute/display/log selections from run.yml
  */
-public final class RunArtifacts {
+public final class RunArtifacts implements AutoCloseable {
 
     private final RunContext run;
     private final DatasetInfoWriter datasetInfoWriter;
     private final ExperimentsCsvWriter experimentsWriter;
+    private final SystemStatsCollector sysStatsCollector;
+    private final JfrRecorder jfrRecorder;
 
     private final Map<String, List<String>> benchmarksToCompute;
     private final Map<String, List<String>> benchmarksToDisplay;
@@ -56,6 +58,8 @@ public final class RunArtifacts {
     private RunArtifacts(RunContext run,
                          DatasetInfoWriter datasetInfoWriter,
                          ExperimentsCsvWriter experimentsWriter,
+                         SystemStatsCollector sysStatsCollector,
+                         JfrRecorder jfrRecorder,
                          Map<String, List<String>> benchmarksToCompute,
                          Map<String, List<String>> benchmarksToDisplay,
                          MetricSelection metricsToDisplay,
@@ -64,6 +68,8 @@ public final class RunArtifacts {
         this.run = run;
         this.datasetInfoWriter = datasetInfoWriter;
         this.experimentsWriter = experimentsWriter;
+        this.sysStatsCollector = sysStatsCollector;
+        this.jfrRecorder = jfrRecorder;
         this.benchmarksToCompute = benchmarksToCompute;
         this.benchmarksToDisplay = benchmarksToDisplay;
         this.metricsToDisplay = metricsToDisplay;
@@ -120,6 +126,8 @@ public final class RunArtifacts {
                     null,  // run
                     null,  // datasetInfoWriter
                     null,  // experimentsWriter
+                    null,  // sysStatsCollector
+                    null,  // jfrRecorder
                     benchmarksToCompute,
                     benchmarksToDisplay,
                     metricsToDisplay,
@@ -140,10 +148,29 @@ public final class RunArtifacts {
         var outputKeyColumns = LoggingSchemaPlanner.unionLoggingMetricKeys(runCfg, datasetConfigs);
         var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(), outputKeyColumns);
 
+        SystemStatsCollector sysStatsCollector = null;
+        if (runCfg.logging.sysStats) {
+            sysStatsCollector = new SystemStatsCollector();
+            sysStatsCollector.start(run.runDir(), "sys_stats.jsonl");
+        }
+
+        JfrRecorder jfrRecorder = null;
+        if (runCfg.logging.jfr) {
+            jfrRecorder = new JfrRecorder();
+            try {
+                jfrRecorder.start(run.runDir(), "run.jfr");
+            } catch (Exception e) {
+                System.err.println("Failed to start JFR: " + e.getMessage());
+                jfrRecorder = null;
+            }
+        }
+
         return new RunArtifacts(
                 run,
                 datasetInfoWriter,
                 experimentsWriter,
+                sysStatsCollector,
+                jfrRecorder,
                 benchmarksToCompute,
                 benchmarksToDisplay,
                 metricsToDisplay,
@@ -155,7 +182,7 @@ public final class RunArtifacts {
     /** No-op artifacts instance for legacy callers (no sys_info/dataset_info/experiments output). */
     public static RunArtifacts disabled() {
         return new RunArtifacts(
-                null, null, null,
+                null, null, null, null, null,
                 null, null, null,
                 null, null
         );
@@ -173,6 +200,8 @@ public final class RunArtifacts {
                 null,  // run
                 null,  // datasetInfoWriter
                 null,  // experimentsWriter
+                null,  // sysStatsCollector
+                null,  // jfrRecorder
                 compute,
                 display,
                 null,  // metricsToDisplay
@@ -196,7 +225,10 @@ public final class RunArtifacts {
                        int topK,
                        double overquery,
                        int rerankK,
-                       List<Metric> logOutputs) {
+                       List<Metric> logOutputs,
+                       boolean compacted,
+                       Integer numSplits,
+                       String splitDistribution) {
         if (experimentsWriter == null || run == null) {
             return;
         }
@@ -213,7 +245,10 @@ public final class RunArtifacts {
                 usePruning,
                 topK,
                 overquery,
-                rerankK
+                rerankK,
+                compacted,
+                numSplits,
+                splitDistribution
         );
 
         try {
@@ -250,5 +285,19 @@ public final class RunArtifacts {
         }
 
         datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, basePath, queryPath, gtPath, ds));
+    }
+
+    @Override
+    public void close() {
+        if (sysStatsCollector != null) {
+            try {
+                sysStatsCollector.stop(run.runDir());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (jfrRecorder != null) {
+            jfrRecorder.stop();
+        }
     }
 }

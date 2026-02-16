@@ -27,6 +27,8 @@ logging:
 #  jvectorRef: "no ref"   # tag or git sha (recommended)
 #  runId: "my-experiment-{ts}"   # optional; template with {ts} (UTC timestamp). Default: "{ts}"
 #  type: csv # only csv is presently supported
+#  sysStats: false # set to true to enable background /proc metrics
+#  jfr: false # set to true to enable JFR profiling
 #  benchmarks:
 #    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
 #    latency: [ AVG ] # additional options: [ AVG, STD, P999 ]

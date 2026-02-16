@@ -45,9 +45,6 @@ public class BenchYAML {
         if (args == null) {
             throw new InvalidParameterException("argv[] is null, check your maven exec config");
         }
-
-            throw new InvalidParameterException("argv[] is null, check your maven exec config");
-        }
         String regex = Arrays.stream(args)
                 .filter(Objects::nonNull)
                 .flatMap(s -> Arrays.stream(s.split("\\s")))
@@ -72,13 +69,11 @@ public class BenchYAML {
                 allConfigs.add(MultiConfig.getDefaultConfig(name));
             }
 
-            }
-
             MultiConfig.printDefaultConfigUsageSummary();
         }
 
         // get the list of YAML files from args
-        List<String> configNames = (args == null) ? Collections.emptyList() : Arrays.stream(args)
+        List<String> configNames = Arrays.stream(args)
                 .filter(Objects::nonNull)
                 .filter(s -> s.endsWith(".yml"))
                 .collect(Collectors.toList());
@@ -96,10 +91,10 @@ public class BenchYAML {
         }
 
         // Set up reporting for run
-        RunArtifacts artifacts;
+        RunArtifacts artifactsPlaceholder;
         try {
             RunConfig runCfg = RunConfig.loadDefault();
-            artifacts = RunArtifacts.open(runCfg, allConfigs);
+            artifactsPlaceholder = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
             // Legacy yamlSchemaVersion "0" behavior: no run.yml
             // - logging disabled
@@ -118,33 +113,35 @@ public class BenchYAML {
             if (legacyBenchmarks == null) {
                 legacyBenchmarks = SearchReportingCatalog.defaultComputeBenchmarks();
             }
-            artifacts = RunArtifacts.legacyNoLogging(legacyBenchmarks);
+            artifactsPlaceholder = RunArtifacts.legacyNoLogging(legacyBenchmarks);
         }
 
+        final RunArtifacts artifacts = artifactsPlaceholder;
+        try (artifacts) {
+            for (var config : allConfigs) {
 
-        for (var config : allConfigs) {
+                String datasetName = config.dataset;
+                DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                        () -> new RuntimeException("Could not load dataset:" + datasetName)
+                );
+                // Register dataset info the first time we actually load the dataset for benchmarking
+                artifacts.registerDataset(datasetName, ds);
 
-            String datasetName = config.dataset;
-            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                    () -> new RuntimeException("Could not load dataset:" + datasetName)
-            );
-            // Register dataset info the first time we actually load the dataset for benchmarking
-            artifacts.registerDataset(datasetName, ds);
-
-            Grid.runAll(ds,
-                    config.construction.useSavedIndexIfExists,
-                    config.construction.outDegree,
-                    config.construction.efConstruction,
-                    config.construction.neighborOverflow,
-                    config.construction.addHierarchy,
-                    config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(),
-                    config.construction.getCompressorParameters(),
-                    config.compaction.numSplits,
-                    config.search.getCompressorParameters(),
-                    config.search.topKOverquery,
-                    config.search.useSearchPruning,
-                    artifacts);
+                Grid.runAll(ds,
+                        config.construction.useSavedIndexIfExists,
+                        config.construction.outDegree,
+                        config.construction.efConstruction,
+                        config.construction.neighborOverflow,
+                        config.construction.addHierarchy,
+                        config.construction.refineFinalGraph,
+                        config.construction.getFeatureSets(),
+                        config.construction.getCompressorParameters(),
+                        config.partitions,
+                        config.search.getCompressorParameters(),
+                        config.search.topKOverquery,
+                        config.search.useSearchPruning,
+                        artifacts);
+            }
         }
     }
 

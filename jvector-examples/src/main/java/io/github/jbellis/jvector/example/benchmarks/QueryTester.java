@@ -128,8 +128,6 @@ public class QueryTester {
                     Grid.getIndexBuildTimeSeconds(datasetName)));
         }
 
-        }
-
         return results;
     }
 }

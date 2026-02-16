@@ -35,7 +35,7 @@ import java.util.Map;
 public class MultiConfig {
     public ConstructionParameters construction;
     public SearchParameters search;
-    public CompactionParameters compaction = new CompactionParameters(1);
+    public TestDataPartition partitions = new TestDataPartition(1);
     public String dataset;
 
     private static final String defaultDirectory = "jvector-examples/yaml-configs/";
@@ -256,6 +256,4 @@ public class MultiConfig {
             return null; // best-effort; legacy support only
         }
     }
-}
-
 }

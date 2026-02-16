@@ -18,10 +18,7 @@
  * Reusable benchmark infrastructure utilities.
  * <p>
  * This package provides general-purpose tools for JMH benchmarks including
- * git hash detection ({@link io.github.jbellis.jvector.bench.benchtools.GitInfo}),
- * JSONL result writing ({@link io.github.jbellis.jvector.bench.benchtools.JsonlWriter}),
- * JFR recording management ({@link io.github.jbellis.jvector.bench.benchtools.JfrRecorder}),
- * system stats collection ({@link io.github.jbellis.jvector.bench.benchtools.SystemStatsCollector}),
- * and {@code @Param} combination counting ({@link io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter}).
+ * {@code @Param} combination counting ({@link io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter})
+ * and JFR event log analysis ({@link io.github.jbellis.jvector.bench.benchtools.EventLogAnalyzer}).
  */
 package io.github.jbellis.jvector.bench.benchtools;

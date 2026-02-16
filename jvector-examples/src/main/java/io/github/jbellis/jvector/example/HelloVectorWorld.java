@@ -40,23 +40,24 @@ public class HelloVectorWorld {
         var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
                 .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
         // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
-        RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));
-        artifacts.registerDataset(datasetName, ds);
+        try (RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config))) {
+            artifacts.registerDataset(datasetName, ds);
 
-        // Run
-        Grid.runAll(ds,
-                config.construction.useSavedIndexIfExists,
-                config.construction.outDegree,
-                config.construction.efConstruction,
-                config.construction.neighborOverflow,
-                config.construction.addHierarchy,
-                config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(),
-                config.construction.getCompressorParameters(),
-                config.compaction.numSplits,
-                config.search.getCompressorParameters(),
-                config.search.topKOverquery,
-                config.search.useSearchPruning,
-                artifacts);
+            // Run
+            Grid.runAll(ds,
+                    config.construction.useSavedIndexIfExists,
+                    config.construction.outDegree,
+                    config.construction.efConstruction,
+                    config.construction.neighborOverflow,
+                    config.construction.addHierarchy,
+                    config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(),
+                    config.construction.getCompressorParameters(),
+                    config.partitions,
+                    config.search.getCompressorParameters(),
+                    config.search.topKOverquery,
+                    config.search.useSearchPruning,
+                    artifacts);
+        }
     }
 }

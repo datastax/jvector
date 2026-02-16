@@ -138,8 +138,8 @@ public final class OnDiskGraphIndexCompactor {
         dimension = this.sources.get(0).getDimension();
         this.rng = new Random(0);
         this.executor = executor;
-
     }
+
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources) {
         this(sources, ForkJoinPool.commonPool());
     }
@@ -862,4 +862,3 @@ final class CompactWriter implements AutoCloseable {
         return results;
     }
 }
-

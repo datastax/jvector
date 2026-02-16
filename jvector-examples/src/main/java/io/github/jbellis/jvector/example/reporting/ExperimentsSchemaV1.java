@@ -48,7 +48,10 @@ public final class ExperimentsSchemaV1 {
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
+                "rerankK",
+                "compacted",
+                "numSplits",
+                "splitDistribution"
         );
     }
 
@@ -68,7 +71,10 @@ public final class ExperimentsSchemaV1 {
                                                   boolean usePruning,
                                                   int topK,
                                                   double overquery,
-                                                  int rerankK) {
+                                                  int rerankK,
+                                                  boolean compacted,
+                                                  Integer numSplits,
+                                                  String splitDistribution) {
         Map<String, String> fixed = new HashMap<>();
         fixed.put("schema_version", Integer.toString(run.schemaVersion()));
         fixed.put("run_id", run.runId());
@@ -87,6 +93,10 @@ public final class ExperimentsSchemaV1 {
         fixed.put("topK", Integer.toString(topK));
         fixed.put("overquery", Double.toString(overquery));
         fixed.put("rerankK", Integer.toString(rerankK));
+
+        fixed.put("compacted", Boolean.toString(compacted));
+        fixed.put("numSplits", numSplits == null ? "" : Integer.toString(numSplits));
+        fixed.put("splitDistribution", splitDistribution == null ? "" : splitDistribution);
 
         return fixed;
     }
