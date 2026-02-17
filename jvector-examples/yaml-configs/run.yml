@@ -29,6 +29,7 @@ logging:
 #  type: csv # only csv is presently supported
 #  sysStats: false # set to true to enable background /proc metrics
 #  jfr: false # set to true to enable JFR profiling
+#  jfrObjectCount: false # set to true to enable periodic heap occupancy snapshots in JFR
 #  benchmarks:
 #    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
 #    latency: [ AVG ] # additional options: [ AVG, STD, P999 ]

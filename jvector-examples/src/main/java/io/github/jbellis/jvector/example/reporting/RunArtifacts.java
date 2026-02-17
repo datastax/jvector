@@ -158,7 +158,7 @@ public final class RunArtifacts implements AutoCloseable {
         if (runCfg.logging.jfr) {
             jfrRecorder = new JfrRecorder();
             try {
-                jfrRecorder.start(run.runDir(), "run.jfr");
+                jfrRecorder.start(run.runDir(), "run.jfr", runCfg.logging.jfrObjectCount);
             } catch (Exception e) {
                 System.err.println("Failed to start JFR: " + e.getMessage());
                 jfrRecorder = null;

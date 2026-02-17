@@ -171,8 +171,8 @@ public final class OnDiskGraphIndexCompactor {
         return ((int) (-log(randDouble) * ml));
     }
     private void checkBeforeCompact() {
-        if(sources.size() <= 1) {
-            throw new IllegalArgumentException("Must have at least two sources");
+        if(sources.size() < 1) {
+            throw new IllegalArgumentException("Must have at least one source");
         }
         for(OnDiskGraphIndex source : sources) {
             if(source.getDimension() != dimension) {

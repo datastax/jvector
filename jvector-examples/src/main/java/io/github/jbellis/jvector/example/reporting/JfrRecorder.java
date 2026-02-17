@@ -46,13 +46,32 @@ public final class JfrRecorder {
      * @throws ParseException if the JFR "profile" configuration cannot be loaded
      */
     public Path start(Path outputDir, String fileName) throws IOException, ParseException {
+        return start(outputDir, fileName, false);
+    }
+
+    /**
+     * Creates the output directory, configures a "profile" recording, starts it, and returns the absolute path.
+     *
+     * @param outputDir   directory to write the JFR file into
+     * @param fileName    name of the JFR file
+     * @param objectCount whether to enable periodic 'jdk.ObjectCount' events
+     * @return the absolute path of the recording file
+     */
+    public Path start(Path outputDir, String fileName, boolean objectCount) throws IOException, ParseException {
         Files.createDirectories(outputDir);
         Path jfrPath = outputDir.resolve(fileName).toAbsolutePath();
         recording = new Recording(Configuration.getConfiguration("profile"));
         recording.setToDisk(true);
         recording.setDestination(jfrPath);
-        // Flush to disk every minute so data is available for inspection during long benchmarks
+
+        // Enable heap occupancy snapshots and old object sampling
         var settings = recording.getSettings();
+        if (objectCount) {
+            settings.put("jdk.ObjectCount#enabled", "true");
+            settings.put("jdk.ObjectCount#period", "10s"); // Every 10 seconds
+        }
+        settings.put("jdk.OldObjectSample#enabled", "true");
+        // Flush to disk every minute so data is available for inspection during long benchmarks
         settings.put("flush-interval", Duration.ofMinutes(1).toMillis() + "ms");
         recording.setSettings(settings);
         recording.start();

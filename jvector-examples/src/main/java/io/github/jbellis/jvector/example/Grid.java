@@ -35,6 +35,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.util.DataSetPartitioner;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition;
@@ -379,15 +380,11 @@ public class Grid {
     {
         long start;
 
-        List<Integer> splitSizes = splitDistribution.computeSplitSizes(ds.getBaseVectors().size(), numSplits);
-        int runningStart = 0;
+        var partitionedData = DataSetPartitioner.partition(ds, numSplits, splitDistribution);
+        List<Integer> splitSizes = partitionedData.sizes;
         for(int i = 0; i < numSplits; i++) {
-            int startIdx = runningStart;
-            int endIdx = startIdx + splitSizes.get(i);
-            runningStart = endIdx;
-
             System.out.format("Building splitted dataset %s (%d vectors)...%n", i, splitSizes.get(i));
-            List<VectorFloat<?>> vectorsPerSource = new ArrayList<>(ds.getBaseVectors().subList(startIdx, endIdx));
+            List<VectorFloat<?>> vectorsPerSource = partitionedData.vectors.get(i);
             Path outputPath = testDirectory.resolve("per-source-graph-" + i);
             var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
             BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, ds.getSimilarityFunction());

@@ -75,5 +75,6 @@ public class RunConfig {
         public String type;      // e.g. "csv"
         public boolean sysStats; // optional background /proc stats
         public boolean jfr;      // optional JFR recording
+        public boolean jfrObjectCount; // optional JFR heap occupancy snapshots
     }
 }
