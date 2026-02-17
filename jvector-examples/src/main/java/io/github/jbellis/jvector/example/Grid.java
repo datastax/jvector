@@ -226,6 +226,7 @@ public class Grid {
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
+        // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
             diagnostics.startMonitoring("testDirectory", workDirectory);
@@ -770,9 +771,8 @@ public class Grid {
                                 for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
                                     for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
                                         Path testDirectory = Files.createTempDirectory("bench");
-                                        try {
+                                        try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
                                             // Capture initial state
-                                            var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel());
                                             diagnostics.startMonitoring("testDirectory", testDirectory);
                                             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
