@@ -373,8 +373,10 @@ public class BenchmarkDiagnostics implements AutoCloseable {
      */
     @Override
     public void close() throws IOException {
-        if (diskMonitorStarted) {
+        if (!diskMonitorStarted) return;
+        try {
             diskUsageMonitor.close();
+        } finally {
             diskMonitorStarted = false;
         }
     }
