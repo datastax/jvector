@@ -244,6 +244,7 @@ public class CompactorBenchmark {
     private RandomAccessVectorValues ravv;
     private List<VectorFloat<?>> queryVectors;
     private List<? extends List<Integer>> groundTruth;
+    private DataSet ds;
     private final List<OnDiskGraphIndex> graphs = new ArrayList<>();
     private final List<ReaderSupplier> rss = new ArrayList<>();
     private VectorSimilarityFunction similarityFunction;
@@ -349,31 +350,6 @@ public class CompactorBenchmark {
             throw new IllegalArgumentException("datasetPortion must be in (0.0, 1.0]");
         }
 
-        DataSet ds = DataSets.loadDataSet(datasetNames).orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
-
-        List<VectorFloat<?>> baseVectors;
-        if (datasetPortion == 1.0) {
-            ravv = ds.getBaseRavv();
-            baseVectors = ds.getBaseVectors();
-        } else {
-            int totalVectors = ds.getBaseRavv().size();
-            int portionedSize = (int)(totalVectors * datasetPortion);
-            if (portionedSize < numSources) {
-                throw new IllegalArgumentException(
-                    "datasetPortion=" + datasetPortion + " yields " + portionedSize
-                    + " vectors, fewer than numSources=" + numSources);
-            }
-            baseVectors = ds.getBaseVectors().subList(0, portionedSize);
-            ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
-        }
-
-        queryVectors = ds.getQueryVectors();
-        groundTruth = ds.getGroundTruth();
-        similarityFunction = ds.getSimilarityFunction();
-
-        log.info("Dataset {} loaded. Base vectors: {} (portion {}), Query vectors: {}, Dimensions: {}, Similarity: {}",
-                datasetNames, ravv.size(), datasetPortion, queryVectors.size(), ds.getDimension(), similarityFunction);
-
         // Handle storage directories
         storagePaths = new ArrayList<>();
         if (storageDirectories != null && !storageDirectories.isBlank()) {
@@ -446,67 +422,97 @@ public class CompactorBenchmark {
                 }
             }
         }
+        ds = DataSets.loadDataSet(datasetNames).orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
+        queryVectors = ds.getQueryVectors();
+        groundTruth = ds.getGroundTruth();
+        similarityFunction = ds.getSimilarityFunction();
 
-        vectorsPerSourceCount = splitDistribution.computeSplitSizes(ravv.size(), numSources);
-        log.info("Splitting dataset into {} segments (degree {}, beamWidth {}, splitDistribution {}, splitSizes {}, indexPrecision {}, parallelWriteThreads {}, vectorizationProvider {}, datasetPortion {}, jfrPartitioning {}, jfrCompacting {}, sysStatsEnabled {}) and building graphs...",
-                numSources, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled);
+        if(numSources > 1) {
+                List<VectorFloat<?>> baseVectors;
+                if (datasetPortion == 1.0) {
+                    ravv = ds.getBaseRavv();
+                    baseVectors = ds.getBaseVectors();
+                } else {
+                    int totalVectors = ds.getBaseRavv().size();
+                    int portionedSize = (int)(totalVectors * datasetPortion);
+                    if (portionedSize < numSources) {
+                        throw new IllegalArgumentException(
+                            "datasetPortion=" + datasetPortion + " yields " + portionedSize
+                            + " vectors, fewer than numSources=" + numSources);
+                    }
+                    baseVectors = ds.getBaseVectors().subList(0, portionedSize);
+                    ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
+                }
+                log.info("Dataset {} loaded. Base vectors: {} (portion {}), Query vectors: {}, Dimensions: {}, Similarity: {}",
+                        datasetNames, ravv.size(), datasetPortion, queryVectors.size(), ds.getDimension(), similarityFunction);
 
-        if (jfrPartitioning) {
-            jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr");
-        }
 
-        int runningStart = 0;
-        for (int i = 0; i < numSources; i++) {
-            int start = runningStart;
-            int end = start + vectorsPerSourceCount.get(i);
-            runningStart = end;
-            List<VectorFloat<?>> vectorsPerSource = baseVectors.subList(start, end);
-            // Round-robin assignment of sources to storage paths
-            Path baseDir = storagePaths.get(i % storagePaths.size());
-            Path outputPath = baseDir.resolve("per-source-graph-" + i);
-            log.info("Building and writing segment {}/{} to {}", i + 1, numSources, outputPath.toAbsolutePath());
-            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
-            BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
-            var builder = new GraphIndexBuilder(bspPerSource,
-                    ds.getDimension(),
-                    graphDegree, beamWidth, 1.2f, 1.2f, true);
-            var graph = builder.build(ravvPerSource);
+                vectorsPerSourceCount = splitDistribution.computeSplitSizes(ravv.size(), numSources);
+                log.info("Splitting dataset into {} segments (degree {}, beamWidth {}, splitDistribution {}, splitSizes {}, indexPrecision {}, parallelWriteThreads {}, vectorizationProvider {}, datasetPortion {}, jfrPartitioning {}, jfrCompacting {}, sysStatsEnabled {}) and building graphs...",
+                        numSources, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled);
 
-            // Build the on-disk writer with configurable features
-            var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
-
-            if (parallelWriteThreads > 1) {
-                writerBuilder.withParallelWrites(true).withParallelWorkerThreads(parallelWriteThreads);
-            }
-
-            writerBuilder.with(new InlineVectors(ds.getDimension()));
-
-            ProductQuantization pq = null;
-            PQVectors pqVectors = null;
-            if (indexPrecision == IndexPrecision.FUSEDPQ) {
-                boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-                pq = ProductQuantization.compute(ravvPerSource, ds.getDimension() / 8, 256, centerData);
-                pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
-                writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
-            }
-
-            try (var writer = writerBuilder.build()) {
-                var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
-                suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravvPerSource.getVector(ordinal)));
-
-                if (indexPrecision == IndexPrecision.FUSEDPQ) {
-                    var view = graph.getView();
-                    var finalPqVectors = pqVectors;
-                    suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, finalPqVectors, ordinal));
+                if (jfrPartitioning) {
+                    jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr");
                 }
 
-                writer.write(suppliers);
-            }
-        }
-        log.info("Done building segments.");
+                int runningStart = 0;
+                for (int i = 0; i < numSources; i++) {
+                    int start = runningStart;
+                    int end = start + vectorsPerSourceCount.get(i);
+                    runningStart = end;
+                    List<VectorFloat<?>> vectorsPerSource = baseVectors.subList(start, end);
+                    // Round-robin assignment of sources to storage paths
+                    Path baseDir = storagePaths.get(i % storagePaths.size());
+                    Path outputPath = baseDir.resolve("per-source-graph-" + i);
+                    log.info("Building and writing segment {}/{} to {}", i + 1, numSources, outputPath.toAbsolutePath());
+                    var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
+                    BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
+                    var builder = new GraphIndexBuilder(bspPerSource,
+                            ds.getDimension(),
+                            graphDegree, beamWidth, 1.2f, 1.2f, true);
+                    var graph = builder.build(ravvPerSource);
 
-        if (jfrPartitioningRecorder.isActive()) {
-            jfrPartitioningRecorder.stop();
+                    // Build the on-disk writer with configurable features
+                    var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
+
+                    if (parallelWriteThreads > 1) {
+                        writerBuilder.withParallelWrites(true).withParallelWorkerThreads(parallelWriteThreads);
+                    }
+
+                    writerBuilder.with(new InlineVectors(ds.getDimension()));
+
+                    ProductQuantization pq = null;
+                    PQVectors pqVectors = null;
+                    if (indexPrecision == IndexPrecision.FUSEDPQ) {
+                        boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                        pq = ProductQuantization.compute(ravvPerSource, ds.getDimension() / 8, 256, centerData);
+                        pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
+                        writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+                    }
+
+                    try (var writer = writerBuilder.build()) {
+                        var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+                        suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravvPerSource.getVector(ordinal)));
+
+                        if (indexPrecision == IndexPrecision.FUSEDPQ) {
+                            var view = graph.getView();
+                            var finalPqVectors = pqVectors;
+                            suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, finalPqVectors, ordinal));
+                        }
+
+                        writer.write(suppliers);
+                    }
+                }
+                log.info("Done building segments.");
+
+                if (jfrPartitioningRecorder.isActive()) {
+                    jfrPartitioningRecorder.stop();
+                }
+                }
+        else {
+            log.info("Dataset {} loaded. Query vectors: {}, Dimensions: {}, Similarity: {}",
+                    datasetNames, queryVectors.size(), ds.getDimension(), similarityFunction);
+            log.info("numSources is 1. Building the graph from scratch.");
         }
         } catch (Exception e) {
             persistError(e);
@@ -578,21 +584,20 @@ public class CompactorBenchmark {
                 log.warn("Failed to start compacting JFR recording", e);
             }
         }
-
-        long startNanos = System.nanoTime();
-        for (int i = 0; i < numSources; ++i) {
-            Path baseDir = storagePaths.get(i % storagePaths.size());
-            var outputPathPerSource = baseDir.resolve("per-source-graph-" + i);
-            log.info("Reading segment {}/{} from {}", i + 1, numSources, outputPathPerSource.toAbsolutePath());
-            rss.add(ReaderSupplierFactory.open(outputPathPerSource.toAbsolutePath()));
-            var onDiskGraph = OnDiskGraphIndex.load(rss.get(i));
-            graphs.add(onDiskGraph);
-        }
-
         // Use the first storage path for the output compacted graph
-        var outputPath = storagePaths.get(0).resolve("compact-graph");
+        var outputPath = storagePaths.get(0).resolve("result-graph");
+        long startNanos = System.nanoTime();
+        if(numSources > 1) {
+            for (int i = 0; i < numSources; ++i) {
+                Path baseDir = storagePaths.get(i % storagePaths.size());
+                var outputPathPerSource = baseDir.resolve("per-source-graph-" + i);
+                log.info("Reading segment {}/{} from {}", i + 1, numSources, outputPathPerSource.toAbsolutePath());
+                rss.add(ReaderSupplierFactory.open(outputPathPerSource.toAbsolutePath()));
+                var onDiskGraph = OnDiskGraphIndex.load(rss.get(i));
+                graphs.add(onDiskGraph);
+            }
 
-        if (numSources > 1) {
+
             var compactor = new OnDiskGraphIndexCompactor(graphs);
             int globalOrdinal = 0;
             for (int n = 0; n < numSources; ++n) {
@@ -603,14 +608,77 @@ public class CompactorBenchmark {
                 var remapper = new OrdinalMapper.MapMapper(map);
                 compactor.setRemapper(graphs.get(n), remapper);
             }
-            log.info("Compacting {} segments into {}", numSources, outputPath.toAbsolutePath());
             compactor.compact(outputPath, similarityFunction);
+            long compactDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            log.info("Compacting {} segments into {} with {} ms", numSources, outputPath.toAbsolutePath(), compactDurationMs);
+        }
+        else {
+            List<VectorFloat<?>> baseVectors;
+            if (datasetPortion == 1.0) {
+                ravv = ds.getBaseRavv();
+                baseVectors = ds.getBaseVectors();
+            } else {
+                int totalVectors = ds.getBaseRavv().size();
+                int portionedSize = (int)(totalVectors * datasetPortion);
+                if (portionedSize < numSources) {
+                    throw new IllegalArgumentException(
+                        "datasetPortion=" + datasetPortion + " yields " + portionedSize
+                        + " vectors, fewer than numSources=" + numSources);
+                }
+                baseVectors = ds.getBaseVectors().subList(0, portionedSize);
+                ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
+            }
+            log.info("Finished loading base vectors. Start building the graph.");
+            Path baseDir = storagePaths.get(0);
+            BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+            var builder = new GraphIndexBuilder(bsp,
+                    ds.getDimension(),
+                    graphDegree, beamWidth, 1.2f, 1.2f, true);
+
+            // TODO: should we compare build with FusedPQ?
+            var graph = builder.build(ravv);
+            log.info("Finished building the graph. Start writing the graph using {} threads.", parallelWriteThreads);
+            // Build the on-disk writer with configurable features
+            var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
+
+            if (parallelWriteThreads > 1) {
+                writerBuilder.withParallelWrites(true).withParallelWorkerThreads(parallelWriteThreads);
+            }
+
+            writerBuilder.with(new InlineVectors(ds.getDimension()));
+
+            ProductQuantization pq;
+            PQVectors pqVectors;
+            if (indexPrecision == IndexPrecision.FUSEDPQ) {
+                boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                pq = ProductQuantization.compute(ravv, ds.getDimension() / 8, 256, centerData);
+                pqVectors = (PQVectors) pq.encodeAll(ravv);
+                writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+            }
+            else {
+                pq = null;
+                pqVectors = null;
+            }
+
+            try (var writer = writerBuilder.build()) {
+                var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+                suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+
+                if (indexPrecision == IndexPrecision.FUSEDPQ) {
+                    var view = graph.getView();
+                    suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
+                }
+                writer.write(suppliers);
+            }
+
+
+            long buildFromScratchDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            log.info("Building from scratch into {} with {} ms", outputPath.toAbsolutePath(), buildFromScratchDurationMs);
         }
 
-        Path searchPath = (numSources > 1) ? outputPath : storagePaths.get(0).resolve("per-source-graph-0");
-        log.info("Loading and searching index at {}", searchPath.toAbsolutePath());
+        log.info("Loading and searching index at {}", outputPath.toAbsolutePath());
 
-        try (var rs = ReaderSupplierFactory.open(searchPath)) {
+        try (var rs = ReaderSupplierFactory.open(outputPath)) {
             var compactGraph = OnDiskGraphIndex.load(rs);
             List<SearchResult> compactedRetrieved = new ArrayList<>();
             for (int n = 0; n < queryVectors.size(); ++n) {
@@ -624,8 +692,8 @@ public class CompactorBenchmark {
             recallResult.recall = AccuracyMetrics.recallFromSearchResults(groundTruth, compactedRetrieved, 10, 10);
             log.info("Recall [dataset={}, numSources={}, graphDegree={}, beamWidth={}, splitDistribution={}, splitSizes={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}, jfrPartitioning={}, jfrCompacting={}, sysStatsEnabled={}]: {}",
                     datasetNames, numSources, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled, recallResult.recall);
-            long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-            persistResult(recallResult.recall, durationMs);
+            long searchDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            persistResult(recallResult.recall, searchDurationMs);
             blackhole.consume(compactedRetrieved);
         } finally {
             if (jfrCompactingRecorder.isActive()) {
