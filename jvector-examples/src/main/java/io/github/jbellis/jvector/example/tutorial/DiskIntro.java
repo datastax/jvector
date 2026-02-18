@@ -79,7 +79,7 @@ public class DiskIntro {
         Path graphPath = Files.createTempFile("jvector-example-graph", null);  // or wherever you want to save the graph
         try (
             // Create a writer for the on-heap graph we just built.
-            GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.ON_DISK_PARALLEL, heapGraph, graphPath)
+            GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.RANDOM_ACCESS_PARALLEL, heapGraph, graphPath)
                 // Let the writer know that we'll also be passing in the actual vector data
                 // to be saved "inline" with the data for each corresponding graph node.
                 .with(new InlineVectors(dim))

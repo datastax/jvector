@@ -100,7 +100,7 @@ for (int ordinal = 0; ordinal < ravv.size(); ordinal++) {
     pqVectors.encodeAndSet(ordinal, v);
 
     // Write the feature (full-resolution vector) for a single vector instead of all at once.
-    writer.writeInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
+    writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
 
     builder.addGraphNode(ordinal, v);
 }

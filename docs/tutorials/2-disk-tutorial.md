@@ -45,7 +45,7 @@ Path graphPath = Files.createTempFile("jvector-example-graph", null);  // or whe
 
 // Create a writer for the on-heap graph we just built.
 // Remember to close when done.
-GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.ON_DISK_PARALLEL, heapGraph, graphPath)
+GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.RANDOM_ACCESS_PARALLEL, heapGraph, graphPath)
     // Let the writer know that we'll also be passing in the actual vector data
     // to be saved "inline" with the data for each corresponding graph node.
     .with(new InlineVectors(dim))

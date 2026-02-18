@@ -127,7 +127,7 @@ public class LargerThanMemory {
 
                     // Write the feature (full-resolution vector) for a single vector instead of all at once.
                     try {
-                        writer.writeInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
+                        writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
