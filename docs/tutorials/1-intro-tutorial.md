@@ -41,8 +41,8 @@ RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, di
 
 > [!NOTE]
 > A note on terminology:
-> - "Base" vectors are the vectors used to build the index. Each vector becomes a node in the graph. May also be referred to as the "train" set.
-> - "Query" vectors are vectors used as queries for ANN search after the index has been built. In some cases you may want to use some base vectors as queries. Also referred to as the "test" set.
+> - "Base" vectors are the vectors used to build the index. Each vector becomes a node in the graph.
+> - "Query" vectors are vectors used as queries for ANN search after the index has been built. In some cases you may want to use some base vectors as queries.
 
 We're now ready to create a Graph-based vector index. We'll do this using a `GraphIndexBuilder` as an intermediate. Let's take a look at the signature of one of it's constructors:
 
@@ -69,7 +69,7 @@ VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.EUCLIDEAN
 BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
 ```
 
-Let's also initialize the graph parameters. For now we will not worry about the exact function of the parameters, except to note that these are reasonable defaults. Refer the DiskANN and HNSW papers for more details.
+Let's also initialize the graph parameters. For now we will not worry about the exact function of the parameters, except to note that these are reasonable defaults. Refer to the DiskANN and HNSW papers for more details.
 
 <!-- TODO describe graph parameters in a separate doc -->
 
@@ -100,7 +100,7 @@ ImmutableGraphIndex graph = builder.build(ravv);
 ```
 
 > [!NOTE]
-> You may notice that we supplied the same `ravv` to `builder.build`, even though we'd already passed in the RAVV while creating the `BuildScoreProvider`. This is necessary since generally speaking, the `BuildScoreProvider` won't keep a reference to the actual base vectors, it just so happens that we're using an "exact" score provider that does so.
+> You may notice that we supplied the same `ravv` to `builder.build`, even though we'd already passed in the RAVV while creating the `BuildScoreProvider`. This is necessary since generally speaking, the `BuildScoreProvider` won't keep a reference to the actual base vectors, but it just so happens that we're using an "exact" score provider that does so.
 
 At this point, you have a completed Graph Index that resides in-memory.
 

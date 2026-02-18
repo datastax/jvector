@@ -56,7 +56,7 @@ some-other-category:
 
 You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`, but without the `.hdf5` suffix for hdf5 datasets. The format of this file is exactly the same as `default.yml`.
 
-Refer `default.yml` for a list of all options.
+Refer to `default.yml` for a list of all options.
 
 Most parameters can be specified as an array. For these parameters, a separate benchmark is run for each value of the parameter. If multiple parameters are specified as arrays, a benchmark is run for each combination (i.e. taking the Cartesian product). For example:
 ```yaml
