@@ -105,12 +105,22 @@ public class QueryTester {
 
         if (systemSnapshot != null) {
             // Max heap usage in MB
-            results.add(Metric.of("search.system.max_heap_mb", "Max heap usage", ".1f",
+            results.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f",
                     systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
 
             // Max off-heap usage (direct + mapped) in MB
-            results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage", ".1f",
+            results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
                     systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+        }
+
+        if (diskSnapshot != null) {
+            // Number of index files created
+            results.add(Metric.of("search.disk.file_count", "File count", ".0f",
+                    diskSnapshot.fileCount));
+
+            // Total size of index files created
+            results.add(Metric.of("search.disk.total_file_size_mb", "Total file size (MB)", ".1f",
+                    diskSnapshot.totalBytes / (1024.0 * 1024.0)));
         }
 
         return results;

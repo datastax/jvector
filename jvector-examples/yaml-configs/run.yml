@@ -35,4 +35,4 @@ logging:
 #  metrics:
 #    system: [ max_heap_mb, max_offheap_mb ] # additional options: [ max_heap_mb, max_offheap_mb ]
 #    disk: [ total_file_size_mb, file_count ] # additional options: [ total_file_size_mb, file_count ]
-#    construction: [ index_build_time_s ]
+#    construction: [ encoding_time_s, index_build_time_s ]
