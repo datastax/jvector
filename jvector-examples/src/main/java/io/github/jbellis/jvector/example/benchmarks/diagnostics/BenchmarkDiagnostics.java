@@ -36,9 +36,8 @@ public class BenchmarkDiagnostics implements AutoCloseable {
     private final DiskUsageMonitor diskUsageMonitor;
     private final PerformanceAnalyzer performanceAnalyzer;
     private final List<SystemMonitor.SystemSnapshot> snapshots;
-    private final List<DiskUsageMonitor.DiskUsageSnapshot> diskSnapshots;
+    private final List<DiskUsageMonitor.MultiDirectorySnapshot> diskSnapshots;
     private final List<PerformanceAnalyzer.TimingAnalysis> timingAnalyses;
-    private Path monitoredDirectory;
     private boolean diskMonitorStarted = false;
 
     public BenchmarkDiagnostics(DiagnosticLevel level) {
@@ -49,7 +48,6 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         this.snapshots = new ArrayList<>();
         this.diskSnapshots = new ArrayList<>();
         this.timingAnalyses = new ArrayList<>();
-        this.monitoredDirectory = null;
     }
 
     /**
@@ -79,12 +77,27 @@ public class BenchmarkDiagnostics implements AutoCloseable {
      *
      * @param directory the directory to monitor
      * @throws IOException if unable to start monitoring
+     * @deprecated Use {@link #startMonitoring(String, Path)} instead
      */
+    @Deprecated
     public void setMonitoredDirectory(Path directory) throws IOException {
-        this.monitoredDirectory = directory;
-        if (directory != null && !diskMonitorStarted) {
-            diskUsageMonitor.start(directory);
+        startMonitoring("default", directory);
+    }
+    
+    /**
+     * Starts monitoring a labeled directory for disk usage.
+     * This should be called before capturing any snapshots for optimal performance.
+     *
+     * @param label a label to identify this directory in reports
+     * @param directory the directory to monitor
+     * @throws IOException if unable to start monitoring
+     */
+    public void startMonitoring(String label, Path directory) throws IOException {
+        if (!diskMonitorStarted) {
+            diskUsageMonitor.startMonitoring(label, directory);
             diskMonitorStarted = true;
+        } else {
+            diskUsageMonitor.addDirectory(label, directory);
         }
     }
 
@@ -95,12 +108,12 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         SystemMonitor.SystemSnapshot snapshot = systemMonitor.captureSnapshot();
         snapshots.add(snapshot);
 
-        // Capture disk usage if directory is set
-        if (monitoredDirectory != null) {
+        // Capture disk usage if monitoring is started
+        if (diskMonitorStarted) {
             try {
-                DiskUsageMonitor.DiskUsageSnapshot diskSnapshot = diskUsageMonitor.captureSnapshot(monitoredDirectory);
+                DiskUsageMonitor.MultiDirectorySnapshot diskSnapshot = diskUsageMonitor.captureSnapshot();
                 diskSnapshots.add(diskSnapshot);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 if (level != DiagnosticLevel.NONE) {
                     System.err.printf("[%s] Failed to capture disk usage: %s%n", phase, e.getMessage());
                 }
@@ -127,15 +140,15 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         snapshots.add(postSnapshot);
 
         // Capture and log disk usage changes
-        if (monitoredDirectory != null) {
+        if (diskMonitorStarted) {
             try {
-                DiskUsageMonitor.DiskUsageSnapshot postDiskSnapshot = diskUsageMonitor.captureSnapshot(monitoredDirectory);
+                DiskUsageMonitor.MultiDirectorySnapshot postDiskSnapshot = diskUsageMonitor.captureSnapshot();
                 if (!diskSnapshots.isEmpty() && level != DiagnosticLevel.NONE) {
-                    DiskUsageMonitor.DiskUsageSnapshot preDiskSnapshot = diskSnapshots.get(diskSnapshots.size() - 1);
+                    DiskUsageMonitor.MultiDirectorySnapshot preDiskSnapshot = diskSnapshots.get(diskSnapshots.size() - 1);
                     diskUsageMonitor.logDifference(phase, preDiskSnapshot, postDiskSnapshot);
                 }
                 diskSnapshots.add(postDiskSnapshot);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 if (level != DiagnosticLevel.NONE) {
                     System.err.printf("[%s] Failed to capture disk usage: %s%n", phase, e.getMessage());
                 }
@@ -223,7 +236,7 @@ public class BenchmarkDiagnostics implements AutoCloseable {
     /**
      * Gets the latest disk usage snapshot, or null if none captured
      */
-    public DiskUsageMonitor.DiskUsageSnapshot getLatestDiskSnapshot() {
+    public DiskUsageMonitor.MultiDirectorySnapshot getLatestDiskSnapshot() {
         return diskSnapshots.isEmpty() ? null : diskSnapshots.get(diskSnapshots.size() - 1);
     }
 
@@ -298,17 +311,33 @@ public class BenchmarkDiagnostics implements AutoCloseable {
     public void printDiskStatistics(String label) {
         // Disk usage summary
         if (!diskSnapshots.isEmpty()) {
-            DiskUsageMonitor.DiskUsageSnapshot firstDisk = diskSnapshots.get(0);
-            DiskUsageMonitor.DiskUsageSnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
-            DiskUsageMonitor.DiskUsageSnapshot totalDisk = lastDisk.subtract(firstDisk);
+            DiskUsageMonitor.MultiDirectorySnapshot firstDisk = diskSnapshots.get(0);
+            DiskUsageMonitor.MultiDirectorySnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
+            DiskUsageMonitor.MultiDirectorySnapshot totalDisk = lastDisk.subtract(firstDisk);
 
             System.out.printf("\nDisk Usage Summary %s:%n", label);
-            System.out.printf("  Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.totalBytes));
-            System.out.printf("  Total Files: %d%n", lastDisk.fileCount);
-            System.out.printf("  Net Change: %s, %+d files%n",
-                    DiskUsageMonitor.formatBytes(totalDisk.totalBytes), totalDisk.fileCount);
+            
+            // Print statistics for each monitored directory
+            for (String dirLabel : lastDisk.snapshots.keySet()) {
+                DiskUsageMonitor.DiskUsageSnapshot lastSnap = lastDisk.get(dirLabel);
+                DiskUsageMonitor.DiskUsageSnapshot totalSnap = totalDisk.get(dirLabel);
+                
+                System.out.printf("  [%s]:%n", dirLabel);
+                System.out.printf("    Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastSnap.totalBytes));
+                System.out.printf("    Total Files: %d%n", lastSnap.fileCount);
+                if (totalSnap != null) {
+                    System.out.printf("    Net Change: %s, %+d files%n",
+                            DiskUsageMonitor.formatBytes(totalSnap.totalBytes), totalSnap.fileCount);
+                }
+            }
+            
+            // Print overall totals
+            System.out.printf("  [Overall Total]:%n");
+            System.out.printf("    Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.getTotalBytes()));
+            System.out.printf("    Total Files: %d%n", lastDisk.getTotalFileCount());
+            System.out.printf("    Net Change: %s, %+d files%n",
+                    DiskUsageMonitor.formatBytes(totalDisk.getTotalBytes()), totalDisk.getTotalFileCount());
         }
-
     }
 
     /**
