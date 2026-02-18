@@ -18,6 +18,7 @@ The general procedure for running benchmarks is mentioned below. The following s
 - [Specify the dataset](#specifying-datasets) names to benchmark in `datasets.yml`.
 - Certain datasets will be downloaded automatically. If using a different dataset, make sure the dataset files are downloaded and made available (refer the section on [Custom datasets](#custom-datasets)).
 - Adjust the benchmark parameters in `default.yml`. This will affect the parameters for all datasets to be benchmarked. You can specify custom parameters for a specific dataset by creating a file called `<your-dataset-name>.yml` in the same folder.
+- Decide on the kind of measurements and logging you want and configure them in `run.yml`.
 
 You can run the configured benchmark with maven:
 ```sh
@@ -34,7 +35,7 @@ Datasets are assumed to be Fvec/Ivec based unless the entry in the `datasets.yml
 
 You'll notice that datasets are grouped into categories. The categories can be arbitrarily chosen for convenience and are not currently considered by the benchmarking system.
 
-For HDF5 files, the substrings `-angular`, `-euclidean` and `-dot` correspond to cosine similarity, L2 distance, and dot product similarity functions (these substrings ARE considered to be part of the "dataset name"). Currently, Fvec/Ivec datasets are implicitly assumed to use cosine similarity (changing this requires editing `MultiFileDataSource.java`).
+For HDF5 files, the substrings `-angular`, `-euclidean` and `-dot` correspond to cosine similarity, L2 distance, and dot product similarity functions (these substrings ARE considered to be part of the "dataset name"). Currently, Fvec/Ivec datasets are implicitly assumed to use cosine similarity (changing this requires editing `DataSetLoaderMFD.java`).
 
 Example `datasets.yml`:
 
@@ -66,6 +67,16 @@ construction:
 ```
 will build and benchmark four graphs, one for each combination of M and ef in {(32, 100), (64, 100), (32, 200), (64, 200)}. This is particularly useful when running a Grid search to identify the best performing parameters.
 
+### run.yml
+
+This file contains configurations for
+- Specifying the measurements you want to report, like QPS, latency and recall
+- Specifying where to output these measurements, i.e. to the console, or to a file, or both.
+
+The configurations in this file are "run-level", meaning that they are shared across all the datasets being benchmarked.
+
+See `run.yml` for a full list of all options.
+
 ## Running `bench` from the command line
 
 Once configured to your liking, you can run the benchmark through maven:
@@ -83,7 +94,7 @@ mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs="glove nytimes"
 
 ### Custom Fvec/Ivec datasets
 
-Using fvec/ivec datasets requires them to be configured in `MultiFileDatasource.java`. Some datasets are already pre-configured; these will be downloaded and used automatically on running the benchmark.
+Using fvec/ivec datasets requires them to be configured in `DataSetLoaderMFD.java`. Some datasets are already pre-configured; these will be downloaded and used automatically on running the benchmark.
 
 To use a custom dataset consisting of files `base.fvec`, `queries.fvec` and `neighbors.ivec`, do the following:
 - Ensure that you have three files:
@@ -92,12 +103,12 @@ To use a custom dataset consisting of files `base.fvec`, `queries.fvec` and `nei
     - `neighbors.ivec` containing Q K-dimensional integer vectors, one for each query vector, representing the exact K-nearest neighbors for that query among the base vectors.
     The files can be named however you like.
 - Save all three files somewhere in the `fvec` directory in the root of the `jvector` repo (if it doesn't exist, create it). It's recommended to create at least one sub-folder with the name of the dataset and copy or move all three files there.
-- Edit `MultiFileDatasource.java` to configure a new dataset and it's associated files:
+- Edit `DataSetLoaderMFD.java` to configure a new dataset and it's associated files:
     ```java
     put("cust-ds", new MultiFileDatasource("cust-ds",
-            "/cust-ds/base.fvec",
-            "/cust-ds/query.fvec",
-            "/cust-ds/neighbors.ivec"));
+            "cust-ds/base.fvec",
+            "cust-ds/query.fvec",
+            "cust-ds/neighbors.ivec"));
     ```
     The file paths are resolved relative to the `fvec` directory. `cust-ds` is the name of the dataset and can be changed to whatever is appropriate.
 - In `jvector-examples/yaml-configs/datasets.yml`, add an entry corresponding to your custom dataset. Comment out other datasets which you do not want to benchmark.
