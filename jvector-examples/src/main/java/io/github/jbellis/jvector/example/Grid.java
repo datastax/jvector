@@ -225,6 +225,8 @@ public class Grid {
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
+        // Prepare to collect index construction metrics for reporting....
+        var constructionMetrics = new ConstructionMetrics();
         // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
@@ -279,6 +281,7 @@ public class Grid {
 
             diagnostics.printDiskStatistics("Graph Index Build");
             System.out.printf("Index build time: %f seconds%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+            constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
 
             try {
                 for (var cpSupplier : compressionGrid) {
@@ -298,13 +301,15 @@ public class Grid {
                             } else {
                                 long start = System.nanoTime();
                                 cv = compressor.encodeAll(ds.getBaseRavv());
-                                System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                                double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
+                                constructionMetrics.encodingTimeS = encodingTimeS; // Report encoding time
                             }
                         }
 
                         try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                             testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
-                                    artifacts, workDirectory);
+                                    artifacts, constructionMetrics, workDirectory);
                         } catch (Exception e) {
                             throw new RuntimeException(e);
                         }
@@ -582,6 +587,7 @@ public class Grid {
                                           boolean refineFinalGraph,
                                           Set<FeatureId> featureSetForIndex,
                                           RunArtifacts artifacts,
+                                          ConstructionMetrics constructionMetrics,
                                           Path testDirectory) {
         int queryRuns = 2;
         System.out.format("Using %s:%n", cs.index);
@@ -625,6 +631,8 @@ public class Grid {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    // Merge construction-phase metrics into the runtime results so selections can see them.
+                    constructionMetrics.appendTo(results);
 
                     // Best-effort runtime availability warnings (warn once per key)
                     consoleSel.warnMissing(results, consoleResolved);
@@ -998,6 +1006,33 @@ public class Grid {
         @Override
         public void close() throws Exception {
             searchers.close();
+        }
+    }
+
+    /**
+     * Construction-phase metrics captured while building (and optionally encoding and writing) an index.
+     * <p>
+     * Values may be {@code null} when not measured or not applicable (e.g., cache hit). Call {@link #appendTo(List)}
+     * to emit these as {@link Metric} entries so they can be selected for console/CSV reporting.
+     */
+    static final class ConstructionMetrics {
+        // null means “not applicable / not measured”
+        public Double encodingTimeS;
+        public Double indexBuildTimeS;
+
+        ConstructionMetrics() {}
+
+        /** Adds construction metrics as Metric entries (keys always present; null => blank in CSV). */
+        void appendTo(List<Metric> out) {
+            if (encodingTimeS != null) {
+                out.add(Metric.of("construction.encoding_time_s",
+                        "Encoding time (s)", ".2f", encodingTimeS));
+            }
+
+            if (indexBuildTimeS != null) {
+                out.add(Metric.of("construction.index_build_time_s",
+                        "Index build time (s)", ".2f", indexBuildTimeS));
+            }
         }
     }
 }
