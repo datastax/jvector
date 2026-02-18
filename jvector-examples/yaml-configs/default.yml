@@ -1,4 +1,5 @@
-version: 6
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
 
 dataset: default
 
@@ -33,8 +34,5 @@ search:
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
-  benchmarks: # full option set, if the whole "benchmarks" section is not specified, a default set will be used
-    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
-    latency: [ AVG ] # additional options: [ AVG, STD, P999 ]
-    count: [ visited ] # additional options: [ visited, expanded, expanded base layer ]
-    accuracy: [ recall ] # additional options: [ recall, MAP ]
+
+# Run-level controls, such as benchmarks, console, and logging, are in run.yml.

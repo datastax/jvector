@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-import io.github.jbellis.jvector.example.Grid;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 
@@ -79,57 +78,40 @@ public class QueryTester {
 
         List<Metric> results = new ArrayList<>();
 
-        // Capture memory and disk usage before running queries
+        // Capture memory and disk usage before/after running queries
         // Use NONE level to suppress logging output that would break the table
-        var diagnostics = new BenchmarkDiagnostics(io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel.NONE);
-        if (monitoredDirectory != null) {
-            try {
+        try (var diagnostics = new BenchmarkDiagnostics(
+                io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel.NONE)) {
+
+            if (monitoredDirectory != null) {
                 diagnostics.setMonitoredDirectory(monitoredDirectory);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
             }
-        }
-        diagnostics.capturePrePhaseSnapshot("Query");
 
-        for (var benchmark : benchmarks) {
-            var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-            results.addAll(metrics);
-        }
+            diagnostics.capturePrePhaseSnapshot("Query");
 
-        // Capture memory and disk usage after running queries
-        diagnostics.capturePostPhaseSnapshot("Query");
-        
-        // Add memory and disk metrics to results
-        var systemSnapshot = diagnostics.getLatestSystemSnapshot();
-        var diskSnapshot = diagnostics.getLatestDiskSnapshot();
-        
-        if (systemSnapshot != null) {
-            // Max heap usage in MB
-            results.add(Metric.of("Max heap usage", ".1f",
-                systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
-            
-            // Max off-heap usage (direct + mapped) in MB
-            results.add(Metric.of("Max offheap usage", ".1f",
-                systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
-        }
-        
-        if (diskSnapshot != null) {
-            // Total file size in MB
-            results.add(Metric.of("Total file size", ".1f",
-                diskSnapshot.totalBytes / (1024.0 * 1024.0)));
-            
-            // Number of files
-            results.add(Metric.of("Number of files", ".0f",
-                (double) diskSnapshot.fileCount));
-        }
-        
-        // Add index build time if available
-        if (datasetName != null && Grid.getIndexBuildTimeSeconds(datasetName) != null) {
-            results.add(Metric.of("Index build time", ".2f",
-                Grid.getIndexBuildTimeSeconds(datasetName)));
-        }
+            for (var benchmark : benchmarks) {
+                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                results.addAll(metrics);
+            }
 
+            // Capture memory and disk usage after running queries
+            diagnostics.capturePostPhaseSnapshot("Query");
+
+            // Add memory and disk metrics to results
+            var systemSnapshot = diagnostics.getLatestSystemSnapshot();
+            var diskSnapshot = diagnostics.getLatestDiskSnapshot();
+
+            if (systemSnapshot != null) {
+                results.add(Metric.of("search.system.max_heap_mb", "Max heap usage", ".1f",
+                        systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+
+                results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage", ".1f",
+                        systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         return results;
     }
 }
-

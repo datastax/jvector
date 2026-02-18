@@ -93,6 +93,22 @@ public class BufferedRandomAccessWriter implements RandomAccessWriter {
     }
 
     /**
+     * Invalidates any buffered read cache by seeking to the current position.
+     * This is necessary when external writes (e.g., via AsynchronousFileChannel)
+     * have modified the file, bypassing this writer's buffer.
+     * <p>
+     * This method flushes any pending writes and then seeks to the current position,
+     * which forces the underlying RandomAccessFile to re-read from disk on the next read.
+     *
+     * @throws IOException if an I/O error occurs
+     */
+    public void invalidateCache() throws IOException {
+        flush();
+        long currentPos = raf.getFilePointer();
+        raf.seek(currentPos);
+    }
+
+    /**
      * Returns the CRC32 checksum for the range [startOffset .. endOffset)
      *
      * The file pointer will be left at endOffset.
