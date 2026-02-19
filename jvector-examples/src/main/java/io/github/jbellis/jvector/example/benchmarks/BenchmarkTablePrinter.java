@@ -130,5 +130,3 @@ public class BenchmarkTablePrinter {
         System.out.println();
     }
 }
-
-

@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
+import io.github.jbellis.jvector.example.yaml.TestDataPartition;
+import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -38,6 +40,7 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 public class Bench {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+        var parsedArgs = parseArgs(args);
 
         // When enabled, caches built indices for reuse in future runs.
         // Useful for large indexes and repeated testing.
@@ -75,18 +78,10 @@ public class Bench {
                 EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ),
                 EnumSet.of(FeatureId.INLINE_VECTORS)
         );
-        Integer numSplits = 1;
-
-        // args is list of regexes, possibly needing to be split by whitespace.
-        // generate a regex that matches any regex in args, or if args is empty/null, match everything
-        var regex = args.length == 0 ? ".*" : Arrays.stream(args).flatMap(s -> Arrays.stream(s.split("\\s"))).map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
-        // compile regex and do substring matching using find
-        var pattern = Pattern.compile(regex);
-
-        execute(pattern, enableIndexCache, buildCompression, featureSets, numSplits, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
+        execute(parsedArgs.datasetPattern, enableIndexCache, buildCompression, featureSets, parsedArgs.partitions, searchCompression, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, topKGrid, usePruningGrid);
     }
 
-    private static void execute(Pattern pattern, boolean enableIndexCache, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, Integer numSplits, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
+    private static void execute(Pattern pattern, boolean enableIndexCache, List<Function<DataSet, CompressorParameters>> buildCompression, List<EnumSet<FeatureId>> featureSets, TestDataPartition partitions, List<Function<DataSet, CompressorParameters>> compressionGrid, List<Integer> mGrid, List<Integer> efConstructionGrid, List<Float> neighborOverflowGrid, List<Boolean> addHierarchyGrid, List<Boolean> refineFinalGraphGrid, Map<Integer, List<Double>> topKGrid, List<Boolean> usePruningGrid) throws IOException {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
         System.out.println("Executing the following datasets: " + datasetNames);
@@ -95,7 +90,104 @@ public class Bench {
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Dataset " + datasetName + " not found")
             );
-            Grid.runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, numSplits, compressionGrid, topKGrid, usePruningGrid);
+            Grid.runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, partitions, compressionGrid, topKGrid, usePruningGrid);
+        }
+    }
+
+    static ParsedArgs parseArgs(String[] args) {
+        List<String> tokens = Arrays.stream(args == null ? new String[0] : args)
+                .filter(Objects::nonNull)
+                .flatMap(s -> Arrays.stream(s.split("\\s+")))
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
+
+        var regexTokens = new ArrayList<String>();
+        var splitCounts = new ArrayList<Integer>();
+        var splitDistributions = new ArrayList<Distribution>();
+
+        for (int i = 0; i < tokens.size(); i++) {
+            String token = tokens.get(i);
+            switch (token) {
+                case "--num-splits":
+                    i = requireAndParseSplitCounts(tokens, i, splitCounts);
+                    break;
+                case "--split-distribution":
+                    i = requireAndParseSplitDistributions(tokens, i, splitDistributions);
+                    break;
+                default:
+                    regexTokens.add(token);
+            }
+        }
+
+        var regex = regexTokens.isEmpty()
+                ? ".*"
+                : regexTokens.stream().map(s -> "(?:" + s + ")").collect(Collectors.joining("|"));
+
+        var partitions = new TestDataPartition();
+        if (!splitCounts.isEmpty()) {
+            partitions.numSplits = splitCounts;
+        }
+        if (!splitDistributions.isEmpty()) {
+            partitions.splitDistribution = splitDistributions;
+        }
+
+        return new ParsedArgs(Pattern.compile(regex), partitions);
+    }
+
+    private static int requireAndParseSplitCounts(List<String> tokens, int optionIndex, List<Integer> splitCounts) {
+        if (optionIndex + 1 >= tokens.size()) {
+            throw new IllegalArgumentException("Missing value for --num-splits");
+        }
+        int sizeBefore = splitCounts.size();
+        String value = tokens.get(optionIndex + 1);
+        for (String raw : value.split(",")) {
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int parsed = Integer.parseInt(trimmed);
+            if (parsed <= 0) {
+                throw new IllegalArgumentException("--num-splits values must be positive: " + parsed);
+            }
+            splitCounts.add(parsed);
+        }
+        if (splitCounts.size() == sizeBefore) {
+            throw new IllegalArgumentException("No valid values provided for --num-splits");
+        }
+        return optionIndex + 1;
+    }
+
+    private static int requireAndParseSplitDistributions(List<String> tokens, int optionIndex, List<Distribution> splitDistributions) {
+        if (optionIndex + 1 >= tokens.size()) {
+            throw new IllegalArgumentException("Missing value for --split-distribution");
+        }
+        int sizeBefore = splitDistributions.size();
+        String value = tokens.get(optionIndex + 1);
+        for (String raw : value.split(",")) {
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                splitDistributions.add(Distribution.valueOf(trimmed.toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid --split-distribution value '" + trimmed
+                        + "'. Expected one of " + Arrays.toString(Distribution.values()), e);
+            }
+        }
+        if (splitDistributions.size() == sizeBefore) {
+            throw new IllegalArgumentException("No valid values provided for --split-distribution");
+        }
+        return optionIndex + 1;
+    }
+
+    static final class ParsedArgs {
+        final Pattern datasetPattern;
+        final TestDataPartition partitions;
+
+        ParsedArgs(Pattern datasetPattern, TestDataPartition partitions) {
+            this.datasetPattern = datasetPattern;
+            this.partitions = partitions;
         }
     }
 }

@@ -21,8 +21,8 @@
  * Persistent Disk, Network Filesystem) across different environments including
  * AWS, GCP, and local development machines.
  * <p>
- * The primary entry point is {@link io.github.jbellis.jvector.bench.storage.CloudStorageLayoutUtil},
+ * The primary entry point is {@link io.github.jbellis.jvector.example.util.storage.CloudStorageLayoutUtil},
  * which provides a unified view of the system's mount points and their corresponding
- * {@link io.github.jbellis.jvector.bench.storage.CloudStorageLayoutUtil.StorageClass}.
+ * {@link io.github.jbellis.jvector.example.util.storage.CloudStorageLayoutUtil.StorageClass}.
  */
-package io.github.jbellis.jvector.bench.storage;
+package io.github.jbellis.jvector.example.util.storage;

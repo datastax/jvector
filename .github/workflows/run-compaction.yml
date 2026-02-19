@@ -1,0 +1,186 @@
+name: Run Compaction Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_config:
+        description: 'Compaction benchmark dataset regex'
+        required: false
+        default: 'ada002-100k-compaction'
+      branches:
+        description: 'Space-separated list of branches to benchmark'
+        required: false
+        default: 'main'
+      custom_config:
+        description: 'Custom YAML configuration content (will override autoDefault.yml)'
+        required: false
+        type: string
+        default: ''
+  pull_request:
+    types: [opened,synchronize,ready_for_review]
+    branches:
+      - main
+    paths:
+      - '**/src/main/java/**'
+      - 'pom.xml'
+      - '**/pom.xml'
+
+jobs:
+  # Job to generate the matrix configuration
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          # Default branches based on event type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BRANCHES='["main", "${{ github.head_ref }}"]'
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
+            BRANCHES_INPUT="${{ github.event.inputs.branches }}"
+            BRANCHES="["
+            for branch in $BRANCHES_INPUT; do
+              if [[ "$BRANCHES" != "[" ]]; then
+                BRANCHES="$BRANCHES, "
+              fi
+              BRANCHES="$BRANCHES"$branch""
+            done
+            BRANCHES="$BRANCHES]"
+          else
+            BRANCHES='["main"]'
+          fi
+
+          echo "matrix={"jdk":[24],"isa":["isa-avx512f"],"branch":$BRANCHES}" >> $GITHUB_OUTPUT
+
+  test-compaction:
+    needs: generate-matrix
+    strategy:
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.isa }}
+    steps:
+      - name: Set up GCC
+        run: sudo apt install -y gcc
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: temurin
+          cache: maven
+
+      # Checkout the branch specified in the matrix
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      # Create a directory to store benchmark results
+      - name: Create results directory
+        run: mkdir -p benchmark_results
+
+      # Build the branch
+      - name: Build branch
+        run: mvn -B -Punix-amd64-profile package --file pom.xml
+
+      # Run the compaction benchmark
+      - name: Run benchmark
+        id: run-benchmark
+        env:
+          DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
+        run: |
+          # Determine available memory and set heap size to half of it
+          TOTAL_MEM_GB=$(free -g | awk '/^Mem:/ {print $2}')
+          if [[ -z "$TOTAL_MEM_GB" ]] || [[ "$TOTAL_MEM_GB" -le 0 ]]; then
+            TOTAL_MEM_GB=16
+          fi
+          HALF_MEM_GB=$((TOTAL_MEM_GB / 2))
+          if [[ "$HALF_MEM_GB" -lt 1 ]]; then
+            HALF_MEM_GB=1
+          fi
+          
+          # Determine optional benchmark config argument from workflow input
+          BENCH_ARG="${{ github.event.inputs.benchmark_config }}"
+          if [[ -z "$BENCH_ARG" ]]; then
+            BENCH_ARG="ada002-100k-compaction"
+          fi
+          BENCH_SUFFIX=" $BENCH_ARG"
+
+          # Handle custom configuration if provided
+          CUSTOM_CONFIG="${{ github.event.inputs.custom_config }}"
+          CONFIG_ARG=""
+          if [[ -n "$CUSTOM_CONFIG" ]]; then
+            CUSTOM_CONFIG_FILE="custom-compaction-config.yml"
+            echo "$CUSTOM_CONFIG" > "$CUSTOM_CONFIG_FILE"
+            CONFIG_ARG="--config $CUSTOM_CONFIG_FILE"
+          fi
+
+          # Sanitize branch name for filenames
+          SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+          echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
+
+          java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} 
+            ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} 
+            -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g 
+            -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-compaction-results ${CONFIG_ARG}${BENCH_SUFFIX}
+
+          # Move the results to the benchmark_results directory
+          mv ${SAFE_BRANCH}-compaction-results.csv benchmark_results/ || true
+          mv ${SAFE_BRANCH}-compaction-results.json benchmark_results/ || true
+
+      - name: Upload Compaction Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: compaction-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ steps.run-benchmark.outputs.safe_branch }}
+          path: |
+            benchmark_results/*.csv
+            benchmark_results/*.json
+          if-no-files-found: warn
+
+  # Job to combine results and create visualizations
+  combine-results:
+    needs: test-compaction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: compaction-results-*
+          path: all-compaction-results
+          merge-multiple: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install matplotlib numpy psutil
+
+      - name: Generate visualization using visualize_benchmarks.py
+        run: |
+          shopt -s globstar nullglob
+          files=(all-compaction-results/**/*.csv)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=(**/*.csv)
+          fi
+          
+          if [ ${#files[@]} -gt 0 ]; then
+            OUTPUT_DIR="compaction_reports"
+            python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
+          fi
+
+      - name: Upload visualization artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compaction-comparison-results
+          path: |
+            compaction_reports/**
+          retention-days: 90

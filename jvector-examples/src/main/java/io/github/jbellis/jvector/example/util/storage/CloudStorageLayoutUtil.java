@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.github.jbellis.jvector.bench.storage;
+package io.github.jbellis.jvector.example.util.storage;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

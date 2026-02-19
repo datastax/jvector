@@ -7,6 +7,7 @@ CONTRIBUTIONS.md
 package.json
 .github/workflows/tag-release.yml
 .github/workflows/run-bench.yml
+.github/workflows/run-compaction.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md

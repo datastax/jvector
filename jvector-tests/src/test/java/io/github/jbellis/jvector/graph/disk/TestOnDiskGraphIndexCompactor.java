@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
@@ -46,11 +47,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
 import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
+import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 
+@ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     private List<TestUtil.RandomlyConnectedGraphIndex> randomlyConnectedGraphs;
     private List<TestVectorGraph.CircularFloatVectorValues> ravvs;
@@ -64,6 +66,8 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     int numQueries = 10;
     VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
     RandomAccessVectorValues allravv;
+    private final ForkJoinPool simdExecutor = ForkJoinPool.commonPool();
+    private final ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
 
     @Before
     public void setup() throws IOException {
@@ -78,7 +82,17 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for(int i = 0; i < numGraphs; ++i) {
             List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
             RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
-            var builder = new GraphIndexBuilder(ravv, similarityFunction, 10, 100, 1.0f, 1.0f, true);
+            var builder = new GraphIndexBuilder(
+                    BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction),
+                    dimension,
+                    10,
+                    100,
+                    1.0f,
+                    1.0f,
+                    true,
+                    true,
+                    simdExecutor,
+                    parallelExecutor);
             var graph = TestUtil.buildSequentially(builder, ravv);
 
             var outputPath = testDirectory.resolve("test_graph_" + i);
@@ -90,10 +104,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for(int i = 0; i < numGraphs; ++i) {
             List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
             RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
-            ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true);
-            PQVectors pqv = (PQVectors) pq.encodeAll(ravv);
+            ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+            PQVectors pqv = (PQVectors) pq.encodeAll(ravv, simdExecutor);
             var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
-            var builder = new GraphIndexBuilder(bsp, dimension, 32, 1000, 1.0f, 1.0f, true, true);
+            var builder = new GraphIndexBuilder(bsp, dimension, 32, 1000, 1.0f, 1.0f, true, true, simdExecutor, parallelExecutor);
             var graph = builder.getGraph();
 
             var outputPath = testDirectory.resolve("test_graph_" + i);
@@ -129,10 +143,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     void buildGoldenPQ() throws IOException {
         allravv = new ListRandomAccessVectorValues(allVecs, dimension);
 
-        ProductQuantization pq = ProductQuantization.compute(allravv, 8, 256, true);
-        PQVectors pqv = (PQVectors) pq.encodeAll(allravv);
+        ProductQuantization pq = ProductQuantization.compute(allravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv = (PQVectors) pq.encodeAll(allravv, simdExecutor);
         var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
-        var builder = new GraphIndexBuilder(bsp, dimension, 10, 100, 1.0f, 1.0f, true, true);
+        var builder = new GraphIndexBuilder(bsp, dimension, 10, 100, 1.0f, 1.0f, true, true, simdExecutor, parallelExecutor);
         for (var i = 0; i < allravv.size(); i++) {
             builder.addGraphNode(i, allravv.getVector(i));
         }

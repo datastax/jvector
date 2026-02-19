@@ -16,11 +16,16 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
+import java.util.List;
+import java.util.Map;
 
-public class CompactionParameters extends CommonParameters {
-    public Integer numSplits;
-    public CompactionParameters() {}
-    public CompactionParameters(int numSplits) {
-        this.numSplits = numSplits;
-    }
+/**
+ * A sink-agnostic selection of benchmark stats and related metrics, using the same schema
+ * as SearchParameters.benchmarks ({@code Map<String, List<String>>}).
+ *
+ * Used for console projections now, and logging (CSV/Parquet/etc) later.
+ */
+public class BenchmarkSelection {
+    public Map<String, List<String>> benchmarks;
+    public MetricSelection metrics;
 }

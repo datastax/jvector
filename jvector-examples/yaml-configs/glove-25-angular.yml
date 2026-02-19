@@ -1,5 +1,7 @@
 # This is here for loader testing purposes only, use other datasets for realistic test data
-version: 6
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
 
 dataset: glove-25-angular
 
@@ -31,8 +33,4 @@ search:
         mFactor: 4
         centerData: No
         anisotropicThreshold: -1.0
-  benchmarks:
-    throughput: [AVG]
-    latency: [AVG, STD, P999]
-    count: [visited, expanded base layer]
-    accuracy: [recall]
+

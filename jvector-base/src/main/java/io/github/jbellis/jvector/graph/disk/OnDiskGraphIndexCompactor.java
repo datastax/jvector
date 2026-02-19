@@ -126,8 +126,8 @@ public final class OnDiskGraphIndexCompactor {
         dimension = this.sources.get(0).getDimension();
         this.rng = new Random(0);
         this.executor = executor;
-
     }
+
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources) {
         this(sources, ForkJoinPool.commonPool());
     }
@@ -159,8 +159,8 @@ public final class OnDiskGraphIndexCompactor {
         return ((int) (-log(randDouble) * ml));
     }
     private void checkBeforeCompact() {
-        if(sources.size() <= 1) {
-            throw new IllegalArgumentException("Must have at least two sources");
+        if(sources.size() < 1) {
+            throw new IllegalArgumentException("Must have at least one source");
         }
         for(OnDiskGraphIndex source : sources) {
             if(source.getDimension() != dimension) {
@@ -910,4 +910,3 @@ final class CompactWriter implements AutoCloseable {
         return new WriteResult(ordinal, fileOffset, dataCopy);
     }
 }
-

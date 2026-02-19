@@ -44,27 +44,34 @@ import java.util.stream.Collectors;
  * 
  * The benchmark runner supports checkpointing to allow resuming from failures.
  * It creates a checkpoint file (outputPath + ".checkpoint.json") that records
- * which datasets have been fully processed. If the benchmark is restarted,
- * it will skip datasets that have already been processed, allowing it to
+ * which tests have been fully processed. If the benchmark is restarted,
+ * it will skip tests that have already been processed, allowing it to
  * continue from where it left off rather than starting over from the beginning.
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
 
     /**
-     * Returns a list of all dataset names.
-     * This replaces the need to load datasets.yml which may not be available in all environments.
+     * Returns a list of all test names.
+     * This includes both dataset names (which fall back to autoDefault) and specific test configuration names.
      */
-    private static List<String> getAllDatasetNames() {
-        List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
-        allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
+    private static List<String> getAllTestNames() {
+        List<String> tests = new ArrayList<>();
+        // Standard datasets using autoDefault
+        tests.add("cap-1M");
+        tests.add("cap-6M");
+        tests.add("cohere-english-v3-1M");
+        tests.add("cohere-english-v3-10M");
+        tests.add("dpr-1M");
+        tests.add("dpr-10M");
+        tests.add("ada002-100k");
+        
+        // Specific test configurations
+        tests.add("ada002-100k-compaction");
+        tests.add("colbert-1M");
+        tests.add("glove-25-angular");
 
-        return allDatasets;
+        return tests;
     }
 
     public static void main(String[] args) throws IOException {
@@ -83,10 +90,9 @@ public class AutoBenchYAML {
 
         // Initialize checkpoint manager
         CheckpointManager checkpointManager = new CheckpointManager(outputPath);
-        logger.info("Initialized checkpoint manager. Already completed datasets: {}", checkpointManager.getCompletedDatasets());
+        logger.info("Initialized checkpoint manager. Already completed tests: {}", checkpointManager.getCompletedDatasets());
 
         // Filter out --output, --config and their arguments from the args
-        String finalOutputPath = outputPath;
         String configPath = null;
         int diagnostic_level = 0;
         for (int i = 0; i < args.length - 1; i++) {
@@ -96,10 +102,11 @@ public class AutoBenchYAML {
         if (diagnostic_level > 0) {
             Grid.setDiagnosticLevel(diagnostic_level);
         }
-        String finalConfigPath = configPath;
+        final String fOutputPath = outputPath;
+        final String fConfigPath = configPath;
         String[] filteredArgs = Arrays.stream(args)
-                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) && 
-                               !arg.equals("--config") && !arg.equals(finalConfigPath))
+                .filter(arg -> !arg.equals("--output") && !arg.equals(fOutputPath) && 
+                               !arg.equals("--config") && !arg.equals(fConfigPath))
                 .toArray(String[]::new);
 
         // Log the filtered arguments for debugging
@@ -112,66 +119,83 @@ public class AutoBenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        var datasetNames = getAllDatasetNames().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var testNames = getAllTestNames().stream().filter(tn -> pattern.matcher(tn).find()).collect(Collectors.toList());
 
-        logger.info("Executing the following datasets: {}", datasetNames);
+        logger.info("Executing the following tests: {}", testNames);
         List<BenchResult> results = new ArrayList<>();
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
-        // Process datasets from regex patterns
-        if (!datasetNames.isEmpty()) {
-            for (var datasetName : datasetNames) {
-                // Skip already completed datasets
-                if (checkpointManager.isDatasetCompleted(datasetName)) {
-                    logger.info("Skipping already completed dataset: {}", datasetName);
+        // Process tests from regex patterns
+        if (!testNames.isEmpty()) {
+            for (var testName : testNames) {
+                // Skip already completed tests
+                if (checkpointManager.isDatasetCompleted(testName)) {
+                    logger.info("Skipping already completed test: {}", testName);
                     continue;
                 }
 
-                logger.info("Loading dataset: {}", datasetName);
+                logger.info("Starting test: {}", testName);
                 try {
-                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                            () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    );
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
-
-                    String normalizedDatasetName = datasetName;
-                    if (normalizedDatasetName.endsWith(".hdf5")) {
-                        normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
-                    }
-
                     MultiConfig config;
-                    if (finalConfigPath != null) {
-                        config = MultiConfig.getConfig(finalConfigPath);
-                        // Override dataset name if not specified in custom config
-                        if (config.dataset == null || config.dataset.isEmpty()) {
-                            config.dataset = normalizedDatasetName;
-                        }
+                    if (fConfigPath != null) {
+                        config = MultiConfig.getConfig(fConfigPath);
                     } else {
-                        config = MultiConfig.getDefaultConfig("autoDefault");
-                        config.dataset = normalizedDatasetName;
+                        // Try to load a config matching the test name, fallback to autoDefault
+                        try {
+                            config = MultiConfig.getConfig(testName);
+                        } catch (Exception e) {
+                            config = MultiConfig.getDefaultConfig("autoDefault");
+                        }
                     }
+
+                    // Resolve the actual dataset name to use
+                    String dtl = (config.dataset != null && !config.dataset.isEmpty()) 
+                            ? config.dataset 
+                            : testName;
+                    
+                    // Standardize dataset name (remove .hdf5 if present)
+                    if (dtl.endsWith(".hdf5")) {
+                        dtl = dtl.substring(0, dtl.length() - ".hdf5".length());
+                    }
+                    final String datasetToLoad = dtl;
+
+                    logger.info("Loading dataset [{}] for test [{}]", datasetToLoad, testName);
+                    DataSet ds = DataSets.loadDataSet(datasetToLoad).orElseThrow(
+                            () -> new RuntimeException("Dataset " + datasetToLoad + " not found")
+                    );
+                    logger.info("Dataset loaded: {} with {} vectors", datasetToLoad, ds.getBaseVectors().size());
+
                     logger.info("Using configuration: {}", config);
 
-                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
-                            config.construction.useSavedIndexIfExists,
-                            config.construction.outDegree, 
-                            config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
-                            config.construction.addHierarchy,
-                            config.construction.refineFinalGraph,
-                            config.construction.getFeatureSets(), 
-                            config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
-                            config.search.useSearchPruning);
-                    results.addAll(datasetResults);
+                                          List<BenchResult> testResults = Grid.runAllAndCollectResults(ds,
+                                                  config.construction.useSavedIndexIfExists,
+                                                  config.construction.outDegree, 
+                                                  config.construction.efConstruction,
+                                                  config.construction.neighborOverflow, 
+                                                  config.construction.addHierarchy,
+                                                  config.construction.refineFinalGraph,
+                                                  config.construction.getFeatureSets(), 
+                                                                                config.construction.getCompressorParameters(),
+                                                                                config.partitions,
+                                                                                config.search.getCompressorParameters(), 
+                                                   
+                                                  config.search.topKOverquery, 
+                                                  config.search.useSearchPruning);
+                                        // Tag results with the test name if it differs from dataset name
+                    for (var res : testResults) {
+                        if (!res.dataset.equals(testName)) {
+                            res.parameters.put("testName", testName);
+                        }
+                    }
+                    
+                    results.addAll(testResults);
 
-                    logger.info("Benchmark completed for dataset: {}", datasetName);
-                    // Mark dataset as completed and update checkpoint, passing results
-                    checkpointManager.markDatasetCompleted(datasetName, datasetResults);
+                    logger.info("Test completed: {}", testName);
+                    // Mark test as completed and update checkpoint, passing results
+                    checkpointManager.markDatasetCompleted(testName, testResults);
                 } catch (Exception e) {
-                    logger.error("Exception while processing dataset {}", datasetName, e);
+                    logger.error("Exception while processing test {}", testName, e);
                 }
             }
         }

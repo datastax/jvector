@@ -32,6 +32,10 @@ import java.util.List;
 class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     static final int PREFERRED_BIT_SIZE = FloatVector.SPECIES_PREFERRED.vectorBitSize();
+    static {
+        // Publish the value to System Properties for other packages (other language levels...)
+        System.setProperty("io.github.jbellis.jvector.vector_bit_size", String.valueOf(PREFERRED_BIT_SIZE));
+    }
     static final IntVector BYTE_TO_INT_MASK_512 = IntVector.broadcast(IntVector.SPECIES_512, 0xff);
     static final IntVector BYTE_TO_INT_MASK_256 = IntVector.broadcast(IntVector.SPECIES_256, 0xff);
 
