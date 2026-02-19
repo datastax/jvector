@@ -56,6 +56,7 @@ public final class LoggingSchemaPlanner {
             var ctx = ReportingSelectionResolver.Context.of("topK", Integer.toString(topK));
             var resolved = ReportingSelectionResolver.resolve(runCfg.logging, SearchReportingCatalog.catalog(), ctx);
             union.addAll(resolved.keys());
+            expandPrefixes(union, resolved.prefixes(), allConfigs);
         }
 
         // 2) Emit keys in canonical order, only if present in union
@@ -108,6 +109,63 @@ public final class LoggingSchemaPlanner {
     private static void addIfPresent(Set<String> union, List<String> ordered, String key) {
         if (union.remove(key)) {
             ordered.add(key);
+        }
+    }
+
+    private static void expandPrefixes(Set<String> union,
+                                       Set<String> prefixes,
+                                       List<MultiConfig> allConfigs) {
+        if (prefixes == null || prefixes.isEmpty()) return;
+
+        // Collect quant types from YAML configs (domain is defined by yaml `compression.type` and `reranking`)
+        Set<String> indexQuantTypes = new HashSet<>();
+        Set<String> searchQuantTypes = new HashSet<>();
+        boolean wantsNVQ = false;
+
+        for (MultiConfig cfg : allConfigs) {
+            if (cfg == null) continue;
+
+            // construction compression types (PQ/BQ/None)
+            if (cfg.construction != null && cfg.construction.compression != null) {
+                for (var c : cfg.construction.compression) {
+                    if (c != null && c.type != null && !"None".equals(c.type)) {
+                        indexQuantTypes.add(c.type); // "PQ" or "BQ"
+                    }
+                }
+            }
+
+            // construction reranking types (FP/NVQ)
+            if (cfg.construction != null && cfg.construction.reranking != null) {
+                if (cfg.construction.reranking.contains("NVQ")) {
+                    wantsNVQ = true;
+                }
+            }
+
+            // search compression types (PQ/BQ/None)
+            if (cfg.search != null && cfg.search.compression != null) {
+                for (var c : cfg.search.compression) {
+                    if (c != null && c.type != null && !"None".equals(c.type)) {
+                        searchQuantTypes.add(c.type); // "PQ" or "BQ"
+                    }
+                }
+            }
+        }
+
+        for (String p : prefixes) {
+            if ("construction.index_quant_time_s".equals(p)) {
+                for (String qt : indexQuantTypes) {
+                    union.add(p + "." + qt + ".compute_time_s");
+                    union.add(p + "." + qt + ".encoding_time_s");
+                }
+                if (wantsNVQ) {
+                    union.add(p + ".NVQ.compute_time_s"); // we intentionally do not time NVQ encode
+                }
+            } else if ("search.search_quant_time_s".equals(p)) {
+                for (String qt : searchQuantTypes) {
+                    union.add(p + "." + qt + ".compute_time_s");
+                    union.add(p + "." + qt + ".encoding_time_s");
+                }
+            }
         }
     }
 }

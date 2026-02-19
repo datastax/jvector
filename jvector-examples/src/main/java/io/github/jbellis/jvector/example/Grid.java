@@ -81,6 +81,8 @@ public class Grid {
 
     private static final String dirPrefix = "BenchGraphDir";
 
+    private enum Phase { INDEX, SEARCH }
+
     private static final Map<String,Double> indexBuildTimes = new HashMap<>();
 
     private static int diagnostic_level;
@@ -112,7 +114,7 @@ public class Grid {
         // Always use a fresh temp directory for per-run artifacts
         final Path workDir = Files.createTempDirectory(dirPrefix);
 
-        // Initialize cache (creates stable directory when enabled, cleans up stale temp files; no-op otherwise)
+        // Initialize index cache (creates stable directory when enabled, cleans up stale temp files; no-op otherwise)
         final OnDiskGraphIndexCache cache =
                 enableIndexCache
                         ? OnDiskGraphIndexCache.initialize(Paths.get(indexCacheDir))
@@ -125,9 +127,8 @@ public class Grid {
                         for (float neighborOverflow : neighborOverflowGrid) {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
-                                    var compressor = getCompressor(bc, ds);
                                     runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
-                                            compressor, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
+                                            bc, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
                                 }
                             }
                         }
@@ -217,7 +218,7 @@ public class Grid {
                             float neighborOverflow,
                             boolean addHierarchy,
                             boolean refineFinalGraph,
-                            VectorCompressor<?> buildCompressor,
+                            Function<DataSet, CompressorParameters> buildCompressor,
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
@@ -225,15 +226,27 @@ public class Grid {
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
+        // Prepare to collect index construction metrics for reporting....
+        var constructionMetrics = new ConstructionMetrics();
+
         // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
             diagnostics.setMonitoredDirectory(workDirectory);
             diagnostics.capturePrePhaseSnapshot("Graph Build");
 
+            // Resolve build compressor (and label quant type) so we can record compute time
+            VectorCompressor<?> buildCompressorObj = null;
+            String buildQuantType = null;
+
+            if (buildCompressor != null) {
+                var buildParams = buildCompressor.apply(ds);
+                buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
+                buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
+            }
 
             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
-            if (buildCompressor == null) {
+            if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
             } else {
                 // If cache is disabled, we use the (tmp) workDirectory as the output
@@ -244,7 +257,7 @@ public class Grid {
                 Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new HashMap<>();
 
                 for (Set<FeatureId> fs : featureSets) {
-                    var key = cache.key(ds.getName(), fs, M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, buildCompressor);
+                    var key = cache.key(ds.getName(), fs, M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, buildCompressorObj);
                     var cached = cache.tryLoad(key);
 
                     if (cached.isPresent()) {
@@ -255,8 +268,7 @@ public class Grid {
                         if (cache.isEnabled()) {
                             var handle = cache.beginWrite(key, OnDiskGraphIndexCache.Overwrite.ALLOW);
                             // Log cache miss / build start
-                            System.out.printf("%s: Building graph index (cached enabled) for %s%n",
-                                    key.datasetName, fs);
+                            System.out.printf("%s: Building graph index (cached enabled) for %s%n", key.datasetName, fs);
                             // Prepare the atomic write handle immediately
                             handles.put(fs, handle);
                         } else {
@@ -269,7 +281,7 @@ public class Grid {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
                     var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
-                            ds, outputDir, buildCompressor, handles);
+                            ds, outputDir, buildCompressorObj, handles, constructionMetrics);
                     indexes.putAll(newIndexes);
                 }
             }
@@ -278,7 +290,8 @@ public class Grid {
             diagnostics.capturePostPhaseSnapshot("Graph Build");
 
             diagnostics.printDiskStatistics("Graph Index Build");
-            System.out.printf("Index build time: %f seconds%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+            System.out.printf("Index build time: %f seconds%n%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+            constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
 
             try {
                 for (var cpSupplier : compressionGrid) {
@@ -288,23 +301,27 @@ public class Grid {
                         CompressedVectors cv;
                         if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
                             cv = null;
-                            System.out.format("Fused graph index%n");
                         } else {
-                            var compressor = getCompressor(cpSupplier, ds);
+                            constructionMetrics.resetSearch(); // per (index, cpSupplier) config
+
+                            var searchParams = cpSupplier.apply(ds);
+                            String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
+                            var compressor = getCompressor(cpSupplier, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
 
                             if (compressor == null) {
                                 cv = null;
-                                System.out.format("Uncompressed vectors%n");
                             } else {
                                 long start = System.nanoTime();
-                                cv = compressor.encodeAll(ds.getBaseRavv());
-                                System.out.format("%s encoded %d vectors [%.2f MB] in %.2fs%n", compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), (System.nanoTime() - start) / 1_000_000_000.0);
+                                cv = constructionMetrics.search(searchQuantType)
+                                        .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
+                                double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
                         try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                             testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
-                                    artifacts, workDirectory);
+                                    artifacts, constructionMetrics, workDirectory);
                         } catch (Exception e) {
                             throw new RuntimeException(e);
                         }
@@ -342,14 +359,17 @@ public class Grid {
                                                                         DataSet ds,
                                                                         Path outputDir,
                                                                         VectorCompressor<?> buildCompressor,
-                                                                        Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles)
-            throws IOException
+                                                                        Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
+                                                                        ConstructionMetrics constructionMetrics) throws IOException
     {
         Files.createDirectories(outputDir);
 
         var floatVectors = ds.getBaseRavv();
 
-        var pq = (PQVectors) buildCompressor.encodeAll(floatVectors);
+        // Record the encoding time if asked for....
+        PQVectors pq = (PQVectors) ((constructionMetrics != null)
+                ? constructionMetrics.index("PQ").timeEncode(() -> buildCompressor.encodeAll(floatVectors))
+                : buildCompressor.encodeAll(floatVectors));
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
@@ -366,7 +386,7 @@ public class Grid {
             } else {
                 graphPath = outputDir.resolve("graph" + n++);
             }
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor());
+            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor(), constructionMetrics);
             var writer = bws.builder.build();
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
@@ -448,7 +468,8 @@ public class Grid {
                                                              ImmutableGraphIndex onHeapGraph,
                                                              Path outPath,
                                                              RandomAccessVectorValues floatVectors,
-                                                             ProductQuantization pq)
+                                                             ProductQuantization pq,
+                                                             ConstructionMetrics constructionMetrics)
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
@@ -472,7 +493,9 @@ public class Grid {
                     break;
                 case NVQ_VECTORS:
                     int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
-                    var nvq = NVQuantization.compute(floatVectors, nSubVectors);
+                    var nvq = (constructionMetrics != null)
+                            ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
+                            : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
                     suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
                     break;
@@ -556,7 +579,7 @@ public class Grid {
                 continue;
             }
             var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null);
+            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null);
             try (var writer = bws.builder.build()) {
                 start = System.nanoTime();
                 writer.write(bws.suppliers);
@@ -582,9 +605,10 @@ public class Grid {
                                           boolean refineFinalGraph,
                                           Set<FeatureId> featureSetForIndex,
                                           RunArtifacts artifacts,
+                                          ConstructionMetrics constructionMetrics,
                                           Path testDirectory) {
         int queryRuns = 2;
-        System.out.format("Using %s:%n", cs.index);
+        System.out.format("%s: Using %s:%n", cs.ds.getName(), cs.index);
 
         Map<String, List<String>> benchmarksToCompute = artifacts.benchmarksToCompute();
         Map<String, List<String>> benchmarksToDisplay = artifacts.benchmarksToDisplay();
@@ -606,25 +630,38 @@ public class Grid {
         QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
 
         // 3) Setup benchmark table for printing
-        for (var topK : topKGrid.keySet()) {
-            // Resolving selections depends on topK
-            var consoleResolved = consoleSel.resolveForTopK(topK);
-            var logResolved = logSel.resolveForTopK(topK);
+        for (var usePruning : usePruningGrid) {
+            BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
 
-            for (var usePruning : usePruningGrid) {
-                BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
-                printer.printConfig(Map.of(
+            // Print the config once per index and query configuration (not per topK)
+            printer.printConfig(
+                    ordered( // Index configuration
+                        "featureSetForIndex", featureSetForIndex,
                         "M",                  M,
                         "efConstruction",     efConstruction,
                         "neighborOverflow",   neighborOverflow,
                         "addHierarchy",       addHierarchy,
-                        "usePruning",         usePruning
-                ));
+                        "refineFinalGraph",   refineFinalGraph
+                    ),
+                    ordered( // Query configuration
+                            "usePruning",         usePruning
+                    )
+            );
+
+            for (var topK : topKGrid.keySet()) {
+                // Resolving selections depends on topK
+                var consoleResolved = consoleSel.resolveForTopK(topK);
+                var logResolved = logSel.resolveForTopK(topK);
+
+                // Force header to re-print for this topK (columns change)
+                printer.resetTable();
 
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    // Merge construction-phase metrics into the runtime results so selections can see them.
+                    constructionMetrics.appendTo(results);
 
                     // Best-effort runtime availability warnings (warn once per key)
                     consoleSel.warnMissing(results, consoleResolved);
@@ -740,6 +777,18 @@ public class Grid {
         return benchmarks;
     }
 
+    // Helper for printConfig (preserves insertion order)
+    private static Map<String, Object> ordered(Object... kv) {
+        if ((kv.length & 1) != 0)
+            throw new IllegalArgumentException("Need even number of args (k,v)*");
+
+        var m = new LinkedHashMap<String, Object>(kv.length / 2);
+        for (int i = 0; i < kv.length; i += 2) {
+            m.put((String) kv[i], kv[i + 1]);
+        }
+        return m; // insertion-ordered
+    }
+
     public static List<BenchResult> runAllAndCollectResults(
             DataSet ds,
             boolean enableIndexCache,
@@ -813,7 +862,7 @@ public class Grid {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
                                                 var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
-                                                        ds, outputDir, compressor, handles);
+                                                        ds, outputDir, compressor, handles, null);
                                                 indexes.putAll(newIndexes);
                                             }
 
@@ -927,7 +976,7 @@ public class Grid {
                     try (var readerSupplier = ReaderSupplierFactory.open(path)) {
                         try (var rar = readerSupplier.get()) {
                             var pq = ProductQuantization.load(rar);
-                            System.out.format("%s loaded from %s%n", pq, fname);
+                            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
                             return pq;
                         }
                     }
@@ -938,7 +987,7 @@ public class Grid {
 
             var start = System.nanoTime();
             var compressor = cp.computeCompressor(ds);
-            System.out.format("%s build in %.2fs,%n", compressor, (System.nanoTime() - start) / 1_000_000_000.0);
+            System.out.format("%s: %s codebooks computed in %.2fs,%n", ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
             if (cp.supportsCaching()) {
                 try {
                     Files.createDirectories(path.getParent());
@@ -950,6 +999,79 @@ public class Grid {
                 }
             }
             return compressor;
+        });
+    }
+
+    /**
+     * Resolve a {@link VectorCompressor} from YAML {@link CompressorParameters}, with optional instrumentation.
+     *
+     * <p>This overload exists for reporting: when the compressor is constructed (i.e., cache miss), it records
+     * the compressor build time as a quantization <em>compute</em> metric under either
+     * {@code construction.index_quant_time_s.*} or {@code search.search_quant_time_s.*}, keyed by {@code quantType}
+     * (e.g., {@code PQ}, {@code BQ}).</p>
+     *
+     * <p>We do <b>not</b> record load times. If a cached compressor is loaded, no compute metric is emitted
+     * (value remains {@code null} and will be blank in CSV/console).</p>
+     *
+     * @param cpSupplier supplies dataset-specific compressor parameters (YAML-derived)
+     * @param ds dataset being benchmarked
+     * @param metrics per-run construction metrics sink (may be null)
+     * @param phase which phase to attribute compute time to (index construction vs search-time setup)
+     * @param quantType YAML quantization type label (e.g., PQ/BQ); if null, no quant metric is recorded
+     */
+     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
+                                                     DataSet ds,
+                                                     ConstructionMetrics metrics,
+                                                     Phase phase,
+                                                     String quantType) {
+        var cp = cpSupplier.apply(ds);
+        if (!cp.supportsCaching()) {
+            // treat this as "compute" if we want to capture it
+            if (metrics != null && quantType != null) {
+                var h = (phase == Phase.INDEX) ? metrics.index(quantType) : metrics.search(quantType);
+                return h.timeCompute(() -> cp.computeCompressor(ds));
+            }
+            return cp.computeCompressor(ds);
+        }
+
+        var fname = cp.idStringFor(ds);
+        return cachedCompressors.computeIfAbsent(fname, __ -> {
+            var path = Paths.get(pqCacheDir).resolve(fname);
+            if (path.toFile().exists()) {
+                try (var readerSupplier = ReaderSupplierFactory.open(path);
+                     var rar = readerSupplier.get()) {
+                    // Cache hit: intentionally do not record any timing (no load_time_s); compute_time_s stays null/blank.
+                    var pq = ProductQuantization.load(rar);
+                    System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
+                    return pq;
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+
+            // cache miss -> compute (record)
+            java.util.function.Supplier<VectorCompressor<?>> compute = () -> {
+                var start = System.nanoTime();
+                var compressor = cp.computeCompressor(ds);
+                System.out.format("%s: %s computed codebooks in %.2fs,%n", ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
+                if (cp.supportsCaching()) {
+                    try {
+                        Files.createDirectories(path.getParent());
+                        try (var writer = new BufferedRandomAccessWriter(path)) {
+                            compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }
+                return compressor;
+            };
+
+            if (metrics != null && quantType != null) {
+                var h = (phase == Phase.INDEX) ? metrics.index(quantType) : metrics.search(quantType);
+                return h.timeCompute(compute);
+            }
+            return compute.get();
         });
     }
 
@@ -998,6 +1120,124 @@ public class Grid {
         @Override
         public void close() throws Exception {
             searchers.close();
+        }
+    }
+
+    // Helper that maps YAML-derived CompressorParameters to a stable label
+    private static String quantTypeOf(CompressorParameters cp) {
+        if (cp == null || cp == CompressorParameters.NONE) return null;
+        if (cp instanceof CompressorParameters.PQParameters) return "PQ";
+        if (cp instanceof CompressorParameters.BQParameters) return "BQ";
+        // Unknown/unsupported type for quant timing purposes
+        return null;
+    }
+
+    /**
+     * Construction/search quantization timing metrics captured while building an index and while encoding
+     * vectors for search-time evaluation.
+     *
+     * <p>Values may be {@code null} when not measured or not applicable (e.g., cache hit).</p>
+     *
+     * <p>Call {@link #appendTo(List)} to emit these as {@link Metric} entries so they can be selected for
+     * console/CSV reporting.</p>
+     */
+    static final class ConstructionMetrics {
+        // null means “not applicable / not measured”
+        public Double indexBuildTimeS;
+
+        // Index-construction phase (single pass per run)
+        private final Map<String, QuantStats> indexByType = new HashMap<>();
+
+        // Search phase (reset per evaluated config)
+        private final Map<String, QuantStats> searchByType = new HashMap<>();
+
+        ConstructionMetrics() {}
+
+        /** Clear search-phase quant timings for the next evaluated (index, compression) configuration. */
+        void resetSearch() {
+            searchByType.clear();
+        }
+
+        QuantHandle index(String quantType)  { return handle(indexByType, quantType); }
+        QuantHandle search(String quantType) { return handle(searchByType, quantType); }
+
+        private static QuantHandle handle(Map<String, QuantStats> map, String quantType) {
+            if (quantType == null) return QuantHandle.NOOP;
+            QuantStats qs = map.computeIfAbsent(quantType, __ -> new QuantStats());
+            return new QuantHandle(qs);
+        }
+
+        /** Adds construction + quant metrics as Metric entries (null => blank in CSV). */
+        void appendTo(List<Metric> out) {
+            if (indexBuildTimeS != null) {
+                out.add(Metric.of("construction.index_build_time_s",
+                        "Index build time (s)", ".2f", indexBuildTimeS));
+            }
+
+            // Index-construction quant timings
+            appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType);
+
+            // Search-phase quant timings (note: search.* namespace matches other query-time metrics)
+            appendQuant(out, "search.search_quant_time_s", "Search", searchByType);
+        }
+
+        private static void appendQuant(List<Metric> out,
+                                        String prefix,
+                                        String phaseLabel,
+                                        Map<String, QuantStats> byType) {
+            final String hPrefix = (phaseLabel == null || phaseLabel.isBlank()) ? "" : (phaseLabel + " ");
+
+            for (var e : byType.entrySet()) {
+                String qt = e.getKey();
+                QuantStats qs = e.getValue();
+
+                // Compute
+                if (qs.computeTimeS != null) {
+                    out.add(Metric.of(prefix + "." + qt + ".compute_time_s",
+                            hPrefix + qt + " compute (s)", ".2f", qs.computeTimeS));
+                }
+
+                // Encoding (usually single; suffix only if multiple)
+                int n = qs.encodeTimesS.size();
+                if (n == 1) {
+                    out.add(Metric.of(prefix + "." + qt + ".encoding_time_s",
+                            hPrefix + qt + " encoding (s)", ".2f", qs.encodeTimesS.get(0)));
+                } else if (n > 1) {
+                    for (int i = 0; i < n; i++) {
+                        out.add(Metric.of(prefix + "." + qt + ".encoding_time_s." + i,
+                                hPrefix + qt + " encoding (s) #" + i, ".2f", qs.encodeTimesS.get(i)));
+                    }
+                }
+            }
+        }
+
+        private static final class QuantStats {
+            Double computeTimeS;
+            final List<Double> encodeTimesS = new ArrayList<>();
+        }
+
+        static final class QuantHandle {
+            static final QuantHandle NOOP = new QuantHandle(null);
+
+            private final QuantStats qs;
+
+            private QuantHandle(QuantStats qs) {
+                this.qs = qs;
+            }
+
+            <T> T timeCompute(java.util.function.Supplier<T> f) {
+                if (qs == null) return f.get();
+                long t0 = System.nanoTime();
+                try { return f.get(); }
+                finally { qs.computeTimeS = (System.nanoTime() - t0) / 1_000_000_000.0; }
+            }
+
+            <T> T timeEncode(java.util.function.Supplier<T> f) {
+                if (qs == null) return f.get();
+                long t0 = System.nanoTime();
+                try { return f.get(); }
+                finally { qs.encodeTimesS.add((System.nanoTime() - t0) / 1_000_000_000.0); }
+            }
         }
     }
 }
