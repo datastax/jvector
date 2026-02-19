@@ -71,7 +71,7 @@ final class WriteResult {
     }
 };
 
-public final class OnDiskGraphIndexCompactor {
+public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
@@ -481,6 +481,49 @@ public final class OnDiskGraphIndexCompactor {
         }
 
         return upperLayerGraph;
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
+        int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
+        // Shallow size of this object (header + fields)
+        // fields: sources, liveNodes, remappers, upperLayerNodeList, maxDegrees,
+        //         neighborOverflow(float), addHierarchy(boolean), dimension(int), rng,
+        //         maxOrdinal(int), numTotalNodes(int), executor, tlSearchers
+        long size = OH + 13L * REF + Integer.BYTES * 3 + Float.BYTES + 1;
+
+        // liveNodes: FixedBitSet per source
+        for (var entry : liveNodes.values()) {
+            size += entry.ramBytesUsed();
+        }
+
+        // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap
+        // Estimate based on the number of mappings
+        for (var mapper : remappers.values()) {
+            // Object overhead + two maps with int key/value pairs
+            // HashMap entry: ~32 bytes each; Int2IntHashMap: ~16 bytes per entry
+            if (mapper instanceof OrdinalMapper.MapMapper) {
+                // rough estimate: the mapper stores two maps over all mapped ordinals
+                size += OH + (long) (maxOrdinal + 1) * 48;
+            }
+        }
+
+        // upperLayerNodeList: List of Map.Entry<OnDiskGraphIndex, NodeAtLevel>
+        // Each entry: OH + 2*REF, NodeAtLevel: OH + int + int
+        long entrySize = OH + 2L * REF + OH + Integer.BYTES + Integer.BYTES;
+        size += OH + REF + (long) upperLayerNodeList.size() * entrySize;
+
+        // maxDegrees: small list of integers
+        size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
+
+        // tlSearchers: ConcurrentHashMap of GraphSearcher[] per thread
+        // Cannot measure precisely since it depends on the number of active threads;
+        // account for the container overhead only
+        size += OH + REF;
+
+        return size;
     }
 
     private static final class SelectedVecCache {
