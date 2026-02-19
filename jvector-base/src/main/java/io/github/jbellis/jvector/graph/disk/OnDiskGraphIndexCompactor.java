@@ -21,7 +21,8 @@ import java.io.IOException;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousFileChannel;
+//import java.nio.channels.AsynchronousFileChannel;
+import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
@@ -58,19 +59,6 @@ import org.slf4j.LoggerFactory;
 
 import static java.lang.Math.*;
 
-final class NodeWrite {
-    final int ordinal;
-    final VectorFloat<?> vec;
-    final NodeArray neighbors;
-    final List<ByteSequence<?>> neighborPQs;
-
-    NodeWrite(int ordinal, VectorFloat<?> vec, NodeArray neighbors, List<ByteSequence<?>> neighborPQs) {
-        this.ordinal = ordinal;
-        this.vec = vec;
-        this.neighbors = neighbors;
-        this.neighborPQs = neighborPQs;
-    }
-};
 final class WriteResult {
     final int newOrdinal;
     final long fileOffset;
@@ -84,6 +72,7 @@ final class WriteResult {
 };
 
 public final class OnDiskGraphIndexCompactor {
+    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
     private final List<OnDiskGraphIndex> sources;
@@ -100,7 +89,6 @@ public final class OnDiskGraphIndexCompactor {
     private int numTotalNodes = 0;
     private final ForkJoinPool executor;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
-    private final int beamWidth = 1000;
     private final ExplicitThreadLocal<GraphSearcher[]> tlSearchers;
 
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources, ForkJoinPool executor) {
@@ -276,9 +264,23 @@ public final class OnDiskGraphIndexCompactor {
         writer.writeHeader();
 
         CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
-        List<Future<List<WriteResult>>> writeFutures = new ArrayList<>();
         AtomicInteger batchesCompleted = new AtomicInteger(0);
         int totalBatches = 0; // counted below
+        int submitted = 0;
+        int searchTopK = Math.max(2, (maxDegrees.get(0) + sources.size() - 1) / sources.size());
+        int beamWidth = searchTopK;
+        int maxCandidateSize = searchTopK * sources.size() + maxDegrees.get(0);
+        final ThreadLocal<LiveExcludingBits> tlBits =
+            ThreadLocal.withInitial(LiveExcludingBits::new);
+        final ThreadLocal<SelectedVecCache> tlSelectedCache = 
+            ThreadLocal.withInitial(() -> new SelectedVecCache(maxDegrees.get(0)));
+        final ThreadLocal<FixedBitSet> tlSelected =
+            ThreadLocal.withInitial(() -> new FixedBitSet(maxCandidateSize));
+        final ThreadLocal<VectorFloat<?>> tlBaseVec = 
+            ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(dimension));
+        final ThreadLocal<VectorFloat<?>> tlTmpVec = 
+            ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(dimension));
+        ExecutorCompletionService<List<WriteResult>> ecs = new ExecutorCompletionService<>(executor);
 
         // Write base layer (level 0) nodes to buffer
         for (int s = 0; s < sources.size(); s++) {
@@ -289,7 +291,7 @@ public final class OnDiskGraphIndexCompactor {
             for(int i = 0; i < numNodes; ++i) nodes[i] = sourceNodes.next();
             FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
 
-            int numBatches = max(40, (numNodes + 1024 - 1) / 1024);
+            int numBatches = max(40, (numNodes + 128 - 1) / 128);
             if(numBatches > numNodes) {
                 numBatches = numNodes;
             }
@@ -301,124 +303,123 @@ public final class OnDiskGraphIndexCompactor {
                 final int end = min(numNodes, batchSize * (b + 1));
                 final int finalS = s;
 
-                writeFutures.add(executor.submit(() -> {
+                ecs.submit(() -> {
                     OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) tlSearchers.get()[finalS].getView();
-                    List<NodeWrite> nws = new ArrayList<>(end - start);
+                    List<WriteResult> wrs = new ArrayList<>(end - start);
                     for(int i = start; i < end; ++i) {
                         int node = nodes[i];
                         if (!sourceAlive.get(node)) continue;
-                        VectorFloat<?> vec = sourceView.getVector(node);
+                        VectorFloat<?> vec = tlBaseVec.get();
+                        sourceView.getVectorInto(node, vec, 0);
+                        VectorFloat<?> tmp = tlTmpVec.get();
                         List<Map.Entry<Integer, SearchResult.NodeScore>> candidates =
-                                new ArrayList<>();
+                                new ArrayList<>(maxCandidateSize);
 
                         for (int ss = 0; ss < sources.size(); ++ss) {
                             OnDiskGraphIndex idx = sources.get(ss);
                             FixedBitSet indexAlive = liveNodes.get(idx);
-                            Bits searchBits;
+                            var cv = (OnDiskGraphIndex.View) tlSearchers.get()[ss].getView();
 
-                            // exclude the node itself
                             if (finalS == ss) {
-                                FixedBitSet indexAliveCopy = new FixedBitSet(indexAlive.length());
-                                indexAliveCopy.or(indexAlive);
-                                indexAliveCopy.clear(node);
-                                searchBits = indexAliveCopy;
+                                // use existing neighbors as candidates
+                                var it = cv.getNeighborsIterator(0, node);
+                                while(it.hasNext()) {
+                                    int nb = it.nextInt();
+                                    if(!indexAlive.get(nb)) continue;
+                                    cv.getVectorInto(nb, tmp, 0);
+                                    float score = similarityFunction.compare(vec, tmp);
+                                    candidates.add(Map.entry(ss, new SearchResult.NodeScore(nb, score)));
+                                }
+
                             } else {
-                                searchBits = indexAlive;
+                                SearchScoreProvider ssp;
+                                if(fpq != null) {
+                                   ssp = new DefaultSearchScoreProvider(cv.approximateScoreFunctionFor(vec, similarityFunction));
+                                 }
+                                else {
+                                   ssp = DefaultSearchScoreProvider.exact(vec, similarityFunction, cv);
+                                }
+
+                                // PRIORITY
+                                // TODO: clarify heuristics approach, identify key questions and verification methods
+                                // TODO: parameterize topK and beamWidth in JMH coverage
+                                // TODO: validate assumption that recall is stable enough between original contributing graphs and the compacted graph
+                                // FUTURE
+                                // TODO: ensure that result metrics contain recall first as a correctness measure, and then add performance data
+                                //       to include completion time, merge speeds, etc
+                                //       to include resource usage variations for compaction and search
+                                //SearchResult results = tlSearchers.get()[ss].search(ssp, maxDegrees.get(0), maxDegrees.get(0), 0.0f, 0.0f, indexAlive);
+                                SearchResult results = tlSearchers.get()[ss].search(ssp, searchTopK, beamWidth, 0.0f, 0.0f, indexAlive);
+                                for (SearchResult.NodeScore re : results.getNodes()) {
+                                    candidates.add(Map.entry(ss, re));
+                                }
                             }
 
-                            SearchScoreProvider ssp;
-                           if(fpq != null) {
-                              ssp = new DefaultSearchScoreProvider(((OnDiskGraphIndex.View)tlSearchers.get()[ss].getView()).approximateScoreFunctionFor(vec, similarityFunction));
-                            }
-                           else {
-                              ssp = DefaultSearchScoreProvider.exact(vec, similarityFunction, (OnDiskGraphIndex.View) tlSearchers.get()[ss].getView());
-                           }
-
-                            // PRIORITY
-                            // TODO: clarify heuristics approach, identify key questions and verification methods
-                            // TODO: parameterize topK and beamWidth in JMH coverage
-                            // TODO: validate assumption that recall is stable enough between original contributing graphs and the compacted graph
-                            // FUTURE
-                            // TODO: ensure that result metrics contain recall first as a correctness measure, and then add performance data
-                            //       to include completion time, merge speeds, etc
-                            //       to include resource usage variations for compaction and search
-                            SearchResult results = tlSearchers.get()[ss].search(ssp, maxDegrees.get(0) * 16, beamWidth, 0.0f, 0.0f, searchBits);
-                            for (SearchResult.NodeScore re : results.getNodes()) {
-                                candidates.add(Map.entry(ss, re));
-                            }
                         }
 
                         candidates.sort((a1, a2) -> Float.compare(a2.getValue().score, a1.getValue().score));
 
-                        BitSet selected = new FixedBitSet(candidates.size());
-                        vdp.retainDiverse(candidates, maxDegrees.get(0), 0, selected);
+                        FixedBitSet selected = tlSelected.get();
+                        selected.clear(0, candidates.size());
+                        SelectedVecCache selectedCache = tlSelectedCache.get();
+                        selectedCache.reset();
+                        vdp.retainDiverse(candidates, maxDegrees.get(0), 0, selected, selectedCache);
 
                         NodeArray neighbors = new NodeArray(maxDegrees.get(0));
-                        List<ByteSequence<?>> neighborPQs = new ArrayList<>();
+                        List<ByteSequence<?>> neighborPQs = null;
+                        if(pq != null) {
+                          neighborPQs = new ArrayList<>(maxDegrees.get(0));
+                        }
 
-                        for (int k = 0; k < candidates.size(); k++) {
-                            if (!selected.get(k)) continue;
-
-                            var candidate = candidates.get(k);
-                            int cidx = candidate.getKey();
+                        for (int k = 0; k < selectedCache.size; k++) {
                             int targetOrdinal =
-                                    remappers.get(sources.get(cidx)).oldToNew(candidate.getValue().node);
+                                    remappers.get(sources.get(selectedCache.idxs[k])).oldToNew(selectedCache.nodes[k]);
 
-                            neighbors.addInOrder(targetOrdinal, candidate.getValue().score);
+                            neighbors.addInOrder(targetOrdinal, selectedCache.scores[k]);
                             if(pq != null) {
-                                neighborPQs.add(pq.encode(((OnDiskGraphIndex.View) tlSearchers.get()[cidx].getView()).getVector(candidate.getValue().node)));
+                                neighborPQs.add(pq.encode(selectedCache.vecs[k]));
                             }
                         }
 
                         int newOrdinal = remappers.get(sources.get(finalS)).oldToNew(node);
-                        nws.add(new NodeWrite(newOrdinal, vec, neighbors, neighborPQs));
+                        wrs.add(writer.writeInlineNodeRecord(newOrdinal, vec, neighbors, neighborPQs));
                     }
-                    var writeResults = writer.writeInlineNodeRecord(nws);
                     int done = batchesCompleted.incrementAndGet();
                     if (done % 10 == 0) {
                         log.info("Compaction progress: {} batches computed so far ({} nodes in this batch)",
-                                done, nws.size());
+                                done, wrs.size());
                     }
-                    return writeResults;
-                }));
+                    return wrs;
+                });
+                submitted++;
             }
         }
         log.info("Submitted {} compute batches across {} sources to thread pool (parallelism={})",
                 totalBatches, sources.size(), executor.getParallelism());
 
         var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
-        int maxConcurrentWrites = executor.getPoolSize() * 2;
-        List<Future<Integer>> pendingWrites = new ArrayList<>(maxConcurrentWrites);
-            var afc = AsynchronousFileChannel.open(outputPath, opts, executor);
-            int batchesWritten = 0;
-            for(Future<List<WriteResult>> future : writeFutures) {
-                List<WriteResult> results = future.get();
-                for(WriteResult result: results) {
-                    Future<Integer> writeFuture = afc.write(result.data, result.fileOffset);
-                    pendingWrites.add(writeFuture);
-
-                    if (pendingWrites.size() >= maxConcurrentWrites) {
-                        for (Future<Integer> wf : pendingWrites) {
-                            wf.get();
-                        }
-                        pendingWrites.clear();
+        try(FileChannel fc = FileChannel.open(outputPath, opts)) {
+            for(int sb = 0; sb < submitted; ++sb) {
+                List<WriteResult> results = ecs.take().get();
+                for(WriteResult r: results) {
+                    ByteBuffer b = r.data;
+                    long pos = r.fileOffset;
+                    while (b.hasRemaining()) {
+                        int n = fc.write(b, pos);
+                        pos += n;
                     }
                 }
-                batchesWritten++;
-                if (batchesWritten % 10 == 0) {
-                    log.info("Compaction I/O progress: {}/{} batches written to disk", batchesWritten, totalBatches);
+                if (sb != 0 && sb % 10 == 0) {
+                    log.info("Compaction I/O progress: {}/{} batches written to disk", sb, submitted);
                 }
             }
-
-            for (Future<Integer> wf : pendingWrites) {
-                wf.get();
-            }
-            log.info("All {} batches written to disk, writing upper layers and footer", totalBatches);
-            writer.offsetAfterInline();
-            writer.writeUpperLayers(ulpqv, rulmap);
-            writer.writeFooter();
-            writer.close();
-            log.info("Compaction complete: {}", outputPath);
+        }
+        log.info("All {} batches written to disk, writing upper layers and footer", totalBatches);
+        writer.offsetAfterInline();
+        writer.writeUpperLayers(ulpqv, rulmap);
+        writer.writeFooter();
+        writer.close();
+        log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -457,7 +458,7 @@ public final class OnDiskGraphIndexCompactor {
                     if (lvl > newNodeLevel.level) {
                         searchers.searchOneLayer(upperLayerGraphSsp, 1, 0.0f, lvl, searchers.getView().liveNodes());
                     } else {
-                        searchers.searchOneLayer(upperLayerGraphSsp, beamWidth, 0.0f, lvl, searchers.getView().liveNodes());
+                        searchers.searchOneLayer(upperLayerGraphSsp, 100, 0.0f, lvl, searchers.getView().liveNodes());
                         SearchResult.NodeScore[] neighbors = new SearchResult.NodeScore[searchers.approximateResults.size()];
                         final int[] index = {0};
                         searchers.approximateResults.foreach((neighbor, score) -> {
@@ -481,6 +482,37 @@ public final class OnDiskGraphIndexCompactor {
 
         return upperLayerGraph;
     }
+
+    private static final class SelectedVecCache {
+        int[] idxs;
+        OnDiskGraphIndex.View[] views;
+        int[] nodes;
+        float[] scores;
+        VectorFloat<?>[] vecs;
+        int size;
+
+        SelectedVecCache(int capacity) {
+            idxs = new int[capacity];
+            views = new OnDiskGraphIndex.View[capacity];
+            nodes = new int[capacity];
+            scores = new float[capacity];
+            vecs = new VectorFloat<?>[capacity];
+            size = 0;
+        }
+
+        void reset() { size = 0; }
+
+        void add(int idx, OnDiskGraphIndex.View view, int node, float score, VectorFloat<?> vec) {
+            idxs[size] = idx;
+            views[size] = view;
+            nodes[size] = node;
+            scores[size] = score;
+            vecs[size] = vec;
+            size++;
+        }
+    }
+
+
     private static class ExcludingBits implements Bits {
         private final int excluded;
 
@@ -491,6 +523,21 @@ public final class OnDiskGraphIndexCompactor {
         @Override
         public boolean get(int index) {
             return index != excluded;
+        }
+    }
+    private static final class LiveExcludingBits implements Bits {
+        private FixedBitSet live;
+        private int excluded;
+
+        public void reset(FixedBitSet live, int excluded) {
+            this.live = live;
+            this.excluded = excluded;
+        }
+
+        @Override
+        public boolean get(int index) {
+            // Respect live nodes AND exclude the one node
+            return index != excluded && live.get(index);
         }
     }
     private void updateNeighborsOneLayer(OnHeapGraphIndex upperLayerGraph, int level, int nodeId, SearchResult.NodeScore[] neighbors) {
@@ -580,7 +627,9 @@ public final class OnDiskGraphIndexCompactor {
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
          * @return the fraction of short edges (neighbors within alpha=1.0)
          */
-        public double retainDiverse(List<Map.Entry<Integer, SearchResult.NodeScore>> neighbors, int maxDegree, int diverseBefore, BitSet selected) {
+        public double retainDiverse(List<Map.Entry<Integer, SearchResult.NodeScore>> neighbors, int maxDegree, int diverseBefore, BitSet selected, SelectedVecCache selectedCache) {
+            assert neighbors.size() > 0;
+
             for (int i = 0; i < min(diverseBefore, maxDegree); i++) {
                 selected.set(i);
             }
@@ -596,12 +645,15 @@ public final class OnDiskGraphIndexCompactor {
                         continue;
                     }
 
-                    OnDiskGraphIndex.View cSourceView = (OnDiskGraphIndex.View) tlSearchers.get()[neighbors.get(i).getKey()].getView();
+                    int cIdx = neighbors.get(i).getKey();
+                    OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) tlSearchers.get()[cIdx].getView();
                     int cNode = neighbors.get(i).getValue().node;
                     float cScore = neighbors.get(i).getValue().score;
-                    if (isDiverse(cNode, cSourceView, cScore, neighbors, selected, currentAlpha)) {
+                    VectorFloat<?> cVec = cView.getVector(cNode);
+                    if (isDiverse(cNode, cView, cVec, cScore, neighbors, selected, currentAlpha, selectedCache)) {
                         selected.set(i);
                         nSelected++;
+                        selectedCache.add(cIdx, cView, cNode, cScore, cVec);
                     }
                 }
 
@@ -618,16 +670,12 @@ public final class OnDiskGraphIndexCompactor {
 
         // is the candidate node with the given score closer to the base node than it is to any of the
         // already-selected neighbors
-        private boolean isDiverse(int cNode, OnDiskGraphIndex.View cSourceView, float score, List<Map.Entry<Integer, SearchResult.NodeScore>> others, BitSet selected, float alpha) {
-            assert others.size() > 0;
-
-            for (int i = selected.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {
-                OnDiskGraphIndex.View otherView = (OnDiskGraphIndex.View) tlSearchers.get()[others.get(i).getKey()].getView();
-                int otherNode = others.get(i).getValue().node;
-                if (cSourceView == otherView && cNode == otherNode) {
+        private boolean isDiverse(int cNode, OnDiskGraphIndex.View cView, VectorFloat<?> cVec, float cScore, List<Map.Entry<Integer, SearchResult.NodeScore>> others, BitSet selected, float alpha, SelectedVecCache selectedCache) {
+            for (int j = 0; j < selectedCache.size; j++) {
+                if (selectedCache.views[j] == cView && selectedCache.nodes[j] == cNode) {
                     break;
                 }
-                if (vsf.compare(cSourceView.getVector(cNode), otherView.getVector(otherNode)) > score * alpha) {
+                if (vsf.compare(cVec, selectedCache.vecs[j]) > cScore * alpha) {
                     return false;
                 }
             }
@@ -659,6 +707,9 @@ final class CompactWriter implements AutoCloseable {
     private final int maxOrdinal;
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ThreadLocal<ByteBuffer> bufferPerThread;
+    //private final ThreadLocal<ByteSequence<?>> zeroPQ = ThreadLocal.withInitial(() -> {
+        //vectorTypeSupport.createByteSequence();
+    //});;
 
     CompactWriter(Path outputPath,
                   int maxOrdinal,
@@ -803,63 +854,60 @@ final class CompactWriter implements AutoCloseable {
     }
 
 
-    public List<WriteResult> writeInlineNodeRecord(List<NodeWrite> nws) throws IOException
+    public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, NodeArray neighbors, List<ByteSequence<?>> neighborPQs) throws IOException
     {
-        List<WriteResult> results = new ArrayList<>(nws.size());
         var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());
 
-        for(NodeWrite nw: nws) {
-            long fileOffset = startOffset + headerSize + nw.ordinal * recordSize;
-            bwriter.reset();
-            bwriter.writeInt(nw.ordinal);
-            //TODO: handle omitted nodes?
-            // write inline vector
-            //inlineVectorFeature.writeInline(bwriter, new InlineVectors.State(nw.vec));
-            //vectorTypeSupport.writeFloatVector(bwriter, nw.vec);
+        long fileOffset = startOffset + headerSize + ordinal * recordSize;
+        bwriter.reset();
+        bwriter.writeInt(ordinal);
+        //TODO: handle omitted nodes?
+        // write inline vector
+        //inlineVectorFeature.writeInline(bwriter, new InlineVectors.State(nw.vec));
+        //vectorTypeSupport.writeFloatVector(bwriter, nw.vec);
 
-            for(int i = 0; i < nw.vec.length(); ++i) {
-                bwriter.writeFloat(nw.vec.get(i));
-            }
-
-            // write fused PQ
-            // since we build a graph in a streaming way,
-            // we cannot use fusedPQfeature.writeInline
-            if (fusedPQFeature != null) {
-                int length = nw.neighborPQs.get(0).length();
-                int i = 0;
-                for (; i < nw.neighbors.size(); ++i) {
-                    vectorTypeSupport.writeByteSequence(bwriter, nw.neighborPQs.get(i).copy());
-                }
-                ByteSequence<?> zeros = vectorTypeSupport.createByteSequence(length);
-                zeros.zero();
-                for (; i < baseDegree; i++) {
-                    vectorTypeSupport.writeByteSequence(bwriter, zeros);
-                }
-            }
-
-            // write neighbors list
-            bwriter.writeInt(nw.neighbors.size());
-            int n = 0;
-            for (; n < nw.neighbors.size(); n++) {
-                bwriter.writeInt(nw.neighbors.getNode(n));
-            }
-
-            // pad out to base layer degree
-            for (; n < baseDegree; n++) {
-                bwriter.writeInt(-1);
-            }
-
-            // TODO: verify we wrote exactly the expected amount
-            if (bwriter.bytesWritten() != recordSize) {
-                throw new IllegalStateException(
-                    String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes, base degree: %d",
-                                  nw.ordinal, recordSize, bwriter.bytesWritten(), baseDegree));
-            }
-
-            ByteBuffer dataCopy = bwriter.cloneBuffer();
-            results.add(new WriteResult(nw.ordinal, fileOffset, dataCopy));
+        for(int i = 0; i < vec.length(); ++i) {
+            bwriter.writeFloat(vec.get(i));
         }
-        return results;
+
+        // write fused PQ
+        // since we build a graph in a streaming way,
+        // we cannot use fusedPQfeature.writeInline
+        if (fusedPQFeature != null) {
+          // TODO: what if no neighbors? lenght will be incorrect
+            int length = neighborPQs.get(0).length();
+            int i = 0;
+            for (; i < neighbors.size(); ++i) {
+                vectorTypeSupport.writeByteSequence(bwriter, neighborPQs.get(i));
+            }
+            ByteSequence<?> zeros = vectorTypeSupport.createByteSequence(length);
+            zeros.zero();
+            for (; i < baseDegree; i++) {
+                vectorTypeSupport.writeByteSequence(bwriter, zeros);
+            }
+        }
+
+        // write neighbors list
+        bwriter.writeInt(neighbors.size());
+        int n = 0;
+        for (; n < neighbors.size(); n++) {
+            bwriter.writeInt(neighbors.getNode(n));
+        }
+
+        // pad out to base layer degree
+        for (; n < baseDegree; n++) {
+            bwriter.writeInt(-1);
+        }
+
+        // TODO: verify we wrote exactly the expected amount
+        if (bwriter.bytesWritten() != recordSize) {
+            throw new IllegalStateException(
+                String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes, base degree: %d",
+                              ordinal, recordSize, bwriter.bytesWritten(), baseDegree));
+        }
+
+        ByteBuffer dataCopy = bwriter.cloneBuffer();
+        return new WriteResult(ordinal, fileOffset, dataCopy);
     }
 }
 
