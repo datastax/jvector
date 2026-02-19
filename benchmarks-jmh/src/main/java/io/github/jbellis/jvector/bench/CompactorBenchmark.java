@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.reporting.JfrRecorder;
 import io.github.jbellis.jvector.example.reporting.JsonlWriter;
 import io.github.jbellis.jvector.example.reporting.RunReporting;
 import io.github.jbellis.jvector.example.reporting.SystemStatsCollector;
+import io.github.jbellis.jvector.example.reporting.ThreadAllocTracker;
 import io.github.jbellis.jvector.example.util.DataSetPartitioner;
 import io.github.jbellis.jvector.example.util.storage.CloudStorageLayoutUtil;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition;
@@ -253,9 +254,13 @@ public class CompactorBenchmark {
     @Param({"true"})
     public boolean sysStatsEnabled;
 
+    @Param({"false"})
+    public boolean threadAllocTracking;
+
     private final JfrRecorder jfrPartitioningRecorder = new JfrRecorder();
     private final JfrRecorder jfrCompactingRecorder = new JfrRecorder();
     private final SystemStatsCollector sysStatsCollector = new SystemStatsCollector();
+    private final ThreadAllocTracker threadAllocTracker = new ThreadAllocTracker();
 
     private volatile boolean resultPersisted;
     private List<Path> storagePaths;
@@ -291,6 +296,17 @@ public class CompactorBenchmark {
                     sysStatsCollector.start(SYSTEM_DIR, sysStatsFileName);
                 } catch (Exception e) {
                     log.warn("Failed to start system stats collection", e);
+                }
+            }
+
+            if (threadAllocTracking) {
+                String threadAllocFileName = String.format("threadalloc-%s-n%d-d%d-bw%d-%s-%s-pw%d-%s-dp%.2f.jsonl",
+                        datasetNames, numSources, graphDegree, beamWidth,
+                        splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion);
+                try {
+                    threadAllocTracker.start(SYSTEM_DIR, threadAllocFileName);
+                } catch (Exception e) {
+                    log.warn("Failed to start thread allocation tracking", e);
                 }
             }
 
@@ -410,8 +426,8 @@ public class CompactorBenchmark {
             int numParts = (numSources == 0) ? 1 : numSources;
             var partitionedData = DataSetPartitioner.partition(baseVectors, numParts, splitDistribution);
             vectorsPerSourceCount = partitionedData.sizes;
-            log.info("Splitting dataset into {} segments (degree {}, beamWidth {}, splitDistribution {}, splitSizes {}, indexPrecision {}, parallelWriteThreads {}, vectorizationProvider {}, datasetPortion {}, jfrPartitioning {}, jfrCompacting {}, sysStatsEnabled {}) and building graphs...",
-                    numParts, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled);
+            log.info("Splitting dataset into {} segments (degree {}, beamWidth {}, splitDistribution {}, splitSizes {}, indexPrecision {}, parallelWriteThreads {}, vectorizationProvider {}, datasetPortion {}, jfrPartitioning {}, jfrCompacting {}, sysStatsEnabled {}, threadAllocTracking {}) and building graphs...",
+                    numParts, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled, threadAllocTracking);
 
             if (jfrPartitioning) {
                 jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
@@ -477,6 +493,10 @@ public class CompactorBenchmark {
 
     @TearDown(Level.Iteration)
     public void tearDown() throws IOException, InterruptedException {
+        if (threadAllocTracker.isActive()) {
+            threadAllocTracker.stop();
+        }
+
         if (sysStatsCollector.isActive()) {
             sysStatsCollector.stop(SYSTEM_DIR);
         }
@@ -586,8 +606,8 @@ public class CompactorBenchmark {
                             Bits.ALL));
                 }
                 recallResult.recall = AccuracyMetrics.recallFromSearchResults(groundTruth, compactedRetrieved, 10, 10);
-                log.info("Recall [dataset={}, numSources={}, graphDegree={}, beamWidth={}, splitDistribution={}, splitSizes={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}, jfrPartitioning={}, jfrCompacting={}, sysStatsEnabled={}]: {}",
-                        datasetNames, numSources, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled, recallResult.recall);
+                log.info("Recall [dataset={}, numSources={}, graphDegree={}, beamWidth={}, splitDistribution={}, splitSizes={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}, jfrPartitioning={}, jfrCompacting={}, sysStatsEnabled={}, threadAllocTracking={}]: {}",
+                        datasetNames, numSources, graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, jfrPartitioning, jfrCompacting, sysStatsEnabled, threadAllocTracking, recallResult.recall);
                 persistResult(recallResult.recall, durationMs);
                 blackhole.consume(compactedRetrieved);
             } finally {
@@ -637,6 +657,7 @@ public class CompactorBenchmark {
         params.put("jfrCompacting", jfrCompacting);
         params.put("jfrObjectCount", jfrObjectCount);
         params.put("sysStatsEnabled", sysStatsEnabled);
+        params.put("threadAllocTracking", threadAllocTracking);
         return params;
     }
 
@@ -679,6 +700,9 @@ public class CompactorBenchmark {
         }
         if (sysStatsCollector.getFileName() != null) {
             results.put("sysStatsFile", sysStatsCollector.getFileName());
+        }
+        if (threadAllocTracker.getFileName() != null) {
+            results.put("threadAllocFile", threadAllocTracker.getFileName());
         }
         result.put("results", results);
         result.put("completedTests", completed);
