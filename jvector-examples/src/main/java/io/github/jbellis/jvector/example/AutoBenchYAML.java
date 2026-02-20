@@ -132,7 +132,7 @@ public class AutoBenchYAML {
                 try {
                     DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    );
+                    ).getDataSet();
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;

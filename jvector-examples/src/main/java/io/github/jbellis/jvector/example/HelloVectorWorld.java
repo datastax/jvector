@@ -38,7 +38,8 @@ public class HelloVectorWorld {
 
         // Load dataset
         var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
-                .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
+                .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"))
+                .getDataSet();
 
         // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
         RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));

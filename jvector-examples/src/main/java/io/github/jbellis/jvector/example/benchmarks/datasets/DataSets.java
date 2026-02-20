@@ -25,6 +25,14 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
+/// Facade for locating datasets across multiple {@link DataSetLoader} implementations.
+///
+/// Returns a {@link DataSetInfo} handle whose vector data is loaded lazily on the first
+/// call to {@link DataSetInfo#getDataSet()}, allowing callers to inspect dataset metadata
+/// (name, similarity function) without incurring the cost of reading vectors into memory.
+///
+/// @see DataSetInfo
+/// @see DataSetLoader
 public class DataSets {
     private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
 
@@ -33,11 +41,20 @@ public class DataSets {
         add(new DataSetLoaderMFD());
     }};
 
-    public static Optional<DataSet> loadDataSet(String dataSetName) {
+    /// Loads a dataset by name using the {@link #defaultLoaders}.
+    ///
+    /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
+    /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName) {
         return loadDataSet(dataSetName, defaultLoaders);
     }
 
-    public static Optional<DataSet> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
+    /// Loads a dataset by name, trying each loader in order until one matches.
+    ///
+    /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
+    /// @param loaders     the loaders to try, in priority order
+    /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
         logger.info("loading dataset [{}]", dataSetName);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
@@ -45,7 +62,7 @@ public class DataSets {
 
         for (DataSetLoader loader : loaders) {
             logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
-            Optional<DataSet> dataSetLoaded = loader.loadDataSet(dataSetName);
+            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
             if (dataSetLoaded.isPresent()) {
                 logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
                 return dataSetLoaded;
