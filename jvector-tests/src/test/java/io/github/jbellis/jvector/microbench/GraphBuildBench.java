@@ -46,7 +46,7 @@ public class GraphBuildBench {
         public Parameters() {
             this.ds = new DataSetLoaderHDF5().loadDataSet("hdf5/glove-100-angular.hdf5").orElseThrow(
                     () -> new RuntimeException("Unable to load dataset: hdf5/glove-100-angular.hdf5" )
-            );
+            ).getDataSet();
             this.ravv = new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
         }
     }

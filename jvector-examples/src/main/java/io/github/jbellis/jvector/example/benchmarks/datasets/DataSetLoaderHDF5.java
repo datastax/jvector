@@ -48,8 +48,11 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
     /**
      * {@inheritDoc}
      */
-    public Optional<DataSet> loadDataSet(String datasetName) {
-        return maybeDownloadHdf5(datasetName).map(this::readHdf5Data);
+    public Optional<DataSetInfo> loadDataSet(String datasetName) {
+        return maybeDownloadHdf5(datasetName).map(path -> {
+            VectorSimilarityFunction similarity = getVectorSimilarityFunction(path);
+            return new DataSetInfo(datasetName, similarity, () -> readHdf5Data(path));
+        });
     }
 
     private DataSet readHdf5Data(Path path) {

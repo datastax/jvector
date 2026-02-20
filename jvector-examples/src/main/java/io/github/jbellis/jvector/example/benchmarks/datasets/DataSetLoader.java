@@ -35,7 +35,7 @@ public interface DataSetLoader {
      * diverse data sources.
      *
      * @param dataSetName
-     * @return a {@link DataSet}, if found
+     * @return a {@link DataSetInfo} handle for the dataset, if found
      */
-    Optional<DataSet> loadDataSet(String dataSetName);
+    Optional<DataSetInfo> loadDataSet(String dataSetName);
 }

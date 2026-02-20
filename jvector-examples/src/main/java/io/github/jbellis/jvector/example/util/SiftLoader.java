@@ -39,7 +39,12 @@ public class SiftLoader {
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
             while (dis.available() > 0) {
                 var dimension = Integer.reverseBytes(dis.readInt());
-                assert dimension > 0 : dimension;
+                if (dimension <= 0) {
+                    throw new IOException("Corrupt fvecs file: negative or zero dimension " + dimension + " (possible file corruption or wrong format)");
+                }
+                if (dimension > 100_000) {
+                    throw new IOException("Unreasonable dimension " + dimension + " in fvecs file (possible file corruption or wrong format)");
+                }
                 var buffer = new byte[dimension * Float.BYTES];
                 dis.readFully(buffer);
                 var byteBuffer = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
