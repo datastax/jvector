@@ -33,11 +33,11 @@ public class DataSets {
         add(new DataSetLoaderMFD());
     }};
 
-    public static Optional<DataSet> loadDataSet(String dataSetName) {
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName) {
         return loadDataSet(dataSetName, defaultLoaders);
     }
 
-    public static Optional<DataSet> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
         logger.info("loading dataset [{}]", dataSetName);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
@@ -45,7 +45,7 @@ public class DataSets {
 
         for (DataSetLoader loader : loaders) {
             logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
-            Optional<DataSet> dataSetLoaded = loader.loadDataSet(dataSetName);
+            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
             if (dataSetLoaded.isPresent()) {
                 logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
                 return dataSetLoaded;
