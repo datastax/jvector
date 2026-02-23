@@ -22,5 +22,7 @@ import java.util.Map;
 public class SearchParameters extends CommonParameters {
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
-    public Map<String, List<String>> benchmarks;
+
+    // NOTE: benchmark compute + console/logging selection are now run-level (run.yml)
+    // and are no longer recognized in dataset configs.
 }

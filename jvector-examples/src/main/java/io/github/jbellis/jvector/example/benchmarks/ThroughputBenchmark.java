@@ -24,6 +24,8 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -49,7 +51,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private String formatAvgQps;
     private String formatMedianQps;
     private String formatMaxQps;
-    private BenchmarkDiagnostics diagnostics;
+    private DiagnosticLevel diagnosticLevel;
 
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
@@ -79,7 +81,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         this.formatAvgQps = formatAvgQps;
         this.formatMedianQps = formatMedianQps;
         this.formatMaxQps = formatMaxQps;
-        this.diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
+        this.diagnosticLevel = diagnosticLevel;
     }
 
     public ThroughputBenchmark displayAvgQps() {
@@ -116,7 +118,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
      * Configure the diagnostic level for this benchmark
      */
     public ThroughputBenchmark withDiagnostics(DiagnosticLevel level) {
-        this.diagnostics = new BenchmarkDiagnostics(level);
+        this.diagnosticLevel = level;
         return this;
     }
 
@@ -136,134 +138,160 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
             throw new RuntimeException("At least one metric must be displayed");
         }
+        try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel)) {
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
-        int dim = cs.getDataSet().getDimension();
+            int totalQueries = cs.getDataSet().getQueryVectors().size();
+            int dim = cs.getDataSet().getDimension();
 
-        // Warmup Phase with diagnostics
-        double[] warmupQps = new double[numWarmupRuns];
-        for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
-            String warmupPhase = "Warmup-" + warmupRun;
-            
-            warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
-                IntStream.range(0, totalQueries)
-                        .parallel()
-                        .forEach(k -> {
-                            long queryStart = System.nanoTime();
-                            
-                            // Generate a random vector
-                            VectorFloat<?> randQ = vts.createFloatVector(dim);
-                            for (int j = 0; j < dim; j++) {
-                                randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                            }
-                            VectorUtil.l2normalize(randQ);
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, randQ);
-                            SINK += sr.getVisitedCount();
-                            
-                            long queryEnd = System.nanoTime();
-                            recorder.recordTime(queryEnd - queryStart);
-                        });
-                
-                return totalQueries / 1.0; // Return QPS placeholder
-            });
-            
-            diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
-        }
+            // Warmup Phase with diagnostics
+            double[] warmupQps = new double[numWarmupRuns];
+            for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
+                String warmupPhase = "Warmup-" + warmupRun;
 
-        // Analyze warmup effectiveness
-        if (numWarmupRuns > 1) {
-            double warmupVariance = StatUtils.variance(warmupQps);
-            double warmupMean = StatUtils.mean(warmupQps);
-            double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
-            diagnostics.console("Warmup Analysis: Mean=" + warmupMean + " QPS, CV=" + warmupCV);
-            
-            if (warmupCV > 15.0) {
-                diagnostics.console(" ⚠️  High warmup variance - consider more warmup runs\n");
-            } else {
-                diagnostics.console(" ✓ Warmup appears stable\n");
+                warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
+                    IntStream.range(0, totalQueries)
+                            .parallel()
+                            .forEach(k -> {
+                                long queryStart = System.nanoTime();
+
+                                // Generate a random vector
+                                VectorFloat<?> randQ = vts.createFloatVector(dim);
+                                for (int j = 0; j < dim; j++) {
+                                    randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                                }
+                                VectorUtil.l2normalize(randQ);
+                                SearchResult sr = QueryExecutor.executeQuery(
+                                        cs, topK, rerankK, usePruning, randQ);
+                                SINK += sr.getVisitedCount();
+
+                                long queryEnd = System.nanoTime();
+                                recorder.recordTime(queryEnd - queryStart);
+                            });
+
+                    return totalQueries / 1.0; // Return QPS placeholder
+                });
+
+                diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
             }
-        }
 
-        double[] qpsSamples = new double[numTestRuns];
-        for (int testRun = 0; testRun < numTestRuns; testRun++) {
-            String testPhase = "Test-" + testRun;
+            // Analyze warmup effectiveness
+            if (numWarmupRuns > 1) {
+                double warmupVariance = StatUtils.variance(warmupQps);
+                double warmupMean = StatUtils.mean(warmupQps);
+                double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
+                diagnostics.console("Warmup Analysis: Mean=" + warmupMean + " QPS, CV=" + warmupCV);
 
-            // Clear Eden and let GC complete with diagnostics monitoring
-            diagnostics.monitorPhase("GC-" + testRun, () -> {
-                System.gc();
-                System.runFinalization();
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+                if (warmupCV > 15.0) {
+                    diagnostics.console(" ⚠️  High warmup variance - consider more warmup runs\n");
+                } else {
+                    diagnostics.console(" ✓ Warmup appears stable\n");
                 }
-                return null;
-            });
+            }
 
-            // Test Phase with detailed monitoring
-            qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
-                LongAdder visitedAdder = new LongAdder();
-                long startTime = System.nanoTime();
-                
-                IntStream.range(0, totalQueries)
-                        .parallel()
-                        .forEach(i -> {
-                            long queryStart = System.nanoTime();
-                            
-                            SearchResult sr = QueryExecutor.executeQuery(
-                                    cs, topK, rerankK, usePruning, i);
-                            // "Use" the result to prevent optimization
-                            visitedAdder.add(sr.getVisitedCount());
-                            
-                            long queryEnd = System.nanoTime();
-                            recorder.recordTime(queryEnd - queryStart);
-                        });
-                        
-                double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-                return totalQueries / elapsedSec;
-            });
+            double[] qpsSamples = new double[numTestRuns];
+            for (int testRun = 0; testRun < numTestRuns; testRun++) {
+                String testPhase = "Test-" + testRun;
 
-            diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
+                // Clear Eden and let GC complete with diagnostics monitoring
+                diagnostics.monitorPhase("GC-" + testRun, () -> {
+                    System.gc();
+                    System.runFinalization();
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+
+                // Test Phase with detailed monitoring
+                qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
+                    LongAdder visitedAdder = new LongAdder();
+                    long startTime = System.nanoTime();
+
+                    IntStream.range(0, totalQueries)
+                            .parallel()
+                            .forEach(i -> {
+                                long queryStart = System.nanoTime();
+
+                                SearchResult sr = QueryExecutor.executeQuery(
+                                        cs, topK, rerankK, usePruning, i);
+                                // "Use" the result to prevent optimization
+                                visitedAdder.add(sr.getVisitedCount());
+
+                                long queryEnd = System.nanoTime();
+                                recorder.recordTime(queryEnd - queryStart);
+                            });
+
+                    double elapsedSec = (System.nanoTime() - startTime) / 1e9;
+                    return totalQueries / elapsedSec;
+                });
+
+                diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
+            }
+
+            // Performance variance analysis
+            Arrays.sort(qpsSamples);
+            double medianQps = qpsSamples[numTestRuns / 2];
+            double avgQps = StatUtils.mean(qpsSamples);
+            double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
+            double maxQps = StatUtils.max(qpsSamples);
+            double minQps = StatUtils.min(qpsSamples);
+            double coefficientOfVariation = (stdDevQps / avgQps) * 100;
+
+            diagnostics.console("QPS Variance Analysis: CV=" + coefficientOfVariation + ", Range=[" + minQps + " - " + maxQps + "]\n");
+
+            if (coefficientOfVariation > 10.0) {
+                diagnostics.console("⚠️  High performance variance detected (CV > 10%%)%n");
+            }
+
+            // Compare test runs for performance regression detection
+            if (numTestRuns > 1) {
+                diagnostics.comparePhases("Test-0", "Test-" + (numTestRuns - 1));
+            }
+
+            // Generate final diagnostics summary and recommendations
+            diagnostics.logSummary();
+            diagnostics.provideRecommendations();
+
+            var list = new ArrayList<Metric>();
+            if (computeAvgQps) {
+                list.add(Metric.of("search.throughput.avg_qps",
+                        "Avg QPS (of " + numTestRuns + ")",
+                        formatAvgQps,
+                        avgQps));
+
+                list.add(Metric.of("search.throughput.stddev_qps",
+                        "± Std Dev",
+                        formatAvgQps,
+                        stdDevQps));
+
+                list.add(Metric.of("search.throughput.cv_pct",
+                        "CV %",
+                        ".1f",
+                        coefficientOfVariation));
+            }
+            if (computeMedianQps) {
+                list.add(Metric.of("search.throughput.median_qps",
+                        "Median QPS (of " + numTestRuns + ")",
+                        formatMedianQps,
+                        medianQps));
+            }
+            if (computeMaxQps) {
+                list.add(Metric.of("search.throughput.max_qps",
+                        "Max QPS (of " + numTestRuns + ")",
+                        formatMaxQps,
+                        maxQps));
+
+                list.add(Metric.of("search.throughput.min_qps",
+                        "Min QPS (of " + numTestRuns + ")",
+                        formatMaxQps,
+                        minQps));
+            }
+            return list;
         }
-
-        // Performance variance analysis
-        Arrays.sort(qpsSamples);
-        double medianQps = qpsSamples[numTestRuns/2];
-        double avgQps = StatUtils.mean(qpsSamples);
-        double stdDevQps = Math.sqrt(StatUtils.variance(qpsSamples));
-        double maxQps = StatUtils.max(qpsSamples);
-        double minQps = StatUtils.min(qpsSamples);
-        double coefficientOfVariation = (stdDevQps / avgQps) * 100;
-
-        diagnostics.console("QPS Variance Analysis: CV=" + coefficientOfVariation + ", Range=[" + minQps + " - " + maxQps + "]\n");
-            
-        if (coefficientOfVariation > 10.0) {
-            diagnostics.console("⚠️  High performance variance detected (CV > 10%%)%n");
+        catch (IOException e) {
+            throw new RuntimeException(e);
         }
-
-        // Compare test runs for performance regression detection
-        if (numTestRuns > 1) {
-            diagnostics.comparePhases("Test-0", "Test-" + (numTestRuns - 1));
-        }
-
-        // Generate final diagnostics summary and recommendations
-        diagnostics.logSummary();
-        diagnostics.provideRecommendations();
-
-        var list = new ArrayList<Metric>();
-        if (computeAvgQps) {
-            list.add(Metric.of("Avg QPS (of " + numTestRuns + ")", formatAvgQps, avgQps));
-            list.add(Metric.of("± Std Dev", formatAvgQps, stdDevQps));
-            list.add(Metric.of("CV %", ".1f", coefficientOfVariation));
-        }
-        if (computeMedianQps) {
-            list.add(Metric.of("Median QPS (of " + numTestRuns + ")", formatMedianQps, medianQps));
-        }
-        if (computeMaxQps) {
-            list.add(Metric.of("Max QPS (of " + numTestRuns + ")", formatMaxQps, maxQps));
-            list.add(Metric.of("Min QPS (of " + numTestRuns + ")", formatMaxQps, minQps));
-        }
-        return list;
     }
 }

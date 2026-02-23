@@ -1,0 +1,38 @@
+# Run-level controls for BenchYAML (applies to the whole invocation)
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+# Benchmark stats to compute
+benchmarks:
+  throughput: [ AVG ]   # [AVG, MEDIAN, MAX]
+  latency:    [ AVG ]   # [AVG, STD, P999]
+  count:      [ visited ]  # [visited, expanded, expanded base layer]
+  accuracy:   [ recall ]   # [recall, MAP]
+
+# Console display (omit/leave blank to print all computed outputs)
+console:
+  benchmarks:
+    throughput: [ AVG ]
+    latency:    [ AVG ]
+    count:      [ visited ]
+    accuracy:   [ recall ]
+  metrics:
+    system: [ max_heap_mb, max_offheap_mb ]
+    disk:   [ total_file_size_mb, file_count ]
+    construction: [ index_build_time_s ]
+
+# Experiments CSV logging (selection + run metadata)
+logging:
+#  dir: logging # set as desired
+#  jvectorRef: "no ref"   # tag or git sha (recommended)
+#  runId: "my-experiment-{ts}"   # optional; template with {ts} (UTC timestamp). Default: "{ts}"
+#  type: csv # only csv is presently supported
+#  benchmarks:
+#    throughput: [ AVG ] # additional options: [AVG, MEDIAN, MAX]
+#    latency: [ AVG ] # additional options: [ AVG, STD, P999 ]
+#    count: [ visited ] # additional options: [ visited, expanded, expanded base layer ]
+#    accuracy: [ recall ] # additional options: [ recall, MAP ]
+#  metrics:
+#    system: [ max_heap_mb, max_offheap_mb ] # additional options: [ max_heap_mb, max_offheap_mb ]
+#    disk: [ total_file_size_mb, file_count ] # additional options: [ total_file_size_mb, file_count ]
+#    construction: [ index_build_time_s ]
