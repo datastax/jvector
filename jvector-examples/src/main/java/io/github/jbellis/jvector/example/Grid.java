@@ -69,6 +69,7 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
+import java.util.function.Supplier;
 
 /**
  * Tests a grid of configurations against a dataset
@@ -962,44 +963,9 @@ public class Grid {
         return results;
     }
 
+    /** Overload for non-reporting use */
     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
-        var cp = cpSupplier.apply(ds);
-        if (!cp.supportsCaching()) {
-            return cp.computeCompressor(ds);
-        }
-
-        var fname = cp.idStringFor(ds);
-        return cachedCompressors.computeIfAbsent(fname, __ -> {
-            var path = Paths.get(pqCacheDir).resolve(fname);
-            if (path.toFile().exists()) {
-                try {
-                    try (var readerSupplier = ReaderSupplierFactory.open(path)) {
-                        try (var rar = readerSupplier.get()) {
-                            var pq = ProductQuantization.load(rar);
-                            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
-                            return pq;
-                        }
-                    }
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-
-            var start = System.nanoTime();
-            var compressor = cp.computeCompressor(ds);
-            System.out.format("%s: %s codebooks computed in %.2fs,%n", ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
-            if (cp.supportsCaching()) {
-                try {
-                    Files.createDirectories(path.getParent());
-                    try (var writer = new BufferedRandomAccessWriter(path)) {
-                        compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
-                    }
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-            return compressor;
-        });
+        return getCompressor(cpSupplier, ds, null, null, null);
     }
 
     /**
@@ -1019,60 +985,73 @@ public class Grid {
      * @param phase which phase to attribute compute time to (index construction vs search-time setup)
      * @param quantType YAML quantization type label (e.g., PQ/BQ); if null, no quant metric is recorded
      */
-     private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
+    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
                                                      DataSet ds,
                                                      ConstructionMetrics metrics,
                                                      Phase phase,
                                                      String quantType) {
         var cp = cpSupplier.apply(ds);
-        if (!cp.supportsCaching()) {
-            // treat this as "compute" if we want to capture it
+
+        // Core compute and save logic
+        Supplier<VectorCompressor<?>> computeAndSaveAction = () -> {
+            var start = System.nanoTime();
+            var compressor = cp.computeCompressor(ds);
+            System.out.format("%s: %s codebooks computed in %.2fs,%n",
+                    ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
+
+            if (cp.supportsCaching()) {
+                saveToCache(cp.idStringFor(ds), compressor);
+            }
+            return compressor;
+        };
+
+        // Execute (with or without metrics)
+        Supplier<VectorCompressor<?>> executionWrapper = () -> {
             if (metrics != null && quantType != null) {
                 var h = (phase == Phase.INDEX) ? metrics.index(quantType) : metrics.search(quantType);
-                return h.timeCompute(() -> cp.computeCompressor(ds));
+                return h.timeCompute(computeAndSaveAction::get);
             }
-            return cp.computeCompressor(ds);
+            return computeAndSaveAction.get();
+        };
+
+        // No-cache path
+        if (!cp.supportsCaching()) {
+            return executionWrapper.get();
         }
 
+        // Cache path
         var fname = cp.idStringFor(ds);
         return cachedCompressors.computeIfAbsent(fname, __ -> {
-            var path = Paths.get(pqCacheDir).resolve(fname);
-            if (path.toFile().exists()) {
-                try (var readerSupplier = ReaderSupplierFactory.open(path);
-                     var rar = readerSupplier.get()) {
-                    // Cache hit: intentionally do not record any timing (no load_time_s); compute_time_s stays null/blank.
-                    var pq = ProductQuantization.load(rar);
-                    System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
-                    return pq;
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
+            Path path = Paths.get(pqCacheDir).resolve(fname);
+            if (Files.exists(path)) {
+                return loadFromCache(ds, fname, path);
             }
-
-            // cache miss -> compute (record)
-            java.util.function.Supplier<VectorCompressor<?>> compute = () -> {
-                var start = System.nanoTime();
-                var compressor = cp.computeCompressor(ds);
-                System.out.format("%s: %s computed codebooks in %.2fs,%n", ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
-                if (cp.supportsCaching()) {
-                    try {
-                        Files.createDirectories(path.getParent());
-                        try (var writer = new BufferedRandomAccessWriter(path)) {
-                            compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
-                        }
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                }
-                return compressor;
-            };
-
-            if (metrics != null && quantType != null) {
-                var h = (phase == Phase.INDEX) ? metrics.index(quantType) : metrics.search(quantType);
-                return h.timeCompute(compute);
-            }
-            return compute.get();
+            return executionWrapper.get();
         });
+    }
+
+    // Load/save helpers for getCompressor
+    private static VectorCompressor<?> loadFromCache(DataSet ds, String fname, Path path) {
+        try (var readerSupplier = ReaderSupplierFactory.open(path);
+             var rar = readerSupplier.get()) {
+            var pq = ProductQuantization.load(rar);
+            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
+            return pq;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static void saveToCache(String fname, VectorCompressor<?> compressor) {
+        try {
+            Path path = Paths.get(pqCacheDir).resolve(fname);
+            Files.createDirectories(path.getParent());
+            try (var writer = new BufferedRandomAccessWriter(path)) {
+                compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
