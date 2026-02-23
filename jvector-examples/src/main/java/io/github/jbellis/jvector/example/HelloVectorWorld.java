@@ -17,23 +17,46 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderMFD;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.RunConfig;
 
 import java.io.IOException;
+import java.util.List;
 
-/**
- * Tests GraphIndexes against vectors from various datasets
- */
 public class HelloVectorWorld {
     public static void main(String[] args) throws IOException {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+
         String datasetName = "ada002-100k";
+
+        // Dataset-tuned config (construction/search grids)
+        MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
+
+        // Run-level policy config (benchmarks/console/logging + run metadata)
+        RunConfig runCfg = RunConfig.loadDefault();
+
+        // Load dataset
         var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
                 .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
-        MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-        Grid.runAll(ds, config.construction.useSavedIndexIfExists, config.construction.outDegree, config.construction.efConstruction,
-                config.construction.neighborOverflow, config.construction.addHierarchy, config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(), config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(), config.search.topKOverquery, config.search.useSearchPruning, config.search.benchmarks);
+
+        // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
+        RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));
+        artifacts.registerDataset(datasetName, ds);
+
+        // Run
+        Grid.runAll(ds,
+                config.construction.useSavedIndexIfExists,
+                config.construction.outDegree,
+                config.construction.efConstruction,
+                config.construction.neighborOverflow,
+                config.construction.addHierarchy,
+                config.construction.refineFinalGraph,
+                config.construction.getFeatureSets(),
+                config.construction.getCompressorParameters(),
+                config.search.getCompressorParameters(),
+                config.search.topKOverquery,
+                config.search.useSearchPruning,
+                artifacts);
     }
 }

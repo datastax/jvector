@@ -143,17 +143,15 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgLatency) {
-            list.add(Metric.of("Mean Latency (ms)", formatAvgLatency, mean));
+            list.add(Metric.of("search.latency.mean_ms", "Mean Latency (ms)", formatAvgLatency, mean));
         }
         if (computeLatencySTD) {
-            list.add(Metric.of("STD Latency (ms)", formatLatencySTD, standardDeviation));
+            list.add(Metric.of("search.latency.std_ms", "STD Latency (ms)", formatLatencySTD, standardDeviation));
         }
         if (computeP999Latency) {
-            list.add(Metric.of("p999 Latency (ms)", formatP999Latency, p999Latency));
+            list.add(Metric.of("search.latency.p999_ms", "p999 Latency (ms)", formatP999Latency, p999Latency));
         }
         return list;
+
     }
 }
-
-
-

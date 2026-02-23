@@ -21,27 +21,31 @@ import java.util.function.Function;
 
 /**
  * A single column in the table:
+ *   - key: Stable identifier for selection/logging (e.g. "search.throughput.avg_qps")
  *   - header: The column title
  *   - fmtSpec: The format specifier, e.g. ".3f" for floats or "s" for strings
  *   - extractor: How to pull the value from the summary‐map
  */
 public class Metric {
+    private final String key;
     private final String header;
     private final String fmtSpec;
     private final double value;
 
-    private Metric(String header, String fmtSpec, double value) {
+    private Metric(String key, String header, String fmtSpec, double value) {
+        this.key = key;
         this.header = header;
         this.fmtSpec = fmtSpec;
         this.value = value;
     }
 
+    public String getKey()      { return key; }
     public String getHeader()   { return header; }
     public String getFmtSpec()  { return fmtSpec; }
     public double getValue() { return value; }
 
-    public static Metric of(String header, String fmtSpec, double value) {
-        return new Metric(header, fmtSpec, value);
+    public static Metric of(String key, String header, String fmtSpec, double value) {
+        return new Metric(key, header, fmtSpec, value);
     }
 
     @Override
@@ -49,4 +53,3 @@ public class Metric {
         return String.format(header + " = " + fmtSpec, value);
     }
 }
-
