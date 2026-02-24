@@ -29,12 +29,12 @@ import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiskUsageMonitor;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
-import io.github.jbellis.jvector.example.yaml.BenchmarkSelection;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -233,7 +233,8 @@ public class Grid {
         // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
-            diagnostics.setMonitoredDirectory(workDirectory);
+            diagnostics.startMonitoring("testDirectory", workDirectory);
+            diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
 
             // Resolve build compressor (and label quant type) so we can record compute time
@@ -822,7 +823,8 @@ public class Grid {
                                         Path testDirectory = Files.createTempDirectory("bench");
                                         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
                                             // Capture initial state
-                                            diagnostics.setMonitoredDirectory(testDirectory);
+                                            diagnostics.startMonitoring("testDirectory", testDirectory);
+                                            diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
 
@@ -873,7 +875,7 @@ public class Grid {
                                             diagnostics.capturePostPhaseSnapshot("Build");
                                             diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
-                                            var buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
+                                            DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                                 int queryRuns = 2;
@@ -927,8 +929,8 @@ public class Grid {
 
                                                             // Add disk metrics if available
                                                             if (buildDiskSnapshot != null) {
-                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.totalBytes / 1024.0 / 1024.0);
-                                                                allMetrics.put("File Count", buildDiskSnapshot.fileCount);
+                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.getTotalBytes() / 1024.0 / 1024.0);
+                                                                allMetrics.put("File Count", buildDiskSnapshot.getTotalFileCount());
                                                             }
 
                                                             results.add(new BenchResult(ds.getName(), params, allMetrics));
