@@ -203,9 +203,6 @@ public class MultiConfig {
         var datasets = new java.util.ArrayList<>(DEFAULT_USED_FOR_DATASETS);
         if (datasets.isEmpty()) return;
 
-        System.out.printf("Default YAML config file: %s (used for %d dataset(s))%n",
-                f.getAbsolutePath(), datasets.size());
-
         // Print a wrapped bracket-list similar to "Executing the following datasets"
         System.out.println("Default YAML used for datasets: " + wrapList(datasets, 6, "  "));
     }
