@@ -286,7 +286,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int totalBatches = 0; // counted below
         int submitted = 0;
         int searchTopK = Math.max(2, (maxDegrees.get(0) + sources.size() - 1) / sources.size());
-        int beamWidth = searchTopK;
+        int beamWidth;
+        if(pq != null) {
+            beamWidth = searchTopK * 2;
+        } 
+        else {
+            beamWidth = searchTopK;
+        }
         int maxCandidateSize = searchTopK * sources.size() + maxDegrees.get(0);
         final ThreadLocal<SelectedVecCache> tlSelectedCache = 
             ThreadLocal.withInitial(() -> new SelectedVecCache(maxDegrees.get(0)));
@@ -322,15 +328,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             ecs.submit(() -> {
                 OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) tlSearchers.get()[bs.sourceIdx].getView();
                 List<WriteResult> wrs = new ArrayList<>(bs.end - bs.start);
+                int[] candSrc = new int[maxCandidateSize];
+                int[] candNode = new int[maxCandidateSize];
+                float[] candScore = new float[maxCandidateSize];
                 VectorFloat<?> tmp = tlTmpVec.get();
                 for(int i = bs.start; i < bs.end; ++i) {
                     int node = bs.nodes[i];
                     if (!bs.sourceAlive.get(node)) continue;
                     VectorFloat<?> vec = tlBaseVec.get();
                     sourceView.getVectorInto(node, vec, 0);
-                    int[] candSrc = new int[maxCandidateSize];
-                    int[] candNode = new int[maxCandidateSize];
-                    float[] candScore = new float[maxCandidateSize];
                     int candSize = 0;
 
                     for (int ss = 0; ss < sources.size(); ++ss) {
@@ -397,7 +403,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     vdp.retainDiverse(candSrc, candNode, candScore, order, candSize, maxDegrees.get(0), selectedCache, tmp);
 
                     for (int k = 0; k < selectedCache.size; k++) {
-                        selectedCache.nodes[k] = remappers.get(sources.get(selectedCache.idxs[k])).oldToNew(selectedCache.nodes[k]);
+                        selectedCache.nodes[k] = remappers.get(sources.get(selectedCache.sourceIdx[k])).oldToNew(selectedCache.nodes[k]);
                     }
 
                     int newOrdinal = remappers.get(sources.get(bs.sourceIdx)).oldToNew(node);
@@ -1003,7 +1009,7 @@ final class CompactWriter implements AutoCloseable {
 }
 
 final class SelectedVecCache {
-    int[] idxs;
+    int[] sourceIdx;
     OnDiskGraphIndex.View[] views;
     int[] nodes;
     float[] scores;
@@ -1011,7 +1017,7 @@ final class SelectedVecCache {
     int size;
 
     SelectedVecCache(int capacity) {
-        idxs = new int[capacity];
+        sourceIdx = new int[capacity];
         views = new OnDiskGraphIndex.View[capacity];
         nodes = new int[capacity];
         scores = new float[capacity];
@@ -1021,12 +1027,12 @@ final class SelectedVecCache {
 
     void reset() { size = 0; }
 
-    void add(int idx, OnDiskGraphIndex.View view, int node, float score, VectorFloat<?> vec) {
-        idxs[size] = idx;
+    void add(int source, OnDiskGraphIndex.View view, int node, float score, VectorFloat<?> vec) {
+        sourceIdx[size] = source;
         views[size] = view;
         nodes[size] = node;
         scores[size] = score;
-        vecs[size] = vec;
+        vecs[size] = vec.copy();
         size++;
     }
 }
