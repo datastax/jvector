@@ -91,9 +91,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private boolean ownsExecutor;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
-    private final ExplicitThreadLocal<GraphSearcher[]> tlSearchers;
+    private final int taskWindowSize;
 
-    public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources, ForkJoinPool executor) {
+    public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources, int taskWindowSize, ForkJoinPool executor) {
         if (sources.isEmpty()) {
             throw new IllegalArgumentException("sources must not be empty");
         }
@@ -104,15 +104,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 throw new IllegalArgumentException("sources must have the same dimension");
             }
         }
-        tlSearchers = ExplicitThreadLocal.withInitial(() -> {
-            GraphSearcher[] gs = new GraphSearcher[sources.size()];
-            for (int i = 0; i < sources.size(); i++) {
-                gs[i] = new GraphSearcher(sources.get(i));
-                gs[i].usePruning(false);
-            }
-            return gs;
-        });
-
         this.upperLayerNodeList = new ArrayList<>();
         this.liveNodes = new HashMap<>();
         this.remappers = new HashMap<>();
@@ -128,11 +119,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         dimension = this.sources.get(0).getDimension();
         this.rng = new Random(0);
         this.executor = executor;
+        this.taskWindowSize = taskWindowSize;
         this.ownsExecutor = false;
     }
 
+    public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources, ForkJoinPool executor) {
+        this(sources, executor.getParallelism(), executor);
+    }
+
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources) {
-        this(sources, ForkJoinPool.commonPool());
+        this(sources, Runtime.getRuntime().availableProcessors());
+    }
+
+    public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources, int taskWindowSize) {
+        this(sources, taskWindowSize, new ForkJoinPool(taskWindowSize));
         this.ownsExecutor = true;
     }
 
@@ -294,12 +294,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             beamWidth = searchTopK;
         }
         int maxCandidateSize = searchTopK * sources.size() + maxDegrees.get(0);
-        final ThreadLocal<SelectedVecCache> tlSelectedCache = 
-            ThreadLocal.withInitial(() -> new SelectedVecCache(maxDegrees.get(0)));
-        final ThreadLocal<VectorFloat<?>> tlBaseVec = 
-            ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(dimension));
-        final ThreadLocal<VectorFloat<?>> tlTmpVec = 
-            ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(dimension));
+        ArrayBlockingQueue<Scratch> scratchPool = new ArrayBlockingQueue<>(taskWindowSize);
+        for(int p = 0; p < taskWindowSize; ++p) scratchPool.add(new Scratch(maxCandidateSize, maxDegrees.get(0), dimension, sources));
+
         ExecutorCompletionService<List<WriteResult>> ecs = new ExecutorCompletionService<>(executor);
         List<BatchSpec> batches = new ArrayList<>();
         for (int s = 0; s < sources.size(); s++) {
@@ -326,32 +323,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             total, sources.size(), executor.getParallelism());
         java.util.function.Consumer<BatchSpec> submitOne = (BatchSpec bs) -> {
             ecs.submit(() -> {
-                OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) tlSearchers.get()[bs.sourceIdx].getView();
                 List<WriteResult> wrs = new ArrayList<>(bs.end - bs.start);
-                int[] candSrc = new int[maxCandidateSize];
-                int[] candNode = new int[maxCandidateSize];
-                float[] candScore = new float[maxCandidateSize];
-                VectorFloat<?> tmp = tlTmpVec.get();
+                Scratch scratch = scratchPool.take();
+                OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) scratch.gs[bs.sourceIdx].getView();
+                VectorFloat<?> tmpVec = scratch.tmpVec;
                 for(int i = bs.start; i < bs.end; ++i) {
                     int node = bs.nodes[i];
                     if (!bs.sourceAlive.get(node)) continue;
-                    VectorFloat<?> vec = tlBaseVec.get();
-                    sourceView.getVectorInto(node, vec, 0);
+                    VectorFloat<?> baseVec = scratch.baseVec;
+                    int[] candSrc = scratch.candSrc;
+                    int[] candNode = scratch.candNode;
+                    float[] candScore = scratch.candScore;
+                    sourceView.getVectorInto(node, baseVec, 0);
                     int candSize = 0;
 
                     for (int ss = 0; ss < sources.size(); ++ss) {
                         OnDiskGraphIndex idx = sources.get(ss);
                         FixedBitSet indexAlive = liveNodes.get(idx);
-                        var cv = (OnDiskGraphIndex.View) tlSearchers.get()[ss].getView();
+                        var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
 
                         if (bs.sourceIdx == ss) {
                             // use existing neighbors as candidates
-                            var it = cv.getNeighborsIterator(0, node);
+                            var it = searchView.getNeighborsIterator(0, node);
                             while(it.hasNext()) {
                                 int nb = it.nextInt();
                                 if(!indexAlive.get(nb)) continue;
-                                cv.getVectorInto(nb, tmp, 0);
-                                float score = similarityFunction.compare(vec, tmp);
+                                searchView.getVectorInto(nb, tmpVec, 0);
+                                float score = similarityFunction.compare(baseVec, tmpVec);
                                 candSrc[candSize] = ss;
                                 candNode[candSize] = nb;
                                 candScore[candSize] = score;
@@ -362,15 +360,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             SearchScoreProvider ssp;
                             if(pq != null) {
                                // custom scratch space?
-                               ssp = new DefaultSearchScoreProvider(cv.approximateScoreFunctionFor(vec, similarityFunction));
+                               ssp = new DefaultSearchScoreProvider(searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
                             }
                             else {
-                               var searchView = (OnDiskGraphIndex.View) tlSearchers.get()[ss].getView();
                                var sf = new ScoreFunction.ExactScoreFunction() {
                                     @Override
                                     public float similarityTo(int node2) {
-                                        searchView.getVectorInto(node2, tmp, 0);
-                                        return similarityFunction.compare(vec, tmp);
+                                        searchView.getVectorInto(node2, tmpVec, 0);
+                                        return similarityFunction.compare(baseVec, tmpVec);
                                     }
                                };
                                ssp = new DefaultSearchScoreProvider(sf);
@@ -385,7 +382,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             //       to include completion time, merge speeds, etc
                             //       to include resource usage variations for compaction and search
                             //SearchResult results = tlSearchers.get()[ss].search(ssp, maxDegrees.get(0), maxDegrees.get(0), 0.0f, 0.0f, indexAlive);
-                            SearchResult results = tlSearchers.get()[ss].search(ssp, searchTopK, beamWidth, 0.f, 0.0f, indexAlive);
+                            SearchResult results = scratch.gs[ss].search(ssp, searchTopK, beamWidth, 0.f, 0.0f, indexAlive);
                             for (SearchResult.NodeScore re : results.getNodes()) {
                                 candSrc[candSize] = ss;
                                 candNode[candSize] = re.node;
@@ -399,29 +396,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     int[] order = IntStream.range(0, candSize).toArray();
                     sortOrderByScoreDesc(order, candScore, candSize);
 
-                    SelectedVecCache selectedCache = tlSelectedCache.get();
-                    vdp.retainDiverse(candSrc, candNode, candScore, order, candSize, maxDegrees.get(0), selectedCache, tmp);
+                    SelectedVecCache selectedCache = scratch.selectedCache;
+                    vdp.retainDiverse(candSrc, candNode, candScore, order, candSize, maxDegrees.get(0), selectedCache, tmpVec, scratch.gs);
 
                     for (int k = 0; k < selectedCache.size; k++) {
                         selectedCache.nodes[k] = remappers.get(sources.get(selectedCache.sourceIdx[k])).oldToNew(selectedCache.nodes[k]);
                     }
 
                     int newOrdinal = remappers.get(sources.get(bs.sourceIdx)).oldToNew(node);
-                    wrs.add(writer.writeInlineNodeRecord(newOrdinal, vec, selectedCache));
+                    wrs.add(writer.writeInlineNodeRecord(newOrdinal, baseVec, selectedCache));
                 }
                 int done = batchesCompleted.incrementAndGet();
                 if (done % 10 == 0) {
                     log.info("Compaction progress: {} batches computed so far ({} nodes in this batch)",
                             done, wrs.size());
                 }
+                scratchPool.put(scratch);
                 return wrs;
             });
         };
 
-        int window = Math.max(2, executor.getParallelism());
         int nextToSubmit = 0;
         int inFlight = 0;
-        while (inFlight < window && nextToSubmit < total) {
+        while (inFlight < taskWindowSize && nextToSubmit < total) {
             submitOne.accept(batches.get(nextToSubmit++));
             inFlight++;
         }
@@ -458,6 +455,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         writer.writeUpperLayers(ulpqv, rulmap);
         writer.writeFooter();
         writer.close();
+        for (Scratch s : scratchPool) {
+            s.close();
+        }
         log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -595,6 +595,36 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return i;
     }
 
+    final class Scratch implements AutoCloseable {
+
+      final int[] candSrc, candNode;
+      final float[] candScore;
+      final SelectedVecCache selectedCache;
+      final VectorFloat<?> tmpVec, baseVec;
+      final GraphSearcher[] gs;
+
+      Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources) {
+          this.candSrc = new int[maxCandidateSize];
+          this.candNode = new int[maxCandidateSize];
+          this.candScore = new float[maxCandidateSize];
+          this.selectedCache = new SelectedVecCache(maxDegree);
+          this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
+          this.baseVec = vectorTypeSupport.createFloatVector(dimension);
+
+          this.gs = new GraphSearcher[sources.size()];
+          for (int i = 0; i < sources.size(); i++) {
+              gs[i] = new GraphSearcher(sources.get(i));
+              gs[i].usePruning(false);
+          }
+      }
+
+      @Override
+      public void close() throws IOException {
+          for (var s : gs) s.close();
+          selectedCache.reset();
+      }
+    }
+
 
     private static final class BatchSpec {
         final int sourceIdx;
@@ -726,7 +756,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
          * @return the fraction of short edges (neighbors within alpha=1.0)
          */
-        public double retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp) {
+        public double retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs) {
             selectedCache.reset();
             if (orderSize == 0) return Double.NaN;
             int nSelected = 0;
@@ -742,7 +772,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     int cNode = candNode[ci];
                     float cScore = candScore[ci];
 
-                    OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) tlSearchers.get()[cSrc].getView();
+                    OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) gs[cSrc].getView();
                     cView.getVectorInto(cNode, tmp, 0);
                     if (isDiverse(cView, cNode, tmp, cScore, currentAlpha, selectedCache)) {
                         selectedCache.add(cSrc, cView, cNode, cScore, tmp);
@@ -1025,7 +1055,11 @@ final class SelectedVecCache {
         size = 0;
     }
 
-    void reset() { size = 0; }
+    void reset() { 
+        Arrays.fill(vecs, 0, size, null);
+        Arrays.fill(views, 0, size, null);
+        size = 0; 
+    }
 
     void add(int source, OnDiskGraphIndex.View view, int node, float score, VectorFloat<?> vec) {
         sourceIdx[size] = source;
