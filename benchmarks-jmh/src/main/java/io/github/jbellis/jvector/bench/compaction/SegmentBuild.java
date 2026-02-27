@@ -16,6 +16,7 @@
 package io.github.jbellis.jvector.bench.compaction;
 
 import io.github.jbellis.jvector.bench.compaction.Cli;
+import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.DataSetPartitioner;
@@ -52,11 +53,13 @@ public class SegmentBuild {
     public static void main(String[] args) throws Exception {
         var cli = new Cli(args);
 
-        String dataset = cli.get("dataset", "glove-100-angular");
+        var similarityFunction = VectorSimilarityFunction.COSINE;
+        String baseVecPath = cli.get("baseVectorPath", "");
+        String datasetName = cli.get("datasetName", "");
+
         int numSources = cli.getInt("numSources", 4);
         int graphDegree = cli.getInt("graphDegree", 32);
         int beamWidth = cli.getInt("beamWidth", 100);
-        double datasetPortion = cli.getDouble("datasetPortion", 1.0);
 
         String splitDistStr = cli.get("splitDistribution", "UNIFORM");
         TestDataPartition.Distribution splitDistribution = TestDataPartition.Distribution.valueOf(splitDistStr);
@@ -88,23 +91,13 @@ public class SegmentBuild {
         if (numSources < 0) throw new IllegalArgumentException("numSources must be non-negative");
         int numParts = (numSources == 0) ? 1 : numSources;
 
-        DataSet ds = DataSets.loadDataSet(dataset)
-                .orElseThrow(() -> new RuntimeException("Dataset not found: " + dataset));
-
-        List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
-        if (datasetPortion != 1.0) {
-            int total = ds.getBaseRavv().size();
-            int portioned = (int) (total * datasetPortion);
-            if (portioned < numParts) {
-                throw new IllegalArgumentException("datasetPortion yields fewer vectors than numSources");
-            }
-            baseVectors = baseVectors.subList(0, portioned);
-        }
+        var baseVectors = SiftLoader.readFvecs(baseVecPath);
+        int dimension = baseVectors.get(0).length();
 
         var partitioned = DataSetPartitioner.partition(baseVectors, numParts, splitDistribution);
 
         log.info("Building {} segments for dataset={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={}",
-                numParts, dataset, ds.getDimension(), ds.getSimilarityFunction(),
+                numParts, datasetName, dimension, similarityFunction,
                 graphDegree, beamWidth, indexPrecision, parallelWriteThreads, resolvedVP);
 
         for (int i = 0; i < numParts; i++) {
@@ -113,10 +106,10 @@ public class SegmentBuild {
 
             log.info("Segment {}/{}: vectors={} -> {}", i + 1, numParts, vectorsPerSource.size(), outputPath.toAbsolutePath());
 
-            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
-            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, ds.getSimilarityFunction());
+            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, dimension);
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
 
-            var builder = new GraphIndexBuilder(bsp, ds.getDimension(), graphDegree, beamWidth, 1.2f, 1.2f, true);
+            var builder = new GraphIndexBuilder(bsp, dimension, graphDegree, beamWidth, 1.2f, 1.2f, true);
             var graph = builder.build(ravvPerSource);
 
             AbstractGraphIndexWriter.Builder<?, ?> writerBuilder =
@@ -125,13 +118,13 @@ public class SegmentBuild {
                                 .withParallelWorkerThreads(parallelWriteThreads)
                             : new OnDiskGraphIndexWriter.Builder(graph, outputPath);
 
-            writerBuilder.with(new InlineVectors(ds.getDimension()));
+            writerBuilder.with(new InlineVectors(dimension));
 
             ProductQuantization pq = null;
             PQVectors pqVectors = null;
             if (indexPrecision == IndexPrecision.FUSEDPQ) {
-                boolean centerData = ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN;
-                pq = ProductQuantization.compute(ravvPerSource, ds.getDimension() / 8, 256, centerData);
+                boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                pq = ProductQuantization.compute(ravvPerSource, dimension / 8, 256, centerData);
                 pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
                 writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
             }

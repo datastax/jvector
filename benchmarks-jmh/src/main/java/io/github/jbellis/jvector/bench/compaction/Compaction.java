@@ -16,15 +16,22 @@
 package io.github.jbellis.jvector.bench.compaction;
 
 import io.github.jbellis.jvector.bench.compaction.Cli;
+import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +50,11 @@ public class Compaction {
         VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
         var cli = new Cli(args);
 
-        String dataset = cli.get("dataset", "glove-100-angular");
+        boolean enableRecall = cli.getBool("enableRecall", false);
+        String datasetName = cli.get("datasetName", "");
+        String baseVecPath = cli.get("baseVectorPath", "");
+        String queriesPath = cli.get("queriesPath", "");
+        String groundTruthPath = cli.get("groundTruthPath", "");
         int numSources = cli.getInt("numSources", 4);
         String segmentsDirStr = cli.get("segmentsDir", "target/segments");
         String outputPathStr = cli.get("outputPath", "target/compact-graph");
@@ -95,6 +106,31 @@ public class Compaction {
         } finally {
             for (var g : graphs) try { g.close(); } catch (Exception ignored) {}
             for (var r : rss) try { r.close(); } catch (Exception ignored) {}
+        }
+
+        if(enableRecall) {
+            log.info("Enable recall. Load index from {}", outputPath.toAbsolutePath());
+            var baseVectors = SiftLoader.readFvecs(baseVecPath);
+            var queryVectors = SiftLoader.readFvecs(queriesPath);
+            var groundTruth = SiftLoader.readIvecs(groundTruthPath);
+            int dimension = baseVectors.get(0).length();
+            var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
+
+            try (var rs = ReaderSupplierFactory.open(outputPath)) {
+                var compactGraph = OnDiskGraphIndex.load(rs);
+                List<SearchResult> compactedRetrieved = new ArrayList<>();
+                for (int n = 0; n < queryVectors.size(); ++n) {
+                    compactedRetrieved.add(GraphSearcher.search(queryVectors.get(n),
+                            10,
+                            ravv,
+                            similarityFunction,
+                            compactGraph,
+                            Bits.ALL));
+                }
+                var recall = AccuracyMetrics.recallFromSearchResults(groundTruth, compactedRetrieved, 10, 10);
+                log.info("Recall [dataset={}, numSources={}]: {}",
+                        datasetName, numSources, recall);
+            }
         }
     }
 }

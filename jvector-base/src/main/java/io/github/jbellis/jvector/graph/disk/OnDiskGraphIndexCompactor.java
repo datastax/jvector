@@ -208,12 +208,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             numTotalNodes += liveNodes.get(source).cardinality();
         }
 
-        // first stage: find the nodes for upper layer graph
-        for (OnDiskGraphIndex source : sources) {
+        // first stage: find the nodes for upper layer graph and prepare nodes and alive
+        final FixedBitSet[] aliveBySource = new FixedBitSet[sources.size()];
+        final int[][] nodesBySource = new int[sources.size()][];
+        for(int s = 0; s < sources.size(); ++s) {
+            var source = sources.get(s);
             NodesIterator sourceNodes = source.getNodes(0);
             FixedBitSet sourceAlive = liveNodes.get(source);
+            int[] nodes = new int[sourceNodes.size()];
+            int i = 0;
             while (sourceNodes.hasNext()) {
                 int node = sourceNodes.next();
+                nodes[i++] = node;
                 if (!sourceAlive.get(node)) continue;
                 int level = getRandomGraphLevel();
                 if (level > 0) {
@@ -221,6 +227,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     upperLayerNodeList.add(Map.entry(source, nodeLevel));
                 }
             }
+            aliveBySource[s] = sourceAlive;
+            nodesBySource[s] = nodes;
         }
 
         log.info("Upper layer candidates selected: {} nodes across {} sources", upperLayerNodeList.size(), sources.size());
@@ -300,12 +308,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         ExecutorCompletionService<List<WriteResult>> ecs = new ExecutorCompletionService<>(executor);
         List<BatchSpec> batches = new ArrayList<>();
         for (int s = 0; s < sources.size(); s++) {
-            NodesIterator sourceNodes = sources.get(s).getNodes(0);
-            int numNodes = sourceNodes.size();
-            int[] nodes = new int[numNodes];
-            for (int i = 0; i < numNodes; ++i) nodes[i] = sourceNodes.next();
-
-            FixedBitSet sourceAlive = liveNodes.get(sources.get(s));
+            int[] nodes = nodesBySource[s];
+            FixedBitSet sourceAlive = aliveBySource[s];
+            int numNodes = nodes.length;
 
             int numBatches = max(40, (numNodes + 128 - 1) / 128);
             if (numBatches > numNodes) numBatches = numNodes;
@@ -474,14 +479,26 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         GraphSearcher searchers = new GraphSearcher(upperLayerGraph);
         searchers.usePruning(false);
 
+        VectorFloat<?> searchVec = vectorTypeSupport.createFloatVector(dimension);
+        VectorFloat<?> tmpVec = vectorTypeSupport.createFloatVector(dimension);
+        var view = searchers.getView();
         for(var node: upperLayerNodeList) {
             var nodeLevel = node.getValue();
             int newOrdinal = upperLayerOrdinalMapper.oldToNew(node);
             var newNodeLevel = new OnDiskGraphIndex.NodeAtLevel(nodeLevel.level, newOrdinal);
             upperLayerGraph.addNode(newNodeLevel);
 
-            VectorFloat<?> vec = node.getKey().getView().getVector(node.getValue().node);
-            SearchScoreProvider upperLayerGraphSsp = DefaultSearchScoreProvider.exact(vec, similarityFunction, ulravv);
+            node.getKey().getView().getVectorInto(node.getValue().node, searchVec, 0);
+
+            //SearchScoreProvider upperLayerGraphSsp = DefaultSearchScoreProvider.exact(searchVec, similarityFunction, ulravv);
+            var sf = new ScoreFunction.ExactScoreFunction() {
+                 @Override
+                 public float similarityTo(int node2) {
+                     ulravv.getVectorInto(node2, tmpVec, 0);
+                     return similarityFunction.compare(searchVec, tmpVec);
+                 }
+            };
+            SearchScoreProvider upperLayerGraphSsp = new DefaultSearchScoreProvider(sf);
 
             var bits = new OnDiskGraphIndexCompactor.ExcludingBits(newNodeLevel.node);
 
@@ -495,9 +512,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 // Move downward from entry.level to 1
                 for (int lvl = entry.level; lvl > 0; lvl--) {
                     if (lvl > newNodeLevel.level) {
-                        searchers.searchOneLayer(upperLayerGraphSsp, 1, 0.0f, lvl, searchers.getView().liveNodes());
+                        searchers.searchOneLayer(upperLayerGraphSsp, 1, 0.0f, lvl, view.liveNodes());
                     } else {
-                        searchers.searchOneLayer(upperLayerGraphSsp, 100, 0.0f, lvl, searchers.getView().liveNodes());
+                        searchers.searchOneLayer(upperLayerGraphSsp, 100, 0.0f, lvl, view.liveNodes());
                         SearchResult.NodeScore[] neighbors = new SearchResult.NodeScore[searchers.approximateResults.size()];
                         final int[] index = {0};
                         searchers.approximateResults.foreach((neighbor, score) -> {
@@ -988,7 +1005,7 @@ final class CompactWriter implements AutoCloseable {
     {
         var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());
 
-        long fileOffset = startOffset + headerSize + ordinal * recordSize;
+        long fileOffset = startOffset + headerSize + (long) ordinal * recordSize;
         bwriter.reset();
         bwriter.writeInt(ordinal);
         //TODO: handle omitted nodes?
