@@ -26,7 +26,7 @@ import io.nosqlbench.vectordata.VectorTestData;
 import io.nosqlbench.vectordata.discovery.ProfileSelector;
 import io.nosqlbench.vectordata.discovery.TestDataGroup;
 import io.nosqlbench.vectordata.discovery.TestDataSources;
-import io.nosqlbench.vectordata.discovery.TestDataView;
+import io.nosqlbench.vectordata.discovery.vector.VectorTestDataView;
 import io.nosqlbench.vectordata.downloader.Catalog;
 import io.nosqlbench.vectordata.downloader.DatasetEntry;
 import io.nosqlbench.vectordata.downloader.DatasetProfileSpec;
@@ -43,6 +43,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.LongFunction;
 import java.util.stream.Collectors;
+
+import static io.github.jbellis.jvector.vector.VectorSimilarityFunction.COSINE;
 
 /**
  * A DataSetLoader that uses the io.nosqlbench.datatools-vectordata library to load datasets.
@@ -77,7 +79,7 @@ public class DataSetLoaderVectordata implements DataSetLoader {
             Catalog c1 = tds2.catalog();
             Optional<DatasetEntry> entryOpt = c1.findExact(spec.dataset());
 
-            TestDataView view;
+            VectorTestDataView view;
             if (entryOpt.isPresent()) {
                 DatasetEntry entry = entryOpt.get();
                 logger.info("Found dataset '{}' in catalog. URL: {}", spec.dataset(), entry.url());
@@ -165,7 +167,7 @@ public class DataSetLoaderVectordata implements DataSetLoader {
         private final List<VectorFloat<?>> queryVectors;
         private final List<? extends List<Integer>> groundTruth;
 
-        public VectordataDataSet(String name, VectorSimilarityFunction vsf, TestDataView view) {
+        public VectordataDataSet(String name, VectorSimilarityFunction vsf, VectorTestDataView view) {
             this.name = name;
             this.vsf = vsf;
 
@@ -273,10 +275,10 @@ public class DataSetLoaderVectordata implements DataSetLoader {
     }
 
     private VectorSimilarityFunction mapDistanceFunction(DistanceFunction df) {
-        if (df == null) return VectorSimilarityFunction.COSINE;
+        if (df == null) return COSINE;
         switch (df) {
             case COSINE:
-                return VectorSimilarityFunction.COSINE;
+                return COSINE;
             case DOT_PRODUCT:
                 return VectorSimilarityFunction.DOT_PRODUCT;
             case EUCLIDEAN:
@@ -284,7 +286,7 @@ public class DataSetLoaderVectordata implements DataSetLoader {
                 return VectorSimilarityFunction.EUCLIDEAN;
             default:
                 logger.warn("Unknown distance function {}, defaulting to COSINE", df);
-                return VectorSimilarityFunction.COSINE;
+                return COSINE;
         }
     }
 }
