@@ -114,11 +114,11 @@ public class QueryTester {
             if (diskSnapshot != null) {
                 // Number of index files created
                 results.add(Metric.of("search.disk.file_count", "File count", ".0f",
-                        diskSnapshot.fileCount));
+                        diskSnapshot.getTotalFileCount()));
 
                 // Total size of index files created
                 results.add(Metric.of("search.disk.total_file_size_mb", "Total file size (MB)", ".1f",
-                        diskSnapshot.totalBytes / (1024.0 * 1024.0)));
+                        diskSnapshot.getTotalBytes() / (1024.0 * 1024.0)));
             }
 
         } catch (IOException e) {
