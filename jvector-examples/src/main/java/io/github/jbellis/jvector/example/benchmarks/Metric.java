@@ -50,6 +50,10 @@ public class Metric {
 
     @Override
     public String toString() {
-        return String.format(header + " = " + fmtSpec, value);
+        // Create a safe template: "%s = %" + fmtSpec
+        String template = "%s = %" + fmtSpec;
+
+        // Pass 'header' as the first argument (%s) and 'value' as the second argument (%.1f)
+        return String.format(template, header, value);
     }
 }

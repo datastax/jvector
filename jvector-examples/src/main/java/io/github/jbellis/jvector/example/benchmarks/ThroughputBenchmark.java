@@ -257,7 +257,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             var list = new ArrayList<Metric>();
             if (computeAvgQps) {
                 list.add(Metric.of("search.throughput.avg_qps",
-                        "Avg QPS (of " + numTestRuns + ")",
+                        "Avg QPS\n (of " + numTestRuns + ")",
                         formatAvgQps,
                         avgQps));
 
@@ -273,18 +273,18 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             }
             if (computeMedianQps) {
                 list.add(Metric.of("search.throughput.median_qps",
-                        "Median QPS (of " + numTestRuns + ")",
+                        "Median QPS\n (of " + numTestRuns + ")",
                         formatMedianQps,
                         medianQps));
             }
             if (computeMaxQps) {
                 list.add(Metric.of("search.throughput.max_qps",
-                        "Max QPS (of " + numTestRuns + ")",
+                        "Max QPS\n (of " + numTestRuns + ")",
                         formatMaxQps,
                         maxQps));
 
                 list.add(Metric.of("search.throughput.min_qps",
-                        "Min QPS (of " + numTestRuns + ")",
+                        "Min QPS\n (of " + numTestRuns + ")",
                         formatMaxQps,
                         minQps));
             }

@@ -8,6 +8,9 @@ local/
 pq_cache/
 index_cache/
 
+### Logging (or whatever you use)
+logging/
+
 ### JVM crashes
 hs_err_pid*
 replay_pid*
