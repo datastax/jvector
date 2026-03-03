@@ -103,19 +103,44 @@ public final class ReportingSelectionResolver {
 
     /** Result: concrete keys + a YAML-ish label per key for warnings/errors. */
     public static final class ResolvedSelection {
-        private final Set<String> keys;
+        private final Set<String> keys;                 // exact Metric.key strings
+        private final Set<String> prefixes;             // prefix selectors like "construction.quant."
         private final Map<String, String> keyToSelector;
+        private final Map<String, String> prefixToSelector;
 
-        public ResolvedSelection(Set<String> keys, Map<String, String> keyToSelector) {
+        public ResolvedSelection(Set<String> keys,
+                                 Set<String> prefixes,
+                                 Map<String, String> keyToSelector,
+                                 Map<String, String> prefixToSelector) {
             this.keys = Collections.unmodifiableSet(new HashSet<>(keys));
+            this.prefixes = Collections.unmodifiableSet(new HashSet<>(prefixes));
             this.keyToSelector = Collections.unmodifiableMap(new HashMap<>(keyToSelector));
+            this.prefixToSelector = Collections.unmodifiableMap(new HashMap<>(prefixToSelector));
         }
 
+        /** Exact selected Metric.key values. */
         public Set<String> keys() { return keys; }
 
-        /** For warnings/errors: returns something like "search.console.benchmarks.latency.P999". */
+        /** Prefix selections. */
+        public Set<String> prefixes() { return prefixes; }
+
+        /** True if key is explicitly selected OR matches any selected prefix. */
+        public boolean matchesKey(String key) {
+            if (keys.contains(key)) return true;
+            for (String p : prefixes) {
+                if (key.startsWith(p)) return true;
+            }
+            return false;
+        }
+
+        /** For warnings/errors: returns selector if known, else the key itself. */
         public String selectorForKey(String key) {
             return keyToSelector.getOrDefault(key, key);
+        }
+
+        /** For warnings/errors: returns selector if known, else the prefix itself. */
+        public String selectorForPrefix(String prefix) {
+            return prefixToSelector.getOrDefault(prefix, prefix);
         }
     }
 
@@ -193,11 +218,13 @@ public final class ReportingSelectionResolver {
 
     public static ResolvedSelection resolve(BenchmarkSelection selection, Catalog catalog, Context ctx) {
         if (selection == null) {
-            return new ResolvedSelection(Set.of(), Map.of());
+            return new ResolvedSelection(Set.of(), Set.of(), Map.of(), Map.of());
         }
 
         Set<String> keys = new HashSet<>();
+        Set<String> prefixes = new HashSet<>();
         Map<String, String> keyToSelector = new HashMap<>();
+        Map<String, String> prefixToSelector = new HashMap<>();
 
         // Benchmarks (type/stat -> templates -> keys)
         if (selection.benchmarks != null && !selection.benchmarks.isEmpty()) {
@@ -220,18 +247,27 @@ public final class ReportingSelectionResolver {
         if (selection.metrics != null && !selection.metrics.isEmpty()) {
             // caller should validate names pre-build, but keep this defensive
             validateNamedMetricSelectionNames(selection.metrics, catalog);
-
+            // Recognize @prefix
             for (var e : selection.metrics.entrySet()) {
                 String category = e.getKey();
                 for (String name : e.getValue()) {
-                    String k = substitute(catalog.namedMetricKeys.get(category).get(name), ctx);
-                    keys.add(k);
-                    keyToSelector.putIfAbsent(k, catalog.metricsYamlPrefix + "." + category + "." + name);
+                    String raw = catalog.namedMetricKeys.get(category).get(name);
+                    String k = substitute(raw, ctx);
+                    String selector = catalog.metricsYamlPrefix + "." + category + "." + name;
+
+                    if (k != null && k.startsWith("@prefix:")) {
+                        String prefix = k.substring("@prefix:".length());
+                        prefixes.add(prefix);
+                        prefixToSelector.putIfAbsent(prefix, selector);
+                    } else {
+                        keys.add(k);
+                        keyToSelector.putIfAbsent(k, selector);
+                    }
                 }
             }
         }
 
-        return new ResolvedSelection(keys, keyToSelector);
+        return new ResolvedSelection(keys, prefixes, keyToSelector, prefixToSelector);
     }
 
     private static List<String> expandBenchmarkStat(String type, String stat, Catalog catalog, Context ctx) {
