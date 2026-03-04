@@ -205,6 +205,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             executor = new ForkJoinPool(threads);
             ownsExecutor = true;
         }
+        int taskWindowSize = opts.effectiveTaskWindowSize();
 
         final boolean fusedPQEnabled = opts.writeFeatures.contains(FeatureId.FUSED_PQ);
         final boolean writePQSeparate = opts.pqConfig.pqVectorsOutput == CompactOptions.PQConfig.PQVectorsOutput.SEPARATE_FILE;
@@ -311,8 +312,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             beamWidth = searchTopK;
         }
         int maxCandidateSize = searchTopK * sources.size() + maxDegrees.get(0);
-        ArrayBlockingQueue<Scratch> scratchPool = new ArrayBlockingQueue<>(opts.taskWindowSize);
-        for(int p = 0; p < opts.taskWindowSize; ++p) scratchPool.add(new Scratch(maxCandidateSize, maxDegrees.get(0), dimension, sources, pqResolved));
+        ArrayBlockingQueue<Scratch> scratchPool = new ArrayBlockingQueue<>(taskWindowSize);
+        for(int p = 0; p < taskWindowSize; ++p) scratchPool.add(new Scratch(maxCandidateSize, maxDegrees.get(0), dimension, sources, pqResolved));
 
         ExecutorCompletionService<List<WriteResult>> ecs = new ExecutorCompletionService<>(executor);
         List<BatchSpec> batches = new ArrayList<>();
@@ -432,7 +433,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int nextToSubmit = 0;
         int inFlight = 0;
-        while (inFlight < opts.taskWindowSize && nextToSubmit < total) {
+        while (inFlight < taskWindowSize && nextToSubmit < total) {
             submitOne.accept(batches.get(nextToSubmit++));
             inFlight++;
         }

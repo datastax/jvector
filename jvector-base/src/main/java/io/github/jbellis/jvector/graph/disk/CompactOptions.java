@@ -108,6 +108,13 @@ public final class CompactOptions {
         }
     }
 
+    /** Derive effective task window size. */
+    public int effectiveTaskWindowSize() {
+        if (taskWindowSize > 0) return taskWindowSize;
+        if (executor != null) return Math.max(1, executor.getParallelism());
+        return Math.max(1, Runtime.getRuntime().availableProcessors());
+    }
+
     // -------------------------------------------------------------------------
     // Builder
     // -------------------------------------------------------------------------
