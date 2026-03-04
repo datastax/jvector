@@ -305,7 +305,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int submitted = 0;
         int searchTopK = Math.max(2, (maxDegrees.get(0) + sources.size() - 1) / sources.size());
         int beamWidth;
-        if(pqLength != -1) {
+        if(fusedPQEnabled) {
             beamWidth = searchTopK * 2;
         } 
         else {
@@ -373,7 +373,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
                         } else {
                             SearchScoreProvider ssp;
-                            if(pqLength != -1) {
+                            if(fusedPQEnabled) {
                                // custom scratch space?
                                ssp = new DefaultSearchScoreProvider(searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
                             }

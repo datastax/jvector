@@ -36,6 +36,9 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,6 +71,13 @@ public class SegmentBuild {
         IndexPrecision indexPrecision = IndexPrecision.valueOf(indexPrecisionStr);
 
         int parallelWriteThreads = cli.getInt("parallelWriteThreads", 1);
+        boolean writePQ = cli.getBool("writePQ", false);
+        String pqPathStr = cli.get("pqPath", "target/pq.bin");
+        Path pqPath = Path.of(pqPathStr);
+
+        // PQ training parameters
+        int pqSubspaces = cli.getInt("pqSubspaces", -1); // default dimension/8 if -1
+        int pqClusters = cli.getInt("pqClusters", 256);
 
         String vectorizationProvider = cli.get("vectorizationProvider", "");
         if (vectorizationProvider != null && !vectorizationProvider.isBlank()) {
@@ -86,6 +96,9 @@ public class SegmentBuild {
                 Path p = outDir.resolve("per-source-graph-" + i);
                 if (Files.exists(p)) Files.delete(p);
             }
+            if (writePQ && Files.exists(pqPath)) {
+                Files.delete(pqPath);
+            }
         }
 
         if (numSources < 0) throw new IllegalArgumentException("numSources must be non-negative");
@@ -99,6 +112,33 @@ public class SegmentBuild {
         log.info("Building {} segments for dataset={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={}",
                 numParts, datasetName, dimension, similarityFunction,
                 graphDegree, beamWidth, indexPrecision, parallelWriteThreads, resolvedVP);
+
+        // Train PQ once and write it out (for later compaction withPQSeparate)
+        // Train on the entire dataset (baseVectors), not per-source.
+        ProductQuantization globalPQ = null;
+        if (writePQ) {
+            boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+
+            int subspaces = (pqSubspaces > 0) ? pqSubspaces : Math.max(1, dimension / 8);
+            if (dimension % subspaces != 0) {
+                log.warn("pqSubspaces={} does not divide dimension={}; PQ will still run but this may be suboptimal.",
+                        subspaces, dimension);
+            }
+
+            var ravvAll = new ListRandomAccessVectorValues(baseVectors, dimension);
+            log.info("Training PQ for later compaction: subspaces={} clusters={} centerData={}",
+                    subspaces, pqClusters, centerData);
+
+            globalPQ = ProductQuantization.compute(ravvAll, subspaces, pqClusters, centerData);
+
+            Files.createDirectories(pqPath.toAbsolutePath().getParent());
+            try (var w = new BufferedRandomAccessWriter(pqPath)) {
+                globalPQ.write(w, OnDiskGraphIndex.CURRENT_VERSION);
+                w.flush();
+            }
+
+            log.info("PQ written to {}", pqPath.toAbsolutePath());
+        }
 
         for (int i = 0; i < numParts; i++) {
             List<VectorFloat<?>> vectorsPerSource = partitioned.vectors.get(i);
@@ -144,5 +184,8 @@ public class SegmentBuild {
         }
 
         log.info("Done. Segments written under {}", outDir.toAbsolutePath());
+        if (writePQ) {
+            log.info("PQ available at {} (use this for compaction withPQVectorsSeparate)", pqPath.toAbsolutePath());
+        }
     }
 }
