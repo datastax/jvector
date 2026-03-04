@@ -38,7 +38,7 @@ public final class CompactOptions {
     }
 
     /** Convenience: inline vectors */
-    public static CompactOptions basicInlineVectors() {
+    public static CompactOptions withInlineVectors() {
         return builder()
                 .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
                 .build();
