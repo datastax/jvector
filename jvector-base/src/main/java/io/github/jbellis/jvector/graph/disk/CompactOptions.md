@@ -34,7 +34,7 @@ compactor.compact(
 
 ## 1. Basic Inline Vectors
 
-Stores full vectors inline in the graph index.
+Stores full vectors inline in the graph index. The compacted graph is built using full precision.
 
 ```java
 CompactOptions opts = CompactOptions.withInlineVectors();
@@ -63,7 +63,7 @@ Vectors are stored directly in the graph records.
 
 ## 2. PQ Vectors Stored Separately
 
-Stores inline vectors in the graph but writes **PQ-compressed vectors** into a separate file.
+Stores inline vectors in the graph but writes **PQ-compressed vectors** into a separate file. The compacted graph is built using full precision.
 
 ```java
 ProductQuantization pq = ...;
@@ -101,7 +101,7 @@ PQVectors.load(reader);
 
 ## 3. FusedPQ
 
-Stores PQ codes **directly inside graph neighbor lists** for faster approximate search.
+Stores PQ codes **directly inside graph neighbor lists** for faster approximate search. The compacted graph is built using PQ compressed vectors.
 
 ```java
 CompactOptions opts = CompactOptions.withFusedPQ();
