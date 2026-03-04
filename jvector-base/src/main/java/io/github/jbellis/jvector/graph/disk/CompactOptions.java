@@ -1,10 +1,15 @@
+package io.github.jbellis.jvector.graph.disk;
+
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Optional;
 
-import java.annotation.Nullable;
+import java.util.concurrent.ForkJoinPool;
 
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public final class CompactOptions {
@@ -13,16 +18,10 @@ public final class CompactOptions {
     public final EnumSet<FeatureId> writeFeatures;
 
     /** Executor controls (optional). If null, compactor may create its own. */
-    @Nullable public final ForkJoinPool executor;
+    public final ForkJoinPool executor;
 
     /** Window size for in-flight tasks / scratch pool size. 0 => use executor parallelism or a reasonable default. */
     public final int taskWindowSize;
-
-    /**
-     * If non-null, compactor writes PQ vectors (one per node) to this file.
-     */
-    @Nullable
-    public final Path pqOutputPath;
 
     /** PQ configuration (may be NONE). */
     public final PQConfig pqConfig;
@@ -38,25 +37,34 @@ public final class CompactOptions {
         return new Builder();
     }
 
+    /** Convenience: inline vectors */
     public static CompactOptions basicInlineVectors() {
         return builder()
                 .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
                 .build();
     }
 
-    /** Convenience: inline vectors, PQ provided, write PQ to sidecar. */
-    public static CompactOptions withPQVectorsSidecar(ProductQuantization pq, Path sidecarPath) {
+    /** Convenience: inline vectors, PQ provided, write PQ vectors to a separate file. */
+    public static CompactOptions withPQVectorsSeparate(ProductQuantization pq, Path pqVecPath) {
         return builder()
                 .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
-                .pq(PQConfig.provided(pq).sidecar(sidecarPath))
+                .pqConfig(PQConfig.provided(pq).withPQVectorsSeparate(pqVecPath))
                 .build();
     }
 
-    /** Convenience: inline vectors + FusedPQ, get PQ from the source with the largest number of live nodes */
-    public static CompactOptions withFusedPQLargestLive(ProductQuantization pq) {
+    /** Convenience: inline vectors + FusedPQ, automatically chose the PQ codebook from one of the sources */
+    public static CompactOptions withFusedPQ() {
         return builder()
                 .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
-                .pq(PQConfig.fromSources(PQConfig.PQSourcePolicy.LARGEST_LIVE))
+                .pqConfig(PQConfig.fromSources(PQConfig.PQSourcePolicy.AUTO))
+                .build();
+    }
+
+    /** Convenience: inline vectors + FusedPQ, PQ provided */
+    public static CompactOptions withFusedPQ(ProductQuantization pq) {
+        return builder()
+                .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
+                .pqConfig(PQConfig.provided(pq))
                 .build();
     }
 
@@ -92,19 +100,12 @@ public final class CompactOptions {
                 if (pq == null) throw new IllegalStateException("PQ mode PROVIDED but pq is empty");
             }
             if (pq != null) {
-                if (pq.getOriginalDimension != indexDimension) {
+                if (pq.getOriginalDimension() != indexDimension) {
                     throw new IllegalArgumentException(
-                            "PQ dimension mismatch: pq=" + pq.getOriginalDimension + " index=" + indexDimension);
+                            "PQ dimension mismatch: pq=" + pq.getOriginalDimension() + " index=" + indexDimension);
                 }
             }
         }
-    }
-
-    /** Derive effective task window size. */
-    public int effectiveTaskWindowSize() {
-        if (taskWindowSize > 0) return taskWindowSize;
-        if (executor != null) return Math.max(1, executor.getParallelism());
-        return Math.max(1, Runtime.getRuntime().availableProcessors());
     }
 
     // -------------------------------------------------------------------------
@@ -129,7 +130,7 @@ public final class CompactOptions {
             return this;
         }
 
-        public Builder executor(@Nullable java.util.concurrent.ForkJoinPool executor) {
+        public Builder executor(ForkJoinPool executor) {
             this.executor = executor;
             return this;
         }
@@ -171,7 +172,6 @@ public final class CompactOptions {
     public enum PQStorage {
         /** No PQ written anywhere. */
         NONE
-        // SIDECAR / EMBEDDED can be added later if desired
     }
 
     public enum PQSourcePolicy {
@@ -180,10 +180,10 @@ public final class CompactOptions {
         FIRST
     }
 
-    /** Controls writing per-node PQ vectors (codes) as a sidecar artifact. */
+    /** Controls writing per-node PQ vectors (codes) to a separate file. */
     public enum PQVectorsOutput {
         NONE,
-        SIDECAR_FILE
+        SEPARATE_FILE
     }
 
     public final Mode mode;
@@ -198,15 +198,15 @@ public final class CompactOptions {
     /** Whether to write PQ vectors out, and where. */
     public final PQVectorsOutput pqVectorsOutput;
 
-    /** Required when pqVectorsOutput==SIDECAR_FILE. */
-    @Nullable public final Path pqVectorsOutputPath;
+    /** Required when pqVectorsOutput==SEPARATE_FILE. */
+    public final Path pqVectorsOutputPath;
 
     private PQConfig(Mode mode,
                      PQStorage storage,
-                     @Nullable ProductQuantization pq,
+                     ProductQuantization pq,
                      PQSourcePolicy sourcePolicy,
                      PQVectorsOutput pqVectorsOutput,
-                     @Nullable Path pqVectorsOutputPath) {
+                     Path pqVectorsOutputPath) {
         this.mode = Objects.requireNonNull(mode, "mode");
         this.storage = Objects.requireNonNull(storage, "storage");
         this.pq = Optional.ofNullable(pq);
@@ -215,11 +215,11 @@ public final class CompactOptions {
         this.pqVectorsOutputPath = pqVectorsOutputPath;
 
         // internal consistency
-        if (this.pqVectorsOutput == PQVectorsOutput.SIDECAR_FILE && this.pqVectorsOutputPath == null) {
-            throw new IllegalArgumentException("pqVectorsOutput==SIDECAR_FILE requires pqVectorsOutputPath");
+        if (this.pqVectorsOutput == PQVectorsOutput.SEPARATE_FILE && this.pqVectorsOutputPath == null) {
+            throw new IllegalArgumentException("pqVectorsOutput==SEPARATE_FILE requires pqVectorsOutputPath");
         }
-        if (this.pqVectorsOutput != PQVectorsOutput.SIDECAR_FILE && this.pqVectorsOutputPath != null) {
-            throw new IllegalArgumentException("pqVectorsOutputPath is set but pqVectorsOutput is not SIDECAR_FILE");
+        if (this.pqVectorsOutput != PQVectorsOutput.SEPARATE_FILE && this.pqVectorsOutputPath != null) {
+            throw new IllegalArgumentException("pqVectorsOutputPath is set but pqVectorsOutput is not SEPARATE_FILE");
         }
     }
 
@@ -262,15 +262,15 @@ public final class CompactOptions {
         );
     }
 
-    /** Enable writing PQ vectors to a sidecar file. */
-    public PQConfig withPQVectorsSidecar(Path pqVectorsOutputPath) {
+    /** Enable writing PQ vectors to a separate file. */
+    public PQConfig withPQVectorsSeparate(Path pqVectorsOutputPath) {
         Objects.requireNonNull(pqVectorsOutputPath, "pqVectorsOutputPath");
         return new PQConfig(
                 this.mode,
                 this.storage,
                 this.pq.orElse(null),
                 this.sourcePolicy,
-                PQVectorsOutput.SIDECAR_FILE,
+                PQVectorsOutput.SEPARATE_FILE,
                 pqVectorsOutputPath
         );
     }
@@ -293,7 +293,7 @@ public final class CompactOptions {
 
     public void validateAgainstRequestedFeatures(EnumSet<FeatureId> requested) {
         boolean fusedEnabled = requested.contains(FeatureId.FUSED_PQ);
-        boolean pqVectorsEnabled = (pqVectorsOutput == PQVectorsOutput.SIDECAR_FILE);
+        boolean pqVectorsEnabled = (pqVectorsOutput == PQVectorsOutput.SEPARATE_FILE);
 
         boolean pqNeeded = fusedEnabled || pqVectorsEnabled;
 
@@ -315,9 +315,9 @@ public final class CompactOptions {
             throw new IllegalArgumentException("pqConfig.mode==PROVIDED requires pqConfig.pq");
         }
 
-        // If pq vectors sidecar requested, ensure path exists (already enforced in ctor)
+        // If pq vectors separate file requested, ensure path exists (already enforced in ctor)
         if (pqVectorsEnabled && pqVectorsOutputPath == null) {
-            throw new IllegalArgumentException("pqVectorsOutput==SIDECAR_FILE requires pqVectorsOutputPath");
+            throw new IllegalArgumentException("pqVectorsOutput==SEPARATE_FILE requires pqVectorsOutputPath");
         }
 
         if (mode == Mode.FROM_SOURCES && pq.isPresent()) {

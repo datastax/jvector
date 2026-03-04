@@ -65,9 +65,9 @@ final class WriteResult {
     final int newOrdinal;
     final long fileOffset;
     final ByteBuffer data;
-    final @Nullable ByteBuffer pqCode;
+    final ByteSequence<?> pqCode;
 
-    WriteResult(int newOrdinal, long fileOffset, ByteBuffer data, @Nullable ByteBuffer pqCode) {
+    WriteResult(int newOrdinal, long fileOffset, ByteBuffer data, ByteSequence<?> pqCode) {
         this.newOrdinal = newOrdinal;
         this.fileOffset = fileOffset;
         this.data = data;
@@ -94,7 +94,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
 
     public OnDiskGraphIndexCompactor(List<OnDiskGraphIndex> sources) {
-        this(sources, Runtime.getRuntime().availableProcessors());
 
         if (sources.isEmpty()) {
             throw new IllegalArgumentException("sources must not be empty");
@@ -150,7 +149,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     private void checkBeforeCompact() {
-        if(sources.size() < 1) {
+        if(sources.isEmpty()) {
             throw new IllegalArgumentException("Must have at least one source");
         }
         for(OnDiskGraphIndex source : sources) {
@@ -191,7 +190,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     public void compact(Path outputPath, VectorSimilarityFunction similarityFunction, CompactOptions opts) throws FileNotFoundException {
         checkBeforeCompact();
         opts.validateStatic();
-        opts.validaWithRuntime(dimension);
+        opts.validateWithRuntime(dimension);
 
         ForkJoinPool executor;
         boolean ownsExecutor = false;
@@ -200,7 +199,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             executor = opts.executor;
         } else {
             int threads = opts.taskWindowSize > 0
-                ? opts.taskWindowSize
+                ? Math.min(opts.taskWindowSize, Runtime.getRuntime().availableProcessors())
                 : Runtime.getRuntime().availableProcessors();
 
             executor = new ForkJoinPool(threads);
@@ -208,22 +207,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         final boolean fusedPQEnabled = opts.writeFeatures.contains(FeatureId.FUSED_PQ);
-        final boolean writePQVectorsSidecar = opts.pqConfig.pqVectorsOutput == PQConfig.PQVectorsOutput.SIDECAR_FILE;
+        final boolean writePQSeparate = opts.pqConfig.pqVectorsOutput == CompactOptions.PQConfig.PQVectorsOutput.SEPARATE_FILE;
         final Path pqVectorsPath = opts.pqConfig.pqVectorsOutputPath; // may be null if not enabled
 
         ProductQuantization pqResolved = null;
 
-        if (fusedEnabled || writePQVectorsSidecar) {
+        if (fusedPQEnabled || writePQSeparate) {
             switch (opts.pqConfig.mode) {
                 case PROVIDED:
                     pqResolved = opts.pqConfig.pq.orElseThrow(
-                        () -> new IllegalArgumentException("pq.mode==PROVIDED requires pq.codebook"));
+                        () -> new IllegalArgumentException("pqConfig.mode==PROVIDED requires pq"));
                     break;
                 case FROM_SOURCES:
                     pqResolved = resolvePQFromSources(opts.pqConfig.sourcePolicy);
                     break;
                 case NONE:
-                    throw new IllegalArgumentException("PQ required but pq.mode==NONE");
+                    throw new IllegalArgumentException("PQ required but pqConfig.mode==NONE");
                 default:
                     throw new IllegalStateException("Unknown pq mode: " + opts.pqConfig.mode);
             }
@@ -271,7 +270,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] ulmap;
         RemappedRandomAccessVectorValues ulmrav;
         Map<Integer, Integer> rulmap;
-        if (fusedPQEnabled || writePQVectorsSidecar) {
+        if (fusedPQEnabled || writePQSeparate) {
             // For upperlayer nodes,
             // we cannot directly use encodeAll as it encodes ordinals. 
             // The upperLayerRandomAccessValues are map-based and can be non-contiguous.
@@ -296,7 +295,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // third stage: write base layer nodes, then let writer handle upper layers
         log.info("Writing compacted graph: {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try(CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, upperLayerGraph, dimension, pqResolved, pqLength, fusedPQEnabled)) {
+        try(CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, upperLayerGraph, dimension, pqResolved, pqLength, fusedPQEnabled, writePQSeparate)) {
         writer.writeHeader();
 
         CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
@@ -305,15 +304,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int submitted = 0;
         int searchTopK = Math.max(2, (maxDegrees.get(0) + sources.size() - 1) / sources.size());
         int beamWidth;
-        if(pq != null) {
+        if(pqLength != -1) {
             beamWidth = searchTopK * 2;
         } 
         else {
             beamWidth = searchTopK;
         }
         int maxCandidateSize = searchTopK * sources.size() + maxDegrees.get(0);
-        ArrayBlockingQueue<Scratch> scratchPool = new ArrayBlockingQueue<>(taskWindowSize);
-        for(int p = 0; p < taskWindowSize; ++p) scratchPool.add(new Scratch(maxCandidateSize, maxDegrees.get(0), dimension, sources, pqResolved));
+        ArrayBlockingQueue<Scratch> scratchPool = new ArrayBlockingQueue<>(opts.taskWindowSize);
+        for(int p = 0; p < opts.taskWindowSize; ++p) scratchPool.add(new Scratch(maxCandidateSize, maxDegrees.get(0), dimension, sources, pqResolved));
 
         ExecutorCompletionService<List<WriteResult>> ecs = new ExecutorCompletionService<>(executor);
         List<BatchSpec> batches = new ArrayList<>();
@@ -373,7 +372,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
                         } else {
                             SearchScoreProvider ssp;
-                            if(pq != null) {
+                            if(pqLength != -1) {
                                // custom scratch space?
                                ssp = new DefaultSearchScoreProvider(searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
                             }
@@ -419,7 +418,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
 
                     int newOrdinal = remappers.get(sources.get(bs.sourceIdx)).oldToNew(node);
-                    wrs.add(writer.writeInlineNodeRecord(newOrdinal, baseVec, selectedCache));
+                    wrs.add(writer.writeInlineNodeRecord(newOrdinal, baseVec, selectedCache, scratch.pqCode));
                 }
                 int done = batchesCompleted.incrementAndGet();
                 if (done % 10 == 0) {
@@ -433,27 +432,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int nextToSubmit = 0;
         int inFlight = 0;
-        while (inFlight < taskWindowSize && nextToSubmit < total) {
+        while (inFlight < opts.taskWindowSize && nextToSubmit < total) {
             submitOne.accept(batches.get(nextToSubmit++));
             inFlight++;
         }
 
-        var opts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
-        // Create PQ sidecar writer if needed (same thread that does IO writes)
-        PQVectorsSidecarWriter pqWriter = null;
-        if (opts.pq.pqVectorsOutput == PQConfig.PQVectorsOutput.SIDECAR_FILE) {
+        var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+        // Create PQ writer if needed (same thread that does IO writes)
+        PQVectorsWriter pqWriter = null;
+        if (opts.pqConfig.pqVectorsOutput == CompactOptions.PQConfig.PQVectorsOutput.SEPARATE_FILE) {
             if (pqResolved == null) {
               throw new IllegalStateException("pqVectorsOutput enabled but pqResolved is null");
             }
             int vectorCount = maxOrdinal + 1; // must match PQVectors.load expectations
-            pqWriter = new PQVectorsSidecarWriter(
+            pqWriter = new PQVectorsWriter(
                 opts.pqConfig.pqVectorsOutputPath,
                 pqResolved,
                 vectorCount,
                 OnDiskGraphIndex.CURRENT_VERSION
             );
         }
-        try(FileChannel fc = FileChannel.open(outputPath, opts)) {
+        try(FileChannel fc = FileChannel.open(outputPath, wropts)) {
             int completed = 0;
             while(completed < total) {
                 List<WriteResult> results = ecs.take().get();
@@ -503,7 +502,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
-    private ProductQuantization resolvePQFromSources(PQConfig.PQSourcePolicy policy) {
+    private ProductQuantization resolvePQFromSources(CompactOptions.PQConfig.PQSourcePolicy policy) {
         switch (policy) {
           case FIRST: {
               FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
@@ -606,6 +605,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return upperLayerGraph;
     }
 
+    // TODO: outdated
     @Override
     public long ramBytesUsed() {
         int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
@@ -688,7 +688,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
       final GraphSearcher[] gs;
       final ByteSequence<?> pqCode;
 
-      Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, @Nullable ProductQuantization pq) {
+      Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, ProductQuantization pq) {
           this.candSrc = new int[maxCandidateSize];
           this.candNode = new int[maxCandidateSize];
           this.candScore = new float[maxCandidateSize];
@@ -738,21 +738,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         @Override
         public boolean get(int index) {
             return index != excluded;
-        }
-    }
-    private static final class LiveExcludingBits implements Bits {
-        private FixedBitSet live;
-        private int excluded;
-
-        public void reset(FixedBitSet live, int excluded) {
-            this.live = live;
-            this.excluded = excluded;
-        }
-
-        @Override
-        public boolean get(int index) {
-            // Respect live nodes AND exclude the one node
-            return index != excluded && live.get(index);
         }
     }
     private void updateNeighborsOneLayer(OnHeapGraphIndex upperLayerGraph, int level, int nodeId, SearchResult.NodeScore[] neighbors) {
@@ -909,8 +894,6 @@ final class CompactWriter implements AutoCloseable {
 
     private final RandomAccessWriter writer;
     private final ImmutableGraphIndex upperLayerGraph;
-    private final int numBaseLayerNodes;
-    private final int dimension;
     private final int recordSize;
     private final long startOffset;
     private final int headerSize;
@@ -918,13 +901,13 @@ final class CompactWriter implements AutoCloseable {
     private final int version;
     private final FusedPQ fusedPQFeature;
     private final ProductQuantization pq;
-    private final InlineVectors inlineVectorFeature;
     private final int baseDegree;
     private final int maxOrdinal;
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final ThreadLocal<ByteSequence<?>> zeroPQ;
     private final boolean fusedPQEnabled;
+    private final boolean writePQSeparate;
 
     CompactWriter(Path outputPath,
                   int maxOrdinal,
@@ -934,20 +917,21 @@ final class CompactWriter implements AutoCloseable {
                   int dimension,
                   ProductQuantization pq,
                   int pqLength,
-                  boolean fusedPQEnabled)
+                  boolean fusedPQEnabled,
+                  boolean writePQSeparate)
     throws IOException {
+        this.fusedPQEnabled = fusedPQEnabled;
+        this.writePQSeparate = writePQSeparate;
         this.version = OnDiskGraphIndex.CURRENT_VERSION;
         this.writer = new BufferedRandomAccessWriter(outputPath);
-        this.numBaseLayerNodes = numBaseLayerNodes;
         this.startOffset = startOffset;
         this.upperLayerGraph = upperLayerGraph;
         this.baseDegree = upperLayerGraph.getDegree(0);
         this.pq = pq;
-        this.dimension = dimension;
         this.maxOrdinal = maxOrdinal;
 
         Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
-        this.inlineVectorFeature = new InlineVectorFeature(dimension);
+        InlineVectors inlineVectorFeature = new InlineVectors(dimension);
         featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
         if(fusedPQEnabled) {
             this.fusedPQFeature = new FusedPQ(upperLayerGraph.maxDegree(), pq);
@@ -1080,7 +1064,7 @@ final class CompactWriter implements AutoCloseable {
     }
 
 
-    public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache) throws IOException
+    public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode) throws IOException
     {
         var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());
 
@@ -1102,7 +1086,8 @@ final class CompactWriter implements AutoCloseable {
         if (fusedPQEnabled) {
             int k = 0;
             for (; k < selectedCache.size; k++) {
-                var pqCode = pq.encode(selectedCache.vecs[k]);
+                pqCode.zero();
+                pq.encodeTo(selectedCache.vecs[k], pqCode);
                 vectorTypeSupport.writeByteSequence(bwriter, pqCode);
             }
             for (; k < baseDegree; k++) {
@@ -1132,12 +1117,12 @@ final class CompactWriter implements AutoCloseable {
         ByteBuffer dataCopy = bwriter.cloneBuffer();
 
         ByteSequence pqCopy = null;
-        if (writePQVectorsSidecar) {
+        if (writePQSeparate) {
             // encode into scratch ByteSequence to avoid allocations inside pq.encode()
-            scratch.pq.zero();
-            pqResolved.encodeTo(baseVec, scratch.pqCode);
+            pqCode.zero();
+            pq.encodeTo(vec, pqCode);
 
-            pqCopy = scratch.pqVec.copy();
+            pqCopy = pqCode.copy();
         }
 
         return new WriteResult(ordinal, fileOffset, dataCopy, pqCopy);
@@ -1177,7 +1162,7 @@ final class SelectedVecCache {
     }
 }
 
-public final class PQVectorsSidecarWriter implements AutoCloseable {
+final class PQVectorsWriter implements AutoCloseable {
 
     private static final VectorTypeSupport vts =
             VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -1190,7 +1175,7 @@ public final class PQVectorsSidecarWriter implements AutoCloseable {
     private final long dataStartOffset;
 
     /**
-     * Creates a PQVectors sidecar file that is readable by {@link PQVectors#load(RandomAccessReader)}.
+     * Creates a PQVectors separate file that is readable by {@link PQVectors#load(RandomAccessReader)}.
      *
      * File layout (exactly PQVectors.write/load):
      *   pq.write(out, version)
@@ -1200,7 +1185,7 @@ public final class PQVectorsSidecarWriter implements AutoCloseable {
      *
      * This constructor also pre-allocates/writes zeros for the chunk region so load() can read it fully.
      */
-    public PQVectorsSidecarWriter(Path path, ProductQuantization pq, int vectorCount, int version) throws IOException {
+    public PQVectorsWriter(Path path, ProductQuantization pq, int vectorCount, int version) throws IOException {
         this.out = new BufferedRandomAccessWriter(path);
         this.pq = pq;
         this.vectorCount = vectorCount;
