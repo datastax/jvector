@@ -149,8 +149,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     private void checkBeforeCompact() {
-        if(sources.isEmpty()) {
-            throw new IllegalArgumentException("Must have at least one source");
+        if(sources.size() < 2) {
+            throw new IllegalArgumentException("Must have at least two sources");
         }
         for(OnDiskGraphIndex source : sources) {
             if(source.getDimension() != dimension) {
