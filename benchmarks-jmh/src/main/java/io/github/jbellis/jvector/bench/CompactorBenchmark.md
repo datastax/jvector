@@ -261,22 +261,6 @@ The benchmark logs a warning if these are provided.
 
 ---
 
-**PQ_SEPARATE**
-
-If `trainPQ=false`, then:
-
-```
-pqPath must be provided
-```
-
-If `trainPQ=true`, then:
-```
-train PQ from the entire dataset and saved the PQ to pqPath if provided. The PQ is saved to default if not provided.
-During compaction, the compactor uses that trained PQ to encode each vectors and output to pqVecPath.
-```
-
----
-
 # PQ / Compaction Options in CompactorBenchmark
 
 This section explains the interaction between:
