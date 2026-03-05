@@ -255,6 +255,10 @@ public class Grid {
                 buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
             }
 
+            // Used in logging
+            String buildCompressorString =
+                    (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
+
             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
@@ -331,7 +335,7 @@ public class Grid {
 
                         try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                             testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
-                                    artifacts, constructionMetrics, workDirectory);
+                                    buildCompressorString, artifacts, constructionMetrics, workDirectory);
                         } catch (Exception e) {
                             throw new RuntimeException(e);
                         }
@@ -676,6 +680,7 @@ public class Grid {
                                           boolean addHierarchy,
                                           boolean refineFinalGraph,
                                           Set<FeatureId> featureSetForIndex,
+                                          String buildCompressorString,
                                           RunArtifacts artifacts,
                                           ConstructionMetrics constructionMetrics,
                                           Path testDirectory) {
@@ -744,6 +749,7 @@ public class Grid {
                     printer.printRow(overquery, displayResults);
 
                     // Apply log selection and write CSV row
+                    String searchCompressorString = (cs.cv == null) ? "None" : String.valueOf(cs.cv.getCompressor());
                     var logOutputs = logSel.apply(results, logResolved);
                     artifacts.logRow(
                             cs.ds.getName(),
@@ -753,6 +759,8 @@ public class Grid {
                             addHierarchy,
                             refineFinalGraph,
                             featureSetForIndex,
+                            buildCompressorString,
+                            searchCompressorString,
                             usePruning,
                             topK,
                             overquery,
