@@ -16,91 +16,383 @@
 
 # Compactor Benchmark
 
-The `CompactorBenchmark` measures the performance and accuracy of merging multiple `OnDiskGraphIndex` segments into a single unified index using the `OnDiskGraphIndexCompactor`.
+The `CompactorBenchmark` measures the performance and search quality of different **index construction pipelines** for `OnDiskGraphIndex`.
 
-__TLDR__: `mvn compile exec:exec@compactor -pl benchmarks-jmh -am`
+It supports benchmarking:
 
-## Overview
+- Building an index **from scratch**
+- Building **segments and compacting them**
+- **Compaction only** on prebuilt segments
 
-The benchmark follows these steps:
-1.  **Setup**: Loads a specified dataset and splits it into `numSources` independent on-disk graph segments.
-2.  **Benchmark**: Merges these segments into a single "compacted" index.
-3.  **Verification**: Measures the search recall of the compacted index against the dataset's ground truth to ensure search quality is maintained after merging.
+It also evaluates different **vector storage strategies** used during compaction.
 
-## Parameters
+---
 
-You can tune the benchmark using the following JMH parameters via `-Dargs="-p <param>=<value>"`:
+# TLDR
+
+Run with defaults:
+
+```bash
+mvn compile exec:exec@compactor -pl benchmarks-jmh -am
+```
+
+---
+
+# Overview
+
+The benchmark can run several indexing pipelines.
+
+## 1. Build From Scratch
+
+Build the index directly from the dataset.
+
+```
+dataset
+   │
+   ▼
+graph build
+```
+
+This acts as the **baseline** for comparison.
+
+---
+
+## 2. Segment Build + Compaction
+
+Split the dataset into segments and then merge them.
+
+```
+dataset
+   │
+   ▼
+segment build (N segments)
+   │
+   ▼
+compaction
+   │
+   ▼
+final index
+```
+
+This simulates **production ingestion pipelines** where data arrives incrementally.
+
+---
+
+## 3. Compaction Only
+
+Use prebuilt segments and benchmark only the compaction phase.
+
+```
+segments
+   │
+   ▼
+compaction
+   │
+   ▼
+final index
+```
+
+This isolates the **compaction algorithm performance**.
+
+---
+
+# Compaction Modes
+
+Compaction supports three vector storage strategies.
+
+---
+
+## INLINE
+
+Vectors are stored inline in the graph.
+
+```
+Graph Node
+ ├── neighbors
+ └── full vector
+```
+
+---
+
+## PQ_SEPARATE
+
+Vectors are stored in a separate **PQVectors file**.
+
+```
+Graph Node
+ └── neighbors
+
+PQVectors
+ └── compressed vectors
+```
+
+Search uses PQ decoding during scoring.
+
+PQ can either be:
+
+- loaded from `pqPath`
+- trained from the dataset (`trainPQ=true`)
+
+---
+
+## FUSED_PQ
+
+Neighbor PQ codes are fused directly into the graph.
+
+```
+Graph Node
+ ├── neighbors
+ └── PQ codes
+```
+
+Graph building uses **ADC scoring directly from the graph**.
+
+- requires FusedPQ in source segments
+
+---
+
+# Recall Evaluation
+
+Recall evaluation depends on the compaction mode.
+
+| Mode | Vector source used during search |
+|-----|--------------------------------|
+| INLINE | Full precision vectors |
+| PQ_SEPARATE | `PQVectors` |
+| FUSED_PQ | fused PQ codes inside graph |
+
+For `PQ_SEPARATE`, the benchmark loads the compressed vectors and computes scores using:
+
+```
+PQVectors.scoreFunctionFor(query)
+```
+
+This uses PQ codebooks to compute approximate similarity.
+
+---
+
+# Parameters
+
+Parameters can be supplied via:
+
+```
+-Dargs="-p <param>=<value>"
+```
+
+Example:
+
+```
+-Dargs="-p datasetNames=glove-100-angular"
+```
+
+---
+
+# Core Parameters
 
 | Parameter | Default | Description |
-| :--- | :--- | :--- |
-| `datasetNames` | `glove-100-angular` | The symbolic name of the dataset to load. Supports qualified names like `ibm_datapile:1m`. |
-| `numSources` | `1, 4` | The number of segments to create before compacting. A value of `1` acts as a pass-through baseline (no compaction). |
-| `graphDegree` | `32` | The `M` parameter (max neighbors) used when building the source segments. |
-| `beamWidth` | `100` | The search depth used when building the source segments. |
-| `storageDirectories` | *(empty)* | Comma-separated list of directories to use for storing segments. Used in round-robin fashion. |
-| `storageClasses` | *(empty)* | Comma-separated list of expected `StorageClass` values. Must match the count of `storageDirectories`. |
-| `vectorizationProvider` | `default, panama, native` | Explicitly selects the SIMD runtime. Use `default` for scalar, `panama` for Java Vector API, and `native` for native SIMD. |
+|---|---|---|
+| `datasetNames` | `glove-100-angular` | Dataset to load |
+| `datasetPortion` | `1.0` | Fraction of dataset to use |
+| `workloadMode` | `SEGMENTS_AND_COMPACT` | Benchmark pipeline mode |
+| `numSegments` | `2` | Number of segments before compaction |
 
-## Parameter Validation
+---
 
-The benchmark performs strict validation before execution:
-- `numSources`, `graphDegree`, and `beamWidth` must all be positive integers.
-- If `numSources` is `1`, the benchmark establishes a baseline by skipping the compaction call and searching the source segment directly.
-- If `storageDirectories` are provided, they must be writable.
-- If `storageClasses` are provided, the benchmark verifies that the actual mount points match the asserted classes using `CloudStorageLayoutUtil`.
+# Graph Construction Parameters
 
-Invalid JMH flags or parameter types passed via `-Dargs` will be detected by the JMH parser and result in a build failure.
+| Parameter | Default | Description |
+|---|---|---|
+| `graphDegree` | `32` | Max neighbors per node |
+| `beamWidth` | `100` | Beam search width during graph construction |
 
-## Execution Examples
+---
 
-The benchmark uses the `exec:exec` goal to ensure that forked JVM processes correctly inherit the full project environment, including the classpath and specialized JVector JVM arguments.
+# Compaction Parameters
 
-### Run with Defaults
+| Parameter | Default | Description |
+|---|---|---|
+| `compactMode` | `INLINE` | Vector storage strategy |
+| `pqPath` | *(empty)* | PQ codebook path |
+| `pqVecPath` | *(auto)* | Output path for PQVectors |
+| `trainPQ` | `false` | Train PQ from dataset |
+
+---
+
+# Storage Parameters
+
+These allow benchmarking across different storage tiers.
+
+| Parameter | Description |
+|---|---|
+| `storageDirectories` | Comma-separated list of directories for storing segments |
+| `storageClasses` | Expected storage class for each directory |
+
+If provided, the benchmark verifies mount points using `CloudStorageLayoutUtil`.
+
+---
+
+# Parameter Validation
+
+The benchmark performs strict validation before execution.
+
+### General validation
+
+- `graphDegree` must be positive
+- `beamWidth` must be positive
+- `numSegments` must be positive
+
+---
+
+### Mode-specific validation
+
+**BUILD_FROM_SCRATCH**
+
+Ignored parameters:
+
+```
+compactMode
+pqPath
+pqVecPath
+trainPQ
+numSegments
+```
+
+The benchmark logs a warning if these are provided.
+
+---
+
+**PQ_SEPARATE**
+
+If `trainPQ=false`, then:
+
+```
+pqPath must be provided
+```
+
+If `trainPQ=true`, then:
+```
+train PQ from the entire dataset and saved the PQ to pqPath if provided. The PQ is saved to default if not provided.
+During compaction, the compactor uses that trained PQ to encode each vectors and output to pqVecPath.
+```
+
+---
+
+# PQ / Compaction Options in CompactorBenchmark
+
+This section explains the interaction between:
+
+- `compactMode`
+- `pqPath`
+- `pqVecPath`
+- `trainPQ`
+
+---
+
+# Quick Mental Model
+
+There are **two independent choices**:
+
+1. **How vectors are represented in the output index**
+   - `INLINE`       → full precision vectors stored inline in the graph
+   - `PQ_SEPARATE`  → compressed vectors stored in a separate `.pq` file (PQVectors)
+   - `FUSED_PQ`     → compressed neighbor codes stored inside the graph (fused PQ)
+
+2. **Where the PQ codebook comes from (only relevant to PQ_SEPARATE)**
+   - load from `pqPath`  (`trainPQ=false`)
+   - train from full dataset (`trainPQ=true`)
+   - If `trainPQ=ture`, save the trained PQ to `pqPath`
+`pqVecPath` is simply the **output path** of PQVectors, only relevant to `PQ_SEPARATE`.
+
+---
+
+# Summary Table
+
+| compactMode | What gets written | Needs `pqPath`? | Produces `pqVecPath`? | Recall uses |
+|---|---|---|---|---|
+| `INLINE` | graph with inline full vectors | No | No | `ravv` (full precision vectors) |
+| `PQ_SEPARATE` | graph + `PQVectors` file | Yes if `trainPQ=false` | Yes | `PQVectors.scoreFunctionFor(...)` |
+| `FUSED_PQ` | graph with fused PQ codes | No | No | fused PQ feature |
+
+---
+
+# Execution Examples
+
+## Run with Defaults
+
 ```bash
 ./mvnw -pl benchmarks-jmh exec:exec@compactor
 ```
 
-### Debugging (Disable Forking)
-To attach a debugger or inspect logs in the same process, disable JMH forking:
-```bash
-./mvnw -pl benchmarks-jmh exec:exec@compactor -Dargs="-f 0"
-```
 
-### Run with a Specific Dataset
-```bash
-./mvnw -pl benchmarks-jmh exec:exec@compactor -Dargs="-p datasetNames=ibm_datapile:1m"
-```
-
-### Force a Specific Vectorization Provider
-```bash
-./mvnw -pl benchmarks-jmh exec:exec@compactor -Dargs="-p vectorizationProvider=default"
-```
-
-### Run with Storage Validation
-To benchmark compaction across specific storage tiers (e.g., merging segments stored on a local SSD vs a network mount), provide comma-separated directories and their expected classes:
+## Build From Scratch
 
 ```bash
 ./mvnw -pl benchmarks-jmh exec:exec@compactor \
-  -Dargs="-p storageDirectories=/mnt/fast_ssd,/mnt/slow_network \
-          -p storageClasses=LOCAL_SSD,NETWORK_FILESYSTEM \
-          -p numSources=2"
+-Dargs="-p workloadMode=BUILD_FROM_SCRATCH"
 ```
 
-### Testing a Parameter Matrix
-Example: Testing across different fragmentation levels and degrees:
+---
+
+## Segment Build + Compaction
+
 ```bash
 ./mvnw -pl benchmarks-jmh exec:exec@compactor \
-  -Dargs="-p datasetNames=glove-100-angular -p numSources=1,2,4,8 -p graphDegree=32,64"
+-Dargs="-p workloadMode=SEGMENTS_AND_COMPACT -p numSegments=4"
 ```
 
-### Full JMH Control
-You can pass any standard JMH arguments (like `-wi` for warmups or `-i` for iterations):
+---
+
+## PQ Separate Compaction
+
 ```bash
 ./mvnw -pl benchmarks-jmh exec:exec@compactor \
-  -Dargs="-wi 2 -i 5 -p numSources=1,4"
+-Dargs="-p compactMode=PQ_SEPARATE -p trainPQ=true"
 ```
 
-## Interpreting Results
+---
 
-- **Score (ms/op)**: The average time taken to perform the compaction. For `numSources=1`, this represents the baseline search time (compaction is bypassed).
-- **recall (AuxCounter)**: The search recall of the index. Compare the `recall` of `numSources > 1` against the `numSources=1` baseline to verify that the merge process maintained graph quality.
+## Fused PQ Compaction
+
+```bash
+./mvnw -pl benchmarks-jmh exec:exec@compactor \
+-Dargs="-p compactMode=FUSED_PQ"
+```
+
+
+## Full JMH Control
+
+Standard JMH parameters can be passed.
+
+Example:
+
+```bash
+./mvnw -pl benchmarks-jmh exec:exec@compactor \
+-Dargs="-wi 2 -i 5 -p numSegments=1,4"
+```
+
+---
+
+# Interpreting Results
+
+### Score (ms/op)
+
+Average time for the benchmark pipeline.
+
+Meaning depends on mode.
+
+| Mode | Meaning |
+|---|---|
+| BUILD_FROM_SCRATCH | graph build time |
+| SEGMENTS_AND_COMPACT | segment build + compaction time |
+| COMPACT_ONLY | compaction time |
+
+---
+
+### Recall (AuxCounter)
+
+Measures search quality against ground truth.
+
+Interpretation:
+
+- Compare recall of `SEGMENTS_AND_COMPACT` against `BUILD_FROM_SCRATCH`
+- Ensure compaction maintains graph quality
