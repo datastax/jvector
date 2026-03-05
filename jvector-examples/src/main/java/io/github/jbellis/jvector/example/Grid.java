@@ -414,19 +414,19 @@ public class Grid {
         }
 
         var outputPath = testDirectory.resolve("compact-graph");
-        var compactor = new OnDiskGraphIndexCompactor(graphs, ForkJoinPool.commonPool());
-        int globalOrdinal = 0;
-        for(int n = 0; n < numSplits; ++n) {
-            Map<Integer, Integer> map = new HashMap<>();
-            for(int i = 0; i < splitSizes.get(n); ++i) {
-                map.put(i, globalOrdinal++);
-            }
-            var remapper = new OrdinalMapper.MapMapper(map);
-            compactor.setRemapper(graphs.get(n), remapper);
-        }
-        System.out.format("Compacting...%n");
-        compactor.compact(outputPath, ds.getSimilarityFunction());
-        System.out.format("done%n");
+        //var compactor = new OnDiskGraphIndexCompactor(graphs, ForkJoinPool.commonPool());
+        //int globalOrdinal = 0;
+        //for(int n = 0; n < numSplits; ++n) {
+            //Map<Integer, Integer> map = new HashMap<>();
+            //for(int i = 0; i < splitSizes.get(n); ++i) {
+                //map.put(i, globalOrdinal++);
+            //}
+            //var remapper = new OrdinalMapper.MapMapper(map);
+            //compactor.setRemapper(graphs.get(n), remapper);
+        //}
+        //System.out.format("Compacting...%n");
+        //compactor.compact(outputPath, ds.getSimilarityFunction());
+        //System.out.format("done%n");
 
         var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(outputPath));
 
