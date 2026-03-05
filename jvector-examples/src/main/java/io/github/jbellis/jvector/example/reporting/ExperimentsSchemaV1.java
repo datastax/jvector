@@ -32,6 +32,18 @@ import java.util.Set;
 public final class ExperimentsSchemaV1 {
     private ExperimentsSchemaV1() {}
 
+    static String csvEscape(String s) {
+        if (s == null) return "";
+        boolean needsQuotes =
+                s.indexOf(',') >= 0 ||
+                        s.indexOf('"') >= 0 ||
+                        s.indexOf('\n') >= 0 ||
+                        s.indexOf('\r') >= 0;
+
+        if (!needsQuotes) return s;
+        return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+
     public static List<String> fixedColumns() {
         return List.of(
                 "schema_version",
@@ -45,6 +57,8 @@ public final class ExperimentsSchemaV1 {
                 "addHierarchy",
                 "refineFinalGraph",
                 "feature_set",
+                "build_compressor",
+                "search_compressor",
                 "usePruning",
                 "topK",
                 "overquery",
@@ -65,6 +79,8 @@ public final class ExperimentsSchemaV1 {
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
                                                   Set<FeatureId> featureSet,
+                                                  String buildCompressorString,
+                                                  String searchCompressorString,
                                                   boolean usePruning,
                                                   int topK,
                                                   double overquery,
@@ -82,6 +98,8 @@ public final class ExperimentsSchemaV1 {
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
+        fixed.put("build_compressor", csvEscape(buildCompressorString));
+        fixed.put("search_compressor", csvEscape(searchCompressorString));
 
         fixed.put("usePruning", Boolean.toString(usePruning));
         fixed.put("topK", Integer.toString(topK));
