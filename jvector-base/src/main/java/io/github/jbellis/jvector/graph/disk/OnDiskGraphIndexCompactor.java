@@ -208,28 +208,38 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int taskWindowSize = opts.effectiveTaskWindowSize();
 
         final boolean fusedPQEnabled = opts.writeFeatures.contains(FeatureId.FUSED_PQ);
-        final boolean writePQSeparate = opts.pqConfig.pqVectorsOutput == CompactOptions.PQConfig.PQVectorsOutput.SEPARATE_FILE;
-        final Path pqVectorsPath = opts.pqConfig.pqVectorsOutputPath; // may be null if not enabled
+        final boolean compressedPrecision = opts.precision == CompactOptions.CompactionPrecision.COMPRESSED;
+        final PQVectors providedPQVectors = opts.compressionConfig.pqVectors.orElse(null);
+        final boolean writePQSeparate = opts.compressionConfig.pqVectorsOutputPath != null;
+        final Path pqVectorsPath = opts.compressionConfig.pqVectorsOutputPath;
 
         ProductQuantization pqResolved = null;
-
-        if (fusedPQEnabled || writePQSeparate) {
-            switch (opts.pqConfig.mode) {
-                case PROVIDED:
-                    pqResolved = opts.pqConfig.pq.orElseThrow(
-                        () -> new IllegalArgumentException("pqConfig.mode==PROVIDED requires pq"));
+        if (fusedPQEnabled || writePQSeparate || compressedPrecision) {
+            switch (opts.compressionConfig.kind) {
+                case PQ_VECTORS:
+                    pqResolved = providedPQVectors.getCompressor();
                     break;
-                case FROM_SOURCES:
-                    pqResolved = resolvePQFromSources(opts.pqConfig.sourcePolicy);
+                case PQ_CODEBOOK:
+                    pqResolved = opts.compressionConfig.pqCodebook.orElseThrow();
+                    break;
+                case SOURCE_PQ:
+                    pqResolved = resolvePQFromSources(opts.compressionConfig.sourcePolicy);
                     break;
                 case NONE:
-                    throw new IllegalArgumentException("PQ required but pqConfig.mode==NONE");
-                default:
-                    throw new IllegalStateException("Unknown pq mode: " + opts.pqConfig.mode);
+                    throw new IllegalArgumentException("Compression required but compressionConfig is NONE");
             }
         }
 
+
         final int pqLength = (pqResolved == null) ? -1 : pqResolved.compressedVectorSize();
+
+        if (compressedPrecision) {
+            boolean sourcePQAvailable = hasSourcePQ();
+            if (providedPQVectors == null && !sourcePQAvailable) {
+                throw new IllegalArgumentException(
+                        "CompactionPrecision.COMPRESSED requires caller-provided PQVectors or source-side FUSED_PQ");
+            }
+        }
 
         numTotalNodes = 0;
         for(OnDiskGraphIndex source : sources) {
@@ -305,7 +315,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int submitted = 0;
         int searchTopK = Math.max(2, (maxDegrees.get(0) + sources.size() - 1) / sources.size());
         int beamWidth;
-        if(fusedPQEnabled) {
+        if(compressedPrecision) {
             beamWidth = searchTopK * 2;
         } 
         else {
@@ -372,21 +382,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             }
 
                         } else {
-                            SearchScoreProvider ssp;
-                            if(fusedPQEnabled) {
-                               // custom scratch space?
-                               ssp = new DefaultSearchScoreProvider(searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
-                            }
-                            else {
-                               var sf = new ScoreFunction.ExactScoreFunction() {
-                                    @Override
-                                    public float similarityTo(int node2) {
-                                        searchView.getVectorInto(node2, tmpVec, 0);
-                                        return similarityFunction.compare(baseVec, tmpVec);
-                                    }
-                               };
-                               ssp = new DefaultSearchScoreProvider(sf);
-                            }
+                            SearchScoreProvider ssp = buildCrossSourceScoreProvider(
+                                    compressedPrecision,
+                                    providedPQVectors,
+                                    remappers.get(idx),
+                                    searchView,
+                                    baseVec,
+                                    tmpVec,
+                                    similarityFunction);
 
                             // PRIORITY
                             // TODO: clarify heuristics approach, identify key questions and verification methods
@@ -441,13 +444,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
         // Create PQ writer if needed (same thread that does IO writes)
         PQVectorsWriter pqWriter = null;
-        if (opts.pqConfig.pqVectorsOutput == CompactOptions.PQConfig.PQVectorsOutput.SEPARATE_FILE) {
+        if (writePQSeparate) {
             if (pqResolved == null) {
               throw new IllegalStateException("pqVectorsOutput enabled but pqResolved is null");
             }
             int vectorCount = maxOrdinal + 1; // must match PQVectors.load expectations
             pqWriter = new PQVectorsWriter(
-                opts.pqConfig.pqVectorsOutputPath,
+                opts.compressionConfig.pqVectorsOutputPath,
                 pqResolved,
                 vectorCount,
                 OnDiskGraphIndex.CURRENT_VERSION
@@ -503,7 +506,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
-    private ProductQuantization resolvePQFromSources(CompactOptions.PQConfig.PQSourcePolicy policy) {
+    private ProductQuantization resolvePQFromSources(CompactOptions.CompressionConfig.PQSourcePolicy policy) {
         switch (policy) {
           case FIRST: {
               FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
@@ -537,6 +540,49 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
           default:
               throw new IllegalArgumentException("Unhandled policy: " + policy);
         }
+    }
+
+    private boolean hasSourcePQ() {
+        for (OnDiskGraphIndex source : sources) {
+            if (source.getFeatures().containsKey(FeatureId.FUSED_PQ)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
+                                                              PQVectors providedPQVectors,
+                                                              OrdinalMapper remapper,
+                                                              OnDiskGraphIndex.View searchView,
+                                                              VectorFloat<?> baseVec,
+                                                              VectorFloat<?> tmpVec,
+                                                              VectorSimilarityFunction similarityFunction) {
+        if (compressedPrecision) {
+            if (providedPQVectors != null) {
+                var approx = providedPQVectors.scoreFunctionFor(baseVec, similarityFunction);
+                var remapped = new ScoreFunction.ApproximateScoreFunction() {
+                    @Override
+                    public float similarityTo(int node2) {
+                        int globalOrdinal = remapper.oldToNew(node2);
+                        return approx.similarityTo(globalOrdinal);
+                    }
+                };
+                return new DefaultSearchScoreProvider(remapped);
+            }
+
+            return new DefaultSearchScoreProvider(
+                    searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
+        }
+
+        var sf = new ScoreFunction.ExactScoreFunction() {
+            @Override
+            public float similarityTo(int node2) {
+                searchView.getVectorInto(node2, tmpVec, 0);
+                return similarityFunction.compare(baseVec, tmpVec);
+            }
+        };
+        return new DefaultSearchScoreProvider(sf);
     }
 
     public OnHeapGraphIndex constructUpperLayerGraph(UpperLayerOrdinalMapper upperLayerOrdinalMapper, UpperLayerRandomAccessVectorValues ulravv, VectorSimilarityFunction similarityFunction) {

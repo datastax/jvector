@@ -75,13 +75,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -253,21 +247,23 @@ public class CompactorBenchmark {
     private boolean preserveSegmentsOnDisk;
 
     public enum CompactMode {
-        INLINE,        // CompactOptions.withInlineVectors()
-        PQ_SEPARATE,   // CompactOptions.withPQVectorsSeparate(pq, pqVecPath)
-        FUSEDPQ       // CompactOptions.withFusedPQ() (AUTO-from-sources)
+        INLINE,                    // exact compaction, inline output only
+        PQ_VECTORS_OUTPUT,         // exact compaction, emit PQVectors sidecar
+        FUSEDPQ_FROM_SOURCES,      // compressed compaction using source PQ
+        FUSEDPQ_FROM_PQVECTORS     // compressed compaction using caller PQVectors
     }
 
     @Param({"INLINE"})
     public CompactMode compactMode;
 
-    // Required when compactMode == PQ_SEPARATE
+    // Required when compactMode == PQ_VECTORS_OUTPUT
     @Param({""})
     public String pqPath;
 
-    // Optional when compactMode == PQ_SEPARATE;
     @Param({""})
-    public String pqVecPath;
+    public String pqVectorsInputPath;
+    @Param({""})
+    public String pqVectorsOutputPath;
 
     // ---------- Params ----------
     @Param({"glove-100-angular"})
@@ -506,7 +502,8 @@ public class CompactorBenchmark {
           if (compactMode != CompactMode.INLINE ||
               trainPQ ||
               (pqPath != null && !pqPath.isBlank()) ||
-              (pqVecPath != null && !pqVecPath.isBlank())) {
+              (pqVectorsInputPath != null && !pqVectorsInputPath.isBlank()) ||
+              (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())) {
 
             log.warn(
                 "compactMode/trainPQ/pqPath/pqVecPath ignored in BUILD_FROM_SCRATCH mode. " +
@@ -514,17 +511,34 @@ public class CompactorBenchmark {
                 compactMode,
                 trainPQ,
                 pqPath,
-                pqVecPath
+                pqVectorsInputPath,
+                pqVectorsOutputPath
                 );
               }
         }
 
         if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
-            && compactMode == CompactMode.PQ_SEPARATE && !trainPQ) {
+            && compactMode == CompactMode.PQ_VECTORS_OUTPUT && !trainPQ) {
             if (pqPath == null || pqPath.isBlank()) {
-                throw new IllegalArgumentException("compactMode=PQ_SEPARATE requires pqPath or need to set trainPQ=true");
+                throw new IllegalArgumentException("compactMode=PQ_VECTORS_OUTPUT requires pqPath or need to set trainPQ=true");
             }
         }
+
+        if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
+                && compactMode == CompactMode.FUSEDPQ_FROM_SOURCES
+                && indexPrecision != IndexPrecision.FUSEDPQ) {
+            throw new IllegalArgumentException(
+                    "compactMode=FUSEDPQ_FROM_SOURCES requires source segments built with indexPrecision=FUSEDPQ");
+        }
+
+        if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
+                && compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
+            if (pqVectorsInputPath == null || pqVectorsInputPath.isBlank()) {
+                throw new IllegalArgumentException(
+                        "compactMode=FUSEDPQ_FROM_PQVECTORS requires pqVectorsInputPath");
+            }
+        }
+
     }
 
     private List<Path> resolveStoragePaths() throws IOException {
@@ -766,9 +780,13 @@ public class CompactorBenchmark {
     private CompactOptions buildCompactOptions(Path compactOutputPath) throws IOException {
       switch (compactMode) {
         case INLINE:
-          return CompactOptions.withInlineVectors();
+            return CompactOptions.builder()
+                    .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
+                    .precision(CompactOptions.CompactionPrecision.EXACT)
+                    .compressionConfig(CompactOptions.CompressionConfig.none())
+                    .build();
 
-        case PQ_SEPARATE: {
+        case PQ_VECTORS_OUTPUT: {
 
             ProductQuantization pq;
 
@@ -798,7 +816,7 @@ public class CompactorBenchmark {
 
               if (pqPath == null || pqPath.isBlank()) {
                   throw new IllegalArgumentException(
-                      "compactMode=PQ_SEPARATE requires pqPath when trainPQ=false");
+                      "compactMode=PQ_VECTORS_OUTPUT requires pqPath when trainPQ=false");
               }
 
               try (ReaderSupplier pqRs =
@@ -808,15 +826,47 @@ public class CompactorBenchmark {
             }
 
             Path pqVecOut =
-              (pqVecPath != null && !pqVecPath.isBlank())
-              ? Path.of(pqVecPath)
-              : Path.of(compactOutputPath.toString() + ".pq");
+                    (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())
+                    ? Path.of(pqVectorsOutputPath)
+                    : Path.of(compactOutputPath.toString() + ".pq");
 
-            return CompactOptions.withPQVectorsSeparate(pq, pqVecOut);
+            return CompactOptions.builder()
+                    .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
+                    .precision(CompactOptions.CompactionPrecision.EXACT)
+                    .compressionConfig(
+                            CompactOptions.CompressionConfig.withPQCodebook(pq, pqVecOut)
+                    )
+                    .build();
         }
 
-        case FUSEDPQ:
-            return CompactOptions.withFusedPQ();
+          case FUSEDPQ_FROM_SOURCES:
+              return CompactOptions.builder()
+                      .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
+                      .precision(CompactOptions.CompactionPrecision.COMPRESSED)
+                      .compressionConfig(
+                              CompactOptions.CompressionConfig.withSourcePQ(
+                                      CompactOptions.CompressionConfig.PQSourcePolicy.AUTO
+                              )
+                      )
+                      .build();
+
+          case FUSEDPQ_FROM_PQVECTORS: {
+              PQVectors pqVectors = null;
+
+              try (ReaderSupplier rss = ReaderSupplierFactory.open(Path.of(pqVectorsInputPath))) {
+                  pqVectors = PQVectors.load(rss.get());
+              }
+
+
+              return CompactOptions.builder()
+                      .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
+                      .precision(CompactOptions.CompactionPrecision.COMPRESSED)
+                      .compressionConfig(
+                              CompactOptions.CompressionConfig.withPQVectors(pqVectors)
+                      )
+                      .build();
+          }
+
 
         default:
             throw new IllegalStateException("Unhandled compactMode: " + compactMode);
@@ -1024,14 +1074,21 @@ public class CompactorBenchmark {
 
         PQVectors pqVectors = null;
 
-        if(compactMode == CompactMode.PQ_SEPARATE) {
+        if(compactMode == CompactMode.PQ_VECTORS_OUTPUT) {
             Path pqVecOut =
-              (pqVecPath != null && !pqVecPath.isBlank())
-              ? Path.of(pqVecPath)
-              : Path.of(compactOutputPath.toString() + ".pq");
+                (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())
+                ? Path.of(pqVectorsOutputPath)
+                : Path.of(compactOutputPath.toString() + ".pq");
 
             log.info("Recall: using PQVectors for approximate scoring from {}", pqVecOut.toAbsolutePath());
             try (ReaderSupplier rss = ReaderSupplierFactory.open(pqVecOut)) {
+                pqVectors = PQVectors.load(rss.get());
+            }
+        }
+        else if (compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
+            log.info("Recall: using caller-provided PQVectors for approximate scoring from {}",
+                    Path.of(pqVectorsInputPath).toAbsolutePath());
+            try (ReaderSupplier rss = ReaderSupplierFactory.open(Path.of(pqVectorsInputPath))) {
                 pqVectors = PQVectors.load(rss.get());
             }
         }
@@ -1055,7 +1112,8 @@ public class CompactorBenchmark {
                             Bits.ALL
                     );
                 }
-                else if(compactMode == CompactMode.PQ_SEPARATE) {
+                else if (compactMode == CompactMode.PQ_VECTORS_OUTPUT
+                        || compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
                     // --- PQ approximate search path ---
                     // Score function uses PQVectors (approx) instead of full vectors
                     ScoreFunction.ApproximateScoreFunction asf = pqVectors.scoreFunctionFor(queryVectors.get(n), similarityFunction);
@@ -1063,7 +1121,7 @@ public class CompactorBenchmark {
 
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
                 }
-                else if(compactMode == CompactMode.FUSEDPQ) {
+                else if(compactMode == CompactMode.FUSEDPQ_FROM_SOURCES) {
 
                       SearchScoreProvider ssp = new DefaultSearchScoreProvider(graph.getView().approximateScoreFunctionFor(queryVectors.get(n), similarityFunction));
                       result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
@@ -1086,6 +1144,7 @@ public class CompactorBenchmark {
         var params = new LinkedHashMap<String, Object>();
         params.put("dataset", datasetNames);
         params.put("workloadMode", workloadMode.name());
+        params.put("compactMode", compactMode.name());
         params.put("numSegments", numSegments);
         params.put("graphDegree", graphDegree);
         params.put("beamWidth", beamWidth);
@@ -1099,6 +1158,10 @@ public class CompactorBenchmark {
         params.put("parallelWriteThreads", parallelWriteThreads);
         params.put("vectorizationProvider", resolvedVectorizationProvider);
         params.put("datasetPortion", datasetPortion);
+        params.put("trainPQ", trainPQ);
+        params.put("pqPath", pqPath);
+        params.put("pqVectorsInputPath", pqVectorsInputPath);
+        params.put("pqVectorsOutputPath", pqVectorsOutputPath);
         params.put("enableRecall", enableRecall);
         params.put("jfrPartitioning", jfrPartitioning);
         params.put("jfrCompacting", jfrCompacting);
