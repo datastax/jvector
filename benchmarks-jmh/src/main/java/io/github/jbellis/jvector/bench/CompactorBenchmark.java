@@ -53,6 +53,7 @@ import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -75,7 +76,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -157,6 +164,36 @@ public class CompactorBenchmark {
         long candidate = System.currentTimeMillis() * 1296; // suffix starts at 00
         long actual = LAST_TEST_ID.updateAndGet(last -> Math.max(candidate, last + 1));
         return Long.toString(actual, 36);
+    }
+
+    /**
+    * Returns a Bits instance representing randomly selected live nodes.
+    *
+    */
+    private static FixedBitSet randomLiveNodes(int size, double liveRate, long seed) {
+        FixedBitSet live = new FixedBitSet(size);
+
+        if (liveRate >= 1.0) {
+            live.set(0, size); // all nodes live
+            return live;
+        }
+
+        var rnd = new java.util.SplittableRandom(seed);
+        int liveCount = 0;
+
+        for (int i = 0; i < size; i++) {
+            if (rnd.nextDouble() < liveRate) {
+                live.set(i);
+                liveCount++;
+            }
+        }
+
+        // avoid degenerate case (all dead)
+        if (liveCount == 0 && size > 0) {
+            live.set(rnd.nextInt(size));
+        }
+
+        return live;
     }
 
     private static final Path COUNTER_FILE = RUN_DIR.resolve("completed-count");
@@ -282,6 +319,16 @@ public class CompactorBenchmark {
     public int beamWidth;
 
     /**
+     * liveNodesRate controls how many nodes are considered "live" per source segment
+     * when calling compactor.setLiveNodes(...).
+     *
+     * - 1.0 => all nodes live (default; behaves like no deletions)
+     * - 0.8 => ~80% live, ~20% deleted (randomly selected)
+    */
+    @Param({"1.0"})
+    public double liveNodesRate;
+
+    /**
      * If non-empty, this is where segment files live (or will be written).
      * - For SEGMENTS_* modes: used as output dir for segments.
      * - For COMPACT_ONLY: required
@@ -370,9 +417,9 @@ public class CompactorBenchmark {
     }
 
     private String jfrParamSuffix() {
-        return String.format("%s-%s-n%d-d%d-bw%d-%s-%s-pw%d-%s-dp%.2f",
+        return String.format("%s-w%s-n%d-d%d-bw%d-%s-%s-pw%d-%s-dp%.2f-live%.2f",
                 datasetNames, workloadMode, numSegments, graphDegree, beamWidth,
-                splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion);
+                splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, liveNodesRate);
     }
 
     @Setup(Level.Iteration)
@@ -431,8 +478,8 @@ public class CompactorBenchmark {
             groundTruth = ds.getGroundTruth();
             similarityFunction = ds.getSimilarityFunction();
 
-            log.info("Dataset {} loaded. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}",
-                    datasetNames, ravv.size(), datasetPortion, queryVectors.size(), ds.getDimension(), similarityFunction, workloadMode);
+            log.info("Dataset {} loaded. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
+                    datasetNames, ravv.size(), datasetPortion, queryVectors.size(), ds.getDimension(), similarityFunction, workloadMode, liveNodesRate);
             if(workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY) {
                 log.info("Compact mode: {}", compactMode);
             }
@@ -489,6 +536,9 @@ public class CompactorBenchmark {
         if (beamWidth <= 0) throw new IllegalArgumentException("beamWidth must be positive");
         if (datasetPortion <= 0.0 || datasetPortion > 1.0) {
             throw new IllegalArgumentException("datasetPortion must be in (0.0, 1.0]");
+        }
+        if (liveNodesRate <= 0.0 || liveNodesRate > 1.0) {
+            throw new IllegalArgumentException("liveNodesRate must be in (0.0, 1.0]");
         }
         if (workloadMode == WorkloadMode.COMPACT_ONLY) {
             // strongly recommend a stable dir; tempdir will be empty.
@@ -769,6 +819,8 @@ public class CompactorBenchmark {
                 map.put(i, globalOrdinal++);
             }
             compactor.setRemapper(graphs.get(n), new OrdinalMapper.MapMapper(map));
+            FixedBitSet live = randomLiveNodes(vectorsPerSourceCount.get(n), liveNodesRate, n);
+            compactor.setLiveNodes(graphs.get(n), live);
         }
 
         long startNanos = System.nanoTime();
@@ -1168,6 +1220,7 @@ public class CompactorBenchmark {
         params.put("jfrObjectCount", jfrObjectCount);
         params.put("sysStatsEnabled", sysStatsEnabled);
         params.put("threadAllocTracking", threadAllocTracking);
+        params.put("liveNodesRate", liveNodesRate);
         params.put("preserveSegmentsForCompactOnly", preserveSegmentsForCompactOnly);
         return params;
     }
