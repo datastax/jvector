@@ -53,4 +53,27 @@ public class DataSets {
         logger.warn("Unable to find dataset [{}] with any dataset loader. Loaders tried:{}", dataSetName, loaders.stream().map(DataSetLoader::getName).collect(Collectors.joining(",")));
         return Optional.empty();
     }
+
+    public static Optional<BaseVectorsDataSet> loadBaseVectors(String dataSetName) {
+        return loadBaseVectors(dataSetName, defaultLoaders);
+    }
+
+    public static Optional<BaseVectorsDataSet> loadBaseVectors(String dataSetName, Collection<DataSetLoader> loaders) {
+        logger.info("loading base-vectors dataset [{}]", dataSetName);
+        if (dataSetName.endsWith(".hdf5")) {
+            throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
+        }
+
+        for (DataSetLoader loader : loaders) {
+            logger.trace("trying loader [{}] for base-vectors", loader.getName());
+            Optional<BaseVectorsDataSet> dataSetLoaded = loader.loadBaseVectors(dataSetName);
+            if (dataSetLoaded.isPresent()) {
+                logger.info("base-vectors dataset [{}] found with loader [{}]", dataSetName, loader.getName());
+                return dataSetLoaded;
+            }
+        }
+        logger.warn("Unable to find base-vectors dataset [{}] with any dataset loader. Loaders tried:{}",
+                dataSetName, loaders.stream().map(DataSetLoader::getName).collect(Collectors.joining(",")));
+        return Optional.empty();
+    }
 }

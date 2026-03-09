@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -97,6 +98,31 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
         return maybeDownloadHdf5(datasetName).map(this::readHdf5Data);
     }
 
+    @Override
+    public Optional<BaseVectorsDataSet> loadBaseVectors(String datasetName) {
+
+        // HDF5 loader does not support profiles
+        if (datasetName.contains(":")) {
+            logger.trace("Dataset '{}' has a profile, which is not supported by the HDF5 loader.", datasetName);
+            return Optional.empty();
+        }
+
+        // If not local, only download if it's explicitly known to be on ann-benchmarks.com
+        if (!KNOWN_DATASETS.contains(datasetName)) {
+            logger.trace("Dataset '{}' not in known list, skipping HDF5 download.", datasetName);
+            return Optional.empty();
+        }
+
+        // If it exists locally, we're good
+        var dsFilePath = HDF5_DIR.resolve(datasetName + HDF5_EXTN);
+        if (Files.exists(dsFilePath)) {
+            logger.trace("Dataset '{}' already downloaded.", datasetName);
+            return Optional.of(readHdf5BaseVectors(dsFilePath));
+        }
+
+        return maybeDownloadHdf5(datasetName).map(this::readHdf5BaseVectors);
+    }
+
 
     private DataSet readHdf5Data(Path path) {
 
@@ -138,6 +164,52 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
         }
 
         return DataSetUtils.getScrubbedDataSet(path.getFileName().toString(), similarityFunction, Arrays.asList(baseVectors), Arrays.asList(queryVectors), gtSets);
+    }
+
+    private BaseVectorsDataSet readHdf5BaseVectors(Path path) {
+
+        VectorSimilarityFunction similarityFunction = getVectorSimilarityFunction(path);
+
+        VectorFloat<?>[] baseVectors;
+        try (HdfFile hdf = new HdfFile(path)) {
+            var baseVectorsArray = (float[][]) hdf.getDatasetByPath("train").getData();
+            baseVectors = IntStream.range(0, baseVectorsArray.length)
+                    .parallel()
+                    .mapToObj(i -> vectorTypeSupport.createFloatVector(baseVectorsArray[i]))
+                    .toArray(VectorFloat<?>[]::new);
+        }
+
+        final List<VectorFloat<?>> baseList = Arrays.asList(baseVectors);
+        final int dimension = baseList.get(0).length();
+        final var ravv = new ListRandomAccessVectorValues(baseList, dimension);
+        final String name = path.getFileName().toString();
+
+        return new BaseVectorsDataSet() {
+            @Override
+            public int getDimension() {
+                return dimension;
+            }
+
+            @Override
+            public io.github.jbellis.jvector.graph.RandomAccessVectorValues getBaseRavv() {
+                return ravv;
+            }
+
+            @Override
+            public String getName() {
+                return name;
+            }
+
+            @Override
+            public VectorSimilarityFunction getSimilarityFunction() {
+                return similarityFunction;
+            }
+
+            @Override
+            public List<VectorFloat<?>> getBaseVectors() {
+                return baseList;
+            }
+        };
     }
 
     /**

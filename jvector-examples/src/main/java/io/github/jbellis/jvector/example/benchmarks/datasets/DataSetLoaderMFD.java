@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
@@ -67,6 +69,17 @@ public class DataSetLoaderMFD implements DataSetLoader {
         }
 
         return maybeDownloadFvecs(fileName).map(MultiFileDatasource::load);
+    }
+
+    @Override
+    public Optional<BaseVectorsDataSet> loadBaseVectors(String fileName) {
+
+        if (fileName.contains(":")) {
+            logger.trace("Dataset {} with profile is not supported by MFD loader", fileName);
+            return Optional.empty();
+        }
+
+        return maybeDownloadBaseFvecs(fileName).map(MultiFileDatasource::loadBaseOnly);
     }
 
     private Optional<MultiFileDatasource> maybeDownloadFvecs(String name) {
@@ -128,6 +141,58 @@ public class DataSetLoaderMFD implements DataSetLoader {
         return Optional.of(mfd);
     }
 
+    private Optional<MultiFileDatasource> maybeDownloadBaseFvecs(String name) {
+        String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
+        var mfd = MultiFileDatasource.byName.get(name);
+        if (mfd == null) {
+            logger.debug("MultiFileDatasource not found for name: [" + name + "]");
+            return Optional.empty();
+        }
+        logger.info("found dataset definition for {}", name);
+
+        Path fvecPath = Paths.get(fvecDir);
+        try {
+            Files.createDirectories(fvecPath.resolve(mfd.directory()));
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create directory: " + fvecDir, e);
+        }
+
+        try (S3AsyncClient s3Client = s3AsyncClientBuilder().build()) {
+            S3TransferManager tm = S3TransferManager.builder().s3Client(s3Client).build();
+
+            Path localPath = fvecPath.resolve(mfd.basePath);
+            if (!Files.exists(localPath)) {
+                var urlPath = mfd.basePath.toString().replace('\\', '/');
+                logger.info("Downloading base vectors for dataset {} from {}", name, urlPath);
+                DownloadFileRequest downloadFileRequest =
+                        DownloadFileRequest.builder()
+                                .getObjectRequest(b -> b.bucket(bucket).key(urlPath))
+                                .addTransferListener(LoggingTransferListener.create())
+                                .destination(Paths.get(localPath.toString()))
+                                .build();
+
+                // 3 retries
+                for (int i = 0; i < 3; i++) {
+                    FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
+                    CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
+                    long downloadedSize = Files.size(localPath);
+
+                    if (downloadedSize == downloadResult.response().contentLength()) {
+                        logger.info("Downloaded base file of length {}", downloadedSize);
+                        break;
+                    } else {
+                        logger.error("Incomplete base download. Retrying...");
+                    }
+                }
+            }
+            tm.close();
+        } catch (Exception e) {
+            throw new RuntimeException("Error downloading base data from S3: " + e.getMessage());
+        }
+
+        return Optional.of(mfd);
+    }
+
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
                 .region(Region.US_EAST_1)
@@ -164,6 +229,39 @@ public class DataSetLoaderMFD implements DataSetLoader {
             var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
             var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
             return DataSetUtils.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
+        }
+
+        public BaseVectorsDataSet loadBaseOnly() {
+            var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
+            final int dimension = baseVectors.get(0).length();
+            final var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
+
+            return new BaseVectorsDataSet() {
+                @Override
+                public int getDimension() {
+                    return dimension;
+                }
+
+                @Override
+                public io.github.jbellis.jvector.graph.RandomAccessVectorValues getBaseRavv() {
+                    return ravv;
+                }
+
+                @Override
+                public String getName() {
+                    return name;
+                }
+
+                @Override
+                public VectorSimilarityFunction getSimilarityFunction() {
+                    return VectorSimilarityFunction.COSINE;
+                }
+
+                @Override
+                public List<VectorFloat<?>> getBaseVectors() {
+                    return baseVectors;
+                }
+            };
         }
 
         public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{

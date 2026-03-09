@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.bench;
 import io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorsDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.GitInfo;
@@ -76,13 +77,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -116,6 +111,8 @@ public class CompactorBenchmark {
     }
 
     private static final Logger log = LoggerFactory.getLogger(CompactorBenchmark.class);
+
+    private List<VectorFloat<?>> loadedBaseVectors;
 
     public enum IndexPrecision {
         FULLPRECISION,
@@ -455,31 +452,94 @@ public class CompactorBenchmark {
 
             validateParams();
 
-            ds = DataSets.loadDataSet(datasetNames)
-                    .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
-
             List<VectorFloat<?>> baseVectors;
-            if (datasetPortion == 1.0) {
-                ravv = ds.getBaseRavv();
-                baseVectors = ds.getBaseVectors();
-            } else {
-                int totalVectors = ds.getBaseRavv().size();
-                int portionedSize = (int) (totalVectors * datasetPortion);
-                if (portionedSize < Math.max(1, numSegments)) {
-                    throw new IllegalArgumentException(
-                            "datasetPortion=" + datasetPortion + " yields " + portionedSize
-                                    + " vectors, fewer than numSegments=" + numSegments);
+            int dimension;
+
+            if (workloadMode == WorkloadMode.COMPACT_ONLY) {
+                loadedBaseVectors = null;
+                ravv = null;
+
+                if (enableRecall) {
+                    // Keep current behavior for recall mode.
+                    // If we want COMPACT_ONLY + recall without loading base vectors,
+                    // we should add a separate query/ground-truth-only loader path.
+                    ds = DataSets.loadDataSet(datasetNames)
+                            .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
+
+                    queryVectors = ds.getQueryVectors();
+                    groundTruth = ds.getGroundTruth();
+                    similarityFunction = ds.getSimilarityFunction();
+                    dimension = ds.getDimension();
+
+                    log.info("Dataset {} loaded for COMPACT_ONLY recall. Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
+                            datasetNames, queryVectors.size(), dimension, similarityFunction, workloadMode, liveNodesRate);
+                } else {
+                    ds = null;
+                    queryVectors = null;
+                    groundTruth = null;
+                    similarityFunction = null;
+                    dimension = -1;
+
+                    log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, Live nodes rate: {}",
+                            workloadMode, liveNodesRate);
                 }
-                baseVectors = ds.getBaseVectors().subList(0, portionedSize);
-                ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
+            } else if (enableRecall) {
+                ds = DataSets.loadDataSet(datasetNames)
+                        .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
+
+                if (datasetPortion == 1.0) {
+                    ravv = ds.getBaseRavv();
+                    baseVectors = ds.getBaseVectors();
+                } else {
+                    int totalVectors = ds.getBaseRavv().size();
+                    int portionedSize = (int) (totalVectors * datasetPortion);
+                    if (portionedSize < Math.max(1, numSegments)) {
+                        throw new IllegalArgumentException(
+                                "datasetPortion=" + datasetPortion + " yields " + portionedSize
+                                        + " vectors, fewer than numSegments=" + numSegments);
+                    }
+                    baseVectors = ds.getBaseVectors().subList(0, portionedSize);
+                    ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
+                }
+
+                loadedBaseVectors = baseVectors;
+                queryVectors = ds.getQueryVectors();
+                groundTruth = ds.getGroundTruth();
+                similarityFunction = ds.getSimilarityFunction();
+                dimension = ds.getDimension();
+
+                log.info("Dataset {} loaded with recall data. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
+                        datasetNames, ravv.size(), datasetPortion, queryVectors.size(), dimension, similarityFunction, workloadMode, liveNodesRate);
+            } else {
+                BaseVectorsDataSet baseDs = DataSets.loadBaseVectors(datasetNames)
+                        .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
+
+                ds = null;
+
+                if (datasetPortion == 1.0) {
+                    ravv = baseDs.getBaseRavv();
+                    baseVectors = baseDs.getBaseVectors();
+                } else {
+                    int totalVectors = baseDs.getBaseRavv().size();
+                    int portionedSize = (int) (totalVectors * datasetPortion);
+                    if (portionedSize < Math.max(1, numSegments)) {
+                        throw new IllegalArgumentException(
+                                "datasetPortion=" + datasetPortion + " yields " + portionedSize
+                                        + " vectors, fewer than numSegments=" + numSegments);
+                    }
+                    baseVectors = baseDs.getBaseVectors().subList(0, portionedSize);
+                    ravv = new ListRandomAccessVectorValues(baseVectors, baseDs.getDimension());
+                }
+
+                loadedBaseVectors = baseVectors;
+                queryVectors = null;
+                groundTruth = null;
+                similarityFunction = baseDs.getSimilarityFunction();
+                dimension = baseDs.getDimension();
+
+                log.info("Dataset {} loaded base-only. Base vectors: {} (portion {}), Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
+                        datasetNames, ravv.size(), datasetPortion, dimension, similarityFunction, workloadMode, liveNodesRate);
             }
-
-            queryVectors = ds.getQueryVectors();
-            groundTruth = ds.getGroundTruth();
-            similarityFunction = ds.getSimilarityFunction();
-
-            log.info("Dataset {} loaded. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
-                    datasetNames, ravv.size(), datasetPortion, queryVectors.size(), ds.getDimension(), similarityFunction, workloadMode, liveNodesRate);
             if(workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY) {
                 log.info("Compact mode: {}", compactMode);
             }
@@ -501,8 +561,8 @@ public class CompactorBenchmark {
             }
 
             // Partition metadata for remapping (needed for compaction)
-            if (workloadMode != WorkloadMode.BUILD_FROM_SCRATCH) {
-                var partitionedData = DataSetPartitioner.partition(baseVectors, numSegments, splitDistribution);
+            if (workloadMode == WorkloadMode.SEGMENTS_ONLY || workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT) {
+                var partitionedData = DataSetPartitioner.partition(loadedBaseVectors, numSegments, splitDistribution);
                 vectorsPerSourceCount = partitionedData.sizes;
             } else {
                 vectorsPerSourceCount = null;
@@ -513,7 +573,7 @@ public class CompactorBenchmark {
                 if (jfrPartitioning) {
                     jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
                 }
-                buildSegments(ds, baseVectors);
+                buildSegments(ds, loadedBaseVectors);
                 if (jfrPartitioningRecorder.isActive()) {
                     jfrPartitioningRecorder.stop();
                 }
@@ -933,7 +993,7 @@ public class CompactorBenchmark {
             Files.delete(scratchOutputPath);
         }
 
-        int dimension = ds.getDimension();
+        int dimension = baseVectors.get(0).length();
         var full = new ListRandomAccessVectorValues(baseVectors, dimension);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(full, similarityFunction);
 
@@ -1054,7 +1114,7 @@ public class CompactorBenchmark {
     @Benchmark
     public void run(Blackhole blackhole, RecallResult recallResult) throws Exception {
         long durationMs = 0;
-        double recall = Double.NaN;
+        double recall = -1;
 
         try {
             if (jfrCompacting) {
@@ -1070,7 +1130,7 @@ public class CompactorBenchmark {
                 case SEGMENTS_ONLY:
                     // segments built during setup()
                     durationMs = 0;
-                    recall = Double.NaN;
+                    recall = -1;
                     break;
 
                 case COMPACT_ONLY:
@@ -1081,15 +1141,7 @@ public class CompactorBenchmark {
                     break;
 
                 case BUILD_FROM_SCRATCH: {
-                    // For scratch, use ds baseVectors (respecting datasetPortion selection already applied to ravv)
-                    // Recreate baseVectors list consistently from ravv if needed.
-                    List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
-                    if (datasetPortion != 1.0) {
-                        int totalVectors = ds.getBaseRavv().size();
-                        int portionedSize = (int) (totalVectors * datasetPortion);
-                        baseVectors = baseVectors.subList(0, portionedSize);
-                    }
-                    durationMs = buildFromScratch(baseVectors);
+                    durationMs = buildFromScratch(loadedBaseVectors);
                     if (enableRecall) {
                         recall = runRecall(scratchOutputPath);
                     }

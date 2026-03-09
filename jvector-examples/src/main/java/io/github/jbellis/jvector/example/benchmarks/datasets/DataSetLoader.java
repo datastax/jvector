@@ -39,5 +39,14 @@ public interface DataSetLoader {
      */
     Optional<DataSet> loadDataSet(String dataSetName);
 
+    /**
+      * Load only the base vectors for a dataset. This is useful for benchmarks that do not need
+      * query vectors or ground truth, such as build-time memory footprint measurements.
+      *
+      * @param dataSetName
+      * @return a {@link BaseVectorsDataSet}, if found
+      */
+    Optional<BaseVectorsDataSet> loadBaseVectors(String dataSetName);
+
     String getName();
 }
