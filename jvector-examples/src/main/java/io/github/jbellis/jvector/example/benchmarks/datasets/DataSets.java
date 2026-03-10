@@ -20,10 +20,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.security.InvalidParameterException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class DataSets {
     private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
@@ -31,6 +29,7 @@ public class DataSets {
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
         add(new DataSetLoaderHDF5());
         add(new DataSetLoaderMFD());
+        add(new DataSetLoaderVectordata(true));
     }};
 
     public static Optional<DataSet> loadDataSet(String dataSetName) {
@@ -44,14 +43,14 @@ public class DataSets {
         }
 
         for (DataSetLoader loader : loaders) {
-            logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
+            logger.trace("trying loader [{}]", loader.getName());
             Optional<DataSet> dataSetLoaded = loader.loadDataSet(dataSetName);
             if (dataSetLoaded.isPresent()) {
-                logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
+                logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getName());
                 return dataSetLoaded;
             }
         }
-        logger.warn("Unable to find dataset [{}] with any dataset loader.", dataSetName);
+        logger.warn("Unable to find dataset [{}] with any dataset loader. Loaders tried:{}", dataSetName, loaders.stream().map(DataSetLoader::getName).collect(Collectors.joining(",")));
         return Optional.empty();
     }
 }

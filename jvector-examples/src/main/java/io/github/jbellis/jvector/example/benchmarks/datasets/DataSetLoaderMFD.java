@@ -51,10 +51,21 @@ public class DataSetLoaderMFD implements DataSetLoader {
     private static final String bucketName = "astra-vector";
     private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
 
+    public static final String NAME = "MFD";
+    public String getName() {
+        return NAME;
+    }
+
     /**
      * {@inheritDoc}
      */
     public Optional<DataSet> loadDataSet(String fileName) {
+
+        if (fileName.contains(":")) {
+            logger.trace("Dataset {} with profile is not supported by MFD loader", fileName);
+            return Optional.empty();
+        }
+
         return maybeDownloadFvecs(fileName).map(MultiFileDatasource::load);
     }
 
