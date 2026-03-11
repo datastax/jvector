@@ -830,8 +830,16 @@ public class Grid {
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                            CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
-
+                                            // Encode vectors for reranking if a compressor is provided
+                                            CompressedVectors cvArg;
+                                            if (searchCompressorObj == null) {
+                                                cvArg = null;
+                                            } else {
+                                                cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                                System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
+                                                        ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                        (cvArg.ramBytesUsed() / 1024f / 1024f));
+                                            }
                                             // If cache is disabled, we use the (tmp) testDirectory as the output
                                             Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : testDirectory;
 
