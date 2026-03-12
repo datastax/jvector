@@ -228,33 +228,16 @@ public abstract class PQVectors implements CompressedVectors {
                     var encodedChunk = getChunk(node2);
                     var encodedOffset = getOffsetInChunk(node2);
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
-                    float dp = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
-                        dp += VectorUtil.dotProduct(pq.codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
-                    }
+		    float dp =  VectorUtil.pqScoreDotProduct(pq.codebooks, pq.subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
                     // scale to [0, 1]
                     return (1 + dp) / 2;
                 };
             case COSINE:
-                float norm1 = VectorUtil.dotProduct(centeredQuery, centeredQuery);
                 return (node2) -> {
                     var encodedChunk = getChunk(node2);
                     var encodedOffset = getOffsetInChunk(node2);
-                    // compute the dot product of the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    float norm2 = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
-                        var codebookOffset = centroidIndex * centroidLength;
-                        sum += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, centeredQuery, centroidOffset, centroidLength);
-                        norm2 += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], codebookOffset, centroidLength);
-                    }
-                    float cosine = sum / (float) Math.sqrt(norm1 * norm2);
+                    // compute the cosine of the query and the codebook centroids corresponding to the encoded points
+		    float cosine = VectorUtil.pqScoreCosine(pq.codebooks, pq.subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
                     // scale to [0, 1]
                     return (1 + cosine) / 2;
                 };
@@ -263,13 +246,7 @@ public abstract class PQVectors implements CompressedVectors {
                     var encodedChunk = getChunk(node2);
                     var encodedOffset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        int centroidOffset = pq.subvectorSizesAndOffsets[m][1];
-                        sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
-                    }
+		     float sum = VectorUtil.pqScoreEuclidean(pq.codebooks, pq.subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
                     // scale to [0, 1]
                     return 1 / (1 + sum);
                 };
@@ -290,40 +267,16 @@ public abstract class PQVectors implements CompressedVectors {
                     var node2Chunk = getChunk(node2);
                     var node2Offset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float dp = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        dp += VectorUtil.dotProduct(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
-                    }
+		    float dp =  VectorUtil.pqScoreDotProduct(pq.codebooks, pq.subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
                     // scale to [0, 1]
                     return (1 + dp) / 2;
                 };
             case COSINE:
-                float norm1 = 0.0f;
-                for (int m1 = 0; m1 < subspaceCount; m1++) {
-                    int centroidIndex = Byte.toUnsignedInt(node1Chunk.get(m1 + node1Offset));
-                    int centroidLength = pq.subvectorSizesAndOffsets[m1][0];
-                    var codebookOffset = centroidIndex * centroidLength;
-                    norm1 += VectorUtil.dotProduct(pq.codebooks[m1], codebookOffset, pq.codebooks[m1], codebookOffset, centroidLength);
-                }
-                final float norm1final = norm1;
                 return (node2) -> {
                     var node2Chunk = getChunk(node2);
                     var node2Offset = getOffsetInChunk(node2);
                     // compute the dot product of the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    float norm2 = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        int codebookOffset = centroidIndex2 * centroidLength;
-                        sum += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], centroidIndex1 * centroidLength, centroidLength);
-                        norm2 += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], codebookOffset, centroidLength);
-                    }
-                    float cosine = sum / (float) Math.sqrt(norm1final * norm2);
+		    float cosine = VectorUtil.pqScoreCosine(pq.codebooks, pq.subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
                     // scale to [0, 1]
                     return (1 + cosine) / 2;
                 };
@@ -332,13 +285,7 @@ public abstract class PQVectors implements CompressedVectors {
                     var node2Chunk = getChunk(node2);
                     var node2Offset = getOffsetInChunk(node2);
                     // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
-                    }
+		    float sum = VectorUtil.pqScoreEuclidean(pq.codebooks, pq.subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
                     // scale to [0, 1]
                     return 1 / (1 + sum);
                 };
