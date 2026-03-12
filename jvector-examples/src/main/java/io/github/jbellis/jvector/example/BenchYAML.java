@@ -120,7 +120,7 @@ public class BenchYAML {
             String datasetName = config.dataset;
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
-            );
+            ).getDataSet();
             // Register dataset info the first time we actually load the dataset for benchmarking
             artifacts.registerDataset(datasetName, ds);
 

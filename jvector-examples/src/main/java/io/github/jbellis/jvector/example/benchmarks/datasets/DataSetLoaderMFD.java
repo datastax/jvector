@@ -31,6 +31,9 @@ import software.amazon.awssdk.transfer.s3.model.DownloadFileRequest;
 import software.amazon.awssdk.transfer.s3.model.FileDownload;
 import software.amazon.awssdk.transfer.s3.progress.LoggingTransferListener;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -54,8 +57,9 @@ public class DataSetLoaderMFD implements DataSetLoader {
     /**
      * {@inheritDoc}
      */
-    public Optional<DataSet> loadDataSet(String fileName) {
-        return maybeDownloadFvecs(fileName).map(MultiFileDatasource::load);
+    public Optional<DataSetInfo> loadDataSet(String fileName) {
+        return maybeDownloadFvecs(fileName).map(mfd ->
+                new DataSetInfo(mfd.name, VectorSimilarityFunction.COSINE, mfd::load));
     }
 
     private Optional<MultiFileDatasource> maybeDownloadFvecs(String name) {
@@ -95,18 +99,38 @@ public class DataSetLoaderMFD implements DataSetLoader {
                                 .build();
 
                 // 3 retries
+                boolean downloaded = false;
                 for (int i = 0; i < 3; i++) {
-                    FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
-                    CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
-                    long downloadedSize = Files.size(localPath);
+                    try {
+                        FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
+                        CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
+                        long downloadedSize = Files.size(localPath);
 
-                    // Check if downloaded file size matches the expected size
-                    if (downloadedSize == downloadResult.response().contentLength()) {
+                        // Check if downloaded file size matches the expected size
+                        if (downloadedSize != downloadResult.response().contentLength()) {
+                            logger.error("Incomplete download (got {} of {} bytes). Retrying...",
+                                    downloadedSize, downloadResult.response().contentLength());
+                            Files.deleteIfExists(localPath);
+                            continue;
+                        }
+
+                        // Validate the file header to catch corrupt downloads
+                        if (!validateVecFileHeader(localPath)) {
+                            logger.error("Downloaded file {} has an invalid header; deleting and retrying", urlPath);
+                            Files.deleteIfExists(localPath);
+                            continue;
+                        }
+
                         logger.info("Downloaded file of length " + downloadedSize);
-                        break;  // Successfully downloaded
-                    } else {
-                        logger.error("Incomplete download. Retrying...");
+                        downloaded = true;
+                        break;
+                    } catch (Exception e) {
+                        logger.error("Download attempt {} failed for {}: {}", i + 1, urlPath, e.getMessage());
+                        Files.deleteIfExists(localPath);
                     }
+                }
+                if (!downloaded) {
+                    throw new IOException("Failed to download " + urlPath + " after 3 attempts");
                 }
             }
             tm.close();
@@ -115,6 +139,17 @@ public class DataSetLoaderMFD implements DataSetLoader {
         }
 
         return Optional.of(mfd);
+    }
+
+    /// Reads the first 4 bytes of a vec file (fvecs or ivecs) and checks that the
+    /// little-endian int32 dimension/count value is positive and reasonable.
+    private static boolean validateVecFileHeader(Path path) {
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(path.toFile())))) {
+            int dimension = Integer.reverseBytes(dis.readInt());
+            return dimension > 0 && dimension <= 100_000;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
