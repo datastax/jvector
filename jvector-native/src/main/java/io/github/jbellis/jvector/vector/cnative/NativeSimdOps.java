@@ -96,11 +96,11 @@ public class NativeSimdOps {
         return __bool_true_false_are_defined;
     }
 
-    private static class check_compatibility {
+    private static class check_avx512_compatibility {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
                 NativeSimdOps.C_BOOL    );
 
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("check_compatibility");
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("check_avx512_compatibility");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
     }
@@ -108,43 +108,43 @@ public class NativeSimdOps {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * _Bool check_compatibility()
+     * _Bool check_avx512_compatibility()
      * }
      */
-    public static FunctionDescriptor check_compatibility$descriptor() {
-        return check_compatibility.DESC;
+    public static FunctionDescriptor check_avx512_compatibility$descriptor() {
+        return check_avx512_compatibility.DESC;
     }
 
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * _Bool check_compatibility()
+     * _Bool check_avx512_compatibility()
      * }
      */
-    public static MethodHandle check_compatibility$handle() {
-        return check_compatibility.HANDLE;
+    public static MethodHandle check_avx512_compatibility$handle() {
+        return check_avx512_compatibility.HANDLE;
     }
 
     /**
      * Address for:
      * {@snippet lang=c :
-     * _Bool check_compatibility()
+     * _Bool check_avx512_compatibility()
      * }
      */
-    public static MemorySegment check_compatibility$address() {
-        return check_compatibility.ADDR;
+    public static MemorySegment check_avx512_compatibility$address() {
+        return check_avx512_compatibility.ADDR;
     }
 
     /**
      * {@snippet lang=c :
-     * _Bool check_compatibility()
+     * _Bool check_avx512_compatibility()
      * }
      */
-    public static boolean check_compatibility() {
-        var mh$ = check_compatibility.HANDLE;
+    public static boolean check_avx512_compatibility() {
+        var mh$ = check_avx512_compatibility.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("check_compatibility");
+                traceDowncall("check_avx512_compatibility");
             }
             return (boolean)mh$.invokeExact();
         } catch (Throwable ex$) {
