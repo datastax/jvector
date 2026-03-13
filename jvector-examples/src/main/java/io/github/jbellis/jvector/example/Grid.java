@@ -591,7 +591,29 @@ public class Grid {
 
                                         var compressor = getCompressor(buildCompressor, ds);
                                         var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                        CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
+                                        CompressedVectors cvArg;
+                                        if (features.contains(FeatureId.FUSED_PQ)) {
+                                            cvArg = null;
+                                            System.out.format("%s: configured to use FUSED PQ, skipping vector compression%n", ds.getName());
+                                        } else {
+                                            if (searchCompressorObj == null) {
+                                                cvArg = null;
+                                                System.out.format("%s: No search compressor configured, " +
+                                                        "FULL PRECISION vectors will be used for search%n", ds.getName());
+                                            } else {
+                                                cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                                if (cvArg == null) {
+                                                    throw new IllegalStateException(String.format(
+                                                            "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                                    "Aborting to prevent false recall results.",
+                                                            searchCompressorObj, ds.getName()));
+                                                }
+                                                System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
+                                                        ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                        (cvArg.ramBytesUsed() / 1024f / 1024f));
+                                            }
+                                        }
+
                                         var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
                                         ImmutableGraphIndex index = indexes.get(features);
 
