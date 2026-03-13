@@ -557,7 +557,24 @@ public class Grid {
                                     try {
                                         var compressor = getCompressor(buildCompressor, ds);
                                         var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                        CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
+                                        CompressedVectors cvArg;
+                                        if (searchCompressorObj == null) {
+                                            cvArg = null;
+                                            System.out.format("%s: No search compressor configured, " +
+                                                    "FULL PRECISION vectors will be used for search%n", ds.name);
+                                        } else {
+                                            cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                            if (cvArg == null) {
+                                                throw new IllegalStateException(String.format(
+                                                        "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                                "Aborting to prevent false recall results.",
+                                                        searchCompressorObj, ds.name));
+                                            }
+                                            System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
+                                                    ds.name, searchCompressorObj, ds.baseVectors.size(),
+                                                    (cvArg.ramBytesUsed() / 1024f / 1024f));
+                                        }
+
                                         var indexes = buildOnDisk(List.of(features), m, ef, neighborOverflow, addHierarchy, false, ds, testDirectory, compressor);
                                         ImmutableGraphIndex index = indexes.get(features);
                                         try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
