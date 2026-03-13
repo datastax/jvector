@@ -119,14 +119,14 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         assertTrue(getNeighborNodes(originalView, 0, 2).contains(1));
 
         // create renumbering map
-        Map<Integer, Integer> oldToNewMap = OnDiskGraphIndexWriter.sequentialRenumbering(original);
-        assertEquals(2, oldToNewMap.size());
-        assertEquals(0, (int) oldToNewMap.get(1));
-        assertEquals(1, (int) oldToNewMap.get(2));
+        OrdinalMapper ordinalMapper = OnDiskGraphIndexWriter.sequentialRenumbering(original);
+        assertEquals(2, ordinalMapper.maxOrdinal() + 1);  // number of elements = max + 1
+        assertEquals(0, ordinalMapper.oldToNew(1));
+        assertEquals(1, ordinalMapper.oldToNew(2));
 
         // write the graph
         var outputPath = testDirectory.resolve("renumbered_graph");
-        OnDiskGraphIndex.write(original, ravv, oldToNewMap, outputPath);
+        OnDiskGraphIndex.write(original, ravv, ordinalMapper, outputPath);
         // check that written graph ordinals match the new ones
         try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
