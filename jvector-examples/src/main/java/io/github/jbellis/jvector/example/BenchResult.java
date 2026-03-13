@@ -13,14 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package io.github.jbellis.jvector.example;
 
-package io.github.jbellis.jvector.example.yaml;
-
-import java.util.List;
 import java.util.Map;
 
-public class SearchParameters extends CommonParameters {
-    public Map<Integer, List<Double>> topKOverquery;
-    public List<Boolean> useSearchPruning;
-    public Map<String, List<String>> benchmarks;
+public class BenchResult {
+    public String dataset;
+    public Map<String, Object> parameters;
+    public Map<String, Object> metrics;
+
+    public BenchResult() {}
+    public BenchResult(String dataset, Map<String, Object> parameters, Map<String, Object> metrics) {
+        this.dataset = dataset;
+        this.parameters = parameters;
+        this.metrics = metrics;
+    }
 }
