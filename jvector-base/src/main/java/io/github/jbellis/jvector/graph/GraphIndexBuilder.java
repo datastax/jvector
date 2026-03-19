@@ -25,10 +25,7 @@ import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.ExceptionUtils;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
@@ -83,6 +80,28 @@ public class GraphIndexBuilder implements Closeable {
     private final ExplicitThreadLocal<GraphSearcher> searchers;
 
     private final Random rng;
+
+    /**
+     * Fraction of total live nodes that must be deleted since the last consolidation
+     * before {@link #consolidateDanglingEdges()} is auto-triggered inside
+     * {@link #markNodeDeleted(int)}. Matches the ablation sweet-spot from Table 4 of the
+     * IP-DiskANN paper (arXiv:2502.13826). Configurable via
+     * {@link #setConsolidationThreshold(double)}.
+     */
+    private volatile double consolidationThreshold = 0.20;
+
+    /** Running count of markNodeDeleted calls since construction. */
+    private final AtomicInteger totalDeletions = new AtomicInteger(0);
+
+    /** Value of totalDeletions at the time of the last consolidateDanglingEdges() run. */
+    private final AtomicInteger lastConsolidationAt = new AtomicInteger(0);
+
+    /**
+     * Beam width for the GreedySearch used during in-place deletion repair (l_d in Algorithm 5,
+     * IP-DiskANN paper). Controls how deeply we search for approximate in-neighbors of the deleted
+     * node. Higher values improve in-neighbor recall at the cost of deletion latency.
+     */
+    private static final int DELETION_LD = 128;
 
     /**
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
@@ -678,8 +697,198 @@ public class GraphIndexBuilder implements Closeable {
         graph.updateEntryNode(new NodeAtLevel(level, node));
     }
 
+    /**
+     * Sets the fraction of live nodes that must have been deleted since the last
+     * Algorithm 6 consolidation before the next one auto-triggers inside
+     * {@link #markNodeDeleted(int)}. Default is 0.20 (20%), matching the IP-DiskANN
+     * paper ablation (arXiv:2502.13826, Table 4).
+     *
+     * @param threshold a value in (0, 1]; use 1.0 to effectively disable auto-triggering
+     */
+    public void setConsolidationThreshold(double threshold) {
+        if (threshold <= 0 || threshold > 1.0) {
+            throw new IllegalArgumentException("consolidationThreshold must be in (0, 1]");
+        }
+        this.consolidationThreshold = threshold;
+    }
+
+    /**
+     * Algorithm 6 (IP-DiskANN, arXiv:2502.13826): sweeps every live node at every level
+     * and removes out-edges that point to structurally absent nodes.
+     * <p>
+     * This is the complement of {@link #markNodeDeleted}: Algorithm 5 repairs the
+     * immediate neighborhood of a deleted node at deletion time, but cannot guarantee
+     * that all reverse pointers (in-neighbors elsewhere in the graph) have been cleaned
+     * up. Over time, these dangling edges accumulate and degrade search recall by routing
+     * traversal into dead-end nodes. This method eliminates them in a single parallel sweep.
+     * <p>
+     * Unlike {@link #removeDeletedNodes()}, this method:
+     * <ul>
+     *   <li>Does NOT add replacement edges — pure filter only.</li>
+     *   <li>Does NOT run diversity pruning on survivors.</li>
+     *   <li>Does NOT acquire a write lock — safe to call concurrently with insertions
+     *       and deletions via the underlying CAS on ConcurrentNeighborMap.</li>
+     * </ul>
+     * <p>
+     * Complexity: O(N × M) where N = live node count and M = average out-degree.
+     * No distance calculations are performed.
+     */
+    public void consolidateDanglingEdges() {
+        parallelExecutor.submit(() -> {
+            IntStream.range(0, graph.getMaxLevel() + 1).forEach(level -> {
+                graph.nodeStream(level).parallel().forEach(node -> {
+                    graph.removeDeadEdges(level, node);
+                });
+            });
+        }).join();
+        // reset the consolidation counter so the next window is measured from now
+        lastConsolidationAt.set(totalDeletions.get());
+        logger.debug("consolidateDanglingEdges complete — totalDeletions={}", totalDeletions.get());
+    }
+
     public void markNodeDeleted(int node) {
         graph.markDeleted(node);
+        updateEntryPointIfNeeded(node);
+        repairDeletionViaSearch(node);
+
+        // Auto-trigger Algorithm 6 when the number of deletions since the last
+        // consolidation exceeds consolidationThreshold * current graph size.
+        // Exactly one thread wins the CAS and runs consolidation; all others skip.
+        int total = totalDeletions.incrementAndGet();
+        int lastAt = lastConsolidationAt.get();
+        int deltaNeeded = (int) Math.max(1, consolidationThreshold * graph.size(0));
+        if ((total - lastAt) >= deltaNeeded
+                && lastConsolidationAt.compareAndSet(lastAt, total)) {
+            logger.debug("auto-triggering consolidateDanglingEdges at totalDeletions={}", total);
+            consolidateDanglingEdges();
+        }
+    }
+
+    private void updateEntryPointIfNeeded(int deletedNode) {
+        var currentEntry = graph.entryNode();
+        if (currentEntry == null || currentEntry.node != deletedNode) {
+            return;
+        }
+
+        var deletedNodes = graph.getDeletedNodes();
+        int newLevel = graph.getMaxLevel();
+        int newEntry = -1;
+
+        outer:
+        while (newLevel >= 0) {
+            for (var it = graph.getNodes(newLevel); it.hasNext(); ) {
+                int candidate = it.nextInt();
+                if (!deletedNodes.get(candidate)) {
+                    newEntry = candidate;
+                    break outer;
+                }
+            }
+            newLevel--;
+        }
+
+        graph.updateEntryNode(newEntry >= 0 ? new NodeAtLevel(newLevel, newEntry) : null);
+    }
+
+    /**
+     * In-place deletion repair using a GreedySearch toward the deleted node's vector
+     * (Algorithm 5, IP-DiskANN).
+     * with an O(DELETION_LD) visited-set check:
+     * <ol>
+     *   <li>Run GreedySearch(G, x_node, DELETION_LD) — navigates to x_node's region.</li>
+     *   <li>In-neighbors ≈ {z ∈ Visited : node ∈ N_out(z)} — stale edges pointing to the deleted node.</li>
+     *   <li>Replacement candidates = approximateResults (top-DELETION_LD nearest to x_node) — fresh
+     *       high-quality pool that does not degrade as deletions accumulate.</li>
+     *   <li>For level > 0 (addHierarchy=true), falls back to the full nodeStream scan since the
+     *       level-0 search does not visit upper-layer nodes. Upper layers are logarithmically sparse
+     *       so this is cheap.</li>
+     * </ol>
+     */
+    private void repairDeletionViaSearch(int node) {
+        var deletedNodes = graph.getDeletedNodes();
+        var entry = graph.entryNode();
+        if (entry == null) {
+            graph.removeNode(node);
+            return;
+        }
+
+        var ssp = scoreProvider.searchProviderFor(node);
+
+        try (var gs = searchers.get()) {
+            var view = graph.getView();
+            gs.setView(view);
+
+            // Navigate from the top level down to level 1 to find a good entry point for level 0.
+            // Then run the full beam search at level 0 with beam width DELETION_LD.
+            gs.initializeInternal(ssp, entry, new ExcludingBits(node));
+            for (int lvl = entry.level; lvl > 0; lvl--) {
+                gs.searchOneLayer(ssp, 1, 0.0f, lvl, view.liveNodes());
+                gs.setEntryPointsFromPreviousLayer();
+            }
+            gs.searchOneLayer(ssp, DELETION_LD, 0.0f, 0, view.liveNodes());
+
+            // Collect live replacement candidate IDs from the top-DELETION_LD nearest to x_node.
+            // Scores are re-computed per in-neighbor below (each in-neighbor needs its own scoring).
+            var candidateIds = new ArrayList<Integer>();
+            gs.approximateResults.foreach((k, score) -> {
+                if (!deletedNodes.get(k)) candidateIds.add(k);
+            });
+
+            // Read-only view of visited set — valid until next initializeInternal call.
+            var visitedSet = gs.visitedNodes();
+
+            for (int level = 0; level <= graph.getMaxLevel(); level++) {
+                if (!graph.getNeighborsIterator(level, node).hasNext()) continue;
+                final int lvl = level;
+
+                if (level == 0) {
+                    // Fast path: only check nodes that were visited during the search.
+                    // The greedy search navigates toward x_node, so actual in-neighbors
+                    // are very likely to appear in the visited set.
+                    for (int z : visitedSet) {
+                        if (z == node || deletedNodes.get(z)) continue;
+                        for (var it = graph.getNeighborsIterator(lvl, z); it.hasNext(); ) {
+                            if (it.nextInt() == node) {
+                                repairInNeighbor(lvl, z, node, candidateIds);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Slow path for higher levels (addHierarchy=true).
+                    // Upper layers are logarithmically sparse so this scan is cheap.
+                    graph.nodeStream(level).forEach(i -> {
+                        if (i == node || deletedNodes.get(i)) return;
+                        for (var it = graph.getNeighborsIterator(lvl, i); it.hasNext(); ) {
+                            if (it.nextInt() == node) {
+                                repairInNeighbor(lvl, i, node, candidateIds);
+                                return;
+                            }
+                        }
+                    });
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+
+        graph.removeNode(node);
+    }
+
+    /**
+     * Repairs a single in-neighbor {@code inNeighbor} whose edge to {@code deletedNode} is now stale.
+     * Scores each candidate in {@code candidateIds} from {@code inNeighbor}'s perspective and
+     * calls {@link MutableGraphIndex#replaceDeletedNeighbors} to rewire the edge with diversity pruning.
+     */
+    private void repairInNeighbor(int level, int inNeighbor, int deletedNode, List<Integer> candidateIds) {
+        var iSf = scoreProvider.searchProviderFor(inNeighbor).scoreFunction();
+        var iCandidates = new NodeArray(graph.getDegree(level));
+        for (int k : candidateIds) {
+            if (k == inNeighbor) continue;
+            iCandidates.insertSorted(k, iSf.similarityTo(k));
+        }
+        var bs = new FixedBitSet(Math.max(graph.getIdUpperBound(), deletedNode + 1));
+        bs.set(deletedNode);
+        graph.replaceDeletedNeighbors(level, inNeighbor, bs, iCandidates);
     }
 
     /**

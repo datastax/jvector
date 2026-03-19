@@ -24,6 +24,8 @@ import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.util.IntMap;
 
+import java.util.function.IntPredicate;
+
 import static java.lang.Math.min;
 
 /**
@@ -56,6 +58,7 @@ public class ConcurrentNeighborMap {
     public void insertEdge(int fromId, int toId, float score, float overflow) {
         while (true) {
             var old = neighbors.get(fromId);
+            if (old == null) return; // node was concurrently removed via removeNode() — skip backlink
             var next = old.insert(toId, score, overflow, this);
             if (next == null || neighbors.compareAndPut(fromId, old, next)) {
                 break;
@@ -98,6 +101,21 @@ public class ConcurrentNeighborMap {
             if (next == old || neighbors.compareAndPut(nodeId, old, next)) {
                 break;
             }
+        }
+    }
+
+    /**
+     * Algorithm 6 (IP-DiskANN): pure dangling-edge filter.
+     * Removes every out-neighbor of {@code nodeId} for which {@code isDead} returns true.
+     * No replacement candidates, no diversity pruning on survivors — just a structural sweep.
+     * Safe to call concurrently with inserts and other deletions via CAS.
+     */
+    public void removeDeadEdges(int nodeId, IntPredicate isDead) {
+        while (true) {
+            var old = neighbors.get(nodeId);
+            if (old == null) return; // node itself was concurrently removed
+            var next = old.removeDeadEdges(isDead);
+            if (next == old || neighbors.compareAndPut(nodeId, old, next)) break;
         }
     }
 
@@ -236,6 +254,26 @@ public class ConcurrentNeighborMap {
             NodeArray merged = NodeArray.merge(liveNeighbors, candidates);
             retainDiverseInternal(merged, 0, map);
             return new Neighbors(nodeId, merged);
+        }
+
+        /**
+         * Algorithm 6 (IP-DiskANN): pure structural filter with no diversity pruning.
+         * Returns {@code this} unchanged if no neighbors are dead (avoids allocation).
+         */
+        private Neighbors removeDeadEdges(IntPredicate isDead) {
+            // Fast path: check if any neighbor is dead before allocating
+            boolean anyDead = false;
+            for (int i = 0; i < size(); i++) {
+                if (isDead.test(getNode(i))) { anyDead = true; break; }
+            }
+            if (!anyDead) return this;
+
+            var live = new NodeArray(size());
+            for (int i = 0; i < size(); i++) {
+                int n = getNode(i);
+                if (!isDead.test(n)) live.addInOrder(n, getScore(i));
+            }
+            return new Neighbors(nodeId, live);
         }
 
         /**

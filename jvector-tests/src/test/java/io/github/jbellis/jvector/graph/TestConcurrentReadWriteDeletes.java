@@ -21,7 +21,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
-import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
@@ -36,21 +36,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * Runs "nVectors" operations, where each operation is either:
- * - an insertion
- * - a mock deletion, instantiated through the use of a BitSet for skipping these nodes during search
- * - a search
- * With probability 0.01, we run cleanup to commit the deletions to the index. The cleanup process and the insertions
- * cannot be concurrently executed (we use a lock to control their execution).
+ * Runs "nVectors" operations concurrently, where each operation is either:
+ * - an insertion via {@link GraphIndexBuilder#addGraphNode}
+ * - a deletion via {@link GraphIndexBuilder#markNodeDeleted} (Algorithm 5 — immediate, in-place repair)
+ * - a search via {@link GraphSearcher#search}
+ *
+ * Deletions are now immediate: markNodeDeleted physically removes the node and repairs
+ * affected edges inline using Algorithm 5 (IP-DiskANN). No deferred cleanup step is needed.
+ * Concurrent inserts, deletes, and searches are all safe without external locking.
  */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestConcurrentReadWriteDeletes extends RandomizedTest {
@@ -58,10 +57,8 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
 
     private static final int nVectors = 20_000;
     private static final int dimension = 16;
-    private static final double cleanupProbability = 0.01;
 
     private KeySet keysInserted = new KeySet();
-    private List<Integer> keysRemoved = new CopyOnWriteArrayList();
 
     private List<VectorFloat<?>> vectors = createRandomVectors(nVectors, dimension);
     private RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
@@ -71,34 +68,22 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
     private BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
     private GraphIndexBuilder builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, true);
 
-    private FixedBitSet liveNodes = new FixedBitSet(nVectors);
-
-    private final Lock writeLock = new ReentrantLock();
-
     @Test
     public void testConcurrentReadsWritesDeletes() throws ExecutionException, InterruptedException {
         var vv = ravv.threadLocalSupplier();
 
         testConcurrentOps(i -> {
             var R = getRandom();
-            if (R.nextDouble() < 0.2 || keysInserted.isEmpty())
-            {
-                // In the future, we could improve this test by acquiring the lock earlier and executing other
-                writeLock.lock();
-                try {
-                    builder.addGraphNode(i, vv.get().getVector(i));
-                    liveNodes.set(i);
-                    keysInserted.add(i);
-                } finally {
-                    writeLock.unlock();
-                }
+            if (R.nextDouble() < 0.2 || keysInserted.isEmpty()) {
+                // insert
+                builder.addGraphNode(i, vv.get().getVector(i));
+                keysInserted.add(i);
             } else if (R.nextDouble() < 0.1) {
+                // delete immediately via Algorithm 5 — no deferred cleanup needed
                 var key = keysInserted.getRandom();
-                if (!keysRemoved.contains(key)) {
-                    liveNodes.flip(key);
-                    keysRemoved.add(key);
-                }
+                builder.markNodeDeleted(key);
             } else {
+                // search
                 var queryVector = randomVector(getRandom(), dimension);
                 SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, ravv);
 
@@ -106,107 +91,79 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
                 int rerankK = Math.min(50, keysInserted.size());
 
                 GraphSearcher searcher = new GraphSearcher(builder.getGraph());
-                searcher.search(ssp, topK, rerankK, 0.f, 0.f, liveNodes);
+                searcher.search(ssp, topK, rerankK, 0.f, 0.f, Bits.MatchAllBits.ALL);
             }
         });
     }
 
     @FunctionalInterface
-    private interface Op
-    {
+    private interface Op {
         void run(int i) throws Throwable;
     }
 
-    private void testConcurrentOps(Op op) throws ExecutionException, InterruptedException {
+    private void testConcurrentOps(Op op) throws InterruptedException {
         AtomicInteger counter = new AtomicInteger();
         long start = System.currentTimeMillis();
-        
-        // Use a simpler approach that doesn't rely on parallel streams
+
         var keys = IntStream.range(0, nVectors).boxed().collect(Collectors.toList());
         Collections.shuffle(keys, getRandom());
-        
-        // Use a thread-safe approach without relying on RandomizedContext
-        int threadCount = Math.min(Runtime.getRuntime().availableProcessors(), 8); // Limit thread count
+
+        int threadCount = Math.min(Runtime.getRuntime().availableProcessors(), 8);
         List<Thread> threads = new ArrayList<>();
         int keysPerThread = nVectors / threadCount;
-        
-        // Create a thread-safe random seed for each thread
-        final long randomSeed = getRandom().nextLong();
-        
+
         for (int t = 0; t < threadCount; t++) {
             final int threadIndex = t;
             final int startIdx = threadIndex * keysPerThread;
             final int endIdx = (threadIndex == threadCount - 1) ? keys.size() : (threadIndex + 1) * keysPerThread;
-            
+
             Thread thread = new Thread(() -> {
                 for (int i = startIdx; i < endIdx; i++) {
                     int key = keys.get(i);
                     wrappedOp(op, key);
-                    
+
                     if (counter.incrementAndGet() % 1_000 == 0) {
                         var elapsed = System.currentTimeMillis() - start;
                         logger.info(String.format("%d ops in %dms = %f ops/s",
-                            counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
-                    }
-                    
-                    if (getRandom().nextDouble() < cleanupProbability) {
-                        writeLock.lock();
-                        try {
-                            for (Integer keyToRemove : keysRemoved) {
-                                builder.markNodeDeleted(keyToRemove);
-                            }
-                            keysRemoved.clear();
-                            builder.cleanup();
-                        } finally {
-                            writeLock.unlock();
-                        }
+                                counter.get(), elapsed, counter.get() * 1000.0 / elapsed));
                     }
                 }
             });
-            
+
             threads.add(thread);
             thread.start();
         }
-        
-        // Wait for all threads to complete
+
         for (Thread thread : threads) {
             thread.join();
         }
     }
 
     private static void wrappedOp(Op op, Integer i) {
-        try
-        {
+        try {
             op.run(i);
-        }
-        catch (Throwable e)
-        {
+        } catch (Throwable e) {
             throw new RuntimeException(e);
         }
     }
 
-    private static class KeySet
-    {
+    private static class KeySet {
         private final Map<Integer, Integer> keys = new ConcurrentHashMap<>();
         private final AtomicInteger ordinal = new AtomicInteger();
 
-        public void add(Integer key)
-        {
+        public void add(Integer key) {
             var i = ordinal.getAndIncrement();
             keys.put(i, key);
         }
 
-        public int getRandom()
-        {
+        public int getRandom() {
             if (isEmpty())
                 throw new IllegalStateException();
             var i = TestConcurrentReadWriteDeletes.getRandom().nextInt(ordinal.get());
-            // in case there is race with add(key), retry another random
             return keys.containsKey(i) ? keys.get(i) : getRandom();
         }
 
-        public boolean isEmpty()
-        {
+        public boolean isEmpty() {
             return keys.isEmpty();
         }
 

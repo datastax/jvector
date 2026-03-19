@@ -163,6 +163,13 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
     void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
 
     /**
+     * Algorithm 6 (IP-DiskANN): removes out-edges from {@code node} at {@code level} that
+     * point to nodes no longer structurally present in the graph at that level.
+     * Pure filter — no replacement candidates, no diversity pruning on survivors.
+     */
+    void removeDeadEdges(int level, int node);
+
+    /**
      * Signals that all mutations have been completed and the graph will not be mutated any further.
      * Should be called by the builder after all mutations are completed (during cleanup).
      */
