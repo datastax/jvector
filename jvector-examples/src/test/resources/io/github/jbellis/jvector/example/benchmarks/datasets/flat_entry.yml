@@ -1,0 +1,5 @@
+name: flat-dataset
+similarity_function: EUCLIDEAN
+num_vectors: 50000
+is_normalized: false
+is_zero_vector_free: true

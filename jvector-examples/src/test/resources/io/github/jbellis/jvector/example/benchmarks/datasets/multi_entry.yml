@@ -1,0 +1,14 @@
+ada002-100k:
+  similarity_function: COSINE
+  is_normalized: true
+  is_zero_vector_free: true
+  is_duplicate_vector_free: true
+  num_vectors: 100000
+sift-128-euclidean:
+  similarity_function: EUCLIDEAN
+  num_vectors: 128000
+minimal-entry:
+  similarity_function: DOT_PRODUCT
+has-explicit-name:
+  name: custom-name
+  similarity_function: COSINE

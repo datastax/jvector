@@ -1,4 +1,3 @@
-neighborhood-watch-100k:
   - cohere-english-v3-100k
   - ada002-100k
   - openai-v3-small-100k
@@ -8,10 +7,8 @@ neighborhood-watch-100k:
   - e5-small-v2-100k
   - e5-base-v2-100k
   - e5-large-v2-100k
-neighborhood-watch-1M:
   - ada002-1M
   - colbert-1M
-ann-benchmarks:
   - glove-25-angular.hdf5
   - glove-50-angular.hdf5
   - lastfm-64-dot.hdf5

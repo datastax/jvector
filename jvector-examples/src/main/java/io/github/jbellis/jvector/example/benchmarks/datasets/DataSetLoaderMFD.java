@@ -43,6 +43,10 @@ import java.util.*;
 /**
  * This dataset loader supports <i>multi-file</i> datasets which are comprised of several files as defined in
  * {@link DataSetLoaderMFD.MultiFileDatasource}.
+ *
+ * <p>The vector similarity function is determined by looking up the dataset name in
+ * {@code dataset_metadata.yml} via {@link DataSetMetadataReader}. If no entry is found,
+ * an error is thrown.
  */
 public class DataSetLoaderMFD implements DataSetLoader {
 
@@ -53,15 +57,27 @@ public class DataSetLoaderMFD implements DataSetLoader {
     private static final String fvecDir = "fvec";
     private static final String bucketName = "astra-vector";
     private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
+    private static final DataSetMetadataReader metadata = DataSetMetadataReader.load();
 
     /**
      * {@inheritDoc}
      */
     public Optional<DataSetInfo> loadDataSet(String fileName) {
-        return maybeDownloadFvecs(fileName).map(mfd ->
-                new DataSetInfo(mfd.name, VectorSimilarityFunction.COSINE, mfd::load));
+        return maybeDownloadFvecs(fileName).map(mfd -> {
+            var props = metadata.getProperties(mfd.name)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No metadata configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
+            var vsf = props.similarityFunction()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No similarity_function configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
+            return new DataSetInfo(props, () -> mfd.load(vsf));
+        });
     }
 
+    /// Downloads the fvec/ivec files for the named dataset from S3 if not already present locally.
+    ///
+    /// @param name the logical dataset name
+    /// @return the datasource descriptor, or empty if the name is not a known multi-file dataset
     private Optional<MultiFileDatasource> maybeDownloadFvecs(String name) {
         String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
@@ -152,6 +168,7 @@ public class DataSetLoaderMFD implements DataSetLoader {
         }
     }
 
+    /// Creates an S3 async client builder configured for anonymous access to US-EAST-1.
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
                 .region(Region.US_EAST_1)
@@ -161,6 +178,8 @@ public class DataSetLoaderMFD implements DataSetLoader {
                 .credentialsProvider(AnonymousCredentialsProvider.create());
     }
 
+    /// Describes a dataset stored as three separate fvec/ivec files (base vectors, query
+    /// vectors, and ground truth) in an S3 bucket. Known datasets are registered in {@link #byName}.
     public static class MultiFileDatasource {
         public final String name;
         public final Path basePath;
@@ -175,19 +194,25 @@ public class DataSetLoaderMFD implements DataSetLoader {
             this.groundTruthPath = Paths.get(groundTruthPath);
         }
 
+        /// Returns the parent directory of the base vectors file.
         public Path directory() {
             return basePath.getParent();
         }
 
+        /// Returns the three file paths (base, queries, ground truth) that comprise this dataset.
         public Iterable<Path> paths() {
             return List.of(basePath, queriesPath, groundTruthPath);
         }
 
-        public DataSet load() {
+        /// Reads the fvec/ivec files from disk and returns a scrubbed {@link DataSet}.
+        ///
+        /// @param similarityFunction the similarity function to associate with the dataset
+        /// @return the loaded and scrubbed dataset
+        public DataSet load(VectorSimilarityFunction similarityFunction) {
             var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
             var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
             var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-            return DataSetUtils.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
+            return DataSetUtils.getScrubbedDataSet(name, similarityFunction, baseVectors, queryVectors, gtVectors);
         }
 
         public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{
