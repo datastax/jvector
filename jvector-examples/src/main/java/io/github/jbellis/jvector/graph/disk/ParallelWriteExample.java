@@ -304,7 +304,7 @@ public class ParallelWriteExample {
         System.out.println("Loading dataset: " + datasetName);
         DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                 () -> new RuntimeException("Dataset " + datasetName + " not found")
-        );
+        ).getDataSet();
         System.out.printf("Loaded %d vectors of dimension %d%n", ds.getBaseVectors().size(), ds.getDimension());
 
         var floatVectors = ds.getBaseRavv();
