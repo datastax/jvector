@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /// A lightweight, lazy handle that separates *identifying* a dataset from *loading* its data.
@@ -39,7 +39,7 @@ import java.util.function.Supplier;
 ///
 /// // Cheap — no vectors loaded yet
 /// System.out.println(info.getName());
-/// System.out.println(info.getSimilarityFunction());
+/// System.out.println(info.similarityFunction());
 ///
 /// // First call triggers full load; subsequent calls return the cached DataSet
 /// DataSet ds = info.getDataSet();
@@ -48,10 +48,9 @@ import java.util.function.Supplier;
 /// @see DataSet
 /// @see DataSetLoader
 /// @see DataSets
-public class DataSetInfo {
-    private final String name;
-    private final VectorSimilarityFunction similarityFunction;
+public class DataSetInfo implements DataSetProperties {
     private final Supplier<DataSet> loader;
+    private final DataSetProperties baseProperties;
     private volatile DataSet cached;
 
     /// Creates a new dataset info handle.
@@ -60,30 +59,59 @@ public class DataSetInfo {
     /// It should perform the full load-and-scrub pipeline (read vectors, remove duplicates /
     /// zero vectors, filter queries, normalize) and return a ready-to-use {@link DataSet}.
     ///
-    /// @param name               the dataset name, used for display and lookup
-    /// @param similarityFunction the vector similarity function for this dataset
-    ///                           (e.g. {@link VectorSimilarityFunction#COSINE})
+    /// @param baseProperties     the dataset properties (name, similarity function, etc.)
     /// @param loader             a supplier that performs the deferred load; invoked at most once
-    public DataSetInfo(String name, VectorSimilarityFunction similarityFunction, Supplier<DataSet> loader) {
-        this.name = name;
-        this.similarityFunction = similarityFunction;
+    public DataSetInfo(DataSetProperties baseProperties, Supplier<DataSet> loader) {
+        this.baseProperties = baseProperties;
         this.loader = loader;
     }
 
-    /// Returns the dataset name.
-    ///
-    /// This is always available without triggering a data load.
-    public String getName() {
-        return name;
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<VectorSimilarityFunction> similarityFunction() {
+        return baseProperties.similarityFunction();
     }
 
-    /// Returns the similarity function for this dataset.
-    ///
-    /// This is always available without triggering a data load.
-    /// For MFD datasets this is always {@link VectorSimilarityFunction#COSINE};
-    /// for HDF5 datasets it is inferred from the filename (e.g. {@code -angular} or {@code -euclidean}).
-    public VectorSimilarityFunction getSimilarityFunction() {
-        return similarityFunction;
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int numVectors() {
+        return this.baseProperties.numVectors();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public String getName() {
+        return baseProperties.getName();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isNormalized() {
+        return baseProperties.isNormalized();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isZeroVectorFree() {
+        return baseProperties.isZeroVectorFree();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean isDuplicateVectorFree() {
+        return baseProperties.isDuplicateVectorFree();
     }
 
     /// Returns the fully loaded and scrubbed {@link DataSet}.

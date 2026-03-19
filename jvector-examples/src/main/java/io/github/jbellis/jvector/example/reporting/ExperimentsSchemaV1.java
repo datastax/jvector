@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.Set;
 
 /**
@@ -30,7 +31,20 @@ import java.util.Set;
  * Output-key columns ({@code Metric.key} strings) are appended after these and are computed per run.
  */
 public final class ExperimentsSchemaV1 {
+    private static final Pattern CSV_SPECIAL_CHARS = Pattern.compile("[\\r\\n\",]");
+
     private ExperimentsSchemaV1() {}
+
+    static String csvEscape(String s) {
+        if (s == null) return "";
+
+        // Use a Matcher to check for existence
+        if (!CSV_SPECIAL_CHARS.matcher(s).find()) {
+            return s;
+        }
+
+        return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
 
     public static List<String> fixedColumns() {
         return List.of(
@@ -45,6 +59,8 @@ public final class ExperimentsSchemaV1 {
                 "addHierarchy",
                 "refineFinalGraph",
                 "feature_set",
+                "build_compressor",
+                "search_compressor",
                 "usePruning",
                 "topK",
                 "overquery",
@@ -65,6 +81,8 @@ public final class ExperimentsSchemaV1 {
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
                                                   Set<FeatureId> featureSet,
+                                                  String buildCompressorString,
+                                                  String searchCompressorString,
                                                   boolean usePruning,
                                                   int topK,
                                                   double overquery,
@@ -82,6 +100,8 @@ public final class ExperimentsSchemaV1 {
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
+        fixed.put("build_compressor", csvEscape(buildCompressorString));
+        fixed.put("search_compressor", csvEscape(searchCompressorString));
 
         fixed.put("usePruning", Boolean.toString(usePruning));
         fixed.put("topK", Integer.toString(topK));
