@@ -67,7 +67,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public Optional<VectorSimilarityFunction> similarityFunction() {
@@ -75,7 +75,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public int numVectors() {
@@ -83,7 +83,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public String getName() {
@@ -91,7 +91,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public boolean isNormalized() {
@@ -99,7 +99,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public boolean isZeroVectorFree() {
@@ -107,7 +107,7 @@ public class DataSetInfo implements DataSetProperties {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      */
     @Override
     public boolean isDuplicateVectorFree() {
