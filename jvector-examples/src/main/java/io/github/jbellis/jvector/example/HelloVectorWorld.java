@@ -54,6 +54,7 @@ public class HelloVectorWorld {
                 config.construction.refineFinalGraph,
                 config.construction.getFeatureSets(),
                 config.construction.getCompressorParameters(),
+                false,
                 config.search.getCompressorParameters(),
                 config.search.topKOverquery,
                 config.search.useSearchPruning,

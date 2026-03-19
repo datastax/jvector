@@ -162,6 +162,7 @@ public class AutoBenchYAML {
                             config.construction.refineFinalGraph,
                             config.construction.getFeatureSets(), 
                             config.construction.getCompressorParameters(),
+                            config.construction.useParallelGraphWrites,
                             config.search.getCompressorParameters(), 
                             config.search.topKOverquery, 
                             config.search.useSearchPruning);

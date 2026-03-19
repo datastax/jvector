@@ -20,6 +20,7 @@ construction:
   reranking:
     - NVQ
   useSavedIndexIfExists: No
+  useParallelGraphWrites: No
 
 search:
   topKOverquery:

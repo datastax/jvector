@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
+import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
@@ -104,6 +105,7 @@ public class Grid {
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
                        List<Function<DataSet, CompressorParameters>> buildCompressors,
+                       boolean useParallelGraphWrites,
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
@@ -129,7 +131,7 @@ public class Grid {
                             for (int efC : efConstructionGrid) {
                                 for (var bc : buildCompressors) {
                                     runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
-                                            bc, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
+                                            bc, useParallelGraphWrites, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
                                 }
                             }
                         }
@@ -181,6 +183,7 @@ public class Grid {
                 refineFinalGraphGrid,
                 featureSets,
                 buildCompressors,
+                false,
                 compressionGrid,
                 topKGrid,
                 usePruningGrid,
@@ -220,6 +223,7 @@ public class Grid {
                             boolean addHierarchy,
                             boolean refineFinalGraph,
                             Function<DataSet, CompressorParameters> buildCompressor,
+                            boolean useParallelGraphWrites,
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
@@ -287,7 +291,7 @@ public class Grid {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
                     var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
-                            ds, outputDir, buildCompressorObj, handles, constructionMetrics);
+                            ds, outputDir, buildCompressorObj, handles, constructionMetrics, useParallelGraphWrites);
                     indexes.putAll(newIndexes);
                 }
             }
@@ -366,7 +370,8 @@ public class Grid {
                                                                         Path outputDir,
                                                                         VectorCompressor<?> buildCompressor,
                                                                         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
-                                                                        ConstructionMetrics constructionMetrics) throws IOException
+                                                                        ConstructionMetrics constructionMetrics,
+                                                                        boolean useParalleGraphWrites) throws IOException
     {
         Files.createDirectories(outputDir);
 
@@ -380,9 +385,9 @@ public class Grid {
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
+        Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new HashMap<>();
         Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskGraphIndexWriter scoringWriter = null;
+        RandomAccessOnDiskGraphIndexWriter scoringWriter = null;
         int n = 0;
         for (var features : featureSets) {
             // if we are using index caching, use cache names instead of tmp names for index files....
@@ -392,7 +397,8 @@ public class Grid {
             } else {
                 graphPath = outputDir.resolve("graph" + n++);
             }
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor(), constructionMetrics);
+            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor(),
+                    constructionMetrics, useParalleGraphWrites);
             var writer = bws.builder.build();
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
@@ -475,11 +481,14 @@ public class Grid {
                                                              Path outPath,
                                                              RandomAccessVectorValues floatVectors,
                                                              ProductQuantization pq,
-                                                             ConstructionMetrics constructionMetrics)
+                                                             ConstructionMetrics constructionMetrics,
+                                                             boolean useParalleGraphWrites)
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
+        var builder = useParalleGraphWrites ?
+                new OnDiskParallelGraphIndexWriter.Builder(onHeapGraph, outPath) :
+                new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
@@ -530,11 +539,32 @@ public class Grid {
         }
     }
 
+//    private static class SequentialBuilderWithSuppliers {
+//        public final OnDiskGraphIndexWriter.Builder builder;
+//        public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
+//
+//        public SequentialBuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+//            this.builder = builder;
+//            this.suppliers = suppliers;
+//        }
+//    }
+//
+//    private static class ParallelBuilderWithSuppliers {
+//        public final OnDiskParallelGraphIndexWriter.Builder builder;
+//        public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
+//
+//        public ParallelBuilderWithSuppliers(OnDiskParallelGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+//            this.builder = builder;
+//            this.suppliers = suppliers;
+//        }
+//    }
+
     private static class BuilderWithSuppliers {
-        public final OnDiskGraphIndexWriter.Builder builder;
+        public final AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, RandomAccessWriter> builder;
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
 
-        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+        public BuilderWithSuppliers(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, RandomAccessWriter> builder,
+                                            Map<FeatureId, IntFunction<Feature.State>> suppliers) {
             this.builder = builder;
             this.suppliers = suppliers;
         }
@@ -585,7 +615,7 @@ public class Grid {
                 continue;
             }
             var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null);
+            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null, false);
             try (var writer = bws.builder.build()) {
                 start = System.nanoTime();
                 writer.write(bws.suppliers);
@@ -809,6 +839,7 @@ public class Grid {
             List<Boolean> refineFinalGraphGrid,
             List<? extends Set<FeatureId>> featureSets,
             List<Function<DataSet, CompressorParameters>> buildCompressors,
+            boolean useParallelGraphWrites,
             List<Function<DataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
             List<Boolean> usePruningGrid) throws IOException {
@@ -873,7 +904,7 @@ public class Grid {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
                                                 var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
-                                                        ds, outputDir, compressor, handles, null);
+                                                        ds, outputDir, compressor, handles, null, useParallelGraphWrites);
                                                 indexes.putAll(newIndexes);
                                             }
 
