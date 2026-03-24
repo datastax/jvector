@@ -1023,10 +1023,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * columns (WᵀW = I) and can be used as an orthonormal projection matrix
      * (e.g., y = Wᵀx maps R^D → R^d).
      *
-     * <p>Applies a deterministic per-column sign alignment to reduce SVD sign
-     * ambiguity by flipping columns of W to be positively correlated with the
-     * corresponding columns of G.
-     *
      * @param D dimensionality of the input vectors
      * @param d dimensionality of the projected (embedding) space
      * @param rng random number generator used to sample G
@@ -1039,44 +1035,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalArgumentException("Invalid d=" + d + " for D=" + D);
         }
 
-        // Sample Gaussian matrix G [D x d]
-        // Using a 1D array for native speed, then wrapping it
+        // gData is interpreted as a [D x d] column-major matrix by LAPACK.
         double[] gData = new double[D * d];
         for (int i = 0; i < gData.length; i++) {
             gData[i] = rng.nextGaussian();
         }
-        RealMatrix G = new Array2DRowRealMatrix(deserializeColumnMajor(gData, D, d), false);
 
-        // Perform Thin SVD: G = U S VT
-        // We need U [D x d] and VT [d x d]
-        double[] u = new double[D * d];
-        double[] vt = new double[d * d];
-        double[] s = new double[d];
-        intW info = new intW(0);
-
-        // Workspace query for dgesvd
-        double[] a = gData.clone(); // <- preserve original G for the real factorization
-        double[] workQuery = new double[1];
-        LAPACK.getInstance().dgesvd("S", "S", D, d, a, D, s, u, D, vt, d, workQuery, -1, info);
-        if (info.val != 0) throw new RuntimeException("SVD workspace query failed info=" + info.val);
-
-        double[] work = new double[(int) workQuery[0]];
-
-        a = gData.clone(); // <- ensure the real call sees the original Gaussian matrix
-        // Execute dgesvd with Job "S" (Thin SVD)
-        LAPACK.getInstance().dgesvd("S", "S", D, d, a, D, s, u, D, vt, d, work, work.length, info);
-
-        if (info.val != 0) {
-            throw new RuntimeException("Native SVD failed with info=" + info.val);
-        }
-
-        // Compute W = U @ VT [D x d]
-        // This is the Polar Decomposition (nearest orthonormal matrix to G)
-        double[] wData = new double[D * d];
-        BLAS.getInstance().dgemm("N", "N", D, d, d, 1.0, u, D, vt, d, 0.0, wData, D);
-
+        double[] wData = orthogonalize(gData, D, d);
         RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wData, D, d), false);
-
         return new StiefelTransform(W);
     }
 
@@ -1365,45 +1331,42 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final int D = xHdNorm[0].length;
         final int d = quantizedDim;
 
+        // Convert training data once to flat column-major for BLAS/LAPACK.
+        double[] xCol = serializeColumnMajor(xHdNorm);
+
         // PCA basis M = V[:, :d] where X = U S V^T
-        RealMatrix X = new Array2DRowRealMatrix(xHdNorm, false); // [N×D]
         logProgress("\t[stage] Starting Native SVD for PCA...");
-        // We only need VT, so we tell LAPACK to skip U to save massive amounts of time/memory
-        RealMatrix Vt = computeNativeVt(X);
+        double[] vtCol = computeNativeVt(xCol, N, D);    // [D x D], column-major
         logProgress("\t[stage] Completed Native SVD...");
-        RealMatrix M = Vt.transpose().getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
+        double[] mCol = extractPcaBasis(vtCol, D, d);    // [D x d], column-major
 
         // Early stopping based on stabilized binary codes (subject to max iterations)
-        RealMatrix prevXbin = null;
+        double[] prevXbinCol = null;
         int stable = 0;
-        final double STOP_FRAC = 4e-3;   // stop when <0.4% bits flip TODO setting
-        final int STOP_PATIENCE = 3;     // for 3 consecutive epochs TODO setting
+        final double STOP_FRAC = 4e-3;
+        final int STOP_PATIENCE = 3;
 
-        // X_norm = X_hd_norm @ M (N x d)
-        RealMatrix Xnorm = nativeMultiply(X, M); // [N×d]
+        // X_norm = X_hd_norm @ M  => [N x d], column-major
+        double[] xnormCol = nativeMultiply(xCol, N, D, mCol, d);
 
-        // temp_mat ~ N(0,1) in R^{d×d}. Initial random rotation.
-        RealMatrix temp = gaussianMatrix(d, d, rng);
+        // Initial random rotation seed
+        double[] tempCol = gaussianMatrix(d, d, rng);
 
         // Loop: epoch 0..iters inclusive; last epoch computes R but does not update temp_mat.
-        RealMatrix R = null;
+        double[] rCol = null;
         logProgress("\t[stage] ITQ training iterations started...");
+        var startTime = System.nanoTime();
         for (int epoch = 0; epoch <= nTrainingIterations; epoch++) {
-            R = orthogonalize(temp); // R = U @ V^T
+            rCol = orthogonalize(tempCol, d, d); // R = U @ V^T, [d x d]
 
             if (epoch < nTrainingIterations) {
-                // Use native multiplication for Xtr = Xnorm @ R
-                RealMatrix Xtr = nativeMultiply(Xnorm, R);             // [N×d]
-                RealMatrix Xbin = sign01(Xtr);                         // [N×d] in {+1,-1}
+                // Xtr = Xnorm @ R, then binarize in-place to become Xbin.
+                double[] xbinCol = nativeMultiply(xnormCol, N, d, rCol, d);
 
-                if (prevXbin != null) {
-                    long changed = 0;
+                long changed = sign01InPlace(xbinCol, prevXbinCol);
+
+                if (prevXbinCol != null) {
                     long total = (long) N * (long) d;
-                    for (int i = 0; i < N; i++) {
-                        for (int j = 0; j < d; j++) {
-                            if (Xbin.getEntry(i, j) != prevXbin.getEntry(i, j)) changed++;
-                        }
-                    }
                     double frac = (double) changed / (double) total;
 
                     logProgress(String.format(java.util.Locale.ROOT,
@@ -1411,31 +1374,42 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                             epoch, nTrainingIterations, frac, stable, STOP_PATIENCE));
 
                     if (frac < STOP_FRAC) {
-                        if (++stable >= STOP_PATIENCE) break;
+                        if (++stable >= STOP_PATIENCE) {
+                            break;
+                        }
                     } else {
                         stable = 0;
                     }
                 }
 
-                // Optimized temp = Xnorm.T @ Xbin
-                // This avoids the physical transpose of the large Xnorm matrix
-                prevXbin = Xbin;
-                temp = nativeMultiplyTransposedA(Xnorm, Xbin);          // [d×d]
+                prevXbinCol = xbinCol;
+                tempCol = nativeMultiplyTransposedA(xnormCol, N, d, xbinCol, d);
             }
         }
-        logProgress("\t[stage] ITQ training completed.");
+        var loopTime = (System.nanoTime() - startTime) / 1e9;
+        logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
 
-        // W = M @ R  (shape [D×d])
-        // Use native multiply for the final transform matrix
-        RealMatrix W = nativeMultiply(M, R);
+        // W = M @ R  => [D x d], column-major
+        double[] wCol = nativeMultiply(mCol, D, d, rCol, d);
+
+        RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wCol, D, d), false);
         return new StiefelTransform(W);
     }
 
     /**
+     *
      * LANDING trainer TODO incomplete
      *
      * NOTE: This is a DRAFT (not hardened) implementation using RealMatrix operations.
      * We can SIMD/block-optimize the hot math once correctness is validated.
+     *
+     * Row-oriented implementation of the paper's stochastic updates:
+     *   - A is stored as the decoder matrix [D x d]  (paper's A)
+     *   - W is stored as the encoder-transpose [D x d], so Xb * W gives
+     *     row-wise projections equivalent to W^T x in the paper
+     *
+     * The update equations implemented are the row-oriented forms of
+     * Equations (22)-(25) from the paper.
      */
     private static StiefelTransform runLandingTrainer(
             double[][] xHdNorm,   // [N][D] normalized residuals
@@ -1443,289 +1417,372 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             Random rng,
             int nTrainingIterations
     ) {
+        logProgress("\t[stage] Starting runLandingTrainer...");
+
         final int N = xHdNorm.length;
         final int D = xHdNorm[0].length;
         final int d = quantizedDim;
 
-        RealMatrix X = new Array2DRowRealMatrix(xHdNorm, false); // [N×D]
-
-        // PCA basis M_pca = V[:, :d]
-        SingularValueDecomposition svdX = new SingularValueDecomposition(X);
-        RealMatrix V = svdX.getV();
-        RealMatrix M_pca = V.getSubMatrix(0, D - 1, 0, d - 1); // [D×d]
-
-        // Init:
-        // temp(d×d) -> Q = U V^T
-        // A = Q @ M_pca^T  (d×D)
-        // W = A^T          (D×d)
-        RealMatrix Q = orthogonalize(gaussianMatrix(d, d, rng));
-        RealMatrix A = Q.multiply(M_pca.transpose()); // [d×D]
-        RealMatrix W = A.transpose();                 // [D×d]
-
-        final RealMatrix I_D = MatrixUtils.createRealIdentityMatrix(D);
+        final double invD = 1.0 / d;
         final double invSqrtD = 1.0 / Math.sqrt(d);
+        final double lambda = 1.0;
+
+        // ------------------------------------------------------------------
+        // ITQ-style initialization from PCA basis P and random orthogonal R.
+        //
+        // xHdNorm is row-stacked [N x D]. The top right singular vectors of X
+        // are the top left singular vectors of X^T used in the paper.
+        // ------------------------------------------------------------------
+        double[] xCol = serializeColumnMajor(xHdNorm);
+
+        logProgress("\t[stage] Starting Native SVD for LANDING PCA...");
+        double[] vtCol = computeNativeVt(xCol, N, D);     // [D x D], column-major
+        logProgress("\t[stage] Completed Native SVD for LANDING PCA...");
+
+        double[] pCol = extractPcaBasis(vtCol, D, d);     // [D x d], column-major
+        double[] rCol = orthogonalize(gaussianMatrix(d, d, rng), d, d); // [d x d]
+
+        // Stored row-oriented decoder A and encoder-transpose W both start from PR,
+        // matching the ITQ-style initialization used elsewhere in this class.
+        double[] initCol = nativeMultiply(pCol, D, d, rCol, d); // [D x d]
+        RealMatrix A = new Array2DRowRealMatrix(deserializeColumnMajor(initCol, D, d), false);
+        RealMatrix W = A.copy();
+
+        // I_d for the Stiefel penalty A^T A - I_d
+        double[][] eye = new double[d][d];
+        for (int i = 0; i < d; i++) {
+            eye[i][i] = 1.0;
+        }
+        final RealMatrix I_d = new Array2DRowRealMatrix(eye, false);
 
         int[] idx = new int[N];
-        for (int i = 0; i < N; i++) idx[i] = i;
+        for (int i = 0; i < N; i++) {
+            idx[i] = i;
+        }
 
+        logProgress("\t[stage] LANDING training iterations started...");
         for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
-            shuffleInPlace(idx, rng);
+            // Fisher-Yates shuffle
+            for (int i = idx.length - 1; i > 0; i--) {
+                int j = rng.nextInt(i + 1);
+                int tmp = idx[i];
+                idx[i] = idx[j];
+                idx[j] = tmp;
+            }
+
+            final double lr = 0.1 * Math.pow(0.98, epoch);
 
             for (int off = 0; off < N; off += LANDING_BATCH_SIZE) {
                 final int end = Math.min(N, off + LANDING_BATCH_SIZE);
                 final int B = end - off;
 
-                // Build batch matrix X_batch (B×D)
-                double[][] xb = new double[B][D];
+                // Build batch matrix Xb [B x D] without copying row contents.
+                double[][] xb = new double[B][];
                 for (int bi = 0; bi < B; bi++) {
                     xb[bi] = xHdNorm[idx[off + bi]];
                 }
                 RealMatrix Xb = new Array2DRowRealMatrix(xb, false);
 
-                // X_sign = sign(Xb @ W) / sqrt(d)
-                RealMatrix Xproj = Xb.multiply(W);                        // [B×d]
-                RealMatrix Xsign = sign01(Xproj).scalarMultiply(invSqrtD);// [B×d]
+                // Z = sign(Xb * W) in {+1, -1}^{B x d}, unscaled.
+                RealMatrix Xproj = Xb.multiply(W); // [B x d]
+                double[][] projData = (Xproj instanceof Array2DRowRealMatrix)
+                        ? ((Array2DRowRealMatrix) Xproj).getDataRef()
+                        : Xproj.getData();
 
-                // gradA = (X_sign^T X_sign) A - (X_sign^T X_batch)
-                RealMatrix XtX = Xsign.transpose().multiply(Xsign);       // [d×d]
-                RealMatrix XtB = Xsign.transpose().multiply(Xb);          // [d×D]
-                RealMatrix gradA = XtX.multiply(A).subtract(XtB);         // [d×D]
+                double[][] zData = new double[B][d];
+                for (int i = 0; i < B; i++) {
+                    double[] src = projData[i];
+                    double[] dst = zData[i];
+                    for (int j = 0; j < d; j++) {
+                        dst[j] = (src[j] > 0.0) ? 1.0 : -1.0;
+                    }
+                }
+                RealMatrix Z = new Array2DRowRealMatrix(zData, false); // [B x d]
 
-                // gradW = (X_batch^T X_batch) ( W (A A^T) - A^T )
-                RealMatrix G = Xb.transpose().multiply(Xb);               // [D×D]
-                RealMatrix AAT = A.multiply(A.transpose());               // [d×d]
-                RealMatrix term = W.multiply(AAT).subtract(A.transpose());// [D×d]
-                RealMatrix gradW = G.multiply(term);                      // [D×d]
+                // Batch statistics
+                RealMatrix ZtZ = Z.transpose().multiply(Z);    // [d x d]
+                RealMatrix XtZ = Xb.transpose().multiply(Z);   // [D x d]
+                RealMatrix XtX = Xb.transpose().multiply(Xb);  // [D x D]
+                RealMatrix AtA = A.transpose().multiply(A);    // [d x d]
 
-                double lr = 0.1 * Math.pow(0.98, epoch);
-                double lambda = 1.0;
+                // Row-oriented gradA = d^-1 * A * (Z^T Z) - d^-1/2 * X^T Z
+                RealMatrix gradA = A.multiply(ZtZ).scalarMultiply(invD)
+                        .subtract(XtZ.scalarMultiply(invSqrtD));
 
-                // skew = 0.5 * (A^T gradA - (A^T gradA)^T)
-                RealMatrix Mmat = A.transpose().multiply(gradA);          // [D×D]
-                RealMatrix skew = Mmat.subtract(Mmat.transpose()).scalarMultiply(0.5);
+                // Row-oriented for stored W = (paper W)^T:
+                // gradW = (X^T X) * ( d^-1 * W * (A^T A) - d^-1/2 * A )
+                RealMatrix gradW = XtX.multiply(
+                        W.multiply(AtA).scalarMultiply(invD)
+                                .subtract(A.scalarMultiply(invSqrtD))
+                );
 
-                // A -= lr * A @ ( lambda*(A^T A - I) + skew )
-                RealMatrix ortho = A.transpose().multiply(A).subtract(I_D);
-                RealMatrix updateCore = ortho.scalarMultiply(lambda).add(skew);
-                A = A.subtract(A.multiply(updateCore).scalarMultiply(lr));
+                // Λ(A) = skew(gradA * A^T) * A + λ * A * (A^T A - I)
+                RealMatrix skewBase = gradA.multiply(A.transpose()); // [D x D]
+                RealMatrix skew = skewBase.subtract(skewBase.transpose()).scalarMultiply(0.5);
+                RealMatrix ortho = AtA.subtract(I_d); // [d x d]
+                RealMatrix landing = skew.multiply(A)
+                        .add(A.multiply(ortho).scalarMultiply(lambda));
 
-                // W -= lr * gradW
+                A = A.subtract(landing.scalarMultiply(lr));
                 W = W.subtract(gradW.scalarMultiply(lr));
             }
         }
 
-        return new StiefelTransform(W);
+        logProgress("\t[stage] LANDING training completed.");
+
+        // StiefelTransform expects the decoder matrix [D x d].
+        return new StiefelTransform(A);
     }
 
-    private static void shuffleInPlace(int[] a, Random rng) {
-        for (int i = a.length - 1; i > 0; i--) {
-            int j = rng.nextInt(i + 1);
-            int tmp = a[i];
-            a[i] = a[j];
-            a[j] = tmp;
-        }
-    }
-
-    private static RealMatrix gaussianMatrix(int rows, int cols, Random rng) {
-        double[][] m = new double[rows][cols];
-        for (int i = 0; i < rows; i++) {
-            double[] r = m[i];
-            for (int j = 0; j < cols; j++) {
-                r[j] = rng.nextGaussian();
+    /**
+     * Samples a Gaussian matrix in flat column-major storage.
+     *
+     * Values are assigned in row-major logical order.
+     */
+    private static double[] gaussianMatrix(int rows, int cols, Random rng) {
+        double[] data = new double[rows * cols];
+        for (int r = 0; r < rows; r++) {
+            int dst = r;
+            for (int c = 0; c < cols; c++, dst += rows) {
+                data[dst] = rng.nextGaussian();
             }
         }
-        return new Array2DRowRealMatrix(m, false);
+        return data;
     }
 
-    // Basic dgemm routine.
-    private static RealMatrix nativeMultiply(RealMatrix A, RealMatrix B) {
-        int m = A.getRowDimension();
-        int n = B.getColumnDimension();
-        int k = A.getColumnDimension(); // Must match B's row dimension
+    /** Converts a row-major double[][] to a flat column-major array for BLAS/LAPACK. */
+    private static double[] serializeColumnMajor(double[][] matrix) {
+        int rows = matrix.length;
+        int cols = matrix[0].length;
+        double[] data = new double[rows * cols];
 
-        // 1. Convert to 1D Column-Major for BLAS
-        double[] aArr = serializeColumnMajor(A);
-        double[] bArr = serializeColumnMajor(B);
-        double[] cArr = new double[m * n];
+        for (int r = 0; r < rows; r++) {
+            double[] row = matrix[r];
+            int dst = r;
+            for (int c = 0; c < cols; c++, dst += rows) {
+                data[dst] = row[c];
+            }
+        }
+        return data;
+    }
 
-        // 2. Call Native DGEMM: C = alpha*A*B + beta*C
-        // "N", "N" means 'No Transpose' for both A and B
+    /** Converts a RealMatrix to a flat column-major array for BLAS/LAPACK. */
+    private static double[] serializeColumnMajor(RealMatrix m) {
+        int rows = m.getRowDimension();
+        int cols = m.getColumnDimension();
+        double[] data = new double[rows * cols];
+
+        if (m instanceof Array2DRowRealMatrix) {
+            double[][] raw = ((Array2DRowRealMatrix) m).getDataRef();
+            for (int r = 0; r < rows; r++) {
+                double[] row = raw[r];
+                int dst = r;
+                for (int c = 0; c < cols; c++, dst += rows) {
+                    data[dst] = row[c];
+                }
+            }
+            return data;
+        }
+
+        for (int r = 0; r < rows; r++) {
+            int dst = r;
+            for (int c = 0; c < cols; c++, dst += rows) {
+                data[dst] = m.getEntry(r, c);
+            }
+        }
+        return data;
+    }
+
+    /** Converts a flat column-major array back into a row-major double[][] for Commons Math. */
+    private static double[][] deserializeColumnMajor(double[] data, int rows, int cols) {
+        double[][] matrix = new double[rows][cols];
+        for (int r = 0; r < rows; r++) {
+            double[] row = matrix[r];
+            int src = r;
+            for (int c = 0; c < cols; c++, src += rows) {
+                row[c] = data[src];
+            }
+        }
+        return matrix;
+    }
+
+    /**
+     * Extracts M = V[:, :d] from VT, where VT is [dim x dim] in flat column-major layout.
+     * Returns M as [dim x d], also in flat column-major layout.
+     */
+    private static double[] extractPcaBasis(double[] vtCol, int dim, int d) {
+        double[] mCol = new double[dim * d];
+
+        for (int col = 0; col < d; col++) {
+            int dstOffset = col * dim;
+            for (int row = 0; row < dim; row++) {
+                // M(row, col) = V(row, col) = VT(col, row)
+                mCol[dstOffset + row] = vtCol[col + row * dim];
+            }
+        }
+
+        return mCol;
+    }
+
+    /** Native DGEMM for flat column-major matrices: C = A @ B. */
+    private static double[] nativeMultiply(double[] aCol, int m, int k, double[] bCol, int n) {
+        double[] cCol = new double[m * n];
+
         BLAS.getInstance().dgemm(
                 "N", "N",
                 m, n, k,
-                1.0,    // alpha
-                aArr, m, // A and its leading dimension
-                bArr, k, // B and its leading dimension
-                0.0,    // beta (ignores existing values in cArr)
-                cArr, m  // C and its leading dimension
+                1.0,
+                aCol, m,
+                bCol, k,
+                0.0,
+                cCol, m
         );
 
-        // 3. Convert back to RealMatrix
-        return new Array2DRowRealMatrix(deserializeColumnMajor(cArr, m, n), false);
+        return cCol;
     }
 
-    // Uses the dgesvd routine but tells LAPACK to skip the U matrix (for PCA).  Saves time....
-    private static RealMatrix computeNativeVt(RealMatrix x) {
-        int rows = x.getRowDimension();
-        int cols = x.getColumnDimension();
-        double[] a0 = serializeColumnMajor(x);
+    /** Native DGEMM for flat column-major matrices: C = A^T @ B. */
+    private static double[] nativeMultiplyTransposedA(
+            double[] aCol,
+            int rowsA,
+            int colsA,
+            double[] bCol,
+            int colsB
+    ) {
+        double[] cCol = new double[colsA * colsB];
 
+        BLAS.getInstance().dgemm(
+                "T", "N",
+                colsA, colsB, rowsA,
+                1.0,
+                aCol, rowsA,
+                bCol, rowsA,
+                0.0,
+                cCol, colsA
+        );
+
+        return cCol;
+    }
+
+    /**
+     * Uses LAPACK dgesvd but skips U and returns VT in flat column-major layout.
+     * Input X must be [rows x cols], flat column-major.
+     */
+    private static double[] computeNativeVt(double[] xCol, int rows, int cols) {
         double[] s = new double[Math.min(rows, cols)];
-        double[] vt = new double[cols * cols]; // Right singular vectors
+        double[] vt = new double[cols * cols];
         intW info = new intW(0);
 
-        // Query optimal workspace size (standard LAPACK practice); use a copy
-        double[] a = a0.clone();
+        // Workspace query
+        double[] a = xCol.clone(); // dgesvd overwrites input
         double[] workQuery = new double[1];
         LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, workQuery, -1, info);
+
+        if (info.val != 0) {
+            throw new RuntimeException("Native PCA SVD workspace query failed with info=" + info.val);
+        }
 
         int lwork = (int) workQuery[0];
         double[] work = new double[lwork];
 
-        // Actual call: "N" = No U matrix, "A" = All columns of V^T
-        a = a0.clone(); // Use a fresh copy again
+        // Actual call
+        a = xCol.clone();
         LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, work, lwork, info);
 
         if (info.val != 0) {
             throw new RuntimeException("Native PCA SVD failed with info=" + info.val);
         }
 
-        // Convert VT (column-major) back to RealMatrix
-        return new Array2DRowRealMatrix(deserializeColumnMajor(vt, cols, cols), false);
+        return vt;
     }
 
-    /** Computes A^T * B using Native BLAS dgemm */
-    private static RealMatrix nativeMultiplyTransposedA(RealMatrix A, RealMatrix B) {
-        int m = A.getColumnDimension(); // A.T has rows = A.cols
-        int n = B.getColumnDimension();
-        int k = A.getRowDimension();    // A.T has cols = A.rows
+    /**
+     * Orthogonalizes a flat column-major matrix using thin SVD and returns U @ VT
+     * in flat column-major layout.
+     */
+    private static double[] orthogonalize(double[] mCol, int rows, int cols) {
+        int k = Math.min(rows, cols);
 
-        double[] aArr = serializeColumnMajor(A);
-        double[] bArr = serializeColumnMajor(B);
-        double[] cArr = new double[m * n];
-
-        // "T" = Transpose Matrix A, "N" = No Transpose Matrix B
-        BLAS.getInstance().dgemm(
-                "T", "N",
-                m, n, k,
-                1.0,
-                aArr, k, // Leading dimension is k because A is currently [k x m]
-                bArr, k,
-                0.0,
-                cArr, m
-        );
-
-        return new Array2DRowRealMatrix(deserializeColumnMajor(cArr, m, n), false);
-    }
-
-    private static double calculateMSE(RealMatrix a, RealMatrix b) {
-        double sumSq = 0;
-        int rows = a.getRowDimension();
-        int cols = a.getColumnDimension();
-        for (int i = 0; i < rows; i++) {
-            for (int j = 0; j < cols; j++) {
-                double diff = a.getEntry(i, j) - b.getEntry(i, j);
-                sumSq += diff * diff;
-            }
-        }
-        return sumSq / (rows * cols);
-    }
-
-    private static RealMatrix orthogonalize(RealMatrix m) {
-        int rows = m.getRowDimension(); // D
-        int cols = m.getColumnDimension(); // d
-        int k = Math.min(rows, cols); // The rank for thin SVD
-
-        // Move to column-major 1D array
-        double[] a0 = serializeColumnMajor(m);
-
-        // Prepare Thin-SVD buffers
-        // u: [rows * k] instead of [rows * rows]
-        // vt: [k * cols] instead of [cols * cols]
         double[] u = new double[rows * k];
         double[] vt = new double[k * cols];
         double[] s = new double[k];
         intW info = new intW(0);
 
-        // Workspace Query
-        double[] a = a0.clone(); // Make a copy
+        // Workspace query
+        double[] a = mCol.clone(); // dgesvd overwrites input
         double[] workQuery = new double[1];
         LAPACK.getInstance().dgesvd(
-                "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
-                workQuery, -1, info
+                "S", "S",
+                rows, cols,
+                a, rows,
+                s,
+                u, rows,
+                vt, k,
+                workQuery, -1,
+                info
         );
+
+        if (info.val != 0) {
+            throw new RuntimeException("LAPACK dgesvd workspace query failed with info=" + info.val);
+        }
 
         int lwork = (int) workQuery[0];
         double[] work = new double[lwork];
 
-        // Actual Thin-SVD call (Job "S")
-        a = a0.clone(); // Fresh copy again
+        // Actual call
+        a = mCol.clone();
         LAPACK.getInstance().dgesvd(
-                "S", "S", rows, cols, a, rows, s, u, rows, vt, k,
-                work, lwork, info
+                "S", "S",
+                rows, cols,
+                a, rows,
+                s,
+                u, rows,
+                vt, k,
+                work, lwork,
+                info
         );
 
         if (info.val != 0) {
             throw new RuntimeException("LAPACK dgesvd failed with info=" + info.val);
         }
 
-        // Native Multiplication: Result = U @ VT
-        // Using dgemm here)
-        double[] resultData = new double[rows * cols];
-        BLAS.getInstance().dgemm(
-                "N", "N", rows, cols, k,
-                1.0, u, rows,  // A = u, lda = rows
-                vt, k,         // B = vt, ldb = k
-                0.0, resultData, rows // C = resultData, ldc = rows
-        );
-
-        return new Array2DRowRealMatrix(deserializeColumnMajor(resultData, rows, cols), false);
+        return nativeMultiply(u, rows, k, vt, cols);
     }
 
-    /** Converts an Apache Commons RealMatrix to a column-major 1D array for LAPACK. */
-    private static double[] serializeColumnMajor(RealMatrix m) {
+    /**
+     * Thin wrapper retained so the LANDING stub continues to compile
+     * without changing callers or method names.
+     */
+    private static RealMatrix orthogonalize(RealMatrix m) {
         int rows = m.getRowDimension();
         int cols = m.getColumnDimension();
-        double[] data = new double[rows * cols];
-
-        // Accept RealMatrix double[][] implementation
-        double[][] raw = m.getData();
-
-        for (int c = 0; c < cols; c++) {
-            int colOffset = c * rows;
-            for (int r = 0; r < rows; r++) {
-                data[colOffset + r] = raw[r][c];
-            }
-        }
-        return data;
+        double[] qCol = orthogonalize(serializeColumnMajor(m), rows, cols);
+        return new Array2DRowRealMatrix(deserializeColumnMajor(qCol, rows, cols), false);
     }
 
-    /** Converts a column-major 1D array back into a row-major double[][] for Commons Math. */
-    private static double[][] deserializeColumnMajor(double[] data, int rows, int cols) {
-        double[][] matrix = new double[rows][cols];
-        for (int c = 0; c < cols; c++) {
-            int colOffset = c * rows;
-            for (int r = 0; r < rows; r++) {
-                matrix[r][c] = data[colOffset + r];
-            }
-        }
-        return matrix;
-    }
     /**
-     * Elementwise sign producing +/-1 (no zeros), consistent with ASH encoding convention:
-     * bit=1 iff projection > 0, else bit=-1.
+     * Binarizes values in-place to +/-1 and, if prevBinCol is non-null, counts
+     * how many entries changed relative to the previous binarized matrix.
      */
-    private static RealMatrix sign01(RealMatrix m) {
-        final int r = m.getRowDimension();
-        final int c = m.getColumnDimension();
-        double[][] out = new double[r][c];
-        for (int i = 0; i < r; i++) {
-            double[] row = out[i];
-            for (int j = 0; j < c; j++) {
-                row[j] = (m.getEntry(i, j) > 0.0) ? 1.0 : -1.0;
+    private static long sign01InPlace(double[] valuesCol, double[] prevBinCol) {
+        long changed = 0L;
+
+        if (prevBinCol == null) {
+            for (int i = 0; i < valuesCol.length; i++) {
+                valuesCol[i] = (valuesCol[i] > 0.0) ? 1.0 : -1.0;
             }
+            return 0L;
         }
-        return new Array2DRowRealMatrix(out, false);
+
+        for (int i = 0; i < valuesCol.length; i++) {
+            double bin = (valuesCol[i] > 0.0) ? 1.0 : -1.0;
+            if (bin != prevBinCol[i]) {
+                changed++;
+            }
+            valuesCol[i] = bin;
+        }
+
+        return changed;
     }
 
     private static void writeStiefelTransform(IndexWriter out, StiefelTransform st) throws IOException {
