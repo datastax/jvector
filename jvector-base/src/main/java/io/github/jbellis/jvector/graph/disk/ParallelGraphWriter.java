@@ -71,6 +71,7 @@ class ParallelGraphWriter implements AutoCloseable {
     private final int recordSize;
     private final Path filePath;
     private final int taskMultiplier;
+    private final int maxInFlightWrites;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
 
     /**
@@ -80,27 +81,41 @@ class ParallelGraphWriter implements AutoCloseable {
         final int workerThreads;
         final boolean useDirectBuffers;
         final int taskMultiplier;
+        final int maxInFlightWrites;
 
         /**
          * @param workerThreads number of worker threads for building records (0 = use available processors)
          * @param useDirectBuffers whether to use direct ByteBuffers (can be faster for large records)
          * @param taskMultiplier multiplier for number of tasks relative to worker threads
          *                       (4x = good balance for most use cases, higher = more fine-grained parallelism)
+         * @param maxInFlightWrites maximum number of concurrent async write operations (0 = use cores * 100)
          */
-        public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier) {
+        public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier, int maxInFlightWrites) {
             this.workerThreads = workerThreads <= 0 ? Runtime.getRuntime().availableProcessors() : workerThreads;
             this.useDirectBuffers = useDirectBuffers;
             this.taskMultiplier = taskMultiplier <= 0 ? 4 : taskMultiplier;
+            this.maxInFlightWrites = maxInFlightWrites <= 0 ? Runtime.getRuntime().availableProcessors() * 100 : maxInFlightWrites;
+        }
+
+        /**
+         * Convenience constructor with default maxInFlightWrites.
+         *
+         * @param workerThreads number of worker threads for building records (0 = use available processors)
+         * @param useDirectBuffers whether to use direct ByteBuffers (can be faster for large records)
+         * @param taskMultiplier multiplier for number of tasks relative to worker threads
+         */
+        public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier) {
+            this(workerThreads, useDirectBuffers, taskMultiplier, 0);
         }
 
         /**
          * Returns a default configuration suitable for most use cases.
-         * Uses available CPU cores, heap buffers, and 4x task multiplier.
+         * Uses available CPU cores, heap buffers, 4x task multiplier, and cores * 100 max in-flight writes.
          *
          * @return default configuration
          */
         public static Config defaultConfig() {
-            return new Config(0, false, 4);
+            return new Config(0, false, 4, 0);
         }
     }
 
@@ -122,6 +137,7 @@ class ParallelGraphWriter implements AutoCloseable {
         this.graph = graph;
         this.filePath = Objects.requireNonNull(filePath);
         this.taskMultiplier = config.taskMultiplier;
+        this.maxInFlightWrites = config.maxInFlightWrites;
         this.executor = Executors.newFixedThreadPool(config.workerThreads,
             r -> {
                 Thread t = new Thread(r);
@@ -156,10 +172,16 @@ class ParallelGraphWriter implements AutoCloseable {
     }
 
     /**
-     * Writes all L0 node records in parallel using asynchronous file I/O with range-based task batching.
-     * Records are written using position-based writes to maintain index correctness. The implementation
-     * divides the ordinal space into ranges that are processed by a fixed number of tasks, reducing
-     * overhead compared to per-ordinal task creation.
+     * Writes all L0 node records in parallel using truly asynchronous file I/O with range-based task batching.
+     * <p>
+     * This implementation separates record building (CPU-bound) from I/O operations (I/O-bound) to achieve
+     * true asynchronous execution. Worker threads build records in memory and submit them for async writing
+     * without blocking, allowing the thread to continue building more records while previous writes are in flight.
+     * <p>
+     * The implementation uses:
+     * - AsyncWriteCoordinator: Manages async writes with backpressure control
+     * - AsyncNodeRecordTask: Builds records and submits writes without blocking
+     * - CompletableFuture: Tracks write completion across all tasks
      * <p>
      * The number of tasks is determined by available CPU cores multiplied by a configurable multiplier.
      * This provides good load balancing while minimizing task creation and management overhead.
@@ -195,10 +217,13 @@ class ParallelGraphWriter implements AutoCloseable {
         opts.add(StandardOpenOption.WRITE);
         opts.add(StandardOpenOption.READ);
         
-        try (var channel = AsynchronousFileChannel.open(filePath, opts, null)) {
-            List<Future<Void>> taskFutures = new ArrayList<>(numTasks);
+        try (var channel = AsynchronousFileChannel.open(filePath, opts, null);
+             var writeCoordinator = new AsyncWriteCoordinator(channel,
+                 this.maxInFlightWrites)) {
+            
+            List<Future<List<CompletableFuture<Void>>>> taskFutures = new ArrayList<>(numTasks);
 
-            // Submit range-based tasks
+            // Submit range-based tasks that build records and submit async writes
             for (int i = 0; i < numTasks; i++) {
                 int startOrdinal = i * ordinalsPerTask;
                 int endOrdinal = Math.min(startOrdinal + ordinalsPerTask, totalOrdinals);
@@ -211,11 +236,11 @@ class ParallelGraphWriter implements AutoCloseable {
                 final int start = startOrdinal;
                 final int end = endOrdinal;
 
-                Future<Void> future = executor.submit(() -> {
+                Future<List<CompletableFuture<Void>>> future = executor.submit(() -> {
                     var view = viewPerThread.get();
                     var buffer = bufferPerThread.get();
 
-                    var task = new NodeRecordTask(
+                    var task = new AsyncNodeRecordTask(
                             start,                    // Start of range (inclusive)
                             end,                      // End of range (exclusive)
                             ordinalMapper,
@@ -225,7 +250,7 @@ class ParallelGraphWriter implements AutoCloseable {
                             featureStateSuppliers,
                             recordSize,
                             baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                            channel,                  // Async file channel for position-based writes
+                            writeCoordinator,         // Async write coordinator
                             buffer                    // Thread-local buffer
                     );
 
@@ -235,24 +260,52 @@ class ParallelGraphWriter implements AutoCloseable {
                 taskFutures.add(future);
             }
 
-            // Wait for all tasks to complete - each task writes synchronously using writeFully
-            for (Future<Void> taskFuture : taskFutures) {
+            // Collect all write futures from all tasks
+            List<CompletableFuture<Void>> allWriteFutures = new ArrayList<>();
+            for (Future<List<CompletableFuture<Void>>> taskFuture : taskFutures) {
                 try {
-                    taskFuture.get();
+                    List<CompletableFuture<Void>> writeFutures = taskFuture.get();
+                    allWriteFutures.addAll(writeFutures);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while writing records", e);
+                    throw new IOException("Interrupted while building records", e);
                 } catch (ExecutionException e) {
                     throw unwrapExecutionException(e);
                 }
             }
 
+            // Wait for all writes to complete
+            try {
+                CompletableFuture.allOf(allWriteFutures.toArray(new CompletableFuture[0])).join();
+            } catch (Exception e) {
+                // Find and throw the first exception
+                for (CompletableFuture<Void> future : allWriteFutures) {
+                    if (future.isCompletedExceptionally()) {
+                        try {
+                            future.join(); // This will throw
+                        } catch (Exception ex) {
+                            Throwable cause = ex.getCause();
+                            if (cause instanceof IOException) {
+                                throw (IOException) cause;
+                            } else if (cause instanceof RuntimeException) {
+                                throw (RuntimeException) cause;
+                            } else {
+                                throw new IOException("Write operation failed", cause);
+                            }
+                        }
+                    }
+                }
+                // If we get here, rethrow the original exception
+                throw new IOException("Write operation failed", e);
+            }
+
             // Force all writes to disk before closing the channel.
-            // Even though writeFully ensures each write completes, force() ensures the OS
-            // flushes all data from its buffer cache to the physical storage device.
             // This guarantees data durability and prevents intermittent test failures where
             // subsequent reads might see stale data or zeros.
             channel.force(true);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted during async write coordination", e);
         }
     }
 

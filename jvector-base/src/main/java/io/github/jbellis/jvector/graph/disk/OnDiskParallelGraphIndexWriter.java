@@ -68,6 +68,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     private final Path filePath;
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;
+    private final int parallelMaxInFlightWrites;
 
     /**
      * Constructs an OnDiskParallelGraphIndexWriter with all parameters including file path
@@ -83,6 +84,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
      * @param filePath file path required for parallel writes
      * @param parallelWorkerThreads number of worker threads for parallel writes (0 = use available processors)
      * @param parallelUseDirectBuffers whether to use direct ByteBuffers for parallel writes
+     * @param parallelMaxInFlightWrites maximum number of concurrent async write operations (0 = use cores * 100)
      */
     OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
@@ -93,7 +95,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                                    EnumMap<FeatureId, Feature> features,
                                    Path filePath,
                                    int parallelWorkerThreads,
-                                   boolean parallelUseDirectBuffers)
+                                   boolean parallelUseDirectBuffers,
+                                   int parallelMaxInFlightWrites)
     {
         super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
         if (filePath == null) {
@@ -102,6 +105,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         this.filePath = filePath;
         this.parallelWorkerThreads = parallelWorkerThreads;
         this.parallelUseDirectBuffers = parallelUseDirectBuffers;
+        this.parallelMaxInFlightWrites = parallelMaxInFlightWrites;
     }
 
     /**
@@ -128,7 +132,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         var config = new ParallelGraphWriter.Config(
             parallelWorkerThreads,
             parallelUseDirectBuffers,
-            4  // Default task multiplier (4x cores)
+            4,  // Default task multiplier (4x cores)
+            parallelMaxInFlightWrites
         );
 
         try (var parallelWriter = new ParallelGraphWriter(
@@ -173,6 +178,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         private final Path filePath;
         private int parallelWorkerThreads = 0;
         private boolean parallelUseDirectBuffers = false;
+        private int parallelMaxInFlightWrites = 0;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
@@ -211,11 +217,24 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             return this;
         }
 
+        /**
+         * Set the maximum number of in-flight async write operations.
+         * This controls backpressure to prevent memory exhaustion from too many pending writes.
+         * Higher values allow more parallelism but use more memory.
+         *
+         * @param maxInFlightWrites maximum concurrent writes (0 = use cores * 100)
+         * @return this builder
+         */
+        public Builder withParallelMaxInFlightWrites(int maxInFlightWrites) {
+            this.parallelMaxInFlightWrites = maxInFlightWrites;
+            return this;
+        }
+
         @Override
         protected OnDiskParallelGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskParallelGraphIndexWriter(
                 out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath,
-                parallelWorkerThreads, parallelUseDirectBuffers
+                parallelWorkerThreads, parallelUseDirectBuffers, parallelMaxInFlightWrites
             );
         }
     }
