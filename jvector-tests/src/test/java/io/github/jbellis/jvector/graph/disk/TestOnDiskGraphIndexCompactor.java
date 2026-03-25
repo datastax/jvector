@@ -35,6 +35,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
+import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.After;
@@ -62,7 +63,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     List<OnDiskGraphIndex> graphs = new ArrayList<>();
     int dimension = 32;
     int numVectorsPerGraph = 1000;
-    int numGraphs = 5;
+    int numSources = 5;
     int numQueries = 10;
     VectorSimilarityFunction similarityFunction = VectorSimilarityFunction.COSINE;
     RandomAccessVectorValues allravv;
@@ -79,7 +80,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     void buildFP() throws IOException {
-        for(int i = 0; i < numGraphs; ++i) {
+        for(int i = 0; i < numSources; ++i) {
             List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
             RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
             var builder = new GraphIndexBuilder(
@@ -101,7 +102,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
     void buildFusedPQ() throws IOException {
-        for(int i = 0; i < numGraphs; ++i) {
+        for(int i = 0; i < numSources; ++i) {
             List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, 32);
             RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
             ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
@@ -192,25 +193,31 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     @Test
     public void testCompact() throws Exception {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
         List<ReaderSupplier> rss = new ArrayList<>();
-        for(int i = 0; i < numGraphs; ++i) {
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        for(int i = 0; i < numSources; ++i) {
             var outputPath = testDirectory.resolve("test_graph_" + i);
             rss.add(ReaderSupplierFactory.open(outputPath.toAbsolutePath()));
             var onDiskGraph = OnDiskGraphIndex.load(rss.get(i));
             graphs.add(onDiskGraph);
         }
-
-        var compactor = new OnDiskGraphIndexCompactor(graphs);
-        int topK = 10;
         int globalOrdinal = 0;
-        for(int n = 0; n < numGraphs; ++n) {
-            Map<Integer, Integer> map = new HashMap<>();
-            for(int i = 0; i < numVectorsPerGraph; ++i) {
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
                 map.put(i, globalOrdinal++);
             }
-            var remapper = new OrdinalMapper.MapMapper(map);
-            compactor.setRemapper(graphs.get(n), remapper);
+            remappers.add(new OrdinalMapper.MapMapper(map));
+
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
         }
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, null, similarityFunction, null);
+        int topK = 10;
+
         var outputPath = testDirectory.resolve("test_compact_graph_");
         List<VectorFloat<?>> queries = new ArrayList<>();
         for(int i = 0; i < numQueries; ++i) {
@@ -221,7 +228,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         List<SearchResult> csrs = new ArrayList<>();
         System.out.printf("start compaction%n");
-        compactor.compact(outputPath, similarityFunction);
+        compactor.compact(outputPath);
         System.out.printf("done%n");
 
         ReaderSupplier rs;

@@ -18,25 +18,18 @@ package io.github.jbellis.jvector.bench;
 import io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorsDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.GitInfo;
 import io.github.jbellis.jvector.example.reporting.JfrRecorder;
 import io.github.jbellis.jvector.example.reporting.JsonlWriter;
-import io.github.jbellis.jvector.example.reporting.RunReporting;
 import io.github.jbellis.jvector.example.reporting.SystemStatsCollector;
 import io.github.jbellis.jvector.example.reporting.ThreadAllocTracker;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.DataSetPartitioner;
 import io.github.jbellis.jvector.example.util.storage.CloudStorageLayoutUtil;
-import io.github.jbellis.jvector.example.yaml.RunConfig;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
@@ -49,7 +42,6 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -58,10 +50,6 @@ import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.graph.disk.CompactOptions;
-import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.results.format.ResultFormatType;
@@ -82,7 +70,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
-import java.util.stream.Stream;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -112,8 +99,6 @@ public class CompactorBenchmark {
 
     private static final Logger log = LoggerFactory.getLogger(CompactorBenchmark.class);
 
-    private List<VectorFloat<?>> loadedBaseVectors;
-
     public enum IndexPrecision {
         FULLPRECISION,
         FUSEDPQ
@@ -121,21 +106,28 @@ public class CompactorBenchmark {
 
     public enum WorkloadMode {
         /**
-         * Build per-source segments and stop. (No compaction, no recall.)
+         * Build per-source partitions and stop. (No compaction, no recall.)
          */
-        SEGMENTS_ONLY,
+        PARTITION_ONLY,
+
         /**
-         * Assume segments exist on disk; compact them, then (optionally) run recall.
+         * Assume partitions exist on disk; compact them.
          */
         COMPACT_ONLY,
+
         /**
-         * Build a single graph for the whole dataset and write it. Then (optionally) run recall.
+         * Assume partitions exist on disk; compact them, then run recall.
+         */
+        COMPACT_AND_RECALL,
+
+        /**
+         * Build a single graph for the whole dataset and write it. Then run recall.
          */
         BUILD_FROM_SCRATCH,
         /**
-         * (Default) Build segments, compact them, then (optionally) run recall.
+         * (Default) Build partitions, compact them, then run recall.
          */
-        SEGMENTS_AND_COMPACT
+        PARTITION_AND_COMPACT
     }
 
     private static final Path RESULTS_FILE = RUN_DIR.resolve("compactor-results.jsonl");
@@ -260,6 +252,7 @@ public class CompactorBenchmark {
     // ---------- Benchmark state ----------
     private RandomAccessVectorValues ravv;
     private List<VectorFloat<?>> queryVectors;
+    private List<VectorFloat<?>> baseVectors;
     private List<? extends List<Integer>> groundTruth;
     private DataSet ds;
     private VectorSimilarityFunction similarityFunction;
@@ -273,41 +266,19 @@ public class CompactorBenchmark {
     private String resolvedVectorizationProvider;
 
     // Paths used during execution
-    private Path segmentsBaseDir;       // where per-source segments are placed (or found)
+    private Path partitionsBaseDir;       // where per-source partitions are placed (or found)
     private Path compactOutputPath;     // where compacted graph is written
     private Path scratchOutputPath;     // where build-from-scratch graph is written
-
-    // If COMPACT_ONLY, do not delete segments at teardown (unless explicitly asked)
-    private boolean preserveSegmentsOnDisk;
-
-    public enum CompactMode {
-        INLINE,                    // exact compaction, inline output only
-        PQ_VECTORS_OUTPUT,         // exact compaction, emit PQVectors sidecar
-        FUSEDPQ_FROM_SOURCES,      // compressed compaction using source PQ
-        FUSEDPQ_FROM_PQVECTORS     // compressed compaction using caller PQVectors
-    }
-
-    @Param({"INLINE"})
-    public CompactMode compactMode;
-
-    // Required when compactMode == PQ_VECTORS_OUTPUT
-    @Param({""})
-    public String pqPath;
-
-    @Param({""})
-    public String pqVectorsInputPath;
-    @Param({""})
-    public String pqVectorsOutputPath;
 
     // ---------- Params ----------
     @Param({"glove-100-angular"})
     public String datasetNames;
 
-    @Param({"SEGMENTS_AND_COMPACT"})
+    @Param({"PARTITION_AND_COMPACT"})
     public WorkloadMode workloadMode;
 
-    @Param({"2"}) // Default value, can be overridden via command line
-    public int numSegments;
+    @Param({"4"}) // Default value, can be overridden via command line
+    public int numPartitions;
 
     @Param({"32"})
     public int graphDegree;
@@ -316,7 +287,7 @@ public class CompactorBenchmark {
     public int beamWidth;
 
     /**
-     * liveNodesRate controls how many nodes are considered "live" per source segment
+     * liveNodesRate controls how many nodes are considered "live" per source partition
      * when calling compactor.setLiveNodes(...).
      *
      * - 1.0 => all nodes live (default; behaves like no deletions)
@@ -324,28 +295,6 @@ public class CompactorBenchmark {
     */
     @Param({"1.0"})
     public double liveNodesRate;
-
-    /**
-     * If non-empty, this is where segment files live (or will be written).
-     * - For SEGMENTS_* modes: used as output dir for segments.
-     * - For COMPACT_ONLY: required
-     *
-     * If empty: a temp dir is used and cleaned up at teardown.
-     */
-    @Param({""})
-    public String segmentsDir;
-
-    /**
-     * Output path for compacted graph;
-     */
-    @Param({""})
-    public String compactOutput;
-
-    /**
-     * Output path for build-from-scratch graph
-     */
-    @Param({""})
-    public String scratchOutput;
 
     @Param({""})
     public String storageDirectories;
@@ -383,23 +332,6 @@ public class CompactorBenchmark {
     @Param({"false"})
     public boolean threadAllocTracking;
 
-    /**
-     * Whether to run recall search (loads output index and runs queries).
-     * Ignored for SEGMENTS_ONLY.
-     */
-    @Param({"true"})
-    public boolean enableRecall;
-
-    @Param({"false"})
-    public boolean trainPQ;
-
-    /**
-     * If true and workloadMode==COMPACT_ONLY, do NOT delete segments in teardown.
-     * (Useful when segments are expensive and you run multiple compaction configs.)
-     */
-    @Param({"true"})
-    public boolean preserveSegmentsForCompactOnly;
-
     private final JfrRecorder jfrPartitioningRecorder = new JfrRecorder();
     private final JfrRecorder jfrCompactingRecorder = new JfrRecorder();
     private final SystemStatsCollector sysStatsCollector = new SystemStatsCollector();
@@ -415,7 +347,7 @@ public class CompactorBenchmark {
 
     private String jfrParamSuffix() {
         return String.format("%s-w%s-n%d-d%d-bw%d-%s-%s-pw%d-%s-dp%.2f-live%.2f",
-                datasetNames, workloadMode, numSegments, graphDegree, beamWidth,
+                datasetNames, workloadMode, numPartitions, graphDegree, beamWidth,
                 splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, liveNodesRate);
     }
 
@@ -452,38 +384,21 @@ public class CompactorBenchmark {
 
             validateParams();
 
-            List<VectorFloat<?>> baseVectors;
             int dimension;
 
             if (workloadMode == WorkloadMode.COMPACT_ONLY) {
-                loadedBaseVectors = null;
+                ds = null;
+                queryVectors = null;
+                groundTruth = null;
                 ravv = null;
+                // TODO: don't hard coded
+                similarityFunction = VectorSimilarityFunction.COSINE;
+                baseVectors = null;
+                dimension = -1;
 
-                if (enableRecall) {
-                    // Keep current behavior for recall mode.
-                    // If we want COMPACT_ONLY + recall without loading base vectors,
-                    // we should add a separate query/ground-truth-only loader path.
-                    ds = DataSets.loadDataSet(datasetNames)
-                            .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
-
-                    queryVectors = ds.getQueryVectors();
-                    groundTruth = ds.getGroundTruth();
-                    similarityFunction = ds.getSimilarityFunction();
-                    dimension = ds.getDimension();
-
-                    log.info("Dataset {} loaded for COMPACT_ONLY recall. Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
-                            datasetNames, queryVectors.size(), dimension, similarityFunction, workloadMode, liveNodesRate);
-                } else {
-                    ds = null;
-                    queryVectors = null;
-                    groundTruth = null;
-                    similarityFunction = null;
-                    dimension = -1;
-
-                    log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, Live nodes rate: {}",
-                            workloadMode, liveNodesRate);
-                }
-            } else if (enableRecall) {
+                log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, Live nodes rate: {}",
+                        workloadMode, liveNodesRate);
+            } else {
                 ds = DataSets.loadDataSet(datasetNames)
                         .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
 
@@ -493,16 +408,15 @@ public class CompactorBenchmark {
                 } else {
                     int totalVectors = ds.getBaseRavv().size();
                     int portionedSize = (int) (totalVectors * datasetPortion);
-                    if (portionedSize < Math.max(1, numSegments)) {
+                    if (portionedSize < Math.max(1, numPartitions)) {
                         throw new IllegalArgumentException(
                                 "datasetPortion=" + datasetPortion + " yields " + portionedSize
-                                        + " vectors, fewer than numSegments=" + numSegments);
+                                        + " vectors, fewer than numPartitions=" + numPartitions);
                     }
                     baseVectors = ds.getBaseVectors().subList(0, portionedSize);
                     ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
                 }
 
-                loadedBaseVectors = baseVectors;
                 queryVectors = ds.getQueryVectors();
                 groundTruth = ds.getGroundTruth();
                 similarityFunction = ds.getSimilarityFunction();
@@ -510,70 +424,34 @@ public class CompactorBenchmark {
 
                 log.info("Dataset {} loaded with recall data. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
                         datasetNames, ravv.size(), datasetPortion, queryVectors.size(), dimension, similarityFunction, workloadMode, liveNodesRate);
-            } else {
-                BaseVectorsDataSet baseDs = DataSets.loadBaseVectors(datasetNames)
-                        .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames));
-
-                ds = null;
-
-                if (datasetPortion == 1.0) {
-                    ravv = baseDs.getBaseRavv();
-                    baseVectors = baseDs.getBaseVectors();
-                } else {
-                    int totalVectors = baseDs.getBaseRavv().size();
-                    int portionedSize = (int) (totalVectors * datasetPortion);
-                    if (portionedSize < Math.max(1, numSegments)) {
-                        throw new IllegalArgumentException(
-                                "datasetPortion=" + datasetPortion + " yields " + portionedSize
-                                        + " vectors, fewer than numSegments=" + numSegments);
-                    }
-                    baseVectors = baseDs.getBaseVectors().subList(0, portionedSize);
-                    ravv = new ListRandomAccessVectorValues(baseVectors, baseDs.getDimension());
-                }
-
-                loadedBaseVectors = baseVectors;
-                queryVectors = null;
-                groundTruth = null;
-                similarityFunction = baseDs.getSimilarityFunction();
-                dimension = baseDs.getDimension();
-
-                log.info("Dataset {} loaded base-only. Base vectors: {} (portion {}), Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
-                        datasetNames, ravv.size(), datasetPortion, dimension, similarityFunction, workloadMode, liveNodesRate);
-            }
-            if(workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY) {
-                log.info("Compact mode: {}", compactMode);
             }
 
-            // Resolve storagePaths + segmentsDir
+            // Resolve storagePaths + partitionsDir
             storagePaths = resolveStoragePaths();
-            segmentsBaseDir = resolveSegmentsBaseDir(storagePaths);
-            compactOutputPath = resolveCompactOutputPath(segmentsBaseDir);
-            scratchOutputPath = resolveScratchOutputPath(segmentsBaseDir);
-
-            preserveSegmentsOnDisk = (workloadMode == WorkloadMode.COMPACT_ONLY) && preserveSegmentsForCompactOnly;
+            partitionsBaseDir = resolvePartitionsBaseDir(storagePaths);
+            compactOutputPath = resolveCompactOutputPath(partitionsBaseDir);
+            scratchOutputPath = resolveScratchOutputPath(partitionsBaseDir);
 
             // Clean stale artifacts only if we're going to rebuild them.
-            if (workloadMode == WorkloadMode.SEGMENTS_ONLY || workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-                cleanupStaleArtifacts(storagePaths, numSegments);
-            } else if (workloadMode == WorkloadMode.COMPACT_ONLY) {
-                // For compact-only, ensure the segment files exist.
-                verifySegmentsExist(segmentsBaseDir, numSegments);
+            if (workloadMode == WorkloadMode.COMPACT_ONLY || workloadMode == WorkloadMode.COMPACT_AND_RECALL) {
+                // For compact-only and compact-and-recall, ensure the partition files exist.
+                verifyPartitionsExist(partitionsBaseDir, numPartitions);
             }
 
             // Partition metadata for remapping (needed for compaction)
-            if (workloadMode == WorkloadMode.SEGMENTS_ONLY || workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT) {
-                var partitionedData = DataSetPartitioner.partition(loadedBaseVectors, numSegments, splitDistribution);
+            if (workloadMode == WorkloadMode.PARTITION_ONLY || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
+                var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
                 vectorsPerSourceCount = partitionedData.sizes;
             } else {
                 vectorsPerSourceCount = null;
             }
 
-            // Build segments during setup for SEGMENTS_* (matches original benchmark structure)
-            if (workloadMode == WorkloadMode.SEGMENTS_ONLY || workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT) {
+            // Build partitions during setup for SEGMENTS_* (matches original benchmark structure)
+            if (workloadMode == WorkloadMode.PARTITION_ONLY || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
                 if (jfrPartitioning) {
                     jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
                 }
-                buildSegments(ds, loadedBaseVectors);
+                buildPartitions(ds, baseVectors);
                 if (jfrPartitioningRecorder.isActive()) {
                     jfrPartitioningRecorder.stop();
                 }
@@ -587,10 +465,10 @@ public class CompactorBenchmark {
 
     private void validateParams() {
         if (workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-            log.warn("numSegments={} ignored in BUILD_FROM_SCRATCH mode", numSegments);
+            log.warn("numPartitions={} ignored in BUILD_FROM_SCRATCH mode", numPartitions);
         }
         else {
-           if (numSegments <= 1) throw new IllegalArgumentException("numSegments must be larger than one");
+           if (numPartitions <= 1) throw new IllegalArgumentException("numPartitions must be larger than one");
         }
         if (graphDegree <= 0) throw new IllegalArgumentException("graphDegree must be positive");
         if (beamWidth <= 0) throw new IllegalArgumentException("beamWidth must be positive");
@@ -600,61 +478,11 @@ public class CompactorBenchmark {
         if (liveNodesRate <= 0.0 || liveNodesRate > 1.0) {
             throw new IllegalArgumentException("liveNodesRate must be in (0.0, 1.0]");
         }
-        if (workloadMode == WorkloadMode.COMPACT_ONLY) {
-            // strongly recommend a stable dir; tempdir will be empty.
-            if ((segmentsDir == null || segmentsDir.isBlank()) && (storageDirectories == null || storageDirectories.isBlank())) {
-                log.warn("COMPACT_ONLY without segmentsDir/storageDirectories will likely fail unless segments already exist in the temp dir.");
-            }
-        }
-
-        if (workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-
-          if (compactMode != CompactMode.INLINE ||
-              trainPQ ||
-              (pqPath != null && !pqPath.isBlank()) ||
-              (pqVectorsInputPath != null && !pqVectorsInputPath.isBlank()) ||
-              (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())) {
-
-            log.warn(
-                "compactMode/trainPQ/pqPath/pqVecPath ignored in BUILD_FROM_SCRATCH mode. " +
-                "Received: compactMode={}, trainPQ={}, pqPath={}, pqVecPath={}",
-                compactMode,
-                trainPQ,
-                pqPath,
-                pqVectorsInputPath,
-                pqVectorsOutputPath
-                );
-              }
-        }
-
-        if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
-            && compactMode == CompactMode.PQ_VECTORS_OUTPUT && !trainPQ) {
-            if (pqPath == null || pqPath.isBlank()) {
-                throw new IllegalArgumentException("compactMode=PQ_VECTORS_OUTPUT requires pqPath or need to set trainPQ=true");
-            }
-        }
-
-        if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
-                && compactMode == CompactMode.FUSEDPQ_FROM_SOURCES
-                && indexPrecision != IndexPrecision.FUSEDPQ) {
-            throw new IllegalArgumentException(
-                    "compactMode=FUSEDPQ_FROM_SOURCES requires source segments built with indexPrecision=FUSEDPQ");
-        }
-
-        if ((workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY)
-                && compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
-            if (pqVectorsInputPath == null || pqVectorsInputPath.isBlank()) {
-                throw new IllegalArgumentException(
-                        "compactMode=FUSEDPQ_FROM_PQVECTORS requires pqVectorsInputPath");
-            }
-        }
-
     }
 
     private List<Path> resolveStoragePaths() throws IOException {
         // Priority:
         // 1) storageDirectories (comma-separated)
-        // 2) segmentsDir (single dir)
         // 3) temp dir
         var paths = new ArrayList<Path>();
 
@@ -667,13 +495,6 @@ public class CompactorBenchmark {
                 }
                 paths.add(path);
             }
-        } else if (segmentsDir != null && !segmentsDir.isBlank()) {
-            Path path = Path.of(segmentsDir.trim());
-            if (!Files.exists(path)) Files.createDirectories(path);
-            if (!Files.isDirectory(path) || !Files.isWritable(path)) {
-                throw new IllegalArgumentException("segmentsDir is not a writable directory: " + path);
-            }
-            paths.add(path);
         } else {
             tempDir = Files.createTempDirectory("compact-bench");
             paths.add(tempDir);
@@ -723,90 +544,53 @@ public class CompactorBenchmark {
         return paths;
     }
 
-    private Path resolveSegmentsBaseDir(List<Path> storagePaths) throws IOException {
-        // If segmentsDir explicitly set, always use it as the canonical base dir for segment files.
-        if (segmentsDir != null && !segmentsDir.isBlank()) {
-            Path p = Path.of(segmentsDir.trim());
-            Files.createDirectories(p);
-            return p;
-        }
-        // Otherwise use the first storage path.
+    private Path resolvePartitionsBaseDir(List<Path> storagePaths) throws IOException {
         Path p = storagePaths.get(0);
         Files.createDirectories(p);
         return p;
     }
 
     private Path resolveCompactOutputPath(Path baseDir) {
-        if (compactOutput != null && !compactOutput.isBlank()) {
-            return Path.of(compactOutput.trim());
-        }
         return baseDir.resolve("compact-graph");
     }
 
     private Path resolveScratchOutputPath(Path baseDir) {
-        if (scratchOutput != null && !scratchOutput.isBlank()) {
-            return Path.of(scratchOutput.trim());
-        }
         return baseDir.resolve("scratch-graph");
     }
 
-    private void cleanupStaleArtifacts(List<Path> dirs, int numSegments) throws IOException {
-        // segments + compact + scratch
-        for (Path dir : dirs) {
-            try (var entries = Files.newDirectoryStream(dir, entry -> {
-                String name = entry.getFileName().toString();
-                return name.matches("per-source-graph-\\d+")
-                        || name.equals("compact-graph")
-                        || name.equals("scratch-graph");
-            })) {
-                for (Path stale : entries) {
-                    log.info("Removing stale artifact: {}", stale.toAbsolutePath());
-                    Files.delete(stale);
-                }
-            }
-        }
-
-        // also delete explicit outputs if outside dirs
-        if (Files.exists(compactOutputPath) && !compactOutputPath.startsWith(dirs.get(0))) {
-            Files.delete(compactOutputPath);
-        }
-        if (Files.exists(scratchOutputPath) && !scratchOutputPath.startsWith(dirs.get(0))) {
-            Files.delete(scratchOutputPath);
-        }
-    }
-
-    private void verifySegmentsExist(Path segmentsDir, int numSegments) {
-        for (int i = 0; i < numSegments; i++) {
-            Path seg = segmentsDir.resolve("per-source-graph-" + i);
+    private void verifyPartitionsExist(Path partitionsDir, int numPartitions) {
+        for (int i = 0; i < numPartitions; i++) {
+            Path seg = partitionsDir.resolve("per-source-graph-" + i);
             if (!Files.exists(seg)) {
-                throw new IllegalStateException("Missing segment file for COMPACT_ONLY: " + seg.toAbsolutePath());
+                throw new IllegalStateException("Missing partition file for COMPACT_ONLY or COMPACT_AND_RECALL: " + seg.toAbsolutePath());
             }
         }
     }
 
-    private void buildSegments(DataSet ds, List<VectorFloat<?>> baseVectors) throws Exception {
+    private void buildPartitions(DataSet ds, List<VectorFloat<?>> baseVectors) throws Exception {
 
-        var partitionedData = DataSetPartitioner.partition(baseVectors, numSegments, splitDistribution);
+        var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
         vectorsPerSourceCount = partitionedData.sizes;
 
-        log.info("Building {} segments into {} (deg={}, bw={}, split={}, splitSizes={}, precision={}, pwThreads={}, vp={})",
-                numSegments, segmentsBaseDir.toAbsolutePath(), graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount,
+        log.info("Building {} partitions into {} (deg={}, bw={}, split={}, splitSizes={}, precision={}, pwThreads={}, vp={})",
+                numPartitions, partitionsBaseDir.toAbsolutePath(), graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount,
                 indexPrecision, parallelWriteThreads, resolvedVectorizationProvider);
 
-        for (int i = 0; i < numSegments; i++) {
+        int dimension = baseVectors.get(0).length();
+        for (int i = 0; i < numPartitions; i++) {
             List<VectorFloat<?>> vectorsPerSource = partitionedData.vectors.get(i);
 
-            // Round-robin assignment of segment files to storage paths, but still keep canonical base dir name stable.
+            // Round-robin assignment of partition files to storage paths, but still keep canonical base dir name stable.
             Path baseDirForThisSegment = storagePaths.get(i % storagePaths.size());
             Path outputPath = baseDirForThisSegment.resolve("per-source-graph-" + i);
 
-            log.info("Building segment {}/{}: vectors={} -> {}",
-                    i + 1, numSegments, vectorsPerSource.size(), outputPath.toAbsolutePath());
+            log.info("Building partition {}/{}: vectors={} -> {}",
+                    i + 1, numPartitions, vectorsPerSource.size(), outputPath.toAbsolutePath());
 
-            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, ds.getDimension());
+            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, dimension);
             BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
             var builder = new GraphIndexBuilder(bspPerSource,
-                    ds.getDimension(),
+                    dimension,
                     graphDegree, beamWidth, 1.2f, 1.2f, true);
             var graph = builder.build(ravvPerSource);
 
@@ -818,13 +602,13 @@ public class CompactorBenchmark {
                 writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
             }
 
-            writerBuilder.with(new InlineVectors(ds.getDimension()));
+            writerBuilder.with(new InlineVectors(dimension));
 
             ProductQuantization pq = null;
             PQVectors pqVectors = null;
             if (indexPrecision == IndexPrecision.FUSEDPQ) {
                 boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-                pq = ProductQuantization.compute(ravvPerSource, ds.getDimension() / 8, 256, centerData);
+                pq = ProductQuantization.compute(ravvPerSource, dimension / 8, 256, centerData);
                 pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
                 writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
             }
@@ -843,16 +627,16 @@ public class CompactorBenchmark {
             }
         }
 
-        log.info("Done building segments.");
+        log.info("Done building partitions.");
     }
 
-    private long compactSegments() throws Exception {
+    private long compactPartitions() throws Exception {
 
-        // Load segments (from round-robin storage paths, same naming)
-        for (int i = 0; i < numSegments; i++) {
+        // Load partitions (from round-robin storage paths, same naming)
+        for (int i = 0; i < numPartitions; i++) {
             Path baseDir = storagePaths.get(i % storagePaths.size());
             Path segPath = baseDir.resolve("per-source-graph-" + i);
-            log.info("Loading segment {}/{} from {}", i + 1, numSegments, segPath.toAbsolutePath());
+            log.info("Loading partition {}/{} from {}", i + 1, numPartitions, segPath.toAbsolutePath());
             rss.add(ReaderSupplierFactory.open(segPath.toAbsolutePath()));
             graphs.add(OnDiskGraphIndex.load(rss.get(i)));
         }
@@ -866,123 +650,28 @@ public class CompactorBenchmark {
             Files.delete(compactOutputPath);
         }
 
-        log.info("Compacting {} segments into {}", numSegments, compactOutputPath.toAbsolutePath());
+        log.info("Compacting {} partitions into {}", numPartitions, compactOutputPath.toAbsolutePath());
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs);
 
-        // Remap ordinals: local [0..size-1] -> global increasing in segment order
+        List<OrdinalMapper> remappers = new ArrayList<>(numPartitions);
+        List<FixedBitSet> liveNodes = new ArrayList<>(numPartitions);
+        // Remap ordinals: local [0..size-1] -> global increasing in partition order
         int globalOrdinal = 0;
-        for (int n = 0; n < numSegments; n++) {
+        for (int n = 0; n < numPartitions; n++) {
             int size = graphs.get(n).size();
             Map<Integer, Integer> map = new HashMap<>(size * 2);
             for (int i = 0; i < size; i++) {
                 map.put(i, globalOrdinal++);
             }
-            compactor.setRemapper(graphs.get(n), new OrdinalMapper.MapMapper(map));
-            FixedBitSet live = randomLiveNodes(vectorsPerSourceCount.get(n), liveNodesRate, n);
-            compactor.setLiveNodes(graphs.get(n), live);
+            var remapper = new OrdinalMapper.MapMapper(map);
+            remappers.add(remapper);
+            liveNodes.add(randomLiveNodes(size, liveNodesRate, n));
         }
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, null, similarityFunction, null);
 
         long startNanos = System.nanoTime();
-        CompactOptions opts = buildCompactOptions(compactOutputPath);
-        compactor.compact(compactOutputPath, similarityFunction, opts);
+        compactor.compact(compactOutputPath);
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-    }
-
-    private CompactOptions buildCompactOptions(Path compactOutputPath) throws IOException {
-      switch (compactMode) {
-        case INLINE:
-            return CompactOptions.builder()
-                    .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
-                    .precision(CompactOptions.CompactionPrecision.EXACT)
-                    .compressionConfig(CompactOptions.CompressionConfig.none())
-                    .build();
-
-        case PQ_VECTORS_OUTPUT: {
-
-            ProductQuantization pq;
-
-            if (trainPQ) {
-                log.info("Training PQ from entire dataset");
-
-                RandomAccessVectorValues fullRavv =
-                  new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getDimension());
-
-                boolean center =
-                  similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-
-                pq = ProductQuantization.compute(
-                    fullRavv,
-                    ds.getDimension() / 8,
-                    256,
-                    center
-                    );
-                if (pqPath != null && !pqPath.isBlank()) {
-                    try (var writer = new BufferedRandomAccessWriter(Path.of(pqPath))) {
-                        pq.write(writer);
-                    }
-                }
-
-
-            } else {
-
-              if (pqPath == null || pqPath.isBlank()) {
-                  throw new IllegalArgumentException(
-                      "compactMode=PQ_VECTORS_OUTPUT requires pqPath when trainPQ=false");
-              }
-
-              try (ReaderSupplier pqRs =
-                  ReaderSupplierFactory.open(Path.of(pqPath))) {
-                  pq = ProductQuantization.load(pqRs.get());
-              }
-            }
-
-            Path pqVecOut =
-                    (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())
-                    ? Path.of(pqVectorsOutputPath)
-                    : Path.of(compactOutputPath.toString() + ".pq");
-
-            return CompactOptions.builder()
-                    .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS))
-                    .precision(CompactOptions.CompactionPrecision.EXACT)
-                    .compressionConfig(
-                            CompactOptions.CompressionConfig.withPQCodebook(pq, pqVecOut)
-                    )
-                    .build();
-        }
-
-          case FUSEDPQ_FROM_SOURCES:
-              return CompactOptions.builder()
-                      .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
-                      .precision(CompactOptions.CompactionPrecision.COMPRESSED)
-                      .compressionConfig(
-                              CompactOptions.CompressionConfig.withSourcePQ(
-                                      CompactOptions.CompressionConfig.PQSourcePolicy.AUTO
-                              )
-                      )
-                      .build();
-
-          case FUSEDPQ_FROM_PQVECTORS: {
-              PQVectors pqVectors = null;
-
-              try (ReaderSupplier rss = ReaderSupplierFactory.open(Path.of(pqVectorsInputPath))) {
-                  pqVectors = PQVectors.load(rss.get());
-              }
-
-
-              return CompactOptions.builder()
-                      .writeFeatures(EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ))
-                      .precision(CompactOptions.CompactionPrecision.COMPRESSED)
-                      .compressionConfig(
-                              CompactOptions.CompressionConfig.withPQVectors(pqVectors)
-                      )
-                      .build();
-          }
-
-
-        default:
-            throw new IllegalStateException("Unhandled compactMode: " + compactMode);
-      }
     }
 
     private long buildFromScratch(List<VectorFloat<?>> baseVectors) throws Exception {
@@ -1056,39 +745,6 @@ public class CompactorBenchmark {
         }
 
         closeLoadedGraphs();
-
-        // Cleanup rules:
-        // - If tempDir used: delete it entirely.
-        // - Else: delete artifacts unless preserveSegmentsOnDisk is true.
-        if (tempDir != null && Files.exists(tempDir)) {
-            try (Stream<Path> walk = Files.walk(tempDir)) {
-                walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try {
-                        Files.delete(p);
-                    } catch (IOException e) {
-                        log.error("Failed to delete " + p, e);
-                    }
-                });
-            }
-        } else {
-            // user provided dirs
-            if (!preserveSegmentsOnDisk) {
-                for (int i = 0; i < numSegments; i++) {
-                    Path baseDir = storagePaths.get(i % storagePaths.size());
-                    Path sourcePath = baseDir.resolve("per-source-graph-" + i);
-                    if (Files.exists(sourcePath)) Files.delete(sourcePath);
-                }
-            }
-
-            // Always delete generated outputs (compact/scratch) unless user placed them somewhere and wants to keep.
-            // For now: keep behavior simple — delete if we created them in this iteration.
-            if (workloadMode == WorkloadMode.SEGMENTS_AND_COMPACT || workloadMode == WorkloadMode.COMPACT_ONLY) {
-                if (Files.exists(compactOutputPath)) Files.delete(compactOutputPath);
-            }
-            if (workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-                if (Files.exists(scratchOutputPath)) Files.delete(scratchOutputPath);
-            }
-        }
     }
 
     private void closeLoadedGraphs() {
@@ -1127,32 +783,27 @@ public class CompactorBenchmark {
 
             // Execute workload
             switch (workloadMode) {
-                case SEGMENTS_ONLY:
-                    // segments built during setup()
-                    durationMs = 0;
-                    recall = -1;
+                case PARTITION_ONLY:
                     break;
 
                 case COMPACT_ONLY:
-                    durationMs = compactSegments();
-                    if (enableRecall) {
-                        recall = runRecall(compactOutputPath);
-                    }
+                    durationMs = compactPartitions();
+                    break;
+
+                case COMPACT_AND_RECALL:
+                    durationMs = compactPartitions();
+                    recall = runRecall(compactOutputPath);
                     break;
 
                 case BUILD_FROM_SCRATCH: {
-                    durationMs = buildFromScratch(loadedBaseVectors);
-                    if (enableRecall) {
-                        recall = runRecall(scratchOutputPath);
-                    }
+                    durationMs = buildFromScratch(baseVectors);
+                    recall = runRecall(scratchOutputPath);
                     break;
                 }
 
-                case SEGMENTS_AND_COMPACT:
-                    durationMs = compactSegments();
-                    if (enableRecall) {
-                        recall = runRecall(compactOutputPath);
-                    }
+                case PARTITION_AND_COMPACT:
+                    durationMs = compactPartitions();
+                    recall = runRecall(compactOutputPath);
                     break;
 
                 default:
@@ -1176,69 +827,31 @@ public class CompactorBenchmark {
 
     private double runRecall(Path indexPath) throws Exception {
 
-        PQVectors pqVectors = null;
-
-        if(compactMode == CompactMode.PQ_VECTORS_OUTPUT) {
-            Path pqVecOut =
-                (pqVectorsOutputPath != null && !pqVectorsOutputPath.isBlank())
-                ? Path.of(pqVectorsOutputPath)
-                : Path.of(compactOutputPath.toString() + ".pq");
-
-            log.info("Recall: using PQVectors for approximate scoring from {}", pqVecOut.toAbsolutePath());
-            try (ReaderSupplier rss = ReaderSupplierFactory.open(pqVecOut)) {
-                pqVectors = PQVectors.load(rss.get());
-            }
-        }
-        else if (compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
-            log.info("Recall: using caller-provided PQVectors for approximate scoring from {}",
-                    Path.of(pqVectorsInputPath).toAbsolutePath());
-            try (ReaderSupplier rss = ReaderSupplierFactory.open(Path.of(pqVectorsInputPath))) {
-                pqVectors = PQVectors.load(rss.get());
-            }
-        }
-
         log.info("Loading and searching index at {}", indexPath.toAbsolutePath());
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
-
             GraphSearcher searcher = new GraphSearcher(graph);
+            var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
             searcher.usePruning(false);
             List<SearchResult> retrieved = new ArrayList<>(queryVectors.size());
             for (int n = 0; n < queryVectors.size(); ++n) {
                 SearchResult result;
-                if(compactMode == CompactMode.INLINE || workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-                    result = GraphSearcher.search(
-                            queryVectors.get(n),
-                            10,
-                            ravv,
-                            similarityFunction,
-                            graph,
-                            Bits.ALL
-                    );
-                }
-                else if (compactMode == CompactMode.PQ_VECTORS_OUTPUT
-                        || compactMode == CompactMode.FUSEDPQ_FROM_PQVECTORS) {
-                    // --- PQ approximate search path ---
-                    // Score function uses PQVectors (approx) instead of full vectors
-                    ScoreFunction.ApproximateScoreFunction asf = pqVectors.scoreFunctionFor(queryVectors.get(n), similarityFunction);
-                    SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf);
-
+                if(indexPrecision == IndexPrecision.FUSEDPQ) {
+                    var asf = view.approximateScoreFunctionFor(queryVectors.get(n), similarityFunction);
+                    var rerank = view.rerankerFor(queryVectors.get(n), similarityFunction);
+                    SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf, rerank);
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
                 }
-                else if(compactMode == CompactMode.FUSEDPQ_FROM_SOURCES) {
-
-                      SearchScoreProvider ssp = new DefaultSearchScoreProvider(graph.getView().approximateScoreFunctionFor(queryVectors.get(n), similarityFunction));
-                      result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
-                }
                 else {
-                    throw new RuntimeException("Failed to find the searcher");
+                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(n), similarityFunction, ravv);
+                    result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
                 }
                 retrieved.add(result);
             }
 
             double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10);
-            log.info("Recall [dataset={}, workloadMode={}, numSegments={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}",
-                    datasetNames, workloadMode, numSegments, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall);
+            log.info("Recall [dataset={}, workloadMode={}, numPartitions={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}",
+                    datasetNames, workloadMode, numPartitions, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall);
             return recall;
         }
     }
@@ -1248,13 +861,9 @@ public class CompactorBenchmark {
         var params = new LinkedHashMap<String, Object>();
         params.put("dataset", datasetNames);
         params.put("workloadMode", workloadMode.name());
-        params.put("compactMode", compactMode.name());
-        params.put("numSegments", numSegments);
+        params.put("numPartitions", numPartitions);
         params.put("graphDegree", graphDegree);
         params.put("beamWidth", beamWidth);
-        params.put("segmentsDir", segmentsDir);
-        params.put("compactOutput", compactOutput);
-        params.put("scratchOutput", scratchOutput);
         params.put("storageDirectories", storageDirectories);
         params.put("storageClasses", storageClasses);
         params.put("splitDistribution", splitDistribution.name());
@@ -1262,18 +871,12 @@ public class CompactorBenchmark {
         params.put("parallelWriteThreads", parallelWriteThreads);
         params.put("vectorizationProvider", resolvedVectorizationProvider);
         params.put("datasetPortion", datasetPortion);
-        params.put("trainPQ", trainPQ);
-        params.put("pqPath", pqPath);
-        params.put("pqVectorsInputPath", pqVectorsInputPath);
-        params.put("pqVectorsOutputPath", pqVectorsOutputPath);
-        params.put("enableRecall", enableRecall);
         params.put("jfrPartitioning", jfrPartitioning);
         params.put("jfrCompacting", jfrCompacting);
         params.put("jfrObjectCount", jfrObjectCount);
         params.put("sysStatsEnabled", sysStatsEnabled);
         params.put("threadAllocTracking", threadAllocTracking);
         params.put("liveNodesRate", liveNodesRate);
-        params.put("preserveSegmentsForCompactOnly", preserveSegmentsForCompactOnly);
         return params;
     }
 

@@ -64,6 +64,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -414,19 +415,28 @@ public class Grid {
         }
 
         var outputPath = testDirectory.resolve("compact-graph");
-        //var compactor = new OnDiskGraphIndexCompactor(graphs, ForkJoinPool.commonPool());
-        //int globalOrdinal = 0;
-        //for(int n = 0; n < numSplits; ++n) {
-            //Map<Integer, Integer> map = new HashMap<>();
-            //for(int i = 0; i < splitSizes.get(n); ++i) {
-                //map.put(i, globalOrdinal++);
-            //}
-            //var remapper = new OrdinalMapper.MapMapper(map);
-            //compactor.setRemapper(graphs.get(n), remapper);
-        //}
-        //System.out.format("Compacting...%n");
-        //compactor.compact(outputPath, ds.getSimilarityFunction());
-        //System.out.format("done%n");
+
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSplits; n++) {
+            int size = splitSizes.get(n);
+            Map<Integer, Integer> map = new HashMap<>(size * 2);
+            for (int i = 0; i < size; i++) {
+                map.put(i, globalOrdinal++);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+
+            var lives = new FixedBitSet(size);
+            lives.set(0, size);
+            liveNodes.add(lives);
+        }
+
+        System.out.format("Compacting...%n");
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, null, ds.getSimilarityFunction(), null);
+        compactor.compact(outputPath);
+        System.out.format("done%n");
 
         var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(outputPath));
 

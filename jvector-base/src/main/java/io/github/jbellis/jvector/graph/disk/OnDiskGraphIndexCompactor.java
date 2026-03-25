@@ -25,7 +25,6 @@ import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
@@ -87,11 +86,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     private final List<OnDiskGraphIndex> sources;
     private final List<FixedBitSet> liveNodes;
+    private final List<Integer> numLiveNodesPerSource;
     private final List<OrdinalMapper> remappers;
-    private final List<Map.Entry<Integer, OnDiskGraphIndex.NodeAtLevel>> upperLayerNodeList;
     private final List<Integer> maxDegrees;
 
-    private final float neighborOverflow = 1.2f;
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
@@ -116,16 +114,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.executor = new ForkJoinPool(threads);
             this.ownsExecutor = true;
         }
-        this.taskWindowSize = threads * 2;
+        this.taskWindowSize = threads;
 
         this.sources = sources;
         this.remappers = remappers;
         this.liveNodes = liveNodes;
+        this.numLiveNodesPerSource = new ArrayList<>(this.sources.size());
         for (int s = 0; s < this.sources.size(); s++) {
-            this.numTotalNodes += this.liveNodes.get(s).cardinality();
+            int numLiveNodes = this.liveNodes.get(s).cardinality();
+            this.numTotalNodes += numLiveNodes;
+            this.numLiveNodesPerSource.add(numLiveNodes);
         }
 
-        this.upperLayerNodeList = new ArrayList<>();
         maxDegrees = this.sources.get(0).maxDegrees();
         dimension = this.sources.get(0).getDimension();
         for (var mapper : remappers) {
@@ -212,7 +212,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
-        int entryNode = findEntryNodeFromSources();
+        int entryNode = remappers.get(0).oldToNew(sources.get(0).getView().entryNode().node);
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
@@ -253,7 +253,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int level = 0; level < maxDegrees.size(); level++) {
             List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(2, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * 2);
-            int beamWidth = searchTopK * 2;
+            int beamWidth = Math.max(100, searchTopK * 2);
 
             if (level == 0) {
                 log.info("Compacting level 0 (base layer)");
@@ -266,7 +266,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         Scratch scratch = threadLocalScratch.get();
                         return computeBaseBatch(
                                 writer, bs, scratch,
-                                similarityFunction,
                                 fusedPQEnabled,
                                 compressedPrecision,
                                 searchTopK,
@@ -316,7 +315,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 bs,
                                 lvl,
                                 scratch,
-                                similarityFunction,
                                 fusedPQEnabled,
                                 compressedPrecision,
                                 searchTopK,
@@ -379,153 +377,271 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return batches;
     }
 
-    private List<WriteResult> computeBaseBatch(CompactWriter writer,
-                                               BatchSpec bs,
-                                               Scratch scratch,
-                                               VectorSimilarityFunction similarityFunction,
-                                               boolean fusedPQEnabled,
-                                               boolean compressedPrecision,
-                                               int searchTopK,
-                                               int beamWidth,
-                                               ProductQuantization pq) throws IOException {
-        CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
-        List<WriteResult> wrs = new ArrayList<>(bs.end - bs.start);
-        OnDiskGraphIndex.View sourceView = (OnDiskGraphIndex.View) scratch.gs[bs.sourceIdx].getView();
-        VectorFloat<?> tmpVec = scratch.tmpVec;
-        for (int i = bs.start; i < bs.end; ++i) {
-            int node = bs.nodes[i];
-            if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
-            VectorFloat<?> baseVec = scratch.baseVec;
-            int[] candSrc = scratch.candSrc;
-            int[] candNode = scratch.candNode;
-            float[] candScore = scratch.candScore;
-            sourceView.getVectorInto(node, baseVec, 0);
-            int candSize = 0;
+   private List<WriteResult> computeBaseBatch(CompactWriter writer,
+                                              BatchSpec bs,
+                                              Scratch scratch,
+                                              boolean fusedPQEnabled,
+                                              boolean compressedPrecision,
+                                              int searchTopK,
+                                              int beamWidth,
+                                              ProductQuantization pq) throws IOException {
 
-            for (int ss = 0; ss < sources.size(); ++ss) {
-                var indexAlive = liveNodes.get(ss);
-                var remapper = remappers.get(ss);
-                var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
-
-                if (bs.sourceIdx == ss) {
-                    var it = searchView.getNeighborsIterator(0, node);
-                    while (it.hasNext()) {
-                        int nb = it.nextInt();
-                        if (!indexAlive.get(nb)) continue;
-                        searchView.getVectorInto(nb, tmpVec, 0);
-                        float score = similarityFunction.compare(baseVec, tmpVec);
-                        candSrc[candSize] = ss;
-                        candNode[candSize] = nb;
-                        candScore[candSize] = score;
-                        candSize++;
-                    }
-                } else {
-                    SearchScoreProvider ssp = buildCrossSourceScoreProvider(
-                            compressedPrecision,
-                            searchView,
-                            remapper,
-                            baseVec,
-                            tmpVec,
-                            similarityFunction);
-                    SearchResult results = scratch.gs[ss].search(ssp, searchTopK, beamWidth, 0.f, 0.0f, indexAlive);
-                    for (SearchResult.NodeScore re : results.getNodes()) {
-                        candSrc[candSize] = ss;
-                        candNode[candSize] = re.node;
-                        if (fusedPQEnabled) {
-                            searchView.getVectorInto(re.node, tmpVec, 0);
-                            candScore[candSize] = similarityFunction.compare(baseVec, tmpVec);
-                        } else {
-                            candScore[candSize] = re.score;
-                        }
-                        candSize++;
-                    }
-                }
-            }
-
-            int[] order = IntStream.range(0, candSize).toArray();
-            sortOrderByScoreDesc(order, candScore, candSize);
-
-            SelectedVecCache selectedCache = scratch.selectedCache;
-            vdp.retainDiverse(candSrc, candNode, candScore, order, candSize, maxDegrees.get(0), selectedCache, tmpVec, scratch.gs);
-
-            for (int k = 0; k < selectedCache.size; k++) {
-                selectedCache.nodes[k] = remappers.get(selectedCache.sourceIdx[k]).oldToNew(selectedCache.nodes[k]);
-            }
-
-            int newOrdinal = remappers.get(bs.sourceIdx).oldToNew(node);
-            wrs.add(writer.writeInlineNodeRecord(newOrdinal, baseVec, selectedCache, scratch.pqCode));
-        }
-        return wrs;
-    }
-
-    private List<UpperLayerWriteResult> computeUpperBatchForLevel(BatchSpec bs,
-                                                                  int level,
-                                                                  Scratch scratch,
-                                                                  VectorSimilarityFunction similarityFunction,
-                                                                  boolean fusedPQEnabled,
-                                                                  boolean compressedPrecision,
-                                                                  int searchTopK,
-                                                                  int beamWidth,
-                                                                  ProductQuantization pq) {
-        CompactVamanaDiversityProvider vdp = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
-        List<UpperLayerWriteResult> results = new ArrayList<>(bs.end - bs.start);
-        var sourceView = (OnDiskGraphIndex.View) scratch.gs[bs.sourceIdx].getView();
-        int degree = maxDegrees.get(level);
+        List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
 
         for (int i = bs.start; i < bs.end; i++) {
             int node = bs.nodes[i];
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
-            var baseVec = scratch.baseVec;
-            var tmpVec = scratch.tmpVec;
-            var candSrc = scratch.candSrc;
-            var candNode = scratch.candNode;
-            var candScore = scratch.candScore;
 
-            sourceView.getVectorInto(node, baseVec, 0);
-            int candSize = 0;
+            out.add(processBaseNode(
+                    node,
+                    bs.sourceIdx,
+                    scratch,
+                    writer,
+                    fusedPQEnabled,
+                    compressedPrecision,
+                    searchTopK,
+                    beamWidth,
+                    pq
+            ));
+        }
 
-            for (int ss = 0; ss < sources.size(); ss++) {
-                var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
-                var indexAlive = liveNodes.get(ss);
+        return out;
+    }
 
-                if (bs.sourceIdx == ss) {
-                    var it = searchView.getNeighborsIterator(level, node);
-                    while (it.hasNext()) {
-                        int nb = it.nextInt();
-                        if (!indexAlive.get(nb)) continue;
-                        searchView.getVectorInto(nb, tmpVec, 0);
-                        float score = similarityFunction.compare(baseVec, tmpVec);
-                        candSrc[candSize] = ss;
-                        candNode[candSize] = nb;
-                        candScore[candSize] = score;
+    private List<UpperLayerWriteResult> computeUpperBatchForLevel(
+            BatchSpec bs,
+            int level,
+            Scratch scratch,
+            boolean fusedPQEnabled,
+            boolean compressedPrecision,
+            int searchTopK,
+            int beamWidth,
+            ProductQuantization pq
+    ) {
+        List<UpperLayerWriteResult> results =
+                new ArrayList<>(bs.end - bs.start);
+
+        for (int i = bs.start; i < bs.end; i++) {
+            int node = bs.nodes[i];
+
+            if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
+
+            results.add(processUpperNode(
+                    node,
+                    bs.sourceIdx,
+                    level,
+                    scratch,
+                    fusedPQEnabled,
+                    compressedPrecision,
+                    searchTopK,
+                    beamWidth,
+                    pq
+            ));
+        }
+
+        return results;
+    }
+
+    private WriteResult processBaseNode(
+            int node,
+            int sourceIdx,
+            Scratch scratch,
+            CompactWriter writer,
+            boolean fusedPQEnabled,
+            boolean compressedPrecision,
+            int searchTopK,
+            int beamWidth,
+            ProductQuantization pq
+    ) throws IOException {
+
+        var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        sourceView.getVectorInto(node, scratch.baseVec, 0);
+
+        int candSize = gatherCandidates(
+                node, 0, sourceIdx, scratch,
+                scratch.baseVec,
+                fusedPQEnabled,
+                compressedPrecision,
+                searchTopK,
+                beamWidth
+        );
+
+        int[] order = IntStream.range(0, candSize).toArray();
+        sortOrderByScoreDesc(order, scratch.candScore, candSize);
+
+        var selected = scratch.selectedCache;
+
+        new CompactVamanaDiversityProvider(similarityFunction, 1.2f)
+                .retainDiverse(
+                        scratch.candSrc,
+                        scratch.candNode,
+                        scratch.candScore,
+                        order,
+                        candSize,
+                        maxDegrees.get(0),
+                        selected,
+                        scratch.tmpVec,
+                        scratch.gs
+                );
+
+        // remap
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] =
+                    remappers.get(selected.sourceIdx[k])
+                            .oldToNew(selected.nodes[k]);
+        }
+
+        int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+
+        return writer.writeInlineNodeRecord(
+                newOrdinal,
+                scratch.baseVec,
+                selected,
+                scratch.pqCode
+        );
+    }
+
+    private UpperLayerWriteResult processUpperNode(
+            int node,
+            int sourceIdx,
+            int level,
+            Scratch scratch,
+            boolean fusedPQEnabled,
+            boolean compressedPrecision,
+            int searchTopK,
+            int beamWidth,
+            ProductQuantization pq
+    ) {
+        var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        sourceView.getVectorInto(node, scratch.baseVec, 0);
+
+        int candSize = gatherCandidates(
+                node,
+                level,
+                sourceIdx,
+                scratch,
+                scratch.baseVec,
+                fusedPQEnabled,
+                compressedPrecision,
+                searchTopK,
+                beamWidth
+        );
+
+        int[] order = IntStream.range(0, candSize).toArray();
+        sortOrderByScoreDesc(order, scratch.candScore, candSize);
+
+        var selected = scratch.selectedCache;
+
+        new CompactVamanaDiversityProvider(similarityFunction, 1.2f)
+                .retainDiverse(
+                        scratch.candSrc,
+                        scratch.candNode,
+                        scratch.candScore,
+                        order,
+                        candSize,
+                        maxDegrees.get(level),
+                        selected,
+                        scratch.tmpVec,
+                        scratch.gs
+                );
+
+        // remap
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] =
+                    remappers.get(selected.sourceIdx[k])
+                            .oldToNew(selected.nodes[k]);
+        }
+
+        int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+
+        ByteSequence<?> pqCode = maybeEncodePQ(
+                fusedPQEnabled,
+                level,
+                pq,
+                scratch
+        );
+
+        return new UpperLayerWriteResult(newOrdinal, selected, pqCode);
+    }
+
+    private ByteSequence<?> maybeEncodePQ(
+            boolean fusedPQEnabled,
+            int level,
+            ProductQuantization pq,
+            Scratch scratch
+    ) {
+        if (!fusedPQEnabled || level != 1) {
+            return null;
+        }
+
+        scratch.pqCode.zero();
+        pq.encodeTo(scratch.baseVec, scratch.pqCode);
+        return scratch.pqCode.copy();
+    }
+
+    private int gatherCandidates(
+            int node,
+            int level,
+            int sourceIdx,
+            Scratch scratch,
+            VectorFloat<?> baseVec,
+            boolean fusedPQEnabled,
+            boolean compressedPrecision,
+            int searchTopK,
+            int beamWidth
+    ) {
+        int candSize = 0;
+
+        for (int ss = 0; ss < sources.size(); ss++) {
+            var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
+            var indexAlive = liveNodes.get(ss);
+
+            if (ss == sourceIdx) {
+                var it = searchView.getNeighborsIterator(level, node);
+                while (it.hasNext()) {
+                    int nb = it.nextInt();
+                    if (!indexAlive.get(nb)) continue;
+
+                    searchView.getVectorInto(nb, scratch.tmpVec, 0);
+
+                    scratch.candSrc[candSize] = ss;
+                    scratch.candNode[candSize] = nb;
+                    scratch.candScore[candSize] =
+                            similarityFunction.compare(baseVec, scratch.tmpVec);
+                    candSize++;
+                }
+            } else {
+                SearchScoreProvider ssp = buildCrossSourceScoreProvider(
+                        compressedPrecision,
+                        sources.get(ss),
+                        searchView,
+                        baseVec,
+                        scratch.tmpVec,
+                        similarityFunction
+                );
+
+                if (level == 0) {
+                    SearchResult results = scratch.gs[ss].search(
+                            ssp, searchTopK, beamWidth, 0f, 0f, indexAlive
+                    );
+
+                    for (var r : results.getNodes()) {
+                        scratch.candSrc[candSize] = ss;
+                        scratch.candNode[candSize] = r.node;
+                        scratch.candScore[candSize] =
+                                fusedPQEnabled
+                                        ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                        : r.score;
                         candSize++;
                     }
-                }
-                else {
-
-                    SearchScoreProvider ssp = buildCrossSourceScoreProvider(
-                            compressedPrecision,
-                            searchView,
-                            remappers.get(ss),
-                            baseVec,
-                            tmpVec,
-                            similarityFunction
-                    );
-
-                    scratch.gs[ss].initializeInternal(
-                            ssp,
-                            searchView.entryNode(),
-                            Bits.ALL
-                    );
+                } else {
+                    scratch.gs[ss].initializeInternal(ssp, searchView.entryNode(), Bits.ALL);
 
                     scratch.gs[ss].searchOneLayer(
-                            ssp,
-                            searchTopK,
-                            0.0f,
-                            level,
-                            indexAlive
+                            ssp, searchTopK, 0f, level, indexAlive
                     );
 
+                    int prev_candSize = candSize;
                     candSize = appendApproximateResults(
                             scratch.gs[ss].approximateResults,
                             ss,
@@ -533,47 +649,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             candSize
                     );
 
-                    // rescore
-                    for(int c = 0; c < candSize; c++) {
-                        if (fusedPQEnabled) {
-                            searchView.getVectorInto(candNode[c], tmpVec, 0);
-                            candScore[c] = similarityFunction.compare(baseVec, tmpVec);
+                    if (fusedPQEnabled) {
+                        for (int i = prev_candSize; i < candSize; i++) {
+                            scratch.candScore[i] = rescore(
+                                    searchView,
+                                    scratch.candNode[i],
+                                    baseVec,
+                                    scratch.tmpVec
+                            );
                         }
                     }
                 }
             }
-
-            int[] order = IntStream.range(0, candSize).toArray();
-            sortOrderByScoreDesc(order, candScore, candSize);
-
-            SelectedVecCache selected = scratch.selectedCache;
-            vdp.retainDiverse(
-                    candSrc,
-                    candNode,
-                    candScore,
-                    order,
-                    candSize,
-                    degree,
-                    selected,
-                    tmpVec,
-                    scratch.gs
-            );
-
-            for (int k = 0; k < selected.size; k++) {
-                selected.nodes[k] = remappers.get(selected.sourceIdx[k]).oldToNew(selected.nodes[k]);
-            }
-
-            int newOrdinal = remappers.get(bs.sourceIdx).oldToNew(node);
-            ByteSequence<?> pqCode = null;
-            if (fusedPQEnabled && level == 1) {
-                scratch.pqCode.zero();
-                pq.encodeTo(scratch.baseVec, scratch.pqCode);
-                pqCode = scratch.pqCode;
-            }
-
-            results.add(new UpperLayerWriteResult(newOrdinal, selected, pqCode));
         }
-        return results;
+
+        return candSize;
+    }
+
+    private float rescore(OnDiskGraphIndex.View view,
+                         int node,
+                         VectorFloat<?> base,
+                         VectorFloat<?> tmp) {
+        view.getVectorInto(node, tmp, 0);
+        return similarityFunction.compare(base, tmp);
     }
 
     private <T> void runBatchesWithBackpressure(
@@ -646,64 +744,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return layerInfo;
     }
 
-    private int findEntryNodeFromSources() {
-        int maxLevel = sources.get(0).getMaxLevel();
-        for (int level = maxLevel; level >= 1; level--) {
-            for (int s = 0; s < sources.size(); s++) {
-                NodesIterator it = sources.get(s).getNodes(level);
-                FixedBitSet alive = liveNodes.get(s);
-                while (it.hasNext()) {
-                    int node = it.next();
-                    if (alive.get(node)) {
-                        return remappers.get(s).oldToNew(node);
-                    }
-                }
-            }
-        }
-        for (int s = 0; s < sources.size(); s++) {
-            NodesIterator it = sources.get(s).getNodes(0);
-            FixedBitSet alive = liveNodes.get(s);
-            while (it.hasNext()) {
-                int node = it.next();
-                if (alive.get(node)) {
-                    return remappers.get(s).oldToNew(node);
-                }
-            }
-        }
-        return 0;
-    }
-
     private ProductQuantization resolvePQFromSources(VectorSimilarityFunction similarityFunction) {
-        ProductQuantization pq;
+        log.info("Training PQ using balanced sampling across sources");
 
-        // method #1: get PQ codebook from the largest source
-//         int best = 0;
-//         int bestLive = -1;
-//         for (int i = 0; i < sources.size(); i++) {
-//             int c = liveNodes.get(i).cardinality();
-//             if (c > bestLive) {
-//                 bestLive = c;
-//                 best = i;
-//             }
-//         }
-//         FusedPQ fpq = (FusedPQ) sources.get(best).getFeatures().get(FeatureId.FUSED_PQ);
-//         pq = fpq.getPQ();
+        List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
 
-        // method #2: retrain PQ codebook
-        //if (upperLayerNodeList.size() > 10000) {
-        //    log.info("Retraining PQ codebook using upper layer nodes");
-        //    boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-        //    pq = ProductQuantization.compute(ulravv, pq.compressedVectorSize(), pq.getClusterCount(), center);
-        //}
+        log.info("Collected {} training samples", samples.size());
 
-        // method #3: refining
-        log.info("Refining PQ codebook");
-        FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-        pq = fpq.getPQ();
-        for (int i = 1; i < sources.size(); i++) {
-            pq.refine(sources.get(i).getView());
-        }
-        return pq;
+        RandomAccessVectorValues ravv =
+                new SampledRAVV(sources, samples, dimension);
+
+        FusedPQ fpq = (FusedPQ) sources.get(0)
+                .getFeatures().get(FeatureId.FUSED_PQ);
+
+        ProductQuantization basePQ = fpq.getPQ();
+
+        boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+
+        return ProductQuantization.compute(
+                ravv,
+                basePQ.getSubspaceCount(),
+                basePQ.getClusterCount(),
+                center
+        );
     }
 
     private boolean hasFusedPQ() {
@@ -711,14 +774,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
+                                                              OnDiskGraphIndex searchSource,
                                                               OnDiskGraphIndex.View searchView,
-                                                              OrdinalMapper remapper,
                                                               VectorFloat<?> baseVec,
                                                               VectorFloat<?> tmpVec,
                                                               VectorSimilarityFunction similarityFunction) {
         if (compressedPrecision) {
-            return new DefaultSearchScoreProvider(
-                    searchView.approximateScoreFunctionFor(baseVec, similarityFunction));
+            ScoreFunction.ExactScoreFunction reranker =
+                node2 -> {
+                    searchView.getVectorInto(node2, tmpVec, 0);
+                    return similarityFunction.compare(baseVec, tmpVec);
+                };
+            var asf = ((FusedPQ) searchSource.getFeatures().get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(baseVec, similarityFunction, searchView, reranker);
+
+            return new DefaultSearchScoreProvider(asf);
         }
 
         var sf = new ScoreFunction.ExactScoreFunction() {
@@ -762,7 +831,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // upperLayerNodeList: List of Map.Entry<OnDiskGraphIndex, NodeAtLevel>
         // Each entry: OH + 2*REF, NodeAtLevel: OH + int + int
         long entrySize = OH + 2L * REF + OH + Integer.BYTES + Integer.BYTES;
-        size += OH + REF + (long) upperLayerNodeList.size() * entrySize;
+        size += OH + REF;
 
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
@@ -773,6 +842,118 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         size += OH + REF;
 
         return size;
+    }
+
+    static final class SampleRef {
+        final int source;
+        final int node;
+
+        SampleRef(int source, int node) {
+            this.source = source;
+            this.node = node;
+        }
+    }
+
+    private List<SampleRef> sampleBalanced(int totalSamples) {
+        final int MIN_PER_SOURCE = Math.min(1000, totalSamples / sources.size());
+
+        int[] quota = new int[sources.size()];
+        int assigned = 0;
+
+        // proportional allocation
+        for (int s = 0; s < sources.size(); s++) {
+            quota[s] = Math.max(
+                    MIN_PER_SOURCE,
+                    (int) ((long) totalSamples * numLiveNodesPerSource.get(s) / numTotalNodes)
+            );
+            assigned += quota[s];
+        }
+
+        // normalize down
+        while (assigned > totalSamples) {
+            for (int s = 0; s < sources.size() && assigned > totalSamples; s++) {
+                if (quota[s] > MIN_PER_SOURCE) {
+                    quota[s]--;
+                    assigned--;
+                }
+            }
+        }
+
+        // normalize up
+        while (assigned < totalSamples) {
+            for (int s = 0; s < sources.size() && assigned < totalSamples; s++) {
+                quota[s]++;
+                assigned++;
+            }
+        }
+
+        List<SampleRef> samples = new ArrayList<>(totalSamples);
+        ThreadLocalRandom rand = ThreadLocalRandom.current();
+
+        for (int s = 0; s < sources.size(); s++) {
+            FixedBitSet live = liveNodes.get(s);
+            int max = live.length();
+
+            int count = 0;
+            while (count < quota[s]) {
+                int node = rand.nextInt(max);
+                if (live.get(node)) {
+                    samples.add(new SampleRef(s, node));
+                    count++;
+                }
+            }
+        }
+
+        return samples;
+    }
+
+    static final class SampledRAVV implements RandomAccessVectorValues {
+
+        private final List<OnDiskGraphIndex> sources;
+        private final List<SampleRef> samples;
+        private final int dimension;
+
+        SampledRAVV(List<OnDiskGraphIndex> sources,
+                    List<SampleRef> samples,
+                    int dimension) {
+            this.sources = sources;
+            this.samples = samples;
+            this.dimension = dimension;
+        }
+
+        @Override
+        public int size() {
+            return samples.size();
+        }
+
+        @Override
+        public int dimension() {
+            return dimension;
+        }
+
+        @Override
+        public VectorFloat<?> getVector(int nodeId) {
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+            getVectorInto(nodeId, vec, 0);
+            return vec;
+        }
+
+        @Override
+        public void getVectorInto(int i, VectorFloat<?> dest, int offset) {
+            SampleRef ref = samples.get(i);
+            var view = (OnDiskGraphIndex.View) sources.get(ref.source).getView();
+            view.getVectorInto(ref.node, dest, offset);
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return false;
+        }
+
+        @Override
+        public RandomAccessVectorValues copy() {
+            return null;
+        }
     }
 
     static void sortOrderByScoreDesc(int[] order, float[] score, int size) {
@@ -941,7 +1122,6 @@ final class CompactWriter implements AutoCloseable {
     private static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
 
     private final RandomAccessWriter writer;
-    private final ImmutableGraphIndex upperLayerGraph;
     private final int recordSize;
     private final long startOffset;
     private final int headerSize;
@@ -964,75 +1144,6 @@ final class CompactWriter implements AutoCloseable {
                   int maxOrdinal,
                   int numBaseLayerNodes,
                   long startOffset,
-                  ImmutableGraphIndex upperLayerGraph,
-                  int dimension,
-                  ProductQuantization pq,
-                  int pqLength,
-                  boolean fusedPQEnabled)
-            throws IOException {
-        this.fusedPQEnabled = fusedPQEnabled;
-        this.version = OnDiskGraphIndex.CURRENT_VERSION;
-        this.outputPath = outputPath;
-        this.writer = new BufferedRandomAccessWriter(outputPath);
-        this.startOffset = startOffset;
-        this.upperLayerGraph = upperLayerGraph;
-        this.baseDegree = upperLayerGraph.getDegree(0);
-        this.pq = pq;
-        this.maxOrdinal = maxOrdinal;
-        this.level1FeatureRecords = new ArrayList<>();
-
-        Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
-        InlineVectors inlineVectorFeature = new InlineVectors(dimension);
-        featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
-        if(fusedPQEnabled) {
-            this.fusedPQFeature = new FusedPQ(upperLayerGraph.maxDegree(), pq);
-            featureMap.put(FeatureId.FUSED_PQ, this.fusedPQFeature);
-        }
-        else {
-            this.fusedPQFeature = null;
-        }
-        int rsize = Integer.BYTES
-                + inlineVectorFeature.featureSize()
-                + Integer.BYTES
-                + baseDegree * Integer.BYTES;
-
-        if(fusedPQEnabled) {
-            rsize += fusedPQFeature.featureSize();
-        }
-        this.recordSize = rsize;
-
-        this.configuredLayerInfo = IntStream.rangeClosed(0, upperLayerGraph.getMaxLevel())
-                .mapToObj(i -> new CommonHeader.LayerInfo(upperLayerGraph.size(i), upperLayerGraph.getDegree(i)))
-                .collect(Collectors.toList());
-        this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
-        this.configuredLayerDegrees = IntStream.rangeClosed(0, upperLayerGraph.getMaxLevel())
-                .mapToObj(upperLayerGraph::getDegree)
-                .collect(Collectors.toList());
-
-        var commonHeader = new CommonHeader(this.version,
-                dimension,
-                upperLayerGraph.getView().entryNode().node,
-                this.configuredLayerInfo,
-                this.maxOrdinal + 1);
-        this.header = new Header(commonHeader, featureMap);
-        this.headerSize = header.size();
-
-        this.bufferPerThread = ThreadLocal.withInitial(() -> {
-            ByteBuffer buffer = ByteBuffer.allocate(recordSize);
-            buffer.order(ByteOrder.BIG_ENDIAN);
-            return buffer;
-        });
-        this.zeroPQ = ThreadLocal.withInitial(() -> {
-            var vec = vectorTypeSupport.createByteSequence(pqLength > 0 ? pqLength : 1);
-            vec.zero();
-            return vec;
-        });
-    }
-
-    CompactWriter(Path outputPath,
-                  int maxOrdinal,
-                  int numBaseLayerNodes,
-                  long startOffset,
                   List<CommonHeader.LayerInfo> layerInfo,
                   int entryNode,
                   int dimension,
@@ -1046,7 +1157,6 @@ final class CompactWriter implements AutoCloseable {
         this.outputPath = outputPath;
         this.writer = new BufferedRandomAccessWriter(outputPath);
         this.startOffset = startOffset;
-        this.upperLayerGraph = null;
         this.configuredLayerInfo = new ArrayList<>(layerInfo);
         this.configuredLayerDegrees = new ArrayList<>(layerDegrees);
         this.baseDegree = layerDegrees.get(0);
@@ -1138,10 +1248,6 @@ final class CompactWriter implements AutoCloseable {
         final var endOfGraphPosition = writer.position();
         writer.seek(endOfGraphPosition);
         writer.flush();
-        if (upperLayerGraph != null) {
-            var view = upperLayerGraph.getView();
-            view.close();
-        }
     }
 
 
@@ -1244,10 +1350,6 @@ final class SelectedVecCache {
     }
 
     void reset() {
-        Arrays.fill(views, 0, size, null);
-        for (VectorFloat<?> vec : vecs) {
-            vec.zero();
-        }
         size = 0;
     }
 
@@ -1256,7 +1358,7 @@ final class SelectedVecCache {
         views[size] = view;
         nodes[size] = node;
         scores[size] = score;
-        vecs[size] = vec.copy();
+        vecs[size].copyFrom(vec, 0, 0, vec.length());
         size++;
     }
 }
