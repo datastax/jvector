@@ -588,7 +588,20 @@ public class CompactorBenchmark {
                     i + 1, numPartitions, vectorsPerSource.size(), outputPath.toAbsolutePath());
 
             var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, dimension);
-            BuildScoreProvider bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
+            BuildScoreProvider bspPerSource;
+            ProductQuantization pq = null;
+            PQVectors pqVectors = null;
+            // TODO: should we build partitions by FUSEDPQ?
+            if (indexPrecision == IndexPrecision.FUSEDPQ) {
+                boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+                pq = ProductQuantization.compute(ravvPerSource, dimension / 8, 256, centerData);
+                pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
+                bspPerSource = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+            }
+            else {
+                bspPerSource = BuildScoreProvider.randomAccessScoreProvider(ravvPerSource, similarityFunction);
+            }
+
             var builder = new GraphIndexBuilder(bspPerSource,
                     dimension,
                     graphDegree, beamWidth, 1.2f, 1.2f, true);
@@ -604,12 +617,8 @@ public class CompactorBenchmark {
 
             writerBuilder.with(new InlineVectors(dimension));
 
-            ProductQuantization pq = null;
-            PQVectors pqVectors = null;
+
             if (indexPrecision == IndexPrecision.FUSEDPQ) {
-                boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-                pq = ProductQuantization.compute(ravvPerSource, dimension / 8, 256, centerData);
-                pqVectors = (PQVectors) pq.encodeAll(ravvPerSource);
                 writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
             }
 
@@ -684,7 +693,18 @@ public class CompactorBenchmark {
 
         int dimension = baseVectors.get(0).length();
         var full = new ListRandomAccessVectorValues(baseVectors, dimension);
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(full, similarityFunction);
+        ProductQuantization pq = null;
+        PQVectors pqVectors = null;
+        BuildScoreProvider bsp;
+        if (indexPrecision == IndexPrecision.FUSEDPQ) {
+            boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+            pq = ProductQuantization.compute(full, dimension / 8, 256, centerData);
+            pqVectors = (PQVectors) pq.encodeAll(full);
+            bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+        }
+        else {
+            bsp = BuildScoreProvider.randomAccessScoreProvider(full, similarityFunction);
+        }
 
         log.info("Building from scratch: vectors={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={} -> {}",
                 full.size(), dimension, similarityFunction,
@@ -702,12 +722,15 @@ public class CompactorBenchmark {
 
         writerBuilder.with(new InlineVectors(dimension));
 
-        ProductQuantization pq = null;
-        PQVectors pqVectors = null;
+//        ProductQuantization pq = null;
+//        PQVectors pqVectors = null;
+//        if (indexPrecision == IndexPrecision.FUSEDPQ) {
+//            boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
+//            pq = ProductQuantization.compute(full, dimension / 8, 256, centerData);
+//            pqVectors = (PQVectors) pq.encodeAll(full);
+//            writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+//        }
         if (indexPrecision == IndexPrecision.FUSEDPQ) {
-            boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-            pq = ProductQuantization.compute(full, dimension / 8, 256, centerData);
-            pqVectors = (PQVectors) pq.encodeAll(full);
             writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
         }
 
