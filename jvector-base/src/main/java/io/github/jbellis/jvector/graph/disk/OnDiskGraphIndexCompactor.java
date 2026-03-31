@@ -70,6 +70,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
 
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     */
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
@@ -106,6 +110,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.similarityFunction = similarityFunction;
     }
 
+    /**
+     * Validates that all source indexes have compatible configurations and required features
+     * before attempting compaction. Ensures consistent dimensions, max degrees, hierarchical
+     * settings, and feature sets across all sources.
+     */
     private void checkBeforeCompact(
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
@@ -169,6 +178,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Main compaction entry point. Merges all source indexes into a single output index at the
+     * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
+     */
     public void compact(Path outputPath) throws FileNotFoundException {
         boolean fusedPQEnabled = hasFusedPQ();
         boolean compressedPrecision = fusedPQEnabled;
@@ -200,6 +213,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Compacts all hierarchical levels of the graph, processing each level in batches.
+     * For level 0 (base layer), writes inline vectors and neighbors. For upper layers,
+     * writes only graph structure and optional PQ codes.
+     */
     private void compactLevels(CompactWriter writer,
                                  VectorSimilarityFunction similarityFunction,
                                  boolean fusedPQEnabled,
@@ -323,6 +341,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         threadLocalScratch.remove();
     }
 
+    /**
+     * Divides nodes at a given level across all source indexes into processing batches
+     * for parallel execution. Each batch contains a subset of nodes from one source.
+     */
     private List<BatchSpec> buildBatches(int level) {
         List<BatchSpec> batches = new ArrayList<>();
 
@@ -349,6 +371,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return batches;
     }
 
+    /**
+     * Processes a batch of base layer (level 0) nodes from one source index. For each live node,
+     * gathers candidates from all sources, applies diversity selection, and creates write results
+     * containing the full node record data.
+     */
    private List<WriteResult> computeBaseBatch(CompactWriter writer,
                                               BatchSpec bs,
                                               Scratch scratch,
@@ -380,6 +407,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return out;
     }
 
+    /**
+     * Processes a batch of upper layer nodes from one source index. Similar to base layer
+     * processing but returns only ordinal, neighbors, and optional PQ code (no inline vectors).
+     */
     private List<UpperLayerWriteResult> computeUpperBatchForLevel(
             BatchSpec bs,
             int level,
@@ -414,6 +445,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return results;
     }
 
+    /**
+     * Processes a single base layer node: retrieves its vector, gathers diverse candidates from
+     * all sources, selects best neighbors using diversity criteria, remaps ordinals, and returns
+     * the complete write result for this node.
+     */
     private WriteResult processBaseNode(
             int node,
             int sourceIdx,
@@ -473,6 +509,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
     }
 
+    /**
+     * Processes a single upper layer node: similar to base layer processing but only returns
+     * graph structure (ordinal and neighbors) and optional PQ encoding for level 1.
+     */
     private UpperLayerWriteResult processUpperNode(
             int node,
             int sourceIdx,
@@ -536,6 +576,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return new UpperLayerWriteResult(newOrdinal, selected, pqCode);
     }
 
+    /**
+     * Encodes a vector using Product Quantization if enabled and the level is 1.
+     * Returns null otherwise.
+     */
     private ByteSequence<?> maybeEncodePQ(
             boolean fusedPQEnabled,
             int level,
@@ -551,6 +595,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return scratch.pqCode.copy();
     }
 
+    /**
+     * Collects neighbor candidates for a node from all source indexes. For the source containing
+     * the node, uses existing neighbors; for other sources, performs graph search. Returns the
+     * total number of candidates gathered.
+     */
     private int gatherCandidates(
             int node,
             int level,
@@ -638,6 +687,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return candSize;
     }
 
+    /**
+     * Recomputes exact similarity score between the base vector and a node's vector,
+     * used to refine approximate PQ-based search results.
+     */
     private float rescore(OnDiskGraphIndex.View view,
                          int node,
                          VectorFloat<?> base,
@@ -646,6 +699,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return similarityFunction.compare(base, tmp);
     }
 
+    /**
+     * Executes batches with controlled concurrency using a sliding window approach. Prevents
+     * overwhelming memory by limiting the number of in-flight tasks while maintaining high
+     * throughput via the completion service.
+     */
     private <T> void runBatchesWithBackpressure(
             List<BatchSpec> batches,
             ExecutorCompletionService<List<T>> ecs,
@@ -681,6 +739,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Appends search results from a NodeQueue to the candidate arrays, returning the updated
+     * candidate count.
+     */
     private int appendApproximateResults(NodeQueue queue,
                                          int sourceIdx,
                                          Scratch scratch,
@@ -698,6 +760,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return idx[0];
     }
 
+    /**
+     * Computes layer metadata for the compacted graph by counting live nodes at each level
+     * across all source indexes.
+     */
     private List<CommonHeader.LayerInfo> computeLayerInfoFromSources() {
         int maxLevel = sources.get(0).getMaxLevel();
         List<CommonHeader.LayerInfo> layerInfo = new ArrayList<>(maxLevel + 1);
@@ -716,6 +782,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return layerInfo;
     }
 
+    /**
+     * Trains a new Product Quantization codebook using balanced sampling across all source
+     * indexes. This ensures the PQ is optimized for the combined dataset.
+     */
     private ProductQuantization resolvePQFromSources(VectorSimilarityFunction similarityFunction) {
         log.info("Training PQ using balanced sampling across sources");
 
@@ -741,10 +811,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
     }
 
+    /**
+     * Checks if the source indexes have FusedPQ feature enabled.
+     */
     private boolean hasFusedPQ() {
         return sources.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ);
     }
 
+    /**
+     * Creates a score provider for searching across different source indexes. Uses approximate
+     * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
+     */
     private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
                                                               OnDiskGraphIndex searchSource,
                                                               OnDiskGraphIndex.View searchView,
@@ -772,6 +849,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return new DefaultSearchScoreProvider(sf);
     }
 
+    /**
+     * Estimates the RAM usage of this compactor instance. Note: marked as outdated.
+     */
     // TODO: outdated
     @Override
     public long ramBytesUsed() {
@@ -826,6 +906,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Performs balanced sampling across all source indexes to ensure proportional representation.
+     * Guarantees minimum samples per source while respecting total sample budget.
+     */
     private List<SampleRef> sampleBalanced(int totalSamples) {
 
         //if total live nodes <= totalSamples, return ALL
@@ -897,12 +981,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return samples;
     }
 
+    /**
+     * Random access vector values implementation backed by sampled references from source indexes.
+     * Used for PQ training on a representative subset of the compacted data.
+     */
     private static final class SampledRAVV implements RandomAccessVectorValues {
 
         private final List<OnDiskGraphIndex> sources;
         private final List<SampleRef> samples;
         private final int dimension;
 
+        /**
+         * Constructs a SampledRAVV wrapping the given samples.
+         */
         SampledRAVV(List<OnDiskGraphIndex> sources,
                     List<SampleRef> samples,
                     int dimension) {
@@ -911,16 +1002,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.dimension = dimension;
         }
 
+        /**
+         * Returns the total number of sampled vectors.
+         */
         @Override
         public int size() {
             return samples.size();
         }
 
+        /**
+         * Returns the vector dimension.
+         */
         @Override
         public int dimension() {
             return dimension;
         }
 
+        /**
+         * Retrieves a vector by its sample index (not original node ID).
+         */
         @Override
         public VectorFloat<?> getVector(int nodeId) {
             VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
@@ -928,6 +1028,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             return vec;
         }
 
+        /**
+         * Loads a sampled vector into the destination buffer by resolving the sample reference.
+         */
         @Override
         public void getVectorInto(int i, VectorFloat<?> dest, int offset) {
             SampleRef ref = samples.get(i);
@@ -935,21 +1038,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             view.getVectorInto(ref.node, dest, offset);
         }
 
+        /**
+         * Indicates whether returned vectors share underlying storage.
+         */
         @Override
         public boolean isValueShared() {
             return false;
         }
 
+        /**
+         * Returns a copy of this RAVV instance (not implemented).
+         */
         @Override
         public RandomAccessVectorValues copy() {
             return null;
         }
     }
 
+    /**
+     * Sorts an index array by descending score values using quicksort.
+     */
     private static void sortOrderByScoreDesc(int[] order, float[] score, int size) {
         quicksort(order, score, 0, size - 1);
     }
 
+    /**
+     * Tail-recursive quicksort implementation for sorting by score in descending order.
+     */
     private static void quicksort(int[] order, float[] score, int lo, int hi) {
         while (lo < hi) {
             int p = partition(order, score, lo, hi);
@@ -964,6 +1079,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Partitions the order array for quicksort using descending score comparison.
+     */
     private static int partition(int[] order, float[] score, int lo, int hi) {
         float pivot = score[order[hi]];
         int i = lo;
@@ -1010,6 +1128,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     };
 
 
+    /**
+     * Thread-local scratch space containing reusable buffers and search state for processing nodes.
+     */
     private static final class Scratch implements AutoCloseable {
 
         final int[] candSrc, candNode;
@@ -1019,6 +1140,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
 
+        /**
+         * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
+         */
         Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, ProductQuantization pq) {
             this.candSrc = new int[maxCandidateSize];
             this.candNode = new int[maxCandidateSize];
@@ -1035,6 +1159,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        /**
+         * Closes all graph searchers and resets the cache.
+         */
         @Override
         public void close() throws IOException {
             for (var s : gs) s.close();
@@ -1042,6 +1169,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Specification for a batch of nodes to be processed from one source index.
+     */
     private static final class BatchSpec {
         final int sourceIdx;
         final int[] nodes;              // materialized node ids for this source
@@ -1056,6 +1186,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Provides Vamana-style diversity filtering for neighbor selection during compaction.
+     */
     private static final class CompactVamanaDiversityProvider {
         /**
          * the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more
@@ -1076,6 +1209,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         /**
+         * Selects diverse neighbors from candidates using gradually increasing alpha threshold.
          * Update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
          *
@@ -1116,8 +1250,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             return shortEdges;
         }
 
-        // is the candidate node with the given score closer to the base node than it is to any of the
-        // already-selected neighbors
+        /**
+         * Checks if a candidate is diverse enough by ensuring it's closer to the base node
+         * than to any already-selected neighbor (scaled by alpha threshold).
+         */
         private boolean isDiverse(OnDiskGraphIndex.View cView, int cNode, VectorFloat<?> cVec, float cScore, float alpha, SelectedVecCache selectedCache) {
             for (int j = 0; j < selectedCache.size; j++) {
                 if (selectedCache.views[j] == cView && selectedCache.nodes[j] == cNode) {
@@ -1132,6 +1268,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     }
 
+    /**
+     * Handles writing the compacted graph index to disk, managing header, node records,
+     * upper layers, and footer in the on-disk format.
+     */
     private static final class CompactWriter implements AutoCloseable {
 
         private static final int FOOTER_MAGIC = 0x4a564244;
@@ -1157,6 +1297,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         private final List<Integer> configuredLayerDegrees;
         private final List<UpperLayerFeatureRecord> level1FeatureRecords;
 
+        /**
+         * Constructs a CompactWriter that will write the compacted index to the specified path.
+         */
         CompactWriter(Path outputPath,
                       int maxOrdinal,
                       int numBaseLayerNodes,
@@ -1214,6 +1357,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             });
         }
 
+        /**
+         * Writes the graph header at the start of the file.
+         */
         public void writeHeader() throws IOException {
             writer.seek(startOffset);
             header.write(writer);
@@ -1221,6 +1367,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             writer.flush();
         }
 
+        /**
+         * Writes the footer containing upper layer features (if any), header copy, and magic number.
+         */
         void writeFooter() throws IOException {
             if (fusedPQEnabled && version == 6 && !level1FeatureRecords.isEmpty()) {
                 for (UpperLayerFeatureRecord record : level1FeatureRecords) {
@@ -1236,15 +1385,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             assert writer.position() == expectedPosition : String.format("%d != %d", writer.position(), expectedPosition);
         }
 
+        /**
+         * Positions the writer after the inline (base layer) records section.
+         */
         public void offsetAfterInline() throws IOException {
             long offset = startOffset + headerSize + (long) (maxOrdinal + 1) * recordSize;
             writer.seek(offset);
         }
 
+        /**
+         * Returns the output file path.
+         */
         public Path getOutputPath() {
             return outputPath;
         }
 
+        /**
+         * Writes an upper layer node's graph structure (ordinal and neighbors).
+         * Collects level 1 PQ codes for later writing in the footer.
+         */
         public void writeUpperLayerNode(int level, int ordinal, int[] neighbors, ByteSequence<?> level1PqCode) throws IOException {
             writer.writeInt(ordinal);
             writer.writeInt(neighbors.length);
@@ -1261,13 +1420,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        /**
+         * Flushes and closes the writer.
+         */
         public void close() throws IOException {
             final var endOfGraphPosition = writer.position();
             writer.seek(endOfGraphPosition);
             writer.flush();
         }
 
-
+        /**
+         * Constructs and returns a write result for a base layer node containing the full record:
+         * ordinal, inline vector, PQ codes for neighbors, and neighbor list.
+         */
         public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode) throws IOException
         {
             var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());
@@ -1344,6 +1509,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Cache for storing selected diverse neighbors along with their metadata and vector copies.
+     */
     private static final class SelectedVecCache {
         int[] sourceIdx;
         OnDiskGraphIndex.View[] views;
@@ -1352,6 +1520,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         VectorFloat<?>[] vecs;
         int size;
 
+        /**
+         * Constructs a cache with the specified capacity and vector dimension.
+         */
         SelectedVecCache(int capacity, int dimension) {
             sourceIdx = new int[capacity];
             views = new OnDiskGraphIndex.View[capacity];
@@ -1364,10 +1535,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             size = 0;
         }
 
+        /**
+         * Resets the cache for reuse.
+         */
         void reset() {
             size = 0;
         }
 
+        /**
+         * Adds a selected neighbor to the cache, copying its vector.
+         */
         void add(int source, OnDiskGraphIndex.View view, int node, float score, VectorFloat<?> vec) {
             sourceIdx[size] = source;
             views[size] = view;
@@ -1378,6 +1555,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Writer for standalone PQ vectors file. Not currently used in compaction but provided
+     * for future support of separate PQ storage.
+     */
     private static final class PQVectorsWriter implements AutoCloseable {
 
         private final RandomAccessWriter out;
@@ -1424,6 +1605,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             out.flush();
         }
 
+        /**
+         * Pre-allocates the chunk region with zeros to match PQVectors file format.
+         */
         private void writeZeroChunkRegion() throws IOException {
             // We can reuse a single ByteSequence for full chunks and one for last chunk to avoid big allocations.
             ByteSequence<?> fullZero = vectorTypeSupport.createByteSequence(layout.fullChunkBytes);
@@ -1441,6 +1625,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         /**
+         * Writes a PQ code for a specific ordinal at the appropriate offset in the chunk region.
          * Random-access write the PQ code for a given ordinal into the chunk region.
          * This does NOT write the codebook; codebook is written once in the constructor.
          *
@@ -1466,18 +1651,30 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             vectorTypeSupport.writeByteSequence(out, code);
         }
 
+        /**
+         * Returns the file offset where PQ chunk data begins.
+         */
         public long dataStartOffset() {
             return dataStartOffset;
         }
 
+        /**
+         * Returns the total number of vectors in this PQ file.
+         */
         public int vectorCount() {
             return vectorCount;
         }
 
+        /**
+         * Returns the number of subspaces in the PQ encoding.
+         */
         public int subspaceCount() {
             return subspaceCount;
         }
 
+        /**
+         * Flushes and closes the PQ vectors file.
+         */
         @Override
 
         public void close() throws IOException {
