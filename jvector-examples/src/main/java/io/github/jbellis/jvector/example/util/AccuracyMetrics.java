@@ -65,13 +65,20 @@ public class AccuracyMetrics {
         // Load factor is 0.75, so sized to kGT / 0.75.
         Set<Integer> gtSet = new HashSet<>((int) (kGT / 0.75f) + 1);
         for (int i = 0; i < kGT; i++) {
-            gtSet.add(gt.get(i));
+            int ord = gt.get(i);
+            if (!gtSet.add(ord)) {
+                throw new IllegalArgumentException("Duplicate ground truth ordinal in top-" + kGT + ": " + ord);
+            }
         }
 
-        // Manual primitive loop for speed (no Stream setup).
+        Set<Integer> seenRetrieved = new HashSet<>((int) (kRetrieved / 0.75f) + 1);
         int hits = 0;
         for (int i = 0; i < kRetrieved; i++) {
-            if (gtSet.contains(nodes[i].node)) {
+            int p = nodes[i].node;
+            if (!seenRetrieved.add(p)) {
+                throw new IllegalArgumentException("Duplicate retrieved ordinal in top-" + kRetrieved + ": " + p);
+            }
+            if (gtSet.contains(p)) {
                 hits++;
             }
         }
@@ -99,17 +106,21 @@ public class AccuracyMetrics {
         // Sized hashset used for performance.
         Set<Integer> gtSet = new HashSet<>((int) (k / 0.75f) + 1);
         for (int i = 0; i < k; i++) {
-            gtSet.add(gt.get(i));
+            int ord = gt.get(i);
+            if (!gtSet.add(ord)) {
+                throw new IllegalArgumentException("Duplicate ground truth ordinal in top-" + k + ": " + ord);
+            }
         }
 
-        // Handles potential duplicates in O(1).
-        Set<Integer> seen = new HashSet<>((int) (k / 0.75f) + 1);
-
+        Set<Integer> seenRetrieved = new HashSet<>((int) (k / 0.75f) + 1);
         double score = 0.;
         int hits = 0;
         for (int i = 0; i < k; i++) {
             int p = nodes[i].node;
-            if (gtSet.contains(p) && seen.add(p)) {
+            if (!seenRetrieved.add(p)) {
+                throw new IllegalArgumentException("Duplicate retrieved ordinal in top-" + k + ": " + p);
+            }
+            if (gtSet.contains(p)) {
                 hits++;
                 score += (double) hits / (i + 1);
             }
