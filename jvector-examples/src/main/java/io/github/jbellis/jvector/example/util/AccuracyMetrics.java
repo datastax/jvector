@@ -65,7 +65,10 @@ public class AccuracyMetrics {
         // Load factor is 0.75, so sized to kGT / 0.75.
         Set<Integer> gtSet = new HashSet<>((int) (kGT / 0.75f) + 1);
         for (int i = 0; i < kGT; i++) {
-            int ord = gt.get(i);
+            Integer ord = gt.get(i);
+            if (ord == null) {
+                throw new IllegalArgumentException("Null ground truth ordinal in top-" + kGT + " at index " + i);
+            }
             if (!gtSet.add(ord)) {
                 throw new IllegalArgumentException("Duplicate ground truth ordinal in top-" + kGT + ": " + ord);
             }
@@ -106,7 +109,10 @@ public class AccuracyMetrics {
         // Sized hashset used for performance.
         Set<Integer> gtSet = new HashSet<>((int) (k / 0.75f) + 1);
         for (int i = 0; i < k; i++) {
-            int ord = gt.get(i);
+            Integer ord = gt.get(i);
+            if (ord == null) {
+                throw new IllegalArgumentException("Null ground truth ordinal in top-" + k + " at index " + i);
+            }
             if (!gtSet.add(ord)) {
                 throw new IllegalArgumentException("Duplicate ground truth ordinal in top-" + k + ": " + ord);
             }
