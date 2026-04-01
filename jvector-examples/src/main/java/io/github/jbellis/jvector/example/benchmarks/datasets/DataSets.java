@@ -39,6 +39,7 @@ public class DataSets {
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
         add(new DataSetLoaderHDF5());
         add(new DataSetLoaderMFD());
+        add(new DataSetLoaderVectordata(true));
     }};
 
     /// Loads a dataset by name using the {@link #defaultLoaders}.

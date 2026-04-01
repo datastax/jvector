@@ -161,6 +161,12 @@
             <version>5.11.4</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>datatools-vectordata</artifactId>
+            <version>0.1.23</version>
+        </dependency>
+
     </dependencies>
     <profiles>
         <profile>
