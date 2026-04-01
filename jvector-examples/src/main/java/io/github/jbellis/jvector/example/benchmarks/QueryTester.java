@@ -16,12 +16,13 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 
 /**
  * Orchestrates running a set of QueryBenchmark instances
@@ -29,12 +30,33 @@ import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
  */
 public class QueryTester {
     private final List<QueryBenchmark> benchmarks;
+    private final Path monitoredDirectory;
+    private final String datasetName;
 
     /**
      * @param benchmarks the benchmarks to run, in the order provided
      */
     public QueryTester(List<QueryBenchmark> benchmarks) {
+        this(benchmarks, null, null);
+    }
+
+    /**
+     * @param benchmarks the benchmarks to run, in the order provided
+     * @param monitoredDirectory optional directory to monitor for disk usage
+     */
+    public QueryTester(List<QueryBenchmark> benchmarks, Path monitoredDirectory) {
+        this(benchmarks, monitoredDirectory, null);
+    }
+
+    /**
+     * @param benchmarks the benchmarks to run, in the order provided
+     * @param monitoredDirectory optional directory to monitor for disk usage
+     * @param datasetName optional dataset name for retrieving build time
+     */
+    public QueryTester(List<QueryBenchmark> benchmarks, Path monitoredDirectory, String datasetName) {
         this.benchmarks = benchmarks;
+        this.monitoredDirectory = monitoredDirectory;
+        this.datasetName = datasetName;
     }
 
     /**
@@ -56,12 +78,52 @@ public class QueryTester {
 
         List<Metric> results = new ArrayList<>();
 
-        for (var benchmark : benchmarks) {
-            var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
-            results.addAll(metrics);
-        }
+        // Capture memory and disk usage before/after running queries
+        // Use NONE level to suppress logging output that would break the table
+        try (var diagnostics = new BenchmarkDiagnostics(
+                io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel.NONE)) {
 
+            if (monitoredDirectory != null) {
+                diagnostics.setMonitoredDirectory(monitoredDirectory);
+            }
+
+            diagnostics.capturePrePhaseSnapshot("Query");
+
+            for (var benchmark : benchmarks) {
+                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                results.addAll(metrics);
+            }
+
+            // Capture memory and disk usage after running queries
+            diagnostics.capturePostPhaseSnapshot("Query");
+
+            // Add memory and disk metrics to results
+            var systemSnapshot = diagnostics.getLatestSystemSnapshot();
+            var diskSnapshot = diagnostics.getLatestDiskSnapshot();
+
+            if (systemSnapshot != null) {
+                // Max heap usage in MB
+                results.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f",
+                        systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+
+                // Max off-heap usage (direct + mapped) in MB
+                results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
+                        systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+            }
+
+            if (diskSnapshot != null) {
+                // Number of index files created
+                results.add(Metric.of("search.disk.file_count", "File count", ".0f",
+                        diskSnapshot.getTotalFileCount()));
+
+                // Total size of index files created
+                results.add(Metric.of("search.disk.total_file_size_mb", "Total file size (MB)", ".1f",
+                        diskSnapshot.getTotalBytes() / (1024.0 * 1024.0)));
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
         return results;
     }
 }
-

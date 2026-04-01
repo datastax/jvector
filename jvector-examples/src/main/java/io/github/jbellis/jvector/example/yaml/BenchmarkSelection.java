@@ -14,20 +14,18 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.example.util;
+package io.github.jbellis.jvector.example.yaml;
 
-import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
-public class DataSetLoader {
-    public static DataSet loadDataSet(String fileName) throws IOException {
-        DataSet ds;
-        if (fileName.endsWith(".hdf5")) {
-            DownloadHelper.maybeDownloadHdf5(fileName);
-            ds = Hdf5Loader.load(fileName);
-        } else {
-            var mfd = DownloadHelper.maybeDownloadFvecs(fileName);
-            ds = mfd.load();
-        }
-        return ds;
-    }
+/**
+ * A sink-agnostic selection of benchmark stats and related metrics, using the same schema
+ * as SearchParameters.benchmarks ({@code Map<String, List<String>>}).
+ *
+ * Used for console projections now, and logging (CSV/Parquet/etc) later.
+ */
+public class BenchmarkSelection {
+    public Map<String, List<String>> benchmarks;
+    public MetricSelection metrics;
 }

@@ -1,0 +1,74 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.example.benchmarks.datasets;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.security.InvalidParameterException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+
+/// Facade for locating datasets across multiple {@link DataSetLoader} implementations.
+///
+/// Returns a {@link DataSetInfo} handle whose vector data is loaded lazily on the first
+/// call to {@link DataSetInfo#getDataSet()}, allowing callers to inspect dataset metadata
+/// (name, similarity function) without incurring the cost of reading vectors into memory.
+///
+/// @see DataSetInfo
+/// @see DataSetLoader
+public class DataSets {
+    private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
+
+    public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
+        add(new DataSetLoaderHDF5());
+        add(new DataSetLoaderMFD());
+    }};
+
+    /// Loads a dataset by name using the {@link #defaultLoaders}.
+    ///
+    /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
+    /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName) {
+        return loadDataSet(dataSetName, defaultLoaders);
+    }
+
+    /// Loads a dataset by name, trying each loader in order until one matches.
+    ///
+    /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
+    /// @param loaders     the loaders to try, in priority order
+    /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
+        logger.info("loading dataset [{}]", dataSetName);
+        if (dataSetName.endsWith(".hdf5")) {
+            throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
+        }
+
+        for (DataSetLoader loader : loaders) {
+            logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
+            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
+            if (dataSetLoaded.isPresent()) {
+                logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
+                return dataSetLoaded;
+            }
+        }
+        logger.warn("Unable to find dataset [{}] with any dataset loader.", dataSetName);
+        return Optional.empty();
+    }
+}

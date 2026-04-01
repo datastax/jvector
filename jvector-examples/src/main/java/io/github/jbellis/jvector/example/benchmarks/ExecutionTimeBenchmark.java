@@ -56,7 +56,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
         double totalRuntime = 0;
 
         for (int run = 0; run < queryRuns; run++) {
@@ -75,6 +75,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
         }
 
         double avgRuntimeSec = totalRuntime / queryRuns / 1e9;
-        return List.of(Metric.of("Avg Runtime (s)", format, avgRuntimeSec));
+        return List.of(Metric.of("search.execution_time.avg_runtime_s",
+                "Avg Runtime (s)", format, avgRuntimeSec));
     }
 }

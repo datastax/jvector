@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -55,7 +56,7 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("PQ_%s_%d_%d_%s_%s", ds.name, m, k, isCentered, anisotropicThreshold);
+            return String.format("PQ_%s_%d_%d_%s_%s", ds.getName(), m, k, isCentered, anisotropicThreshold);
         }
 
         @Override
@@ -85,7 +86,7 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("NVQ_%s_%d_%s", ds.name, nSubVectors);
+            return String.format("NVQ_%s_%d_%s", ds.getName(), nSubVectors);
         }
 
         @Override

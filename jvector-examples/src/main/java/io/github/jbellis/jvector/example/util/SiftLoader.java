@@ -34,12 +34,17 @@ import java.util.List;
 public class SiftLoader {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    public static List<VectorFloat<?>> readFvecs(String filePath) throws IOException {
+    public static List<VectorFloat<?>> readFvecs(String filePath) {
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
             while (dis.available() > 0) {
                 var dimension = Integer.reverseBytes(dis.readInt());
-                assert dimension > 0 : dimension;
+                if (dimension <= 0) {
+                    throw new IOException("Corrupt fvecs file: negative or zero dimension " + dimension + " (possible file corruption or wrong format)");
+                }
+                if (dimension > 100_000) {
+                    throw new IOException("Unreasonable dimension " + dimension + " in fvecs file (possible file corruption or wrong format)");
+                }
                 var buffer = new byte[dimension * Float.BYTES];
                 dis.readFully(buffer);
                 var byteBuffer = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
@@ -49,6 +54,8 @@ public class SiftLoader {
                 floatBuffer.get(vector);
                 vectors.add(vectorTypeSupport.createFloatVector(vector));
             }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
         }
         return vectors;
     }
@@ -56,7 +63,7 @@ public class SiftLoader {
     public static List<List<Integer>> readIvecs(String filename) {
         var groundTruthTopK = new ArrayList<List<Integer>>();
 
-        try (var dis = new DataInputStream(new FileInputStream(filename))) {
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filename)))) {
             while (dis.available() > 0) {
                 var numNeighbors = Integer.reverseBytes(dis.readInt());
                 var neighbors = new ArrayList<Integer>(numNeighbors);

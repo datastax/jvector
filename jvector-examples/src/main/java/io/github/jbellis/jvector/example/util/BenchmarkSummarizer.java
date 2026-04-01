@@ -17,8 +17,10 @@ package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.example.BenchResult;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Utility class for summarizing benchmark results by calculating average metrics
@@ -36,18 +38,38 @@ public class BenchmarkSummarizer {
         private final double indexConstruction;
         private final int totalConfigurations;
         private final double qpsStdDev;
+        private final double avgNodesVisited;
+        // Disk and memory stats
+        private final double buildMaxOffheap;
+        private final double buildMaxHeap;
+        private final double queryMaxOffheap;
+        private final double queryMaxHeap;
+        private final double totalDisk;
 
-        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations) {
-            this(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, 0.0);
-        }
-
-        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev) {
+        public SummaryStats(double avgRecall,
+                            double avgQps,
+                            double avgLatency,
+                            double indexConstruction,
+                            int totalConfigurations,
+                            double qpsStdDev,
+                            double avgNodesVisited,
+                            double buildMaxOffheap,
+                            double buildMaxHeap,
+                            double queryMaxOffheap,
+                            double queryMaxHeap,
+                            double totalDisk) {
             this.avgRecall = avgRecall;
             this.avgQps = avgQps;
             this.avgLatency = avgLatency;
             this.indexConstruction = indexConstruction;
             this.totalConfigurations = totalConfigurations;
             this.qpsStdDev = qpsStdDev;
+            this.avgNodesVisited = avgNodesVisited;
+            this.buildMaxOffheap = buildMaxOffheap;
+            this.buildMaxHeap = buildMaxHeap;
+            this.queryMaxOffheap = queryMaxOffheap;
+            this.queryMaxHeap = queryMaxHeap;
+            this.totalDisk = totalDisk;
         }
 
         public double getAvgRecall() {
@@ -70,6 +92,18 @@ public class BenchmarkSummarizer {
 
         public double getQpsStdDev() { return qpsStdDev; }
 
+        public double getAvgNodesVisited() { return avgNodesVisited; }
+
+        public double getBuildMaxOffheap() { return buildMaxOffheap; }
+
+        public double getBuildMaxHeap() { return buildMaxHeap; }
+
+        public double getQueryMaxOffheap() { return queryMaxOffheap; }
+
+        public double getQueryMaxHeap() { return queryMaxHeap; }
+
+        public double getTotalDisk() { return totalDisk; }
+
         @Override
         public String toString() {
             return String.format(
@@ -77,8 +111,9 @@ public class BenchmarkSummarizer {
                 "  Average Recall@k: %.4f%n" +
                 "  Average QPS: %.2f (± %.2f)%n" +
                 "  Average Latency: %.2f ms%n" +
-                "  Index Construction Time: %.2f",
-                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction);
+                "  Index Construction Time: %.2f%n" +
+                "  Average Nodes Visited: %.2f",
+                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction, avgNodesVisited);
         }
     }
     
@@ -89,7 +124,7 @@ public class BenchmarkSummarizer {
      */
     public static SummaryStats summarize(List<BenchResult> results) {
         if (results == null || results.isEmpty()) {
-            return new SummaryStats(0, 0, 0, 0, 0, 0);
+            return new SummaryStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
         double totalRecall = 0;
@@ -97,11 +132,18 @@ public class BenchmarkSummarizer {
         double totalLatency = 0;
         double indexConstruction = 0;
         double totalQpsStdDev = 0;
+        double totalNodesVisited = 0;
+        double buildMaxOffheap = 0;
+        double buildMaxHeap = 0;
+        double queryMaxOffheap = 0;
+        double queryMaxHeap = 0;
+        double totalDisk = 0;
         
         int recallCount = 0;
         int qpsCount = 0;
         int latencyCount = 0;
         int qpsStdDevCount = 0;
+        int nodesVisitedCount = 0;
 
         for (BenchResult result : results) {
             if (result.metrics == null) continue;
@@ -134,19 +176,51 @@ public class BenchmarkSummarizer {
                 latencyCount++;
             }
 
-            indexConstruction = extractIndexConstructionMetric(result.metrics);
+            // Extract nodes visited metric (format is "Avg Visited")
+            Double nodesVisited = extractNodesVisitedMetric(result.metrics);
+            if (nodesVisited != null) {
+                totalNodesVisited += nodesVisited;
+                nodesVisitedCount++;
+            }
+
         }
+
+        /*
+        These metrics should only occur once per dataset. If there are more than one result sets being passed it's
+        a summary where averaging the results of these categories would be nonsensical.
+         */
+        if (results.size() == 1) {
+            var metrics = results.get(0).metrics;
+            indexConstruction = extractIndexConstructionMetric(metrics);
+            buildMaxOffheap = extractDouble("Total Off-Heap (MB)", metrics);
+            buildMaxHeap = extractDouble("Heap Memory Max (MB)", metrics);
+            queryMaxOffheap = extractDouble("Max offheap usage (MB)", metrics);
+            queryMaxHeap = extractDouble("Max heap usage (MB)", metrics);
+            totalDisk = extractDouble("Disk Usage (MB)", metrics);
+        }
+
 
         // Calculate averages, handling cases where some metrics might not be present
         double avgRecall = recallCount > 0 ? totalRecall / recallCount : 0;
         double avgQps = qpsCount > 0 ? totalQps / qpsCount : 0;
         double avgLatency = latencyCount > 0 ? totalLatency / latencyCount : 0;
         double avgQpsStdDev = qpsStdDevCount > 0 ? totalQpsStdDev / qpsStdDevCount : 0;
+        double avgNodesVisited = nodesVisitedCount > 0 ? totalNodesVisited / nodesVisitedCount : 0;
         
         // Count total valid configurations as the maximum count of any metric
         int totalConfigurations = Math.max(Math.max(recallCount, qpsCount), latencyCount);
 
-        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev);
+        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev, avgNodesVisited,
+                buildMaxOffheap, buildMaxHeap, queryMaxOffheap, queryMaxHeap, totalDisk);
+    }
+
+    private static Double extractDouble(String metric, Map<String, Object> metrics) {
+        for (Map.Entry<String, Object> entry : metrics.entrySet()) {
+            if (entry.getKey().startsWith(metric)) {
+                return convertToDouble(entry.getValue());
+            }
+        }
+        return 0.0;
     }
 
     private static Double extractIndexConstructionMetric(Map<String, Object> metrics) {
@@ -235,7 +309,28 @@ public class BenchmarkSummarizer {
         }
         return null;
     }
-    
+
+    /**
+     * Extract an average nodes visited metric from the metrics map
+     * @param metrics Map of metrics
+     * @return The average nodes visited value as a Double, or null if not found
+     */
+    private static Double extractNodesVisitedMetric(Map<String, Object> metrics) {
+        // Try exact match first
+        Double value = extractMetric(metrics, "Avg Visited");
+        if (value != null) return value;
+
+        // Look for any key containing "Avg Visited" case insensitive
+        for (Map.Entry<String, Object> entry : metrics.entrySet()) {
+            if (entry.getKey().contains("Avg Visited")) {
+                return convertToDouble(entry.getValue());
+            }
+        }
+
+        return null;
+    }
+
+
     /**
      * Extract a specific metric from the metrics map
      * @param metrics Map of metrics

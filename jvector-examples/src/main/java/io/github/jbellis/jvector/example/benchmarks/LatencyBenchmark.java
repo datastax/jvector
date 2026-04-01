@@ -104,7 +104,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        int totalQueries = cs.getDataSet().queryVectors.size();
+        int totalQueries = cs.getDataSet().getQueryVectors().size();
         double mean = 0.0;
         double m2 = 0.0;
         int count = 0;
@@ -143,17 +143,15 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
         var list = new ArrayList<Metric>();
         if (computeAvgLatency) {
-            list.add(Metric.of("Mean Latency (ms)", formatAvgLatency, mean));
+            list.add(Metric.of("search.latency.mean_ms", "Mean Latency (ms)", formatAvgLatency, mean));
         }
         if (computeLatencySTD) {
-            list.add(Metric.of("STD Latency (ms)", formatLatencySTD, standardDeviation));
+            list.add(Metric.of("search.latency.std_ms", "STD Latency (ms)", formatLatencySTD, standardDeviation));
         }
         if (computeP999Latency) {
-            list.add(Metric.of("p999 Latency (ms)", formatP999Latency, p999Latency));
+            list.add(Metric.of("search.latency.p999_ms", "p999 Latency (ms)", formatP999Latency, p999Latency));
         }
         return list;
+
     }
 }
-
-
-
