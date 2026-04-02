@@ -18,10 +18,13 @@ package io.github.jbellis.jvector.example.benchmarks.diagnostics;
 
 import java.lang.management.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Utility class for monitoring system resources during benchmark execution.
  * Tracks GC activity, memory usage (on-heap and off-heap), CPU load, and thread statistics.
+ *
+ * Supports continuous peak memory tracking via a background sampling thread.
  */
 public class SystemMonitor {
 
@@ -32,6 +35,13 @@ public class SystemMonitor {
     private final com.sun.management.OperatingSystemMXBean sunOsBean;
     private final List<MemoryPoolMXBean> memoryPoolBeans;
     private final List<BufferPoolMXBean> bufferPoolBeans;
+    
+    // Peak memory tracking
+    private final AtomicLong peakHeapUsed = new AtomicLong(0);
+    private final AtomicLong peakDirectBufferMemory = new AtomicLong(0);
+    private final AtomicLong peakMappedBufferMemory = new AtomicLong(0);
+    private volatile Thread samplingThread;
+    private volatile boolean sampling = false;
 
     public SystemMonitor() {
         this.memoryBean = ManagementFactory.getMemoryMXBean();
@@ -41,6 +51,93 @@ public class SystemMonitor {
         this.sunOsBean = (com.sun.management.OperatingSystemMXBean) osBean;
         this.memoryPoolBeans = ManagementFactory.getMemoryPoolMXBeans();
         this.bufferPoolBeans = ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class);
+    }
+    
+    /**
+     * Starts continuous memory sampling in a background thread.
+     * Samples memory usage every 50ms and tracks peak values.
+     */
+    public void startPeakMemoryTracking() {
+        if (sampling) {
+            return; // Already sampling
+        }
+        
+        // Reset peak values
+        peakHeapUsed.set(0);
+        peakDirectBufferMemory.set(0);
+        peakMappedBufferMemory.set(0);
+        
+        sampling = true;
+        samplingThread = new Thread(() -> {
+            while (sampling) {
+                try {
+                    MemoryStats current = captureMemoryStats();
+                    
+                    // Update peak values atomically
+                    updatePeak(peakHeapUsed, current.heapUsed);
+                    updatePeak(peakDirectBufferMemory, current.directBufferMemory);
+                    updatePeak(peakMappedBufferMemory, current.mappedBufferMemory);
+                    
+                    Thread.sleep(50); // Sample every 50ms
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "SystemMonitor-PeakMemorySampler");
+        samplingThread.setDaemon(true);
+        samplingThread.start();
+    }
+    
+    /**
+     * Stops continuous memory sampling and returns the peak values observed.
+     */
+    public PeakMemoryStats stopPeakMemoryTracking() {
+        sampling = false;
+        if (samplingThread != null) {
+            try {
+                samplingThread.join(1000); // Wait up to 1 second
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            samplingThread = null;
+        }
+        
+        return new PeakMemoryStats(
+            peakHeapUsed.get(),
+            peakDirectBufferMemory.get(),
+            peakMappedBufferMemory.get()
+        );
+    }
+    
+    /**
+     * Gets current peak memory values without stopping tracking.
+     */
+    public PeakMemoryStats getCurrentPeakMemory() {
+        return new PeakMemoryStats(
+            peakHeapUsed.get(),
+            peakDirectBufferMemory.get(),
+            peakMappedBufferMemory.get()
+        );
+    }
+    
+    /**
+     * Resets peak memory tracking values.
+     */
+    public void resetPeakMemory() {
+        peakHeapUsed.set(0);
+        peakDirectBufferMemory.set(0);
+        peakMappedBufferMemory.set(0);
+    }
+    
+    private void updatePeak(AtomicLong peak, long current) {
+        long currentPeak;
+        do {
+            currentPeak = peak.get();
+            if (current <= currentPeak) {
+                break;
+            }
+        } while (!peak.compareAndSet(currentPeak, current));
     }
 
     /**
@@ -167,6 +264,33 @@ public class SystemMonitor {
                 gcBean.getName(), gcBean.getCollectionCount(), gcBean.getCollectionTime());
         }
     }
+    /**
+     * Container for peak memory statistics captured during continuous monitoring.
+     */
+    public static class PeakMemoryStats {
+        public final long peakHeapUsed;
+        public final long peakDirectBufferMemory;
+        public final long peakMappedBufferMemory;
+        
+        public PeakMemoryStats(long peakHeapUsed, long peakDirectBufferMemory, long peakMappedBufferMemory) {
+            this.peakHeapUsed = peakHeapUsed;
+            this.peakDirectBufferMemory = peakDirectBufferMemory;
+            this.peakMappedBufferMemory = peakMappedBufferMemory;
+        }
+        
+        public long getTotalPeakOffHeapMemory() {
+            return peakDirectBufferMemory + peakMappedBufferMemory;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("PeakMemory[heap=%d MB, direct=%d MB, mapped=%d MB]",
+                peakHeapUsed / 1024 / 1024,
+                peakDirectBufferMemory / 1024 / 1024,
+                peakMappedBufferMemory / 1024 / 1024);
+        }
+    }
+
 
     // Inner classes for data structures
     public static class SystemSnapshot {
