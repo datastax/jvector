@@ -35,8 +35,6 @@ import java.util.stream.Collectors;
  */
 public class BenchYAML {
 
-    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BenchYAML.class);
-
     public static void main(String[] args) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.
@@ -73,7 +71,7 @@ public class BenchYAML {
         }
 
         // get the list of YAML files from args
-        List<String> configNames = Arrays.stream(args)
+        List<String> configNames = (args == null) ? Collections.emptyList() : Arrays.stream(args)
                 .filter(Objects::nonNull)
                 .filter(s -> s.endsWith(".yml"))
                 .collect(Collectors.toList());
@@ -91,10 +89,10 @@ public class BenchYAML {
         }
 
         // Set up reporting for run
-        RunArtifacts artifactsPlaceholder;
+        RunArtifacts artifacts;
         try {
             RunConfig runCfg = RunConfig.loadDefault();
-            artifactsPlaceholder = RunArtifacts.open(runCfg, allConfigs);
+            artifacts = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
             // Legacy yamlSchemaVersion "0" behavior: no run.yml
             // - logging disabled
@@ -113,35 +111,32 @@ public class BenchYAML {
             if (legacyBenchmarks == null) {
                 legacyBenchmarks = SearchReportingCatalog.defaultComputeBenchmarks();
             }
-            artifactsPlaceholder = RunArtifacts.legacyNoLogging(legacyBenchmarks);
+            artifacts = RunArtifacts.legacyNoLogging(legacyBenchmarks);
         }
 
-        final RunArtifacts artifacts = artifactsPlaceholder;
-        try (artifacts) {
-            for (var config : allConfigs) {
 
-                String datasetName = config.dataset;
-                DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                        () -> new RuntimeException("Could not load dataset:" + datasetName)
-                );
-                // Register dataset info the first time we actually load the dataset for benchmarking
-                artifacts.registerDataset(datasetName, ds);
+        for (var config : allConfigs) {
 
-                Grid.runAll(ds,
-                        config.construction.useSavedIndexIfExists,
-                        config.construction.outDegree,
-                        config.construction.efConstruction,
-                        config.construction.neighborOverflow,
-                        config.construction.addHierarchy,
-                        config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(),
-                        config.construction.getCompressorParameters(),
-                        config.partitions,
-                        config.search.getCompressorParameters(),
-                        config.search.topKOverquery,
-                        config.search.useSearchPruning,
-                        artifacts);
-            }
+            String datasetName = config.dataset;
+            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                    () -> new RuntimeException("Could not load dataset:" + datasetName)
+            ).getDataSet();
+            // Register dataset info the first time we actually load the dataset for benchmarking
+            artifacts.registerDataset(datasetName, ds);
+
+            Grid.runAll(ds,
+                    config.construction.useSavedIndexIfExists,
+                    config.construction.outDegree,
+                    config.construction.efConstruction,
+                    config.construction.neighborOverflow,
+                    config.construction.addHierarchy,
+                    config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(),
+                    config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(),
+                    config.search.topKOverquery,
+                    config.search.useSearchPruning,
+                    artifacts);
         }
     }
 

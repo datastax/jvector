@@ -91,7 +91,9 @@ public final class SearchReportingCatalog {
                         "file_count",         "search.disk.file_count"
                 ),
                 "construction", Map.of(
-                        "index_build_time_s", "construction.index_build_time_s"
+                        "index_build_time_s","construction.index_build_time_s",
+                        "index_quant_time_s","@prefix:construction.index_quant_time_s",
+                        "search_quant_time_s","@prefix:search.search_quant_time_s"
                 )
         );
     }

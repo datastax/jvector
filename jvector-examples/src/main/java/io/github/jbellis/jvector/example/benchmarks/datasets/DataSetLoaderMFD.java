@@ -17,9 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
@@ -33,6 +31,9 @@ import software.amazon.awssdk.transfer.s3.model.DownloadFileRequest;
 import software.amazon.awssdk.transfer.s3.model.FileDownload;
 import software.amazon.awssdk.transfer.s3.progress.LoggingTransferListener;
 
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +43,10 @@ import java.util.*;
 /**
  * This dataset loader supports <i>multi-file</i> datasets which are comprised of several files as defined in
  * {@link DataSetLoaderMFD.MultiFileDatasource}.
+ *
+ * <p>The vector similarity function is determined by looking up the dataset name in
+ * {@code dataset_metadata.yml} via {@link DataSetMetadataReader}. If no entry is found,
+ * an error is thrown.
  */
 public class DataSetLoaderMFD implements DataSetLoader {
 
@@ -52,36 +57,27 @@ public class DataSetLoaderMFD implements DataSetLoader {
     private static final String fvecDir = "fvec";
     private static final String bucketName = "astra-vector";
     private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
-
-    public static final String NAME = "MFD";
-    public String getName() {
-        return NAME;
-    }
+    private static final DataSetMetadataReader metadata = DataSetMetadataReader.load();
 
     /**
      * {@inheritDoc}
      */
-    public Optional<DataSet> loadDataSet(String fileName) {
-
-        if (fileName.contains(":")) {
-            logger.trace("Dataset {} with profile is not supported by MFD loader", fileName);
-            return Optional.empty();
-        }
-
-        return maybeDownloadFvecs(fileName).map(MultiFileDatasource::load);
+    public Optional<DataSetInfo> loadDataSet(String fileName) {
+        return maybeDownloadFvecs(fileName).map(mfd -> {
+            var props = metadata.getProperties(mfd.name)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No metadata configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
+            var vsf = props.similarityFunction()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "No similarity_function configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
+            return new DataSetInfo(props, () -> mfd.load(vsf));
+        });
     }
 
-    @Override
-    public Optional<BaseVectorsDataSet> loadBaseVectors(String fileName) {
-
-        if (fileName.contains(":")) {
-            logger.trace("Dataset {} with profile is not supported by MFD loader", fileName);
-            return Optional.empty();
-        }
-
-        return maybeDownloadBaseFvecs(fileName).map(MultiFileDatasource::loadBaseOnly);
-    }
-
+    /// Downloads the fvec/ivec files for the named dataset from S3 if not already present locally.
+    ///
+    /// @param name the logical dataset name
+    /// @return the datasource descriptor, or empty if the name is not a known multi-file dataset
     private Optional<MultiFileDatasource> maybeDownloadFvecs(String name) {
         String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
         var mfd = MultiFileDatasource.byName.get(name);
@@ -119,18 +115,38 @@ public class DataSetLoaderMFD implements DataSetLoader {
                                 .build();
 
                 // 3 retries
+                boolean downloaded = false;
                 for (int i = 0; i < 3; i++) {
-                    FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
-                    CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
-                    long downloadedSize = Files.size(localPath);
+                    try {
+                        FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
+                        CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
+                        long downloadedSize = Files.size(localPath);
 
-                    // Check if downloaded file size matches the expected size
-                    if (downloadedSize == downloadResult.response().contentLength()) {
+                        // Check if downloaded file size matches the expected size
+                        if (downloadedSize != downloadResult.response().contentLength()) {
+                            logger.error("Incomplete download (got {} of {} bytes). Retrying...",
+                                    downloadedSize, downloadResult.response().contentLength());
+                            Files.deleteIfExists(localPath);
+                            continue;
+                        }
+
+                        // Validate the file header to catch corrupt downloads
+                        if (!validateVecFileHeader(localPath)) {
+                            logger.error("Downloaded file {} has an invalid header; deleting and retrying", urlPath);
+                            Files.deleteIfExists(localPath);
+                            continue;
+                        }
+
                         logger.info("Downloaded file of length " + downloadedSize);
-                        break;  // Successfully downloaded
-                    } else {
-                        logger.error("Incomplete download. Retrying...");
+                        downloaded = true;
+                        break;
+                    } catch (Exception e) {
+                        logger.error("Download attempt {} failed for {}: {}", i + 1, urlPath, e.getMessage());
+                        Files.deleteIfExists(localPath);
                     }
+                }
+                if (!downloaded) {
+                    throw new IOException("Failed to download " + urlPath + " after 3 attempts");
                 }
             }
             tm.close();
@@ -141,58 +157,18 @@ public class DataSetLoaderMFD implements DataSetLoader {
         return Optional.of(mfd);
     }
 
-    private Optional<MultiFileDatasource> maybeDownloadBaseFvecs(String name) {
-        String bucket = infraDatasets.contains(name) ? infraBucketName : bucketName;
-        var mfd = MultiFileDatasource.byName.get(name);
-        if (mfd == null) {
-            logger.debug("MultiFileDatasource not found for name: [" + name + "]");
-            return Optional.empty();
-        }
-        logger.info("found dataset definition for {}", name);
-
-        Path fvecPath = Paths.get(fvecDir);
-        try {
-            Files.createDirectories(fvecPath.resolve(mfd.directory()));
+    /// Reads the first 4 bytes of a vec file (fvecs or ivecs) and checks that the
+    /// little-endian int32 dimension/count value is positive and reasonable.
+    private static boolean validateVecFileHeader(Path path) {
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(path.toFile())))) {
+            int dimension = Integer.reverseBytes(dis.readInt());
+            return dimension > 0 && dimension <= 100_000;
         } catch (IOException e) {
-            throw new RuntimeException("Failed to create directory: " + fvecDir, e);
+            return false;
         }
-
-        try (S3AsyncClient s3Client = s3AsyncClientBuilder().build()) {
-            S3TransferManager tm = S3TransferManager.builder().s3Client(s3Client).build();
-
-            Path localPath = fvecPath.resolve(mfd.basePath);
-            if (!Files.exists(localPath)) {
-                var urlPath = mfd.basePath.toString().replace('\\', '/');
-                logger.info("Downloading base vectors for dataset {} from {}", name, urlPath);
-                DownloadFileRequest downloadFileRequest =
-                        DownloadFileRequest.builder()
-                                .getObjectRequest(b -> b.bucket(bucket).key(urlPath))
-                                .addTransferListener(LoggingTransferListener.create())
-                                .destination(Paths.get(localPath.toString()))
-                                .build();
-
-                // 3 retries
-                for (int i = 0; i < 3; i++) {
-                    FileDownload downloadFile = tm.downloadFile(downloadFileRequest);
-                    CompletedFileDownload downloadResult = downloadFile.completionFuture().join();
-                    long downloadedSize = Files.size(localPath);
-
-                    if (downloadedSize == downloadResult.response().contentLength()) {
-                        logger.info("Downloaded base file of length {}", downloadedSize);
-                        break;
-                    } else {
-                        logger.error("Incomplete base download. Retrying...");
-                    }
-                }
-            }
-            tm.close();
-        } catch (Exception e) {
-            throw new RuntimeException("Error downloading base data from S3: " + e.getMessage());
-        }
-
-        return Optional.of(mfd);
     }
 
+    /// Creates an S3 async client builder configured for anonymous access to US-EAST-1.
     private static S3AsyncClientBuilder s3AsyncClientBuilder() {
         return S3AsyncClient.builder()
                 .region(Region.US_EAST_1)
@@ -202,6 +178,8 @@ public class DataSetLoaderMFD implements DataSetLoader {
                 .credentialsProvider(AnonymousCredentialsProvider.create());
     }
 
+    /// Describes a dataset stored as three separate fvec/ivec files (base vectors, query
+    /// vectors, and ground truth) in an S3 bucket. Known datasets are registered in {@link #byName}.
     public static class MultiFileDatasource {
         public final String name;
         public final Path basePath;
@@ -216,52 +194,25 @@ public class DataSetLoaderMFD implements DataSetLoader {
             this.groundTruthPath = Paths.get(groundTruthPath);
         }
 
+        /// Returns the parent directory of the base vectors file.
         public Path directory() {
             return basePath.getParent();
         }
 
+        /// Returns the three file paths (base, queries, ground truth) that comprise this dataset.
         public Iterable<Path> paths() {
             return List.of(basePath, queriesPath, groundTruthPath);
         }
 
-        public DataSet load() {
+        /// Reads the fvec/ivec files from disk and returns a scrubbed {@link DataSet}.
+        ///
+        /// @param similarityFunction the similarity function to associate with the dataset
+        /// @return the loaded and scrubbed dataset
+        public DataSet load(VectorSimilarityFunction similarityFunction) {
             var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
             var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
             var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-            return DataSetUtils.getScrubbedDataSet(name, VectorSimilarityFunction.COSINE, baseVectors, queryVectors, gtVectors);
-        }
-
-        public BaseVectorsDataSet loadBaseOnly() {
-            var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
-            final int dimension = baseVectors.get(0).length();
-            final var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
-
-            return new BaseVectorsDataSet() {
-                @Override
-                public int getDimension() {
-                    return dimension;
-                }
-
-                @Override
-                public io.github.jbellis.jvector.graph.RandomAccessVectorValues getBaseRavv() {
-                    return ravv;
-                }
-
-                @Override
-                public String getName() {
-                    return name;
-                }
-
-                @Override
-                public VectorSimilarityFunction getSimilarityFunction() {
-                    return VectorSimilarityFunction.COSINE;
-                }
-
-                @Override
-                public List<VectorFloat<?>> getBaseVectors() {
-                    return baseVectors;
-                }
-            };
+            return DataSetUtils.getScrubbedDataSet(name, similarityFunction, baseVectors, queryVectors, gtVectors);
         }
 
         public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{

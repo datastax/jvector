@@ -7,7 +7,6 @@ CONTRIBUTIONS.md
 package.json
 .github/workflows/tag-release.yml
 .github/workflows/run-bench.yml
-.github/workflows/run-compaction.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md
@@ -27,7 +26,4 @@ scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/*.yml
 src/main/resources/logback.xml
-jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/OnDiskGraphIndexCompactor.md
-jvector-base/src/main/java/io/github/jbellis/jvector/graph/disk/AbstractGraphIndexWriter.md
-benchmarks-jmh/src/main/java/io/github/jbellis/jvector/bench/CompactorBenchmark.md
-local/*
+docs/**/*.md
