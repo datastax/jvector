@@ -56,6 +56,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
+    // Compaction constants
+    private static final int MIN_SAMPLES_PER_SOURCE = 1000;
+    private static final float DIVERSITY_ALPHA_STEP = 0.2f;
+    private static final int MIN_BEAM_WIDTH = 100;
+    private static final int BEAM_WIDTH_MULTIPLIER = 2;
+    private static final int TARGET_BATCHES_PER_SOURCE = 40;
+    private static final int TARGET_NODES_PER_BATCH = 128;
+    private static final int MIN_SEARCH_TOP_K = 2;
+    private static final int SEARCH_TOP_K_MULTIPLIER = 2;
+
     private final List<OnDiskGraphIndex> sources;
     private final List<FixedBitSet> liveNodes;
     private final List<Integer> numLiveNodesPerSource;
@@ -120,11 +130,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<FixedBitSet> liveNodes,
             List<OrdinalMapper> remappers,
             List<Path> fpVectorsPaths) {
+        validateInputSizes(sources, liveNodes, remappers, fpVectorsPaths);
+        validateLiveNodesBounds(sources, liveNodes);
+        validateGraphConfiguration(sources);
+        validateFeatures(sources, fpVectorsPaths);
+    }
+
+    /**
+     * Validates that input lists have consistent sizes and are non-null.
+     */
+    private void validateInputSizes(List<OnDiskGraphIndex> sources,
+                                    List<FixedBitSet> liveNodes,
+                                    List<OrdinalMapper> remappers,
+                                    List<Path> fpVectorsPaths) {
         if (sources.size() < 2) {
             throw new IllegalArgumentException("Must have at least two sources");
         }
         Objects.requireNonNull(liveNodes, "liveNodes");
         Objects.requireNonNull(remappers, "remappers");
+
         if (sources.size() != liveNodes.size()) {
             throw new IllegalArgumentException("sources and liveNodes must have the same size");
         }
@@ -134,14 +158,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (fpVectorsPaths != null && sources.size() != fpVectorsPaths.size()) {
             throw new IllegalArgumentException("fpInputPaths must be null or match the number of sources");
         }
+    }
 
+    /**
+     * Validates that liveNodes bitsets match the size of their corresponding sources.
+     */
+    private void validateLiveNodesBounds(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes) {
         for (int s = 0; s < sources.size(); ++s) {
             if (liveNodes.get(s).length() != sources.get(s).size(0)) {
                 throw new IllegalArgumentException("source " + s + " out of bounds");
             }
         }
+    }
 
-        // check dimensions
+    /**
+     * Validates that all sources have consistent graph configuration (dimensions, degrees, hierarchy).
+     */
+    private void validateGraphConfiguration(List<OnDiskGraphIndex> sources) {
         int dimension = sources.get(0).getDimension();
         var maxDegrees = sources.get(0).maxDegrees();
         var addHierarchy = sources.get(0).isHierarchical();
@@ -159,8 +192,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 throw new IllegalArgumentException("sources must have the same hierarchical setting");
             }
         }
+    }
 
-        // check features
+    /**
+     * Validates that all sources have compatible features for compaction.
+     */
+    private void validateFeatures(List<OnDiskGraphIndex> sources, List<Path> fpVectorsPaths) {
         Set<FeatureId> refKeys = sources.get(0).getFeatures().keySet();
         boolean sameFeatures = sources.stream()
                 .skip(1)
@@ -230,9 +267,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
         }
 
-        int baseSearchTopK = Math.max(2, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * 2);
+        int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
-        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(2, ((maxUpperDegree + sources.size() - 1) / sources.size()) * 2);
+        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
         int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
@@ -242,8 +279,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         for (int level = 0; level < maxDegrees.size(); level++) {
             List<BatchSpec> batches = buildBatches(level);
-            int searchTopK = Math.max(2, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * 2);
-            int beamWidth = Math.max(100, searchTopK * 2);
+            int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+            int beamWidth = Math.max(MIN_BEAM_WIDTH, searchTopK * BEAM_WIDTH_MULTIPLIER);
+
+            CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, beamWidth, pq);
 
             if (level == 0) {
                 log.info("Compacting level 0 (base layer)");
@@ -254,14 +293,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
                     ecs.submit(() -> {
                         Scratch scratch = threadLocalScratch.get();
-                        return computeBaseBatch(
-                                writer, bs, scratch,
-                                fusedPQEnabled,
-                                compressedPrecision,
-                                searchTopK,
-                                beamWidth,
-                                pq
-                        );
+                        return computeBaseBatch(writer, bs, scratch, params);
                     });
                 };
 
@@ -301,16 +333,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
                     ecs.submit(() -> {
                         Scratch scratch = threadLocalScratch.get();
-                        return computeUpperBatchForLevel(
-                                bs,
-                                lvl,
-                                scratch,
-                                fusedPQEnabled,
-                                compressedPrecision,
-                                searchTopK,
-                                beamWidth,
-                                pq
-                        );
+                        return computeUpperBatchForLevel(bs, lvl, scratch, params);
                     });
                 };
 
@@ -358,7 +381,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 nodes[i++] = sourceNodes.next();
             }
 
-            int numBatches = max(40, (numNodes + 128 - 1) / 128);
+            int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
             if (numBatches > numNodes) numBatches = numNodes;
             int batchSize = (numNodes + numBatches - 1) / numBatches;
             for (int b = 0; b < numBatches; ++b) {
@@ -379,11 +402,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
    private List<WriteResult> computeBaseBatch(CompactWriter writer,
                                               BatchSpec bs,
                                               Scratch scratch,
-                                              boolean fusedPQEnabled,
-                                              boolean compressedPrecision,
-                                              int searchTopK,
-                                              int beamWidth,
-                                              ProductQuantization pq) throws IOException {
+                                              CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
 
@@ -391,17 +410,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int node = bs.nodes[i];
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
 
-            out.add(processBaseNode(
-                    node,
-                    bs.sourceIdx,
-                    scratch,
-                    writer,
-                    fusedPQEnabled,
-                    compressedPrecision,
-                    searchTopK,
-                    beamWidth,
-                    pq
-            ));
+            out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params));
         }
 
         return out;
@@ -415,11 +424,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             BatchSpec bs,
             int level,
             Scratch scratch,
-            boolean fusedPQEnabled,
-            boolean compressedPrecision,
-            int searchTopK,
-            int beamWidth,
-            ProductQuantization pq
+            CompactionParams params
     ) {
         List<UpperLayerWriteResult> results =
                 new ArrayList<>(bs.end - bs.start);
@@ -429,17 +434,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
 
-            results.add(processUpperNode(
-                    node,
-                    bs.sourceIdx,
-                    level,
-                    scratch,
-                    fusedPQEnabled,
-                    compressedPrecision,
-                    searchTopK,
-                    beamWidth,
-                    pq
-            ));
+            results.add(processUpperNode(node, bs.sourceIdx, level, scratch, params));
         }
 
         return results;
@@ -455,24 +450,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int sourceIdx,
             Scratch scratch,
             CompactWriter writer,
-            boolean fusedPQEnabled,
-            boolean compressedPrecision,
-            int searchTopK,
-            int beamWidth,
-            ProductQuantization pq
+            CompactionParams params
     ) throws IOException {
 
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
 
-        int candSize = gatherCandidates(
-                node, 0, sourceIdx, scratch,
-                scratch.baseVec,
-                fusedPQEnabled,
-                compressedPrecision,
-                searchTopK,
-                beamWidth
-        );
+        int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
         int[] order = IntStream.range(0, candSize).toArray();
         sortOrderByScoreDesc(order, scratch.candScore, candSize);
@@ -518,26 +502,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int sourceIdx,
             int level,
             Scratch scratch,
-            boolean fusedPQEnabled,
-            boolean compressedPrecision,
-            int searchTopK,
-            int beamWidth,
-            ProductQuantization pq
+            CompactionParams params
     ) {
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
 
-        int candSize = gatherCandidates(
-                node,
-                level,
-                sourceIdx,
-                scratch,
-                scratch.baseVec,
-                fusedPQEnabled,
-                compressedPrecision,
-                searchTopK,
-                beamWidth
-        );
+        int candSize = gatherCandidates(node, level, sourceIdx, scratch, scratch.baseVec, params);
 
         int[] order = IntStream.range(0, candSize).toArray();
         sortOrderByScoreDesc(order, scratch.candScore, candSize);
@@ -566,12 +536,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
 
-        ByteSequence<?> pqCode = maybeEncodePQ(
-                fusedPQEnabled,
-                level,
-                pq,
-                scratch
-        );
+        ByteSequence<?> pqCode = maybeEncodePQ(level, scratch, params);
 
         return new UpperLayerWriteResult(newOrdinal, selected, pqCode);
     }
@@ -580,18 +545,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Encodes a vector using Product Quantization if enabled and the level is 1.
      * Returns null otherwise.
      */
-    private ByteSequence<?> maybeEncodePQ(
-            boolean fusedPQEnabled,
-            int level,
-            ProductQuantization pq,
-            Scratch scratch
-    ) {
-        if (!fusedPQEnabled || level != 1) {
+    private ByteSequence<?> maybeEncodePQ(int level, Scratch scratch, CompactionParams params) {
+        if (!params.fusedPQEnabled || level != 1) {
             return null;
         }
 
         scratch.pqCode.zero();
-        pq.encodeTo(scratch.baseVec, scratch.pqCode);
+        params.pq.encodeTo(scratch.baseVec, scratch.pqCode);
         return scratch.pqCode.copy();
     }
 
@@ -606,10 +566,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int sourceIdx,
             Scratch scratch,
             VectorFloat<?> baseVec,
-            boolean fusedPQEnabled,
-            boolean compressedPrecision,
-            int searchTopK,
-            int beamWidth
+            CompactionParams params
     ) {
         int candSize = 0;
 
@@ -618,68 +575,92 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             var indexAlive = liveNodes.get(ss);
 
             if (ss == sourceIdx) {
-                var it = searchView.getNeighborsIterator(level, node);
-                while (it.hasNext()) {
-                    int nb = it.nextInt();
-                    if (!indexAlive.get(nb)) continue;
-
-                    searchView.getVectorInto(nb, scratch.tmpVec, 0);
-
-                    scratch.candSrc[candSize] = ss;
-                    scratch.candNode[candSize] = nb;
-                    scratch.candScore[candSize] =
-                            similarityFunction.compare(baseVec, scratch.tmpVec);
-                    candSize++;
-                }
+                candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
+                                                 baseVec, scratch, candSize);
             } else {
-                SearchScoreProvider ssp = buildCrossSourceScoreProvider(
-                        compressedPrecision,
-                        sources.get(ss),
-                        searchView,
-                        baseVec,
-                        scratch.tmpVec,
-                        similarityFunction
-                );
+                candSize = gatherFromOtherSource(node, level, ss, searchView, indexAlive,
+                                                  baseVec, scratch, candSize, params);
+            }
+        }
 
-                if (level == 0) {
-                    SearchResult results = scratch.gs[ss].search(
-                            ssp, searchTopK, beamWidth, 0f, 0f, indexAlive
+        return candSize;
+    }
+
+    /**
+     * Gathers candidates from the same source index that contains the node.
+     * Simply iterates through existing neighbors.
+     */
+    private int gatherFromSameSource(int node, int level, int sourceIdx,
+                                     OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                     VectorFloat<?> baseVec, Scratch scratch, int candSize) {
+        var it = searchView.getNeighborsIterator(level, node);
+        while (it.hasNext()) {
+            int nb = it.nextInt();
+            if (!indexAlive.get(nb)) continue;
+
+            searchView.getVectorInto(nb, scratch.tmpVec, 0);
+
+            scratch.candSrc[candSize] = sourceIdx;
+            scratch.candNode[candSize] = nb;
+            scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            candSize++;
+        }
+        return candSize;
+    }
+
+    /**
+     * Gathers candidates from a different source index via graph search.
+     */
+    private int gatherFromOtherSource(int node, int level, int sourceIdx,
+                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                      VectorFloat<?> baseVec, Scratch scratch, int candSize,
+                                      CompactionParams params) {
+        SearchScoreProvider ssp = buildCrossSourceScoreProvider(
+                params.compressedPrecision,
+                sources.get(sourceIdx),
+                searchView,
+                baseVec,
+                scratch.tmpVec,
+                similarityFunction
+        );
+
+        if (level == 0) {
+            SearchResult results = scratch.gs[sourceIdx].search(
+                    ssp, params.searchTopK, params.beamWidth, 0f, 0f, indexAlive
+            );
+
+            for (var r : results.getNodes()) {
+                scratch.candSrc[candSize] = sourceIdx;
+                scratch.candNode[candSize] = r.node;
+                scratch.candScore[candSize] =
+                        params.fusedPQEnabled
+                                ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                : r.score;
+                candSize++;
+            }
+        } else {
+            scratch.gs[sourceIdx].initializeInternal(ssp, searchView.entryNode(), Bits.ALL);
+
+            scratch.gs[sourceIdx].searchOneLayer(
+                    ssp, params.searchTopK, 0f, level, indexAlive
+            );
+
+            int prev_candSize = candSize;
+            candSize = appendApproximateResults(
+                    scratch.gs[sourceIdx].approximateResults,
+                    sourceIdx,
+                    scratch,
+                    candSize
+            );
+
+            if (params.fusedPQEnabled) {
+                for (int i = prev_candSize; i < candSize; i++) {
+                    scratch.candScore[i] = rescore(
+                            searchView,
+                            scratch.candNode[i],
+                            baseVec,
+                            scratch.tmpVec
                     );
-
-                    for (var r : results.getNodes()) {
-                        scratch.candSrc[candSize] = ss;
-                        scratch.candNode[candSize] = r.node;
-                        scratch.candScore[candSize] =
-                                fusedPQEnabled
-                                        ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
-                                        : r.score;
-                        candSize++;
-                    }
-                } else {
-                    scratch.gs[ss].initializeInternal(ssp, searchView.entryNode(), Bits.ALL);
-
-                    scratch.gs[ss].searchOneLayer(
-                            ssp, searchTopK, 0f, level, indexAlive
-                    );
-
-                    int prev_candSize = candSize;
-                    candSize = appendApproximateResults(
-                            scratch.gs[ss].approximateResults,
-                            ss,
-                            scratch,
-                            candSize
-                    );
-
-                    if (fusedPQEnabled) {
-                        for (int i = prev_candSize; i < candSize; i++) {
-                            scratch.candScore[i] = rescore(
-                                    searchView,
-                                    scratch.candNode[i],
-                                    baseVec,
-                                    scratch.tmpVec
-                            );
-                        }
-                    }
                 }
             }
         }
@@ -787,28 +768,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * indexes. This ensures the PQ is optimized for the combined dataset.
      */
     private ProductQuantization resolvePQFromSources(VectorSimilarityFunction similarityFunction) {
-        log.info("Training PQ using balanced sampling across sources");
-
-        List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
-
-        log.info("Collected {} training samples", samples.size());
-
-        RandomAccessVectorValues ravv =
-                new SampledRAVV(sources, samples, dimension);
-
-        FusedPQ fpq = (FusedPQ) sources.get(0)
-                .getFeatures().get(FeatureId.FUSED_PQ);
-
-        ProductQuantization basePQ = fpq.getPQ();
-
-        boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-
-        return ProductQuantization.compute(
-                ravv,
-                basePQ.getSubspaceCount(),
-                basePQ.getClusterCount(),
-                center
-        );
+        PQRetrainer retrainer = new PQRetrainer(sources, liveNodes, dimension);
+        return retrainer.retrain(similarityFunction);
     }
 
     /**
@@ -850,24 +811,28 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Estimates the RAM usage of this compactor instance. Note: marked as outdated.
+     * Estimates the RAM usage of this compactor instance.
+     * Accounts for data structures used during compaction including bitsets, remappers,
+     * executor overhead, and per-thread scratch space.
      */
-    // TODO: outdated
     @Override
     public long ramBytesUsed() {
         int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
         // Shallow size of this object (header + fields)
-        // fields: sources, liveNodes, remappers, upperLayerNodeList, maxDegrees,
-        //         neighborOverflow(float), addHierarchy(boolean), dimension(int), rng,
-        //         maxOrdinal(int), numTotalNodes(int), executor, tlSearchers
-        long size = OH + 13L * REF + Integer.BYTES * 3 + Float.BYTES + 1;
+        // Current fields: sources, liveNodes, numLiveNodesPerSource, remappers, maxDegrees,
+        //                dimension(int), maxOrdinal(int), numTotalNodes(int),
+        //                ownsExecutor(boolean), executor, taskWindowSize(int), similarityFunction
+        long size = OH + 8L * REF + Integer.BYTES * 4 + 1;
 
         // liveNodes: FixedBitSet per source
         for (var entry : liveNodes) {
             size += entry.ramBytesUsed();
         }
+
+        // numLiveNodesPerSource: ArrayList of Integers
+        size += OH + REF + (long) numLiveNodesPerSource.size() * (OH + Integer.BYTES);
 
         // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap
         // Estimate based on the number of mappings
@@ -880,178 +845,98 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
-        // upperLayerNodeList: List of Map.Entry<OnDiskGraphIndex, NodeAtLevel>
-        // Each entry: OH + 2*REF, NodeAtLevel: OH + int + int
-        long entrySize = OH + 2L * REF + OH + Integer.BYTES + Integer.BYTES;
-        size += OH + REF;
-
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
 
-        // tlSearchers: ConcurrentHashMap of GraphSearcher[] per thread
-        // Cannot measure precisely since it depends on the number of active threads;
-        // account for the container overhead only
-        size += OH + REF;
+        // executor: ForkJoinPool overhead (if owned)
+        // Estimate based on number of threads
+        int numThreads = ownsExecutor ? Runtime.getRuntime().availableProcessors() : taskWindowSize;
+        if (ownsExecutor) {
+            size += OH + REF;
+        }
+
+        // Scratch space: ThreadLocal instances (one per active thread)
+        // Each Scratch contains:
+        //   - candSrc, candNode, candScore arrays
+        //   - SelectedVecCache (with its own arrays and vector copies)
+        //   - tmpVec, baseVec (VectorFloat instances)
+        //   - GraphSearcher array (one per source)
+        //   - pqCode ByteSequence
+        size += estimateScratchSpacePerThread() * numThreads;
 
         return size;
     }
 
-    private static final class SampleRef {
-        final int source;
-        final int node;
+    /**
+     * Estimates the RAM usage of a single Scratch instance.
+     */
+    private long estimateScratchSpacePerThread() {
+        int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
+        int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
-        SampleRef(int source, int node) {
-            this.source = source;
-            this.node = node;
+        // Calculate maxCandidateSize and maxDegree (same logic as in compactLevels)
+        int maxUpperDegree = 0;
+        for (int level = 1; level < maxDegrees.size(); level++) {
+            maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
         }
+        int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+        int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
+        int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
+        int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
+
+        long scratchSize = OH + 6L * REF;
+
+        // candSrc, candNode, candScore arrays
+        scratchSize += (long) maxCandidateSize * Integer.BYTES; // candSrc
+        scratchSize += (long) maxCandidateSize * Integer.BYTES; // candNode
+        scratchSize += (long) maxCandidateSize * Float.BYTES;   // candScore
+
+        // SelectedVecCache
+        scratchSize += OH + 5L * REF + Integer.BYTES; // SelectedVecCache object
+        scratchSize += (long) scratchDegree * Integer.BYTES;  // sourceIdx array
+        scratchSize += (long) scratchDegree * REF;            // views array
+        scratchSize += (long) scratchDegree * Integer.BYTES;  // nodes array
+        scratchSize += (long) scratchDegree * Float.BYTES;    // scores array
+        scratchSize += (long) scratchDegree * REF;            // vecs array
+        scratchSize += (long) scratchDegree * (OH + dimension * Float.BYTES); // VectorFloat instances
+
+        // tmpVec and baseVec
+        scratchSize += 2L * (OH + dimension * Float.BYTES);
+
+        // GraphSearcher array (one per source)
+        scratchSize += (long) sources.size() * REF;
+        // Each GraphSearcher has internal state - rough estimate
+        scratchSize += (long) sources.size() * (OH + 10L * REF);
+
+        // pqCode ByteSequence (if PQ enabled)
+        if (hasFusedPQ()) {
+            FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
+            int subspaceCount = fpq.getPQ().getSubspaceCount();
+            scratchSize += OH + subspaceCount; // ByteSequence
+        }
+
+        return scratchSize;
     }
 
     /**
-     * Performs balanced sampling across all source indexes to ensure proportional representation.
-     * Guarantees minimum samples per source while respecting total sample budget.
+     * Encapsulates common parameters used throughout the compaction process.
      */
-    private List<SampleRef> sampleBalanced(int totalSamples) {
+    private static final class CompactionParams {
+        final boolean fusedPQEnabled;
+        final boolean compressedPrecision;
+        final int searchTopK;
+        final int beamWidth;
+        final ProductQuantization pq;
 
-        //if total live nodes <= totalSamples, return ALL
-        if (numTotalNodes <= totalSamples) {
-            List<SampleRef> all = new ArrayList<>(numTotalNodes);
-
-            for (int s = 0; s < sources.size(); s++) {
-                FixedBitSet live = liveNodes.get(s);
-
-                for (int node = live.nextSetBit(0);
-                     node != DocIdSetIterator.NO_MORE_DOCS;
-                     node = live.nextSetBit(node + 1)) {
-                    all.add(new SampleRef(s, node));
-                }
-            }
-
-            return all;
-        }
-
-        final int MIN_PER_SOURCE = Math.min(1000, totalSamples / sources.size());
-
-        int[] quota = new int[sources.size()];
-        int assigned = 0;
-
-        // proportional allocation
-        for (int s = 0; s < sources.size(); s++) {
-            quota[s] = Math.max(
-                    MIN_PER_SOURCE,
-                    (int) ((long) totalSamples * numLiveNodesPerSource.get(s) / numTotalNodes)
-            );
-            assigned += quota[s];
-        }
-
-        // normalize down
-        while (assigned > totalSamples) {
-            for (int s = 0; s < sources.size() && assigned > totalSamples; s++) {
-                if (quota[s] > MIN_PER_SOURCE) {
-                    quota[s]--;
-                    assigned--;
-                }
-            }
-        }
-
-        // normalize up
-        while (assigned < totalSamples) {
-            for (int s = 0; s < sources.size() && assigned < totalSamples; s++) {
-                quota[s]++;
-                assigned++;
-            }
-        }
-
-        List<SampleRef> samples = new ArrayList<>(totalSamples);
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
-
-        for (int s = 0; s < sources.size(); s++) {
-            FixedBitSet live = liveNodes.get(s);
-            int max = live.length();
-
-            int count = 0;
-            while (count < quota[s]) {
-                int node = rand.nextInt(max);
-                if (live.get(node)) {
-                    samples.add(new SampleRef(s, node));
-                    count++;
-                }
-            }
-        }
-
-        return samples;
-    }
-
-    /**
-     * Random access vector values implementation backed by sampled references from source indexes.
-     * Used for PQ training on a representative subset of the compacted data.
-     */
-    private static final class SampledRAVV implements RandomAccessVectorValues {
-
-        private final List<OnDiskGraphIndex> sources;
-        private final List<SampleRef> samples;
-        private final int dimension;
-
-        /**
-         * Constructs a SampledRAVV wrapping the given samples.
-         */
-        SampledRAVV(List<OnDiskGraphIndex> sources,
-                    List<SampleRef> samples,
-                    int dimension) {
-            this.sources = sources;
-            this.samples = samples;
-            this.dimension = dimension;
-        }
-
-        /**
-         * Returns the total number of sampled vectors.
-         */
-        @Override
-        public int size() {
-            return samples.size();
-        }
-
-        /**
-         * Returns the vector dimension.
-         */
-        @Override
-        public int dimension() {
-            return dimension;
-        }
-
-        /**
-         * Retrieves a vector by its sample index (not original node ID).
-         */
-        @Override
-        public VectorFloat<?> getVector(int nodeId) {
-            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-            getVectorInto(nodeId, vec, 0);
-            return vec;
-        }
-
-        /**
-         * Loads a sampled vector into the destination buffer by resolving the sample reference.
-         */
-        @Override
-        public void getVectorInto(int i, VectorFloat<?> dest, int offset) {
-            SampleRef ref = samples.get(i);
-            var view = (OnDiskGraphIndex.View) sources.get(ref.source).getView();
-            view.getVectorInto(ref.node, dest, offset);
-        }
-
-        /**
-         * Indicates whether returned vectors share underlying storage.
-         */
-        @Override
-        public boolean isValueShared() {
-            return false;
-        }
-
-        /**
-         * Returns a copy of this RAVV instance (not implemented).
-         */
-        @Override
-        public RandomAccessVectorValues copy() {
-            return null;
+        CompactionParams(boolean fusedPQEnabled, boolean compressedPrecision,
+                        int searchTopK, int beamWidth, ProductQuantization pq) {
+            this.fusedPQEnabled = fusedPQEnabled;
+            this.compressedPrecision = compressedPrecision;
+            this.searchTopK = searchTopK;
+            this.beamWidth = beamWidth;
+            this.pq = pq;
         }
     }
 
@@ -1245,7 +1130,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     shortEdges = nSelected / (float) maxDegree;
                 }
 
-                currentAlpha += 0.2f;
+                currentAlpha += DIVERSITY_ALPHA_STEP;
             }
             return shortEdges;
         }

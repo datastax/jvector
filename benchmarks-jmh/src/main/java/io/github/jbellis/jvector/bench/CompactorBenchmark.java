@@ -583,6 +583,9 @@ public class CompactorBenchmark {
             // Round-robin assignment of partition files to storage paths, but still keep canonical base dir name stable.
             Path baseDirForThisSegment = storagePaths.get(i % storagePaths.size());
             Path outputPath = baseDirForThisSegment.resolve("per-source-graph-" + i);
+            if (Files.exists(outputPath)) {
+                Files.delete(outputPath);
+            }
 
             log.info("Building partition {}/{}: vectors={} -> {}",
                     i + 1, numPartitions, vectorsPerSource.size(), outputPath.toAbsolutePath());
@@ -668,13 +671,10 @@ public class CompactorBenchmark {
         int globalOrdinal = 0;
         for (int n = 0; n < numPartitions; n++) {
             int size = graphs.get(n).size();
-            Map<Integer, Integer> map = new HashMap<>(size * 2);
-            for (int i = 0; i < size; i++) {
-                map.put(i, globalOrdinal++);
-            }
-            var remapper = new OrdinalMapper.MapMapper(map);
+            var remapper = new OrdinalMapper.OffsetMapper(globalOrdinal, size);
             remappers.add(remapper);
             liveNodes.add(randomLiveNodes(size, liveNodesRate, n));
+            globalOrdinal += size;
         }
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, null, similarityFunction, null);
 
