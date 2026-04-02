@@ -234,7 +234,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
-        int entryNode = remappers.get(0).oldToNew(sources.get(0).getView().entryNode().node);
+        int entryNode = resolveEntryNode();
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
@@ -248,6 +248,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } finally {
             if (ownsExecutor) executor.shutdown();
         }
+    }
+
+    /**
+     * Resolves the entry node for the compacted graph. Uses the entry node of the first source
+     * if it is live; otherwise falls back to the first live node found across all sources.
+     */
+    private int resolveEntryNode() {
+        int originalEntry = sources.get(0).getView().entryNode().node;
+        if (liveNodes.get(0).get(originalEntry)) {
+            return remappers.get(0).oldToNew(originalEntry);
+        }
+        for (int s = 0; s < sources.size(); s++) {
+            int first = liveNodes.get(s).nextSetBit(0);
+            if (first != DocIdSetIterator.NO_MORE_DOCS) {
+                return remappers.get(s).oldToNew(first);
+            }
+        }
+        throw new IllegalStateException("No live nodes found across all sources");
     }
 
     /**

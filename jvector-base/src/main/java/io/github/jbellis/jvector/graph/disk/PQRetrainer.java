@@ -42,6 +42,9 @@ public class PQRetrainer {
     private static final Logger log = LoggerFactory.getLogger(PQRetrainer.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final int MIN_SAMPLES_PER_SOURCE = 1000;
+    // Number of consecutive nodes to read per chunk before jumping to another location.
+    // Keeps sequential accesses within the same memory page, reducing page faults.
+    private static final int SAMPLE_CHUNK_SIZE = 32;
 
     private final List<OnDiskGraphIndex> sources;
     private final List<FixedBitSet> liveNodes;
@@ -151,13 +154,30 @@ public class PQRetrainer {
         for (int s = 0; s < sources.size(); s++) {
             FixedBitSet live = liveNodes.get(s);
             int max = live.length();
+            int numChunks = (max + SAMPLE_CHUNK_SIZE - 1) / SAMPLE_CHUNK_SIZE;
+
+            // Build a shuffled chunk order so samples are representative but
+            // each chunk is read sequentially to minimize page faults.
+            // Fisher-Yates shuffle
+            int[] chunkOrder = new int[numChunks];
+            for (int i = 0; i < numChunks; i++) chunkOrder[i] = i;
+            for (int i = numChunks - 1; i > 0; i--) {
+                int j = rand.nextInt(i + 1);
+                int tmp = chunkOrder[i];
+                chunkOrder[i] = chunkOrder[j];
+                chunkOrder[j] = tmp;
+            }
 
             int count = 0;
-            while (count < quota[s]) {
-                int node = rand.nextInt(max);
-                if (live.get(node)) {
-                    samples.add(new SampleRef(s, node));
-                    count++;
+            outer:
+            for (int ci = 0; ci < numChunks; ci++) {
+                int start = chunkOrder[ci] * SAMPLE_CHUNK_SIZE;
+                int end = Math.min(max, start + SAMPLE_CHUNK_SIZE);
+                for (int node = start; node < end; node++) {
+                    if (live.get(node)) {
+                        samples.add(new SampleRef(s, node));
+                        if (++count >= quota[s]) break outer;
+                    }
                 }
             }
         }
