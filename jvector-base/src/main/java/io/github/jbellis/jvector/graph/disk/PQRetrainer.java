@@ -201,19 +201,24 @@ public class PQRetrainer {
     /**
      * Random access vector values implementation backed by sampled references from source indexes.
      * Used for PQ training on a representative subset of the compacted data.
-     *
-     * Note: Random I/O only happens once when ProductQuantization.extractTrainingVectors()
-     * prefetches all vectors into memory at the start of training.
+     * Caches one View per source per thread to avoid repeated view creation on every read.
      */
     private static final class SampledRAVV implements RandomAccessVectorValues {
         private final List<OnDiskGraphIndex> sources;
         private final List<SampleRef> samples;
         private final int dimension;
+        private final ThreadLocal<OnDiskGraphIndex.View[]> threadLocalViews;
 
         SampledRAVV(List<OnDiskGraphIndex> sources, List<SampleRef> samples, int dimension) {
             this.sources = sources;
             this.samples = samples;
             this.dimension = dimension;
+            this.threadLocalViews = ThreadLocal.withInitial(() -> {
+                OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
+                for (int s = 0; s < sources.size(); s++)
+                    views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
+                return views;
+            });
         }
 
         @Override
@@ -236,8 +241,7 @@ public class PQRetrainer {
         @Override
         public void getVectorInto(int i, VectorFloat<?> dest, int offset) {
             SampleRef ref = samples.get(i);
-            var view = (OnDiskGraphIndex.View) sources.get(ref.source).getView();
-            view.getVectorInto(ref.node, dest, offset);
+            threadLocalViews.get()[ref.source].getVectorInto(ref.node, dest, offset);
         }
 
         @Override
