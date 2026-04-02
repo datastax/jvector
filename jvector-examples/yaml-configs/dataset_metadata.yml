@@ -37,3 +37,15 @@ ada002-1M:
   similarity_function: COSINE
 colbert-1M:
   similarity_function: COSINE
+cap-1M:
+  similarity_function: COSINE
+cap-6M:
+  similarity_function: COSINE
+dpr-1M:
+  similarity_function: COSINE
+dpr-10M:
+  similarity_function: COSINE
+cohere-english-v3-1M:
+  similarity_function: COSINE
+cohere-english-v3-10M:
+  similarity_function: COSINE
