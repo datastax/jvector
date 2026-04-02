@@ -30,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -76,6 +77,10 @@ public class PQRetrainer {
         log.info("Training PQ using balanced sampling across sources");
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
+
+        // Sort by (source, node) so that extractTrainingVectors accesses each source's file
+        // sequentially, enabling OS read-ahead instead of random page faults.
+        samples.sort(Comparator.comparingInt((SampleRef r) -> r.source).thenComparingInt(r -> r.node));
 
         log.info("Collected {} training samples", samples.size());
 

@@ -59,7 +59,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // Compaction constants
     private static final int MIN_SAMPLES_PER_SOURCE = 1000;
     private static final float DIVERSITY_ALPHA_STEP = 0.2f;
-    private static final int MIN_BEAM_WIDTH = 100;
+    // Removed MIN_BEAM_WIDTH constant; beam width is now degree-relative (see compactLevels)
     private static final int BEAM_WIDTH_MULTIPLIER = 2;
     private static final int TARGET_BATCHES_PER_SOURCE = 40;
     private static final int TARGET_NODES_PER_BATCH = 128;
@@ -298,7 +298,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int level = 0; level < maxDegrees.size(); level++) {
             List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-            int beamWidth = Math.max(MIN_BEAM_WIDTH, searchTopK * BEAM_WIDTH_MULTIPLIER);
+            int beamWidth = Math.max(maxDegrees.get(level), searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
             CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, beamWidth, pq);
 
