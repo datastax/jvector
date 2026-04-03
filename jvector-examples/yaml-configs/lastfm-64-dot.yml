@@ -2,7 +2,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: glove-25-angular
+dataset: lastfm-64-dot
 
 construction:
   outDegree: [32]
