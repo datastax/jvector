@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -24,27 +25,22 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicatingFuture;
 import io.nosqlbench.vectordata.VectorTestData;
 import io.nosqlbench.vectordata.discovery.ProfileSelector;
-import io.nosqlbench.vectordata.discovery.TestDataGroup;
 import io.nosqlbench.vectordata.discovery.TestDataSources;
 import io.nosqlbench.vectordata.discovery.vector.VectorTestDataView;
 import io.nosqlbench.vectordata.downloader.Catalog;
 import io.nosqlbench.vectordata.downloader.DatasetEntry;
 import io.nosqlbench.vectordata.downloader.DatasetProfileSpec;
+import io.nosqlbench.vectordata.spec.datasets.types.BaseVectors;
 import io.nosqlbench.vectordata.spec.datasets.types.DistanceFunction;
+import io.nosqlbench.vectordata.spec.datasets.types.NeighborIndices;
+import io.nosqlbench.vectordata.spec.datasets.types.QueryVectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.AbstractList;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.LongFunction;
 import java.util.stream.Collectors;
-
-import static io.github.jbellis.jvector.vector.VectorSimilarityFunction.COSINE;
 
 /**
  * A DataSetLoader that uses the io.nosqlbench.datatools-vectordata library to load datasets.
@@ -79,17 +75,17 @@ public class DataSetLoaderVectordata implements DataSetLoader {
             Catalog c1 = tds2.catalog();
             Optional<DatasetEntry> entryOpt = c1.findExact(spec.dataset());
 
-            VectorTestDataView view;
+            Optional<VectorTestDataView> viewOption = Optional.empty();
             if (entryOpt.isPresent()) {
                 DatasetEntry entry = entryOpt.get();
                 logger.info("Found dataset '{}' in catalog. URL: {}", spec.dataset(), entry.url());
                 ProfileSelector selector = entry.select();
-                view = spec.profile().map(selector::profile).orElseGet(selector::profile);
+                viewOption = spec.profile().map(selector::profile);
             }
-
-            if (view == null) {
+            if (viewOption.isEmpty()) {
                 return Optional.empty();
             }
+            VectorTestDataView view = viewOption.get();
 
             if (prebuffer) {
                 logger.info("Prebuffering dataset '{}'...", dataSetName);
@@ -100,8 +96,8 @@ public class DataSetLoaderVectordata implements DataSetLoader {
                 f.get();
             }
 
-            new DataSetInfo(new VectorDataSetProperties(view),() -> new VectordataDataSet(dataSetName, view));
-            return Optional.of(new VectordataDataSet(dataSetName, mapDistanceFunction(view.getDistanceFunction()), view));
+            return Optional.of(new DataSetInfo(new VectorDataSetProperties(view), () -> new VectordataDataSet(view)));
+
         } catch (Exception e) {
             logger.error("Error loading dataset '{}' via vectordata", dataSetName, e);
             return Optional.empty();
@@ -146,17 +142,17 @@ public class DataSetLoaderVectordata implements DataSetLoader {
 
         @Override
         public boolean isNormalized() {
-            return view.getBaseVectors().map(bv -> bv.isNormalized()).orElse(false);
+            return view.isNormalized().orElse(false);
         }
 
         @Override
         public boolean isZeroVectorFree() {
-            return view.getBaseVectors().map(bv -> bv.isZeroVectorFree()).orElse(false);
+            return view.isZeroVectorFree().orElse(false);
         }
 
         @Override
         public boolean isDuplicateVectorFree() {
-            return view.getBaseVectors().map(bv -> bv.isDuplicateVectorFree()).orElse(false);
+            return view.isDuplicateVectorFree().orElse(false);
         }
     }
 
@@ -197,128 +193,83 @@ public class DataSetLoaderVectordata implements DataSetLoader {
         }
     }
 
-    private static class VectordataDataSet implements DataSet {
-        private final String name;
-        private final int dimension;
-        private final RandomAccessVectorValues baseRavv;
-        private final List<VectorFloat<?>> baseVectors;
-        private final List<VectorFloat<?>> queryVectors;
-        private final List<? extends List<Integer>> groundTruth;
+    public static class VectordataDataSet implements DataSet {
+        private final VectorTestDataView datasetView;
+        private RandomAccessVectorValues baseRavv;
+        private List<VectorFloat<?>> baseVectors;
+        private List<VectorFloat<?>> queryVectors;
+        private List<List<Integer>> groundTruthIndices;
 
-        public VectordataDataSet(String name, VectorTestDataView view) {
-            this.name = name;
-
-            var bv = view.getBaseVectors().orElseThrow(() -> new RuntimeException("Base vectors missing in dataset " + name));
-            int bSize = (int) bv.getCount();
-            float[] firstVector = bv.get(0L);
-            this.dimension = firstVector.length;
-
-            this.baseRavv = new VectordataRavv(dimension, bSize, bv::get);
-            this.baseVectors = new AbstractList<VectorFloat<?>>() {
-                @Override
-                public VectorFloat<?> get(int index) {
-                    return vts.createFloatVector(bv.get((long) index));
-                }
-
-                @Override
-                public int size() {
-                    return bSize;
-                }
-            };
-
-            var qv = view.getQueryVectors().orElseThrow(() -> new RuntimeException("Query vectors missing in dataset " + name));
-            int qSize = (int) qv.getCount();
-            this.queryVectors = new AbstractList<VectorFloat<?>>() {
-                @Override
-                public VectorFloat<?> get(int index) {
-                    return vts.createFloatVector(qv.get((long) index));
-                }
-
-                @Override
-                public int size() {
-                    return qSize;
-                }
-            };
-
-            var niOpt = view.getNeighborIndices();
-            if (niOpt.isPresent()) {
-                var ni = niOpt.get();
-                int niSize = (int) ni.getCount();
-                this.groundTruth = new AbstractList<List<Integer>>() {
-                    @Override
-                    public List<Integer> get(int index) {
-                        int[] indices = ni.get((long) index);
-                        return new AbstractList<Integer>() {
-                            @Override
-                            public Integer get(int i) {
-                                return indices[i];
-                            }
-
-                            @Override
-                            public int size() {
-                                return indices.length;
-                            }
-                        };
-                    }
-
-                    @Override
-                    public int size() {
-                        return niSize;
-                    }
-                };
-            } else {
-                logger.warn("Ground truth missing in dataset {}, recall metrics will not be available", name);
-                this.groundTruth = Collections.nCopies(queryVectors.size(), Collections.emptyList());
-            }
-
-            System.out.format("%n%s: %d base and %d query vectors loaded via Vectordata, dimensions %d%n",
-                    name, baseVectors.size(), queryVectors.size(), dimension);
+        public VectordataDataSet(VectorTestDataView view) {
+            this.datasetView = view;
+//            System.out.format("%n%s: %d base and %d query vectors loaded via Vectordata, dimensions %d%n",
+//                    name, baseVectors.size(), queryVectors.size(), dimension);
         }
 
         @Override
         public int getDimension() {
-            return dimension;
+            return datasetView.getBaseVectors().orElseThrow(
+                    () -> new RuntimeException("Unable to get base vectors for " + datasetView.getName())
+            ).getVectorDimensions();
         }
 
         @Override
-        public RandomAccessVectorValues getBaseRavv() {
+        public synchronized RandomAccessVectorValues getBaseRavv() {
+            if (baseRavv==null) {
+                int vectorDimensions = datasetView.getBaseVectors().get().getVectorDimensions();
+                this.baseRavv = new ListRandomAccessVectorValues(this.getBaseVectors(),vectorDimensions);
+            }
             return baseRavv;
         }
 
         @Override
         public String getName() {
-            return name;
+            return datasetView.getName();
         }
 
         @Override
         public VectorSimilarityFunction getSimilarityFunction() {
-            return vsf;
+            switch(datasetView.getDistanceFunction()) {
+                case COSINE: return VectorSimilarityFunction.COSINE;
+                case DOT_PRODUCT: return VectorSimilarityFunction.DOT_PRODUCT;
+                case L2:
+                case EUCLIDEAN: return VectorSimilarityFunction.EUCLIDEAN;
+                default: throw new RuntimeException("Unknown distance function: " + datasetView.getDistanceFunction());
+            }
         }
 
         @Override
-        public List<VectorFloat<?>> getBaseVectors() {
+        public synchronized List<VectorFloat<?>> getBaseVectors() {
+            if (this.baseVectors==null) {
+                BaseVectors baseVectorsView = datasetView.getBaseVectors().get();
+                this.baseVectors = new ArrayList<>(baseVectorsView.getCount());
+                baseVectorsView.forEach(floatAry -> this.baseVectors.add(vts.createFloatVector(floatAry)));
+            }
             return baseVectors;
-        }
+       }
 
         @Override
-        public List<VectorFloat<?>> getQueryVectors() {
+        public synchronized List<VectorFloat<?>> getQueryVectors() {
+            if (this.queryVectors==null) {
+                QueryVectors queryVectorsView = datasetView.getQueryVectors().get();
+                this.queryVectors = new ArrayList<>(queryVectorsView.getCount());
+                queryVectorsView.forEach(floatAry -> this.queryVectors.add(vts.createFloatVector(floatAry)));
+            }
             return queryVectors;
         }
 
         @Override
-        public List<? extends List<Integer>> getGroundTruth() {
-            return groundTruth;
+        public synchronized List<? extends List<Integer>> getGroundTruth() {
+            if (this.groundTruthIndices == null) {
+                NeighborIndices neighborIndices = datasetView.getNeighborIndices().get();
+                this.groundTruthIndices = new ArrayList<>();
+                for (int[] neighborIndex : neighborIndices) {
+                    List<Integer> ordinalIndex = Arrays.stream(neighborIndex).mapToObj(Integer::new).collect(Collectors.toList());
+                    groundTruthIndices.add(ordinalIndex);
+                }
+            }
+            return this.groundTruthIndices;
         }
     }
 
-    private VectorSimilarityFunction mapDistanceFunction(DistanceFunction df) {
-        if (df == null) {
-            throw new RuntimeException(
-                    "VSF could not be mapped from vectordata metadata since it is undefined.\n" +
-                            "This is a dataset integrity error for dataset " + getName() + ".\n" +
-                            "Please report it to the dataset maintainer.\n"
-            );
-        }
-
-    }
 }
