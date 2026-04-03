@@ -56,6 +56,13 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.rat</groupId>
+                <artifactId>apache-rat-plugin</artifactId>
+                <configuration>
+                    <excludesFile>${project.parent.basedir}/rat-excludes.txt</excludesFile>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
     <dependencies>
@@ -164,7 +171,12 @@
         <dependency>
             <groupId>io.nosqlbench</groupId>
             <artifactId>datatools-vectordata</artifactId>
-            <version>0.1.24</version>
+            <version>0.1.25</version>
+        </dependency>
+        <dependency>
+            <groupId>io.nosqlbench</groupId>
+            <artifactId>datatools-testdata-apis</artifactId>
+            <version>0.1.25</version>
         </dependency>
 
     </dependencies>

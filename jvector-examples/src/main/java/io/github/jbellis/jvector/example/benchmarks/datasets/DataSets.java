@@ -37,8 +37,8 @@ public class DataSets {
     private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
-        add(new DataSetLoaderHDF5());
-        add(new DataSetLoaderMFD());
+//        add(new DataSetLoaderHDF5());
+//        add(new DataSetLoaderMFD());
         add(new DataSetLoaderVectordata(true));
     }};
 

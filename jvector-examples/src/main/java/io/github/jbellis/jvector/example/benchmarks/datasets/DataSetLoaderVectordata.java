@@ -26,6 +26,7 @@ import io.nosqlbench.nbdatatools.api.concurrent.ProgressIndicatingFuture;
 import io.nosqlbench.vectordata.VectorTestData;
 import io.nosqlbench.vectordata.discovery.ProfileSelector;
 import io.nosqlbench.vectordata.discovery.TestDataSources;
+import io.nosqlbench.vectordata.discovery.vector.TestDataView;
 import io.nosqlbench.vectordata.discovery.vector.VectorTestDataView;
 import io.nosqlbench.vectordata.downloader.Catalog;
 import io.nosqlbench.vectordata.downloader.DatasetEntry;
@@ -75,17 +76,18 @@ public class DataSetLoaderVectordata implements DataSetLoader {
             Catalog c1 = tds2.catalog();
             Optional<DatasetEntry> entryOpt = c1.findExact(spec.dataset());
 
-            Optional<VectorTestDataView> viewOption = Optional.empty();
+            TestDataView view;
             if (entryOpt.isPresent()) {
                 DatasetEntry entry = entryOpt.get();
                 logger.info("Found dataset '{}' in catalog. URL: {}", spec.dataset(), entry.url());
                 ProfileSelector selector = entry.select();
-                viewOption = spec.profile().map(selector::profile);
+                view = selector.profile(spec.profile().orElse("default"));
+            } else {
+                view = null;
             }
-            if (viewOption.isEmpty()) {
+            if (view==null) {
                 return Optional.empty();
             }
-            VectorTestDataView view = viewOption.get();
 
             if (prebuffer) {
                 logger.info("Prebuffering dataset '{}'...", dataSetName);
