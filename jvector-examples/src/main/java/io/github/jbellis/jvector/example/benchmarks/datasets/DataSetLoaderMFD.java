@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
@@ -67,10 +66,10 @@ public class DataSetLoaderMFD implements DataSetLoader {
             var props = metadata.getProperties(mfd.name)
                     .orElseThrow(() -> new IllegalArgumentException(
                             "No metadata configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
-            var vsf = props.similarityFunction()
+            props.similarityFunction()
                     .orElseThrow(() -> new IllegalArgumentException(
                             "No similarity_function configured in dataset_metadata.yml for MFD dataset: " + mfd.name));
-            return new DataSetInfo(props, () -> mfd.load(vsf));
+            return new DataSetInfo(props, () -> mfd.load(props));
         });
     }
 
@@ -204,15 +203,16 @@ public class DataSetLoaderMFD implements DataSetLoader {
             return List.of(basePath, queriesPath, groundTruthPath);
         }
 
-        /// Reads the fvec/ivec files from disk and returns a scrubbed {@link DataSet}.
+        /// Reads the fvec/ivec files from disk and processes the dataset using the
+        /// configured dataset properties.
         ///
-        /// @param similarityFunction the similarity function to associate with the dataset
-        /// @return the loaded and scrubbed dataset
-        public DataSet load(VectorSimilarityFunction similarityFunction) {
+        /// @param props the dataset properties controlling similarity and load behavior
+        /// @return the loaded dataset
+        public DataSet load(DataSetProperties props) {
             var baseVectors = SiftLoader.readFvecs("fvec/" + basePath);
             var queryVectors = SiftLoader.readFvecs("fvec/" + queriesPath);
             var gtVectors = SiftLoader.readIvecs("fvec/" + groundTruthPath);
-            return DataSetUtils.getScrubbedDataSet(name, similarityFunction, baseVectors, queryVectors, gtVectors);
+            return DataSetUtils.processDataSet(name, props, baseVectors, queryVectors, gtVectors);
         }
 
         public static Map<String, MultiFileDatasource> byName = new HashMap<>() {{

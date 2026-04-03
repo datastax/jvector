@@ -236,6 +236,7 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
+            System.out.printf("%s: similarity function = %s%n", ds.getName(), ds.getSimilarityFunction());
 
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
