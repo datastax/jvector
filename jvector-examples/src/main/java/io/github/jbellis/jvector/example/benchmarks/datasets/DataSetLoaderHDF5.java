@@ -50,6 +50,11 @@ public class DataSetLoaderHDF5 implements DataSetLoader {
     public static final String HDF5_EXTN = ".hdf5";
     private static final DataSetMetadataReader metadata = DataSetMetadataReader.load();
 
+    @Override
+    public String getName() {
+        return "HDF5";
+    }
+
     /**
      * {@inheritDoc}
      */

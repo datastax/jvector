@@ -58,6 +58,12 @@ public class DataSetLoaderMFD implements DataSetLoader {
     private static final List<String> bucketNames = List.of(bucketName, infraBucketName);
     private static final DataSetMetadataReader metadata = DataSetMetadataReader.load();
 
+
+    @Override
+    public String getName() {
+        return "MFD";
+    }
+
     /**
      * {@inheritDoc}
      */

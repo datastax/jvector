@@ -47,4 +47,10 @@ public interface DataSetLoader {
      * @return a {@link DataSetInfo} handle for the dataset, if found
      */
     Optional<DataSetInfo> loadDataSet(String dataSetName);
+
+    /**
+     * Return the dataset name.
+     * @return the dataset name
+     */
+    String getName();
 }
