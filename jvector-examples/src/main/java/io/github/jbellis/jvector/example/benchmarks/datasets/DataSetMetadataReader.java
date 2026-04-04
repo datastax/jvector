@@ -53,7 +53,7 @@ public class DataSetMetadataReader {
     private final Map<String, Map<String, Object>> metadata;
 
     private DataSetMetadataReader(Map<String, Map<String, Object>> metadata) {
-        this.metadata = metadata;
+        this.metadata = metadata != null ? metadata : Map.of();
     }
 
     /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset_metadata.yml}).
@@ -72,8 +72,7 @@ public class DataSetMetadataReader {
     @SuppressWarnings("unchecked")
     public static DataSetMetadataReader load(String file) {
         try (InputStream inputStream = new FileInputStream(file)) {
-            Yaml yaml = new Yaml();
-            Map<String, Map<String, Object>> data = yaml.load(inputStream);
+            Map<String, Map<String, Object>> data = new Yaml().load(inputStream);
             return new DataSetMetadataReader(data);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load dataset metadata from " + file, e);
@@ -82,22 +81,34 @@ public class DataSetMetadataReader {
 
     /// Looks up the {@link DataSetProperties} for a dataset by key.
     ///
-    /// The lookup tries the exact key first, then the key with {@code .hdf5} appended.
-    /// The YAML entry is wrapped in a {@link DataSetProperties.PropertyMap} with the dataset
-    /// name injected. Properties not present in the YAML default to empty/false/zero.
+    /// The lookup first tries the exact key. If that is not found, it also tries the
+    /// corresponding key with or without the {@code .hdf5} suffix so that callers may
+    /// use either form.
+    ///
+    /// The matched YAML entry is wrapped in a {@link DataSetProperties.PropertyMap}
+    /// with the requested dataset key injected as the dataset name when no explicit
+    /// name is present. Properties not present in the YAML default to empty/false/zero.
     ///
     /// @param datasetKey the dataset name or filename to look up
     /// @return the dataset properties if an entry exists, or empty if no entry is found
     public Optional<DataSetProperties> getProperties(String datasetKey) {
+        return findEntry(datasetKey).map(entry -> {
+            var props = new HashMap<>(entry);
+            props.putIfAbsent(DataSetProperties.KEY_NAME, datasetKey);
+            return new DataSetProperties.PropertyMap(props);
+        });
+    }
+
+    private Optional<Map<String, Object>> findEntry(String datasetKey) {
         Map<String, Object> entry = metadata.get(datasetKey);
-        if (entry == null) {
-            entry = metadata.get(datasetKey + ".hdf5");
+        if (entry != null) {
+            return Optional.of(entry);
         }
-        if (entry == null) {
-            return Optional.empty();
+
+        if (datasetKey.endsWith(".hdf5")) {
+            return Optional.ofNullable(metadata.get(datasetKey.substring(0, datasetKey.length() - ".hdf5".length())));
         }
-        var props = new HashMap<>(entry);
-        props.putIfAbsent(DataSetProperties.KEY_NAME, datasetKey);
-        return Optional.of(new DataSetProperties.PropertyMap(props));
+
+        return Optional.ofNullable(metadata.get(datasetKey + ".hdf5"));
     }
 }
