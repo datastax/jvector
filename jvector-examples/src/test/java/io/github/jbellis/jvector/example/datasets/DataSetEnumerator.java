@@ -15,16 +15,36 @@
  */
 package io.github.jbellis.jvector.example.datasets;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetMetadataReader;
 import io.nosqlbench.vectordata.VectorTestData;
 import io.nosqlbench.vectordata.downloader.Catalog;
 import io.nosqlbench.vectordata.downloader.DatasetEntry;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 public class DataSetEnumerator {
 
+    @Test
+    public void testLoadOfficialSet() {
+        DataSetMetadataReader metadata = DataSetMetadataReader.load();
+        Catalog catalog = VectorTestData.catalogs().configure().catalog();
+        List<String> found = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (String rawname : metadata.keySet()) {
+            String dsname = rawname.endsWith(".hdf5") ? rawname.substring(0, rawname.length() - 5) : rawname;
+            Optional<DatasetEntry> entry = catalog.findExact(dsname);
+            if (entry.isPresent()) {
+                found.add(dsname);
+            } else {
+                missing.add(dsname);
+            }
+        }
+        found.forEach(name -> System.out.println("FOUND: " + name));
+        missing.forEach(name -> System.out.println("MISSING: " + name));
+    }
     @Test
     public void testEnumerateDatasets() {
 

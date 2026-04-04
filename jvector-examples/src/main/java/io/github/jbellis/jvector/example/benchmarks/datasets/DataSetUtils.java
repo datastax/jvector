@@ -19,10 +19,15 @@ package io.github.jbellis.jvector.example.benchmarks.datasets;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
 public class DataSetUtils {
+
+    private static final Logger logger = LoggerFactory.getLogger(DataSetUtils.class);
+
     /**
      * Return a dataset containing the given vectors, scrubbed free from zero vectors and normalized to unit length.
      * Note: This only scrubs and normalizes for dot product similarity.
@@ -51,6 +56,8 @@ public class DataSetUtils {
         var vsf = props.similarityFunction()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No similarity function configured for dataset: " + props.getName()));
+
+        logger.info("load_behavior: " + props.loadBehavior());
 
         switch (props.loadBehavior()) {
             case NO_SCRUB:

@@ -5,11 +5,11 @@
 # as similarity_function and load_behavior.
 #
 # load_behavior controls benchmark-loader processing:
-#   LEGACY_SCRUB - preserve the current load-time scrubbing behavior
+#   NOSCRUB - preserve the current load-time scrubbing behavior
 #   NO_SCRUB     - load vectors and ground truth exactly as stored
 #
 # During the transition, existing deployed datasets should generally remain on
-# LEGACY_SCRUB until their prescrubbed replacements and matching offline ground
+# NOSCRUB until their prescrubbed replacements and matching offline ground
 # truth are ready. New prescrubbed datasets should use NO_SCRUB.
 #
 # Additional metadata requires corresponding support in DataSetProperties and the
@@ -17,83 +17,83 @@
 
 ada002-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 ada002-1M:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 cap-1M:
   similarity_function: DOT_PRODUCT
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 cap-6M:
   similarity_function: DOT_PRODUCT
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 cohere-english-v3-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 cohere-english-v3-1M:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 cohere-english-v3-10M:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 colbert-1M:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 colbert-10M:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 degen-200k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 dpr-1M:
   similarity_function: DOT_PRODUCT
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 dpr-10M:
   similarity_function: DOT_PRODUCT
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 e5-small-v2-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 e5-base-v2-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 e5-large-v2-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 gecko-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 nv-qa-v4-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 openai-v3-small-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 openai-v3-large-3072-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 openai-v3-large-1536-100k:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 # ann-benchmarks
 glove-25-angular.hdf5:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 glove-50-angular.hdf5:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 lastfm-64-dot.hdf5:
   similarity_function: DOT_PRODUCT
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 glove-100-angular.hdf5:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 glove-200-angular.hdf5:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 nytimes-256-angular.hdf5:
   similarity_function: COSINE
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB
 sift-128-euclidean.hdf5:
   similarity_function: EUCLIDEAN
-  load_behavior: LEGACY_SCRUB
+  load_behavior: NOSCRUB

@@ -18,12 +18,14 @@ package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import org.yaml.snakeyaml.Yaml;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /// Reads dataset metadata from a multi-entry YAML file and provides keyed lookups
 /// for {@link DataSetProperties}.
@@ -49,6 +51,7 @@ import java.util.Optional;
 public class DataSetMetadataReader {
 
     private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset_metadata.yml";
+    private static final String MODULE_LOCAL_FILE = "yaml-configs/dataset_metadata.yml";
 
     private final Map<String, Map<String, Object>> metadata;
 
@@ -56,12 +59,18 @@ public class DataSetMetadataReader {
         this.metadata = metadata != null ? metadata : Map.of();
     }
 
-    /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset_metadata.yml}).
+    /// Loads dataset metadata from the default file ({@code yaml-configs/dataset_metadata.yml}).
+    /// Tries the repo-root-relative path first, then falls back to the module-local path
+    /// so that this works whether the working directory is the repository root or the
+    /// {@code jvector-examples} module directory (e.g. when run from an IDE gutter icon).
     ///
     /// @return the loaded metadata
-    /// @throws RuntimeException if the file cannot be read
+    /// @throws RuntimeException if the file cannot be found in either location
     public static DataSetMetadataReader load() {
-        return load(DEFAULT_FILE);
+        if (new File(DEFAULT_FILE).exists()) {
+            return load(DEFAULT_FILE);
+        }
+        return load(MODULE_LOCAL_FILE);
     }
 
     /// Loads dataset metadata from the specified file.
@@ -97,6 +106,13 @@ public class DataSetMetadataReader {
             props.putIfAbsent(DataSetProperties.KEY_NAME, datasetKey);
             return new DataSetProperties.PropertyMap(props);
         });
+    }
+
+    /// Returns the set of dataset keys present in the metadata file.
+    ///
+    /// @return an unmodifiable set of dataset keys
+    public Set<String> keySet() {
+        return metadata.keySet();
     }
 
     private Optional<Map<String, Object>> findEntry(String datasetKey) {
