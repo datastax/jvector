@@ -46,8 +46,9 @@ public class DataSets {
                 true)
         );
 
-        add(new DataSetLoaderHDF5());
-        add(new DataSetLoaderMFD());
+        // These are deprecated and should be removed soon.
+        // add(new DataSetLoaderHDF5());
+        // add(new DataSetLoaderMFD());
 
     }};
 
