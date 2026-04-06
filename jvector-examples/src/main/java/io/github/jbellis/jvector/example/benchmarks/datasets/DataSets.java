@@ -37,8 +37,18 @@ public class DataSets {
     private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
+
+        /// To see the list of available datasets here, just run
+        /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml
+        add(new DataSetLoaderSimpleMFD(
+                "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml",
+                "fvec",
+                true)
+        );
+
         add(new DataSetLoaderHDF5());
         add(new DataSetLoaderMFD());
+
     }};
 
     /// Loads a dataset by name using the {@link #defaultLoaders}.
