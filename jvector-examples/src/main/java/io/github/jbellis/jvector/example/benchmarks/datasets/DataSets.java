@@ -41,10 +41,17 @@ public class DataSets {
         /// To see the list of available datasets here, just run
         /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml
         add(new DataSetLoaderSimpleMFD(
-                "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml",
+                "s3://jvector-datasets-public/datasets-clean/datasets.yaml",
                 "fvec",
                 true)
         );
+
+        // http transport available too, but not recommended for s3 sources.
+        //        add(new DataSetLoaderSimpleMFD(
+        //              "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml",
+        //               "fvec",
+        //               true)
+        //        );
 
         // These are deprecated and should be removed soon.
         // add(new DataSetLoaderHDF5());
