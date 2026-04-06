@@ -391,7 +391,7 @@ public class DataSetPropertiesTest {
     public void productionMetadataAllEntriesHaveSimilarityFunction() {
         var reader = DataSetMetadataReader.load();
         // All entries in the production metadata should have a similarity function
-        for (var name : new String[]{"cohere-english-v3-100k", "ada002-100k", "openai-v3-small-100k",
+        for (var name : new String[]{"cohere-english-v3-100k", "ada002-100k", "openai-v3-small-1536-100k",
                 "gecko-100k", "openai-v3-large-3072-100k", "openai-v3-large-1536-100k",
                 "e5-small-v2-100k", "e5-base-v2-100k", "e5-large-v2-100k",
                 "ada002-1M", "colbert-1M"}) {

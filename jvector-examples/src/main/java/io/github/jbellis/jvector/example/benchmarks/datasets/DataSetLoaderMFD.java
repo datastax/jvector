@@ -252,7 +252,7 @@ public class DataSetLoaderMFD implements DataSetLoader {
                                                                      "wikipedia_squad/100k/text-embedding-3-large_1536_100000_base_vectors.fvec",
                                                                      "wikipedia_squad/100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec",
                                                                      "wikipedia_squad/100k/text-embedding-3-large_1536_100000_indices_query_10000.ivec"));
-            put("openai-v3-small-100k", new MultiFileDatasource("openai-v3-small-100k",
+            put("openai-v3-small-1536-100k", new MultiFileDatasource("openai-v3-small-100k",
                                                                 "wikipedia_squad/100k/text-embedding-3-small_1536_100000_base_vectors.fvec",
                                                                 "wikipedia_squad/100k/text-embedding-3-small_1536_100000_query_vectors_10000.fvec",
                                                                 "wikipedia_squad/100k/text-embedding-3-small_1536_100000_indices_query_10000.ivec"));
@@ -284,22 +284,22 @@ public class DataSetLoaderMFD implements DataSetLoader {
                     "wikipedia_squad/1M/textembedding-gecko_1000000_base_vectors.fvec",
                     "wikipedia_squad/1M/textembedding-gecko_1000000_query_vectors_10000.fvec",
                     "wikipedia_squad/1M/textembedding-gecko_1000000_indices_query_10000.ivec"));
-            put("dpr-1M", new MultiFileDatasource("dpr-1M",
-                    DATASET_HASH + "/dpr/c4-en_base_1M_norm_files0_2.fvecs",
-                    DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
-                    DATASET_HASH + "/dpr/dpr_1m_gt_norm_ip_k100.ivecs"));
-            put("dpr-10M", new MultiFileDatasource("dpr-10M",
-                    DATASET_HASH + "/dpr/c4-en_base_10M_norm_files0_2.fvecs",
-                    DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
-                    DATASET_HASH + "/dpr/dpr_10m_gt_norm_ip_k100.ivecs"));
-            put("cap-1M", new MultiFileDatasource("cap-1M",
-                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_1m_norm_shuffle.fvecs",
-                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
-                    DATASET_HASH + "/cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
-            put("cap-6M", new MultiFileDatasource("cap-6M",
-                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
-                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
-                    DATASET_HASH + "/cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
+//            put("dpr-1M", new MultiFileDatasource("dpr-1M",
+//                    DATASET_HASH + "/dpr/c4-en_base_1M_norm_files0_2.fvecs",
+//                    DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+//                    DATASET_HASH + "/dpr/dpr_1m_gt_norm_ip_k100.ivecs"));
+//            put("dpr-10M", new MultiFileDatasource("dpr-10M",
+//                    DATASET_HASH + "/dpr/c4-en_base_10M_norm_files0_2.fvecs",
+//                    DATASET_HASH + "/dpr/c4-en_query_10k_norm_files0_1.fvecs",
+//                    DATASET_HASH + "/dpr/dpr_10m_gt_norm_ip_k100.ivecs"));
+//            put("cap-1M", new MultiFileDatasource("cap-1M",
+//                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_1m_norm_shuffle.fvecs",
+//                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+//                    DATASET_HASH + "/cap/cap_1m_gt_norm_shuffle_ip_k100.ivecs"));
+//            put("cap-6M", new MultiFileDatasource("cap-6M",
+//                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs",
+//                    DATASET_HASH + "/cap/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs",
+//                    DATASET_HASH + "/cap/cap_6m_gt_norm_shuffle_ip_k100.ivecs"));
         }};
     }
 }

@@ -39,9 +39,17 @@ public class DataSets {
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
 
         /// To add your own datasets:
-        /// 1. Put your base(fvec), query(fvec), and ground truth (ivec) files in a directory, preferably local_datasets/
-        /// 2. Edit local_datasets/catalog_entries.yaml (example included)
-        add(new DataSetLoaderSimpleMFD("local_datasets/catalog_entries.yaml"));
+        /// 1. Put your base, query, and gt files in a directory like `local_datasets/mydatasets`
+        /// 2. Add or edit a dataset mapping file: entries.yaml in that directory:
+        /// ```
+        /// mydataset:
+        ///   base: basefile.fvecs
+        ///   query: queryfile.fvecs
+        ///   gt: groundtruthfile.ivecs
+        /// ```
+        /// 3. For private remote datasets, add a 'baseurl' field per entry pointing to the remote source
+        /// All directories under local_datasets below with an *_entries.yaml file are included separately
+        add(new DataSetLoaderSimpleMFD("local_datasets"));
 
         /// To see the list of available datasets here, just run
         /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml

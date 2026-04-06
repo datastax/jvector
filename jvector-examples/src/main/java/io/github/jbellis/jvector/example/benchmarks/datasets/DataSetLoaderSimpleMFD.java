@@ -39,24 +39,37 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
-/// A dataset loader that works with fvec/ivec datasets described by a {@code catalog_entries.yaml}
-/// catalog. Supports S3, HTTP, local-only, and combined remote+local modes.
+/// A dataset loader that works with fvec/ivec datasets described by YAML catalog files
+/// matching the pattern {@code *entries.yaml} (e.g. {@code catalog_entries.yaml},
+/// {@code entries.yaml}, {@code private_entries.yaml}).
+/// Supports S3, HTTP, local-only, and combined remote+local modes.
 ///
 /// ### Catalog format
 ///
-/// The {@code catalog_entries.yaml} file lists datasets with their base, query, and ground truth files:
+/// Each {@code catalog_entries.yaml} file lists datasets with their base, query, and ground truth
+/// files. An optional {@code baseurl} field overrides the default remote base URL for that entry:
 /// ```yaml
 /// ada002-100k:
 ///   base: ada_002_100k_base_99287.fvecs
 ///   query: ada_002_100k_query_10000.fvecs
 ///   gt: ada_002_100k_gt_ip_100.ivecs
+///
+/// # private dataset with its own remote source
+/// dpr-1M:
+///   baseurl: s3://my-bucket/SECRET_HASH/dpr/
+///   base: c4-en_base_1M_norm.fvecs
+///   query: c4-en_query_10k_norm.fvecs
+///   gt: dpr_1m_gt_norm_ip_k100.ivecs
 /// ```
-/// Filenames are resolved relative to the same directory as the catalog (remote base path or
-/// local cache directory).
+/// Filenames are resolved relative to the catalog's directory (local) or the base URL (remote).
+/// When {@code baseurl} is present on an entry, it is used instead of the loader's default remote
+/// base URL for that entry's files.
 ///
 /// ### Usage patterns
 ///
@@ -65,27 +78,33 @@ import java.util.concurrent.CompletableFuture;
 /// remote catalog changes. Supports both HTTP and S3 URLs.
 /// ```java
 /// var loader = new DataSetLoaderSimpleMFD(
-///     "https://bucket.s3.amazonaws.com/datasets-clean/catalog_entries.yaml",
+///     "s3://bucket/datasets-clean/catalog_entries.yaml",
 ///     "fvec/catalog_entries.yaml",    // local cache path
 ///     true                            // warn if remote catalog differs from local
 /// );
 /// ```
 ///
-/// **Local-only with pre-populated files** — no remote access at all. The local directory must
-/// contain both {@code catalog_entries.yaml} and all referenced fvec/ivec files. Pass null or empty
-/// string for the catalog URL, or use the single-arg constructor.
+/// **Local-only with recursive discovery** — the single-arg constructor accepts a directory
+/// and recursively scans it for all files matching {@code *entries.yaml}. This lets you organise
+/// datasets in subdirectories, including private datasets with per-entry {@code baseurl} overrides:
+/// ```
+/// local_datasets/
+///   mydatasets/
+///     user_entries.yaml               # your personal local datasets
+///   private-infra/
+///     private_entries.yaml            # private remote datasets with baseurl per entry
+/// ```
 /// ```java
-/// var loader = new DataSetLoaderSimpleMFD("local_datasets/catalog_entries.yaml");
+/// var loader = new DataSetLoaderSimpleMFD("local_datasets");
 /// ```
 ///
 /// **Remote+local hybrid** — if the local directory already contains {@code catalog_entries.yaml}
 /// and data files, they are used as-is. Missing data files are downloaded from the remote.
-/// This allows pre-populating some datasets locally while fetching others on demand.
 /// ```java
 /// var loader = new DataSetLoaderSimpleMFD(
-///     "https://bucket.s3.amazonaws.com/datasets-clean/catalog_entries.yaml",
-///     "/data/datasets/catalog_entries.yaml",  // may already contain some files
-///     true                                    // check if remote catalog has changed
+///     "s3://bucket/datasets-clean/catalog_entries.yaml",
+///     "/data/datasets/catalog_entries.yaml",
+///     true
 /// );
 /// ```
 ///
@@ -99,10 +118,25 @@ import java.util.concurrent.CompletableFuture;
 public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     private static final Logger logger = LoggerFactory.getLogger(DataSetLoaderSimpleMFD.class);
-    private static final String CATALOG_FILENAME = "catalog_entries.yaml";
+    private static final String DEFAULT_CATALOG_FILENAME = "catalog_entries.yaml";
+    private static final String CATALOG_GLOB = "*entries.yaml";
+
+    /// Resolved entry in the merged catalog. Tracks where the entry came from so that
+    /// local file resolution and per-entry remote base URL overrides work correctly.
+    private static class CatalogEntry {
+        final Map<String, String> fields;
+        final Path localDir;       // directory containing this entry's catalog file
+        final String baseUrl;      // per-entry baseurl override, or null
+
+        CatalogEntry(Map<String, String> fields, Path localDir, String baseUrl) {
+            this.fields = fields;
+            this.localDir = localDir;
+            this.baseUrl = baseUrl;
+        }
+    }
 
     private final String remoteBasePath;
-    private final Map<String, Map<String, String>> catalog;
+    private final Map<String, CatalogEntry> catalog;
     private final Path localCacheDir;
     private final DataSetMetadataReader metadata;
     private final HttpClient httpClient;
@@ -111,17 +145,17 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private S3AsyncClient s3Client;
     private S3TransferManager s3TransferManager;
 
-    /// Creates a local-only loader. No remote access is performed.
+    /// Creates a local-only loader that recursively discovers all {@code *entries.yaml}
+    /// files under the given path.
     ///
-    /// The {@code localPath} may be either a directory (in which case {@code catalog_entries.yaml}
-    /// is assumed inside it) or the full path to a catalog YAML file (in which case the parent
-    /// directory is used for data files).
+    /// The {@code localPath} may be either a directory (scanned recursively for catalog files)
+    /// or the full path to a single catalog YAML file.
     ///
-    /// If the path or catalog file does not exist, the loader is constructed successfully
-    /// but will return empty for all dataset lookups. This allows it to be safely registered
-    /// in a loader list without failing when local datasets are not present.
+    /// If the path does not exist or contains no catalog files, the loader is constructed
+    /// successfully but will return empty for all dataset lookups. This allows it to be safely
+    /// registered in a loader list without failing when local datasets are not present.
     ///
-    /// @param localPath the local directory or full path to a catalog YAML file
+    /// @param localPath the local directory to scan or full path to a catalog YAML file
     public DataSetLoaderSimpleMFD(String localPath) {
         this(null, localPath, false, DataSetMetadataReader.load());
     }
@@ -130,8 +164,8 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     ///
     /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
     /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
-    /// directory and that file is used as the catalog. Otherwise, {@code catalog_entries.yaml}
-    /// is assumed inside the given directory.
+    /// directory and that file is used as the catalog. Otherwise, the directory is scanned
+    /// recursively for all {@code *entries.yaml} files.
     ///
     /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
     ///                        for local-only mode
@@ -143,11 +177,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     }
 
     /// Creates a loader with a custom metadata reader for resolving dataset properties.
-    ///
-    /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
-    /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
-    /// directory and that file is used as the catalog. Otherwise, {@code catalog_entries.yaml}
-    /// is assumed inside the given directory.
     ///
     /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
     ///                        for local-only mode
@@ -171,7 +200,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             localCatalog = resolvedPath;
         } else {
             this.localCacheDir = resolvedPath;
-            localCatalog = resolvedPath.resolve(CATALOG_FILENAME);
+            localCatalog = resolvedPath.resolve(DEFAULT_CATALOG_FILENAME);
         }
 
         // determine whether we have a remote URL (S3 or HTTP)
@@ -186,28 +215,40 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             this.remoteBasePath = null;
         }
 
-        // try to load the local catalog
-        Map<String, Map<String, String>> localCatalogData = null;
-        if (Files.exists(localCatalog)) {
-            logger.info("Loading local dataset catalog from {}", localCatalog);
-            localCatalogData = loadCatalogFromFile(localCatalog);
+        // load local catalog entries — either from a single file or by scanning a directory tree
+        Map<String, CatalogEntry> localEntries = new HashMap<>();
+        if (localPath.endsWith(".yaml") || localPath.endsWith(".yml")) {
+            // single file mode
+            if (Files.exists(localCatalog)) {
+                loadCatalogEntries(localCatalog, localEntries);
+            }
+        } else if (Files.isDirectory(resolvedPath)) {
+            // recursive scan mode
+            scanForCatalogs(resolvedPath, localEntries);
+        } else if (Files.exists(localCatalog)) {
+            // directory doesn't exist yet but might after remote fetch — check the default file
+            loadCatalogEntries(localCatalog, localEntries);
+        }
+
+        if (!localEntries.isEmpty()) {
+            logger.info("Loaded {} datasets from local catalog(s) under {}", localEntries.size(), localCacheDir);
         }
 
         if (isRemote) {
-            if (localCatalogData != null) {
-                this.catalog = localCatalogData;
-                if (checkForUpdates) checkRemoteCatalogForUpdates(catalogUrl, localCatalogData);
+            if (!localEntries.isEmpty()) {
+                this.catalog = localEntries;
+                if (checkForUpdates) checkRemoteCatalogForUpdates(catalogUrl, localEntries);
             } else {
                 logger.info("No local catalog found, fetching from {}", catalogUrl);
-                this.catalog = fetchRemoteCatalog(catalogUrl);
+                var remoteCatalogData = fetchRemoteCatalogRaw(catalogUrl);
+                this.catalog = toCatalogEntries(remoteCatalogData, localCacheDir);
                 saveCatalogLocally(localCatalog, catalogUrl);
             }
         } else {
-            // local-only mode (catalogUrl is null, empty, or a non-remote path)
-            if (localCatalogData != null) {
-                this.catalog = localCatalogData;
+            if (!localEntries.isEmpty()) {
+                this.catalog = localEntries;
             } else {
-                logger.info("No catalog found at {}. This loader will not match any datasets.", localCatalog);
+                logger.info("No catalog found under {}. This loader will not match any datasets.", localCacheDir);
                 this.catalog = Map.of();
             }
         }
@@ -218,9 +259,9 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         var entry = catalog.get(dataSetName);
         if (entry == null) return Optional.empty();
 
-        var baseFile = entry.get("base");
-        var queryFile = entry.get("query");
-        var gtFile = entry.get("gt");
+        var baseFile = entry.fields.get("base");
+        var queryFile = entry.fields.get("query");
+        var gtFile = entry.fields.get("gt");
         if (baseFile == null || queryFile == null || gtFile == null) {
             logger.error("Dataset '{}' is missing required fields (base, query, gt) in catalog", dataSetName);
             return Optional.empty();
@@ -229,57 +270,118 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         logger.info("Found dataset '{}' in catalog", dataSetName);
         var startTime = System.nanoTime();
 
+        // determine the effective remote base URL for this entry
+        String effectiveBaseUrl = entry.baseUrl != null ? entry.baseUrl : remoteBasePath;
+        Path effectiveLocalDir = entry.localDir;
+
         // Execute downloads simultaneously to maximize network bandwidth
         try {
-            var f1 = CompletableFuture.runAsync(() -> ensureQuietly(baseFile));
-            var f2 = CompletableFuture.runAsync(() -> ensureQuietly(queryFile));
-            var f3 = CompletableFuture.runAsync(() -> ensureQuietly(gtFile));
+            var f1 = CompletableFuture.runAsync(() -> ensureQuietly(baseFile, effectiveLocalDir, effectiveBaseUrl));
+            var f2 = CompletableFuture.runAsync(() -> ensureQuietly(queryFile, effectiveLocalDir, effectiveBaseUrl));
+            var f3 = CompletableFuture.runAsync(() -> ensureQuietly(gtFile, effectiveLocalDir, effectiveBaseUrl));
 
             CompletableFuture.allOf(f1, f2, f3).join();
         } catch (Exception e) {
             throw new RuntimeException("Failed to obtain dataset files for " + dataSetName, e);
         }
 
-        System.out.printf("Total elapsed time (s): %.2f\n", (System.nanoTime() - startTime) / 1e9);
+        logger.info("Dataset files ready for '{}' in {}s", dataSetName, String.format("%.2f", (System.nanoTime() - startTime) / 1e9));
 
         var props = metadata.getProperties(dataSetName).orElseThrow();
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(localCacheDir.resolve(baseFile).toString());
-            var queryVectors = SiftLoader.readFvecs(localCacheDir.resolve(queryFile).toString());
-            var gtVectors = SiftLoader.readIvecs(localCacheDir.resolve(gtFile).toString());
+            var baseVectors = SiftLoader.readFvecs(effectiveLocalDir.resolve(baseFile).toString());
+            var queryVectors = SiftLoader.readFvecs(effectiveLocalDir.resolve(queryFile).toString());
+            var gtVectors = SiftLoader.readIvecs(effectiveLocalDir.resolve(gtFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
         }));
     }
 
     // ========================================================================================
-    // PRIMARY FILE AVAILABILITY & CATALOG LOGIC
+    // CATALOG DISCOVERY & LOADING
     // ========================================================================================
 
-    private void ensureQuietly(String filename) {
+    /// Recursively scans a directory tree for files matching {@code *entries.yaml} and merges
+    /// all entries into the given map. Later entries with the same name override earlier ones.
+    private void scanForCatalogs(Path rootDir, Map<String, CatalogEntry> target) {
+        try (Stream<Path> paths = Files.walk(rootDir)) {
+            var matcher = rootDir.getFileSystem().getPathMatcher("glob:" + CATALOG_GLOB);
+            paths.filter(p -> p.getFileName() != null && matcher.matches(p.getFileName()))
+                    .forEach(catalogFile -> loadCatalogEntries(catalogFile, target));
+        } catch (IOException e) {
+            logger.warn("Error scanning for catalogs under {}: {}", rootDir, e.getMessage());
+        }
+    }
+
+    /// Loads entries from a single catalog file into the target map.
+    @SuppressWarnings("unchecked")
+    private void loadCatalogEntries(Path catalogFile, Map<String, CatalogEntry> target) {
+        var raw = loadCatalogFromFile(catalogFile);
+        if (raw.isEmpty()) return;
+
+        Path catalogDir = catalogFile.getParent() != null ? catalogFile.getParent() : Paths.get(".");
+        logger.info("Loading catalog from {} ({} entries)", catalogFile, raw.size());
+
+        for (var e : raw.entrySet()) {
+            String name = e.getKey();
+            Map<String, String> fields = e.getValue();
+            String baseUrl = fields.get("baseurl");
+            // ensure baseurl ends with / if present
+            if (baseUrl != null && !baseUrl.endsWith("/")) {
+                baseUrl = baseUrl + "/";
+            }
+            target.put(name, new CatalogEntry(fields, catalogDir, baseUrl));
+        }
+    }
+
+    /// Converts a raw catalog map (from a remote fetch) into CatalogEntry objects.
+    private static Map<String, CatalogEntry> toCatalogEntries(Map<String, Map<String, String>> raw, Path localDir) {
+        var result = new HashMap<String, CatalogEntry>();
+        for (var e : raw.entrySet()) {
+            String baseUrl = e.getValue().get("baseurl");
+            if (baseUrl != null && !baseUrl.endsWith("/")) {
+                baseUrl = baseUrl + "/";
+            }
+            result.put(e.getKey(), new CatalogEntry(e.getValue(), localDir, baseUrl));
+        }
+        return result;
+    }
+
+    // ========================================================================================
+    // FILE AVAILABILITY
+    // ========================================================================================
+
+    private void ensureQuietly(String filename, Path localDir, String baseUrl) {
         try {
-            ensureFileAvailable(filename);
+            ensureFileAvailable(filename, localDir, baseUrl);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    private void ensureFileAvailable(String filename) throws IOException {
-        Path localPath = localCacheDir.resolve(filename);
+    /// Ensures a dataset file is available locally. Checks in the entry's local directory first.
+    /// If not found and a remote base URL is available (either per-entry or loader-level),
+    /// downloads the file.
+    private void ensureFileAvailable(String filename, Path localDir, String baseUrl) throws IOException {
+        Path localPath = localDir.resolve(filename);
         if (Files.exists(localPath)) return;
-        if (remoteBasePath == null) throw new IOException("File not found locally and no remote URL configured: " + localPath);
+        if (baseUrl == null) throw new IOException("File not found locally and no remote URL configured: " + localPath);
 
         Path parent = localPath.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
 
-        String url = remoteBasePath + filename;
+        String url = baseUrl + filename;
         logger.info("Downloading {} -> {}", url, localPath);
         downloadUrlToFile(url, localPath);
     }
 
+    // ========================================================================================
+    // REMOTE CATALOG OPERATIONS
+    // ========================================================================================
+
     @SuppressWarnings("unchecked")
-    private Map<String, Map<String, String>> fetchRemoteCatalog(String catalogUrl) {
+    private Map<String, Map<String, String>> fetchRemoteCatalogRaw(String catalogUrl) {
         try {
             Path tempFile = Files.createTempFile("catalog-", ".tmp");
             try {
@@ -315,10 +417,23 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     }
 
     /// Fetches the remote catalog and compares it to the local one, logging a warning if they differ.
-    private void checkRemoteCatalogForUpdates(String catalogUrl, Map<String, Map<String, String>> localCatalogData) {
+    private void checkRemoteCatalogForUpdates(String catalogUrl, Map<String, CatalogEntry> localEntries) {
         try {
-            var remoteCatalogData = fetchRemoteCatalog(catalogUrl);
-            if (!remoteCatalogData.equals(localCatalogData)) {
+            var remoteCatalogData = fetchRemoteCatalogRaw(catalogUrl);
+            // compare just the dataset names and file fields, ignoring localDir
+            boolean differs = false;
+            if (remoteCatalogData.size() != localEntries.size()) {
+                differs = true;
+            } else {
+                for (var e : remoteCatalogData.entrySet()) {
+                    var local = localEntries.get(e.getKey());
+                    if (local == null || !local.fields.equals(e.getValue())) {
+                        differs = true;
+                        break;
+                    }
+                }
+            }
+            if (differs) {
                 logger.warn("Remote catalog at {} differs from local catalog. Consider updating your local copy.", catalogUrl);
             }
         } catch (Exception e) {

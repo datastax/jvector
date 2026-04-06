@@ -1,7 +1,7 @@
 neighborhood-watch-100k:
   - cohere-english-v3-100k
   - ada002-100k
-  - openai-v3-small-100k
+  - openai-v3-small-1536-100k
   - gecko-100k
   - openai-v3-large-3072-100k
   - openai-v3-large-1536-100k
@@ -19,5 +19,13 @@ ann-benchmarks:
   - glove-200-angular.hdf5
   - nytimes-256-angular.hdf5
   - sift-128-euclidean.hdf5
+#large-datasets:
+#  - dpr-1M
+#  - dpr-10M
+#  - cap-1M
+#  - cap-6M
+#  - cohere-english-v3-1M
+#  - cohere-english-v3-10M
+
   # - deep-image-96-angular.hdf5 # large files not yet supported
   # - gist-960-euclidean.hdf5 # large files not yet supported
