@@ -57,7 +57,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // use a non-connectable remote URL — the local catalog should be sufficient
         var loader = new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 false,
                 testMetadata
@@ -79,7 +79,7 @@ public class DataSetLoaderSimpleMFDTest {
         writeTestCatalog(cacheDir);
 
         var loader = new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 false,
                 testMetadata
@@ -95,7 +95,7 @@ public class DataSetLoaderSimpleMFDTest {
         writeTestCatalog(cacheDir);
 
         var loader = new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 false,
                 testMetadata
@@ -108,7 +108,7 @@ public class DataSetLoaderSimpleMFDTest {
     public void failsWhenNoCatalogAndRemoteUnreachable() {
         // no local catalog, and remote is unreachable
         assertThrows(RuntimeException.class, () -> new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 false,
                 testMetadata
@@ -123,7 +123,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // should not throw — it logs a warning but proceeds with the local catalog
         var loader = new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 true,
                 testMetadata
@@ -137,10 +137,10 @@ public class DataSetLoaderSimpleMFDTest {
     public void rejectsCatalogWithMissingFields() throws IOException {
         // write a catalog with a dataset missing the 'gt' field
         String yaml = "bad-ds:\n  base: b.fvecs\n  query: q.fvecs\n";
-        Files.writeString(cacheDir.resolve("datasets.yaml"), yaml);
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"), yaml);
 
         var loader = new DataSetLoaderSimpleMFD(
-                "http://0.0.0.0:1/datasets.yaml",
+                "http://0.0.0.0:1/catalog_entries.yaml",
                 cacheDir.toString(),
                 false,
                 testMetadata
@@ -151,15 +151,15 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     @Test
-    public void loadsFromLocalPathWithoutRemote() throws IOException {
-        // use a local file path instead of an HTTP URL
+    public void loadsWithLocalPathAsYamlFile() throws IOException {
+        // localPath points to the catalog file directly
         writeTestCatalog(cacheDir);
         writeTestDataFiles(cacheDir);
 
-        var catalogPath = cacheDir.resolve("datasets.yaml").toString();
+        var catalogFilePath = cacheDir.resolve("catalog_entries.yaml").toString();
         var loader = new DataSetLoaderSimpleMFD(
-                catalogPath,
-                cacheDir.toString(),
+                null,
+                catalogFilePath,
                 false,
                 testMetadata
         );
@@ -169,6 +169,61 @@ public class DataSetLoaderSimpleMFDTest {
 
         var ds = info.get().getDataSet();
         assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(4, ds.getDimension());
+    }
+
+    @Test
+    public void singleArgConstructorWithFilePath() throws IOException {
+        // single-arg constructor with full path to the yaml file
+        writeTestCatalog(cacheDir);
+
+        var catalogFilePath = cacheDir.resolve("catalog_entries.yaml").toString();
+        var loader = new DataSetLoaderSimpleMFD(catalogFilePath);
+
+        // verify catalog is loaded — unknown dataset returns empty
+        assertFalse(loader.loadDataSet("nonexistent").isPresent());
+    }
+
+    @Test
+    public void singleArgConstructorWithDirectory() throws IOException {
+        // single-arg constructor with directory path
+        writeTestCatalog(cacheDir);
+
+        var loader = new DataSetLoaderSimpleMFD(cacheDir.toString());
+
+        // verify catalog is loaded — unknown dataset returns empty
+        assertFalse(loader.loadDataSet("nonexistent").isPresent());
+    }
+
+    @Test
+    public void singleArgConstructorMissingCatalogReturnsEmpty() {
+        // single-arg with a directory that has no catalog — should not throw
+        var loader = new DataSetLoaderSimpleMFD(cacheDir.toString());
+
+        var info = loader.loadDataSet("test-ds");
+        assertFalse(info.isPresent());
+    }
+
+    @Test
+    public void filePathLocalPathResolvesDataFilesCorrectly() throws IOException {
+        // full file path as localPath with 4-arg constructor — data files in same dir as yaml
+        writeTestCatalog(cacheDir);
+        writeTestDataFiles(cacheDir);
+
+        var catalogFilePath = cacheDir.resolve("catalog_entries.yaml").toString();
+        var loader = new DataSetLoaderSimpleMFD(
+                null,
+                catalogFilePath,
+                false,
+                testMetadata
+        );
+
+        var info = loader.loadDataSet("test-ds");
+        assertTrue(info.isPresent());
+
+        var ds = info.get().getDataSet();
+        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(2, ds.getQueryVectors().size());
         assertEquals(4, ds.getDimension());
     }
 
@@ -212,25 +267,31 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     @Test
-    public void nullCatalogUrlFailsWithoutLocalCatalog() {
-        // no remote, no local catalog — must fail
-        assertThrows(IllegalArgumentException.class, () -> new DataSetLoaderSimpleMFD(
+    public void nullCatalogUrlWithoutLocalCatalogReturnsEmpty() {
+        // no remote, no local catalog — constructs successfully but matches nothing
+        var loader = new DataSetLoaderSimpleMFD(
                 null,
                 cacheDir.toString(),
                 false,
                 testMetadata
-        ));
+        );
+
+        var info = loader.loadDataSet("test-ds");
+        assertFalse(info.isPresent(), "Should return empty when no catalog exists");
     }
 
     @Test
-    public void emptyCatalogUrlFailsWithoutLocalCatalog() {
-        // no remote, no local catalog — must fail
-        assertThrows(IllegalArgumentException.class, () -> new DataSetLoaderSimpleMFD(
+    public void emptyCatalogUrlWithoutLocalCatalogReturnsEmpty() {
+        // no remote, no local catalog — constructs successfully but matches nothing
+        var loader = new DataSetLoaderSimpleMFD(
                 "",
                 cacheDir.toString(),
                 false,
                 testMetadata
-        ));
+        );
+
+        var info = loader.loadDataSet("test-ds");
+        assertFalse(info.isPresent(), "Should return empty when no catalog exists");
     }
 
     @Test
@@ -267,6 +328,50 @@ public class DataSetLoaderSimpleMFDTest {
                 "Error should indicate no remote is available: " + ex.getCause().getMessage());
     }
 
+    @Test
+    public void commentOnlyCatalogFileReturnsEmpty() throws IOException {
+        // catalog file exists but contains only comments — SnakeYAML returns null
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "# This file has no actual entries\n# Just comments\n");
+
+        var loader = new DataSetLoaderSimpleMFD(
+                null,
+                cacheDir.toString(),
+                false,
+                testMetadata
+        );
+
+        assertFalse(loader.loadDataSet("test-ds").isPresent());
+    }
+
+    @Test
+    public void emptyCatalogFileReturnsEmpty() throws IOException {
+        // catalog file exists but is 0 bytes
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"), "");
+
+        var loader = new DataSetLoaderSimpleMFD(
+                null,
+                cacheDir.toString(),
+                false,
+                testMetadata
+        );
+
+        assertFalse(loader.loadDataSet("test-ds").isPresent());
+    }
+
+    @Test
+    public void singleArgWithCommentOnlyCatalogReturnsEmpty() throws IOException {
+        // single-arg constructor with a comment-only catalog file path
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "# placeholder for local datasets\n");
+
+        var loader = new DataSetLoaderSimpleMFD(
+                cacheDir.resolve("catalog_entries.yaml").toString()
+        );
+
+        assertFalse(loader.loadDataSet("anything").isPresent());
+    }
+
     // ========================================================================
     // Helpers
     // ========================================================================
@@ -276,7 +381,7 @@ public class DataSetLoaderSimpleMFDTest {
                 + "  base: test_base.fvecs\n"
                 + "  query: test_query.fvecs\n"
                 + "  gt: test_gt.ivecs\n";
-        Files.writeString(dir.resolve("datasets.yaml"), yaml);
+        Files.writeString(dir.resolve("catalog_entries.yaml"), yaml);
     }
 
     private static void writeTestDataFiles(Path dir) throws IOException {

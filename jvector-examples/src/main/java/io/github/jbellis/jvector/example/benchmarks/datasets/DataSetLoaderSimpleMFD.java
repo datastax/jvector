@@ -43,12 +43,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-/// A dataset loader that works with fvec/ivec datasets described by a {@code datasets.yaml}
+/// A dataset loader that works with fvec/ivec datasets described by a {@code catalog_entries.yaml}
 /// catalog. Supports S3, HTTP, local-only, and combined remote+local modes.
 ///
 /// ### Catalog format
 ///
-/// The {@code datasets.yaml} file lists datasets with their base, query, and ground truth files:
+/// The {@code catalog_entries.yaml} file lists datasets with their base, query, and ground truth files:
 /// ```yaml
 /// ada002-100k:
 ///   base: ada_002_100k_base_99287.fvecs
@@ -57,6 +57,37 @@ import java.util.concurrent.CompletableFuture;
 /// ```
 /// Filenames are resolved relative to the same directory as the catalog (remote base path or
 /// local cache directory).
+///
+/// ### Usage patterns
+///
+/// **Remote with local caching** — files are downloaded on first use and cached locally.
+/// Subsequent runs use cached files. Set {@code checkForUpdates=true} to be warned when the
+/// remote catalog changes. Supports both HTTP and S3 URLs.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD(
+///     "https://bucket.s3.amazonaws.com/datasets-clean/catalog_entries.yaml",
+///     "fvec/catalog_entries.yaml",    // local cache path
+///     true                            // warn if remote catalog differs from local
+/// );
+/// ```
+///
+/// **Local-only with pre-populated files** — no remote access at all. The local directory must
+/// contain both {@code catalog_entries.yaml} and all referenced fvec/ivec files. Pass null or empty
+/// string for the catalog URL, or use the single-arg constructor.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD("local_datasets/catalog_entries.yaml");
+/// ```
+///
+/// **Remote+local hybrid** — if the local directory already contains {@code catalog_entries.yaml}
+/// and data files, they are used as-is. Missing data files are downloaded from the remote.
+/// This allows pre-populating some datasets locally while fetching others on demand.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD(
+///     "https://bucket.s3.amazonaws.com/datasets-clean/catalog_entries.yaml",
+///     "/data/datasets/catalog_entries.yaml",  // may already contain some files
+///     true                                    // check if remote catalog has changed
+/// );
+/// ```
 ///
 /// ### Metadata
 ///
@@ -68,7 +99,7 @@ import java.util.concurrent.CompletableFuture;
 public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     private static final Logger logger = LoggerFactory.getLogger(DataSetLoaderSimpleMFD.class);
-    private static final String CATALOG_FILENAME = "datasets.yaml";
+    private static final String CATALOG_FILENAME = "catalog_entries.yaml";
 
     private final String remoteBasePath;
     private final Map<String, Map<String, String>> catalog;
@@ -80,20 +111,72 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private S3AsyncClient s3Client;
     private S3TransferManager s3TransferManager;
 
-    public DataSetLoaderSimpleMFD(String catalogUrl, String localCacheDir, boolean checkForUpdates) {
-        this(catalogUrl, localCacheDir, checkForUpdates, DataSetMetadataReader.load());
+    /// Creates a local-only loader. No remote access is performed.
+    ///
+    /// The {@code localPath} may be either a directory (in which case {@code catalog_entries.yaml}
+    /// is assumed inside it) or the full path to a catalog YAML file (in which case the parent
+    /// directory is used for data files).
+    ///
+    /// If the path or catalog file does not exist, the loader is constructed successfully
+    /// but will return empty for all dataset lookups. This allows it to be safely registered
+    /// in a loader list without failing when local datasets are not present.
+    ///
+    /// @param localPath the local directory or full path to a catalog YAML file
+    public DataSetLoaderSimpleMFD(String localPath) {
+        this(null, localPath, false, DataSetMetadataReader.load());
     }
 
+    /// Creates a loader using the default dataset metadata from {@code dataset_metadata.yml}.
+    ///
+    /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
+    /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
+    /// directory and that file is used as the catalog. Otherwise, {@code catalog_entries.yaml}
+    /// is assumed inside the given directory.
+    ///
+    /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
+    ///                        for local-only mode
+    /// @param localPath       the local directory or full path to a catalog YAML file
+    /// @param checkForUpdates if true and a local catalog already exists, the remote catalog is
+    ///                        fetched and compared; a warning is logged if they differ
+    public DataSetLoaderSimpleMFD(String catalogUrl, String localPath, boolean checkForUpdates) {
+        this(catalogUrl, localPath, checkForUpdates, DataSetMetadataReader.load());
+    }
+
+    /// Creates a loader with a custom metadata reader for resolving dataset properties.
+    ///
+    /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
+    /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
+    /// directory and that file is used as the catalog. Otherwise, {@code catalog_entries.yaml}
+    /// is assumed inside the given directory.
+    ///
+    /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
+    ///                        for local-only mode
+    /// @param localPath       the local directory or full path to a catalog YAML file
+    /// @param checkForUpdates if true and a local catalog already exists, the remote catalog is
+    ///                        fetched and compared; a warning is logged if they differ.
+    ///                        Ignored when catalogUrl is null/empty.
+    /// @param metadata        the metadata reader for resolving dataset properties
     @SuppressWarnings("unchecked")
-    public DataSetLoaderSimpleMFD(String catalogUrl, String localCacheDir, boolean checkForUpdates, DataSetMetadataReader metadata) {
+    public DataSetLoaderSimpleMFD(String catalogUrl, String localPath, boolean checkForUpdates, DataSetMetadataReader metadata) {
         this.metadata = metadata;
-        this.localCacheDir = Paths.get(localCacheDir);
-        this.httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+        this.httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+
+        // resolve localPath: if it points to a yaml file, use the parent as the cache dir
+        Path resolvedPath = Paths.get(localPath);
+        Path localCatalog;
+        if (localPath.endsWith(".yaml") || localPath.endsWith(".yml")) {
+            this.localCacheDir = resolvedPath.getParent() != null ? resolvedPath.getParent() : Paths.get(".");
+            localCatalog = resolvedPath;
+        } else {
+            this.localCacheDir = resolvedPath;
+            localCatalog = resolvedPath.resolve(CATALOG_FILENAME);
+        }
 
         // determine whether we have a remote URL (S3 or HTTP)
         boolean isRemote = catalogUrl != null && !catalogUrl.isEmpty()
                 && (catalogUrl.startsWith("http://") || catalogUrl.startsWith("https://") || catalogUrl.startsWith("s3://"));
-        boolean isLocalPath = catalogUrl != null && !catalogUrl.isEmpty() && !isRemote;
 
         // derive remote base path by stripping the filename from the catalog URL
         if (isRemote) {
@@ -103,8 +186,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             this.remoteBasePath = null;
         }
 
-        // check for a local catalog first
-        Path localCatalog = this.localCacheDir.resolve(CATALOG_FILENAME);
+        // try to load the local catalog
         Map<String, Map<String, String>> localCatalogData = null;
         if (Files.exists(localCatalog)) {
             logger.info("Loading local dataset catalog from {}", localCatalog);
@@ -120,17 +202,13 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 this.catalog = fetchRemoteCatalog(catalogUrl);
                 saveCatalogLocally(localCatalog, catalogUrl);
             }
-        } else if (isLocalPath) {
-            if (localCatalogData != null) {
-                this.catalog = localCatalogData;
-            } else {
-                this.catalog = loadCatalogFromFile(Paths.get(catalogUrl));
-            }
         } else {
+            // local-only mode (catalogUrl is null, empty, or a non-remote path)
             if (localCatalogData != null) {
                 this.catalog = localCatalogData;
             } else {
-                throw new IllegalArgumentException("No remote catalog URL provided and no local catalog found at " + localCatalog);
+                logger.info("No catalog found at {}. This loader will not match any datasets.", localCatalog);
+                this.catalog = Map.of();
             }
         }
     }
@@ -229,12 +307,14 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     @SuppressWarnings("unchecked")
     private static Map<String, Map<String, String>> loadCatalogFromFile(Path path) {
         try (InputStream in = Files.newInputStream(path)) {
-            return new Yaml().load(in);
+            Map<String, Map<String, String>> result = new Yaml().load(in);
+            return result != null ? result : Map.of();
         } catch (IOException e) {
             throw new RuntimeException("Failed to load catalog from " + path, e);
         }
     }
 
+    /// Fetches the remote catalog and compares it to the local one, logging a warning if they differ.
     private void checkRemoteCatalogForUpdates(String catalogUrl, Map<String, Map<String, String>> localCatalogData) {
         try {
             var remoteCatalogData = fetchRemoteCatalog(catalogUrl);

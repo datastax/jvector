@@ -38,18 +38,23 @@ public class DataSets {
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
 
+        /// To add your own datasets:
+        /// 1. Put your base(fvec), query(fvec), and ground truth (ivec) files in a directory, preferably local_datasets/
+        /// 2. Edit local_datasets/catalog_entries.yaml (example included)
+        add(new DataSetLoaderSimpleMFD("local_datasets/catalog_entries.yaml"));
+
         /// To see the list of available datasets here, just run
-        /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml
+        /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml
         add(new DataSetLoaderSimpleMFD(
-                "s3://jvector-datasets-public/datasets-clean/datasets.yaml",
-                "fvec",
+                "s3://jvector-datasets-public/datasets-clean/catalog_entries.yaml",
+                "fvec/catalog_entries.yaml",
                 true)
         );
 
-        // http transport available too, but not recommended for s3 sources.
+        // HTTP transport available too, but not recommended for S3 sources.
         //        add(new DataSetLoaderSimpleMFD(
-        //              "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/datasets.yaml",
-        //               "fvec",
+        //              "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml",
+        //               "fvec/catalog_entries.yaml",
         //               true)
         //        );
 
