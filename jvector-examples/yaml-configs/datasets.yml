@@ -19,7 +19,7 @@ ann-benchmarks:
   - glove-200-angular.hdf5
   - nytimes-256-angular.hdf5
   - sift-128-euclidean.hdf5
-#large-datasets:
+other-datasets:
 #  - dpr-1M
 #  - dpr-10M
 #  - cap-1M

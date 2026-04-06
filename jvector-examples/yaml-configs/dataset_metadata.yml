@@ -22,10 +22,10 @@ ada002-1M:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
 cap-1M:
-  similarity_function: DOT_PRODUCT
+  similarity_function: COSINE
   load_behavior: NO_SCRUB
 cap-6M:
-  similarity_function: DOT_PRODUCT
+  similarity_function: COSINE
   load_behavior: NO_SCRUB
 cohere-english-v3-100k:
   similarity_function: COSINE
@@ -46,10 +46,10 @@ degen-200k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
 dpr-1M:
-  similarity_function: DOT_PRODUCT
+  similarity_function: COSINE
   load_behavior: NO_SCRUB
 dpr-10M:
-  similarity_function: DOT_PRODUCT
+  similarity_function: COSINE
   load_behavior: NO_SCRUB
 e5-small-v2-100k:
   similarity_function: COSINE
