@@ -35,70 +35,114 @@ import java.util.Map;
 import java.util.Optional;
 
 /// A dataset loader that works with fvec/ivec datasets described by a {@code datasets.yaml}
-/// catalog. Supports both local-only and remote (HTTP) catalogs.
+/// catalog. Supports remote (HTTP), local-only, and combined remote+local modes.
 ///
-/// The constructor accepts the full URL (or local path) to a {@code datasets.yaml} file.
-/// The base path for dataset files is derived by stripping the filename from that URL/path.
-/// Filenames in the catalog are resolved relative to that base path.
+/// ### Catalog format
 ///
-/// ### Local-first with optional remote sync
-///
-/// If a local {@code datasets.yaml} already exists in the cache directory, it is used directly
-/// and no download is needed. When {@code checkForUpdates} is enabled (the default), the loader
-/// also fetches the remote catalog and warns if it differs from the local copy. This lets you
-/// work fully offline with pre-populated local datasets while still being notified when the
-/// remote catalog changes.
-///
-/// ### Example catalog format
+/// The {@code datasets.yaml} file lists datasets with their base, query, and ground truth files:
 /// ```yaml
 /// ada002-100k:
 ///   base: ada_002_100k_base_99287.fvecs
 ///   query: ada_002_100k_query_10000.fvecs
 ///   gt: ada_002_100k_gt_ip_100.ivecs
 /// ```
+/// Filenames are resolved relative to the same directory as the catalog (remote base path or
+/// local cache directory).
 ///
-/// Given {@code catalogUrl = "https://bucket.s3.amazonaws.com/datasets-clean/datasets.yaml"},
-/// the base vectors file would be fetched from:
+/// ### Usage patterns
+///
+/// **Remote with local caching** — files are downloaded on first use and cached locally.
+/// Subsequent runs use cached files. Set {@code checkForUpdates=true} to be warned when the
+/// remote catalog changes.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD(
+///     "https://bucket.s3.amazonaws.com/datasets-clean/datasets.yaml",
+///     "fvec",    // local cache directory
+///     true       // warn if remote catalog differs from local
+/// );
 /// ```
-/// https://bucket.s3.amazonaws.com/datasets-clean/ada_002_100k_base_99287.fvecs
+///
+/// **Local-only with pre-populated files** — no remote access at all. The local directory must
+/// contain both {@code datasets.yaml} and all referenced fvec/ivec files. Pass null or empty
+/// string for the catalog URL.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD(
+///     null,              // no remote
+///     "/data/datasets",  // directory with datasets.yaml and data files
+///     false              // checkForUpdates is ignored when no remote URL
+/// );
 /// ```
+///
+/// **Remote+local hybrid** — if the local directory already contains {@code datasets.yaml}
+/// and data files, they are used as-is. Missing data files are downloaded from the remote.
+/// This allows pre-populating some datasets locally while fetching others on demand.
+/// ```java
+/// var loader = new DataSetLoaderSimpleMFD(
+///     "https://bucket.s3.amazonaws.com/datasets-clean/datasets.yaml",
+///     "/data/datasets",  // may already contain some files
+///     true               // check if remote catalog has changed
+/// );
+/// ```
+///
+/// ### Metadata
 ///
 /// Dataset metadata (similarity function, load behavior) is resolved from
-/// {@code dataset_metadata.yml} via {@link DataSetMetadataReader}.
+/// {@code dataset_metadata.yml} via {@link DataSetMetadataReader}. A custom metadata reader
+/// can be provided via the 4-argument constructor.
 ///
 /// @see DataSetLoaderMFD
 public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     private static final Logger logger = LoggerFactory.getLogger(DataSetLoaderSimpleMFD.class);
     private static final String CATALOG_FILENAME = "datasets.yaml";
-    private static final DataSetMetadataReader metadata = DataSetMetadataReader.load();
 
     private final String remoteBasePath;
     private final Map<String, Map<String, String>> catalog;
     private final Path localCacheDir;
     private final HttpClient httpClient;
+    private final DataSetMetadataReader metadata;
 
-    /// Creates a loader from the full URL to a remote {@code datasets.yaml} file.
+    /// Creates a loader using the default dataset metadata from {@code dataset_metadata.yml}.
     ///
-    /// @param catalogUrl      the full URL to the datasets.yaml catalog
-    ///                        (e.g. {@code "https://bucket.s3.amazonaws.com/path/datasets.yaml"})
-    /// @param localCacheDir   the local directory to cache downloaded fvec/ivec files and the catalog
+    /// @param catalogUrl      the full URL to the remote datasets.yaml catalog, or null/empty
+    ///                        for local-only mode
+    /// @param localCacheDir   the local directory containing (or caching) dataset files and the catalog
     /// @param checkForUpdates if true and a local catalog already exists, the remote catalog is
     ///                        fetched and compared; a warning is logged if they differ
-    @SuppressWarnings("unchecked")
     public DataSetLoaderSimpleMFD(String catalogUrl, String localCacheDir, boolean checkForUpdates) {
+        this(catalogUrl, localCacheDir, checkForUpdates, DataSetMetadataReader.load());
+    }
+
+    /// Creates a loader with a custom metadata reader for resolving dataset properties.
+    ///
+    /// @param catalogUrl      the full URL to the remote datasets.yaml catalog, or null/empty
+    ///                        for local-only mode (requires a local catalog at
+    ///                        {@code <localCacheDir>/datasets.yaml})
+    /// @param localCacheDir   the local directory containing (or caching) dataset files and the catalog
+    /// @param checkForUpdates if true and a local catalog already exists, the remote catalog is
+    ///                        fetched and compared; a warning is logged if they differ.
+    ///                        Ignored when catalogUrl is null/empty.
+    /// @param metadata        the metadata reader for resolving dataset properties
+    @SuppressWarnings("unchecked")
+    public DataSetLoaderSimpleMFD(String catalogUrl, String localCacheDir, boolean checkForUpdates, DataSetMetadataReader metadata) {
+        this.metadata = metadata;
         this.localCacheDir = Paths.get(localCacheDir);
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
 
+        // determine whether we have a remote URL
+        boolean isRemote = catalogUrl != null && !catalogUrl.isEmpty()
+                && (catalogUrl.startsWith("http://") || catalogUrl.startsWith("https://"));
+        boolean isLocalPath = catalogUrl != null && !catalogUrl.isEmpty() && !isRemote;
+
         // derive remote base path by stripping the filename from the catalog URL
-        boolean isRemote = catalogUrl.startsWith("http://") || catalogUrl.startsWith("https://");
-        int lastSlash = catalogUrl.lastIndexOf('/');
-        if (lastSlash < 0) {
-            throw new IllegalArgumentException("Catalog URL/path must contain a path separator: " + catalogUrl);
+        if (isRemote) {
+            int lastSlash = catalogUrl.lastIndexOf('/');
+            this.remoteBasePath = catalogUrl.substring(0, lastSlash + 1);
+        } else {
+            this.remoteBasePath = null;
         }
-        this.remoteBasePath = isRemote ? catalogUrl.substring(0, lastSlash + 1) : null;
 
         // check for a local catalog first
         Path localCatalog = this.localCacheDir.resolve(CATALOG_FILENAME);
@@ -123,8 +167,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 saveCatalogLocally(localCatalog, catalogUrl);
                 logger.info("Loaded and cached catalog with {} datasets", catalog.size());
             }
-        } else {
-            // local-only path
+        } else if (isLocalPath) {
             if (localCatalogData != null) {
                 this.catalog = localCatalogData;
             } else {
@@ -132,6 +175,14 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 logger.info("Loading dataset catalog from local path {}", catalogUrl);
                 this.catalog = loadCatalogFromFile(Paths.get(catalogUrl));
                 logger.info("Loaded catalog with {} datasets", catalog.size());
+            }
+        } else {
+            // null or empty catalogUrl — local-only mode
+            if (localCatalogData != null) {
+                this.catalog = localCatalogData;
+            } else {
+                throw new IllegalArgumentException(
+                        "No remote catalog URL provided and no local catalog found at " + localCatalog);
             }
         }
     }
