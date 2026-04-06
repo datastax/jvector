@@ -40,15 +40,7 @@ public class DataSets {
 
         /// To add your own datasets:
         /// 1. Put your base, query, and gt files in a directory like `local_datasets/mydatasets`
-        /// 2. Add or edit a dataset mapping file: entries.yaml in that directory:
-        /// ```
-        /// mydataset:
-        ///   base: basefile.fvecs
-        ///   query: queryfile.fvecs
-        ///   gt: groundtruthfile.ivecs
-        /// ```
-        /// 3. For private remote datasets, add a 'baseurl' field per entry pointing to the remote source
-        /// All directories under local_datasets below with an *_entries.yaml file are included separately
+        /// 2. Add or edit a dataset mapping file: entries.yaml in that directory. (see example there)
         add(new DataSetLoaderSimpleMFD("local_datasets"));
 
         /// To see the list of available datasets here, just run
