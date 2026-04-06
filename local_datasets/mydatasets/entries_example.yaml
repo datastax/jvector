@@ -1,5 +1,7 @@
 # This file simply maps a simple dataset name to the data facets needed to load knn ground truth
 # You can use either relative or absolute paths here
+#
+# To activate this file, it must be named *entries.yaml, like 'test_entries.yaml'.
 # my_test_data:
 #  base: path_to_base_vectors.fvecs
 #  query: path_query_vectors.fvecs
