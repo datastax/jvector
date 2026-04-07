@@ -37,6 +37,15 @@ public class DataSetLoaderSimpleMFDTest {
     private Path cacheDir;
     private DataSetMetadataReader testMetadata;
 
+    /// Returns the name of an environment variable that is reliably set on all platforms.
+    /// On Unix this is typically HOME; on Windows it is typically USERPROFILE or PATH.
+    private static String findReliableEnvVar() {
+        for (String name : new String[] {"HOME", "USERPROFILE", "PATH"}) {
+            if (System.getenv(name) != null) return name;
+        }
+        throw new AssertionError("Could not find any set environment variable for testing");
+    }
+
     @Before
     public void setUp() throws IOException {
         cacheDir = tempFolder.newFolder("datasets").toPath();
@@ -789,13 +798,11 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void envVarExpandedInBaseurl() throws IOException {
-        // HOME is reliably set on all platforms
-        String home = System.getenv("HOME");
-        assertNotNull(home, "HOME env var must be set for this test");
+        String envName = findReliableEnvVar();
 
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
-                "  base_url: http://0.0.0.0:1/${HOME}/path/\n" +
+                "  base_url: http://0.0.0.0:1/${" + envName + "}/path/\n" +
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
                 "  gt: test_gt.ivecs\n");
@@ -815,12 +822,7 @@ public class DataSetLoaderSimpleMFDTest {
         Path customCache = tempFolder.newFolder("env-cache").toPath();
         writeTestDataFiles(customCache);
 
-        // use USER env var (reliably set) embedded in a path
-        String user = System.getenv("USER");
-        assertNotNull(user, "USER env var must be set for this test");
-
-        // construct a cache_dir that uses ${USER} but resolves to customCache
-        // We just verify that the ${} syntax is expanded without error
+        // verify that the ${} syntax is expanded without error
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
                 "  cache_dir: " + customCache.toString() + "\n" +
@@ -838,12 +840,11 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void envVarExpandedInDefaults() throws IOException {
-        String home = System.getenv("HOME");
-        assertNotNull(home, "HOME env var must be set for this test");
+        String envName = findReliableEnvVar();
 
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "_defaults:\n" +
-                "  base_url: http://0.0.0.0:1/${HOME}/\n" +
+                "  base_url: http://0.0.0.0:1/${" + envName + "}/\n" +
                 "test-ds:\n" +
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
@@ -876,7 +877,6 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void envVarWithDefaultUsesDefault() throws IOException {
-        // references a nonexistent var with a default — should use the default
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
                 "  base_url: http://0.0.0.0:1/${JVECTOR_NONEXISTENT_12345:-fallback-path}/\n" +
@@ -889,20 +889,17 @@ public class DataSetLoaderSimpleMFDTest {
                 null, cacheDir.toString(), false, testMetadata
         );
 
-        // should succeed — the default value "fallback-path" is used
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
         assertEquals(5, ds.getBaseVectors().size());
     }
 
     @Test
     public void envVarWithDefaultPrefersEnvWhenSet() throws IOException {
-        String home = System.getenv("HOME");
-        assertNotNull(home);
+        String envName = findReliableEnvVar();
 
-        // HOME is set, so the default should be ignored
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
-                "  base_url: http://0.0.0.0:1/${HOME:-not-used}/\n" +
+                "  base_url: http://0.0.0.0:1/${" + envName + ":-not-used}/\n" +
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
                 "  gt: test_gt.ivecs\n");
@@ -916,7 +913,6 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void envVarWithEmptyDefault() throws IOException {
-        // ${NONEXISTENT:-} means default to empty string
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
                 "  base_url: http://0.0.0.0:1/${JVECTOR_NONEXISTENT_12345:-}/data/\n" +
@@ -933,20 +929,16 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void multipleEnvVarsExpanded() throws IOException {
-        String home = System.getenv("HOME");
-        String user = System.getenv("USER");
-        assertNotNull(home);
-        assertNotNull(user);
+        String envName = findReliableEnvVar();
 
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "test-ds:\n" +
-                "  base_url: http://0.0.0.0:1/${HOME}/${USER}/\n" +
+                "  base_url: http://0.0.0.0:1/${" + envName + "}/${" + envName + "}/\n" +
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
                 "  gt: test_gt.ivecs\n");
         writeTestDataFiles(cacheDir);
 
-        // should not throw — both vars are resolved
         var loader = new DataSetLoaderSimpleMFD(
                 null, cacheDir.toString(), false, testMetadata
         );
@@ -1056,14 +1048,11 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void includeWithEnvVarInUrl() throws IOException {
-        // ${HOME} is expanded in the _include url — but remote is unreachable,
-        // so we just verify env expansion doesn't crash
-        String home = System.getenv("HOME");
-        assertNotNull(home);
+        String envName = findReliableEnvVar();
 
         Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
                 "_include:\n" +
-                "  url: http://0.0.0.0:1/${HOME}/catalog_entries.yaml\n" +
+                "  url: http://0.0.0.0:1/${" + envName + "}/catalog_entries.yaml\n" +
                 "test-ds:\n" +
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
