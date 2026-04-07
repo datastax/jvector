@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.example.reporting;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderMFD;
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
@@ -242,17 +241,6 @@ public final class RunArtifacts {
             return; // disabled
         }
 
-        var mfd = DataSetLoaderMFD.MultiFileDatasource.byName.get(datasetName);
-
-        String basePath = "";
-        String queryPath = "";
-        String gtPath = "";
-        if (mfd != null) {
-            basePath = Paths.get("fvec").resolve(mfd.basePath).toAbsolutePath().toString();
-            queryPath = Paths.get("fvec").resolve(mfd.queriesPath).toAbsolutePath().toString();
-            gtPath = Paths.get("fvec").resolve(mfd.groundTruthPath).toAbsolutePath().toString();
-        }
-
-        datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, basePath, queryPath, gtPath, ds));
+        datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, "", "", "", ds));
     }
 }

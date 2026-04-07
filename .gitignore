@@ -51,3 +51,4 @@ hdf5/
 dependency-reduced-pom.xml
 results.csv
 **/datasets/custom/**
+**/dataset_cache/**

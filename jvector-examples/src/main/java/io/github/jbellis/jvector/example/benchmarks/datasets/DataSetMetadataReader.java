@@ -28,7 +28,7 @@ import java.util.Optional;
 /// Reads dataset metadata from a multi-entry YAML file and provides keyed lookups
 /// for {@link DataSetProperties}.
 ///
-/// This is used by loaders such as {@link DataSetLoaderMFD} and {@link DataSetLoaderHDF5}
+/// This is used by loaders such as {@link DataSetLoaderSimpleMFD}
 /// that do not have an intrinsic way to determine the similarity function from the dataset
 /// name or file format alone.
 ///

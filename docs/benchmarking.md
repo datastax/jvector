@@ -35,7 +35,7 @@ Datasets are assumed to be Fvec/Ivec based unless the entry in the `datasets.yml
 
 You'll notice that datasets are grouped into categories. The categories can be arbitrarily chosen for convenience and are not currently considered by the benchmarking system.
 
-For HDF5 files, the substrings `-angular`, `-euclidean` and `-dot` correspond to cosine similarity, L2 distance, and dot product similarity functions (these substrings ARE considered to be part of the "dataset name"). Currently, Fvec/Ivec datasets are implicitly assumed to use cosine similarity (changing this requires editing `DataSetLoaderMFD.java`).
+Dataset similarity functions are configured in `jvector-examples/yaml-configs/dataset_metadata.yml`.
 
 Example `datasets.yml`:
 
@@ -92,39 +92,32 @@ mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs="glove nytimes"
 
 ## Custom Datasets
 
-### Custom Fvec/Ivec datasets
+Datasets are configured via YAML catalog files under `jvector-examples/datasets/`. The loader recursively discovers all `.yaml`/`.yml` files in that directory tree. See `jvector-examples/datasets/public/example_datasets_config.yaml` for the full format reference.
 
-Using fvec/ivec datasets requires them to be configured in `DataSetLoaderMFD.java`. Some datasets are already pre-configured; these will be downloaded and used automatically on running the benchmark.
+To add a custom fvec/ivec dataset:
 
-To use a custom dataset consisting of files `base.fvec`, `queries.fvec` and `neighbors.ivec`, do the following:
-- Ensure that you have three files:
-    - `base.fvec` containing N D-dimensional float vectors. These are used to build the index.
-    - `queries.fvec` containing Q D-dimensional float vectors. These are used for querying the built index.
-    - `neighbors.ivec` containing Q K-dimensional integer vectors, one for each query vector, representing the exact K-nearest neighbors for that query among the base vectors.
-    The files can be named however you like.
-- Save all three files somewhere in the `fvec` directory in the root of the `jvector` repo (if it doesn't exist, create it). It's recommended to create at least one sub-folder with the name of the dataset and copy or move all three files there.
-- Edit `DataSetLoaderMFD.java` to configure a new dataset and it's associated files:
-    ```java
-    put("cust-ds", new MultiFileDatasource("cust-ds",
-            "cust-ds/base.fvec",
-            "cust-ds/query.fvec",
-            "cust-ds/neighbors.ivec"));
+1. Create a directory under `jvector-examples/datasets/` (e.g. `custom/mydata/`).
+2. Add a `.yaml` file mapping your dataset name to its files:
+    ```yaml
+    _defaults:
+      cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}
+
+    my-dataset:
+      base: my_base_vectors.fvecs
+      query: my_query_vectors.fvecs
+      gt: my_ground_truth.ivecs
     ```
-    The file paths are resolved relative to the `fvec` directory. `cust-ds` is the name of the dataset and can be changed to whatever is appropriate.
-- In `jvector-examples/yaml-configs/datasets.yml`, add an entry corresponding to your custom dataset. Comment out other datasets which you do not want to benchmark.
+3. Place your fvec/ivec files in the same directory (or specify a `cache_dir` / `base_url` to fetch them from a remote source).
+4. Add the dataset's similarity function to `jvector-examples/yaml-configs/dataset_metadata.yml`:
+    ```yaml
+    my-dataset:
+      similarity_function: COSINE
+      load_behavior: NO_SCRUB
+    ```
+5. Add the dataset name to `jvector-examples/yaml-configs/datasets.yml` so BenchYAML can find it:
     ```yaml
     custom:
-      - cust-ds
+      - my-dataset
     ```
 
-## Custom HDF5 datasets
-
-HDF5 datasets consist of a single file. The Hdf5Loader looks for three HDF5 datasets within the file, `train`, `test` and `neighbors`. These correspond to the base, query and neighbors vectors described above for fvec/ivec files.
-
-To use an HDF5 dataset, edit `jvector-examples/yaml-configs/datasets.yml` to add an entry like the following:
-```yaml
-category:
-  - <dataset-name>.hdf5
-```
-
-BenchYAML looks for hdf5 datasets with the name `<dataset-name>.hdf5` in the `hdf5` folder in the root of this repo. If the file doesn't exist, BenchYAML will attempt to automatically download the dataset from ann-benchmarks.com. If your dataset is not from ann-benchmarks.com, simply ensure that the dataset is available in the `hdf5` folder and edit `datasets.yml` accordingly.
+For remote datasets, use `base_url` to specify where files should be downloaded from. The `${VAR}` and `${VAR:-default}` syntax is supported for environment variable expansion. See the example config for details.
