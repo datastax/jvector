@@ -24,6 +24,7 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
+      - '.github/workflows/run-bench.yml'
 
 jobs:
   # Job to generate the matrix configuration
@@ -41,8 +42,8 @@ jobs:
 
           # Default branches based on event type
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "Pull request detected. Using main and PR branch: ${{ github.head_ref }}"
-            BRANCHES='["main", "${{ github.head_ref }}"]'
+            echo "Pull request detected. Using main and PR commit SHA: ${{ github.event.pull_request.head.sha }}"
+            BRANCHES='["main", "${{ github.event.pull_request.head.sha }}"]'
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
             # Parse space-separated branches input into JSON array
             echo "Workflow dispatch with branches input detected"
