@@ -1,16 +1,16 @@
 # This file contains authoritative metadata for curated benchmark datasets whose
 # raw formats do not carry the properties we need at runtime.
 #
-# Both the MFD and HDF5 loaders use this file to determine dataset properties such
+# The loaders use this file to determine dataset properties, such
 # as similarity_function and load_behavior.
 #
 # load_behavior controls benchmark-loader processing:
-#   NO_SCRUB - preserve the current load-time scrubbing behavior
+#   LEGACY_SCRUB - Use (the soon-to-be deprecated) load-time scrubbing behavior
 #   NO_SCRUB     - load vectors and ground truth exactly as stored
 #
-# During the transition, existing deployed datasets should generally remain on
-# NO_SCRUB until their prescrubbed replacements and matching offline ground
-# truth are ready. New prescrubbed datasets should use NO_SCRUB.
+# In JVector 4.0.0-rc.8 and earlier, datasets were scrubbed at load-time using methods
+# that were found to have problems.  These are enabled using LEGACY_SCRUB, which should
+# only be used to reproduce historical run results.
 #
 # Additional metadata requires corresponding support in DataSetProperties and the
 # relevant loader code.
