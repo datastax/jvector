@@ -1,9 +1,5 @@
 name: Run Bench Main
 
-permissions:
-  contents: read
-  pull-requests: read
-
 on:
   workflow_dispatch:
     inputs:
@@ -28,7 +24,6 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
-      - '.github/workflows/run-bench.yml'
 
 jobs:
   # Job to generate the matrix configuration
@@ -46,18 +41,10 @@ jobs:
 
           # Default branches based on event type
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "Pull request detected. Using main and PR branch: ${{ github.head_ref }}"
-            # Check if PR is from a fork
-            if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
-              echo "PR from fork detected: ${{ github.event.pull_request.head.repo.full_name }}"
-              BRANCHES='[{"branch":"main","repository":"${{ github.repository }}"}, {"branch":"${{ github.head_ref }}","repository":"${{ github.event.pull_request.head.repo.full_name }}"}]'
-            else
-              echo "PR from same repository"
-              BRANCHES='[{"branch":"main","repository":"${{ github.repository }}"}, {"branch":"${{ github.head_ref }}","repository":"${{ github.repository }}"}]'
-            fi
+            echo "Pull request detected. Using main and PR commit SHA: ${{ github.event.pull_request.head.sha }}"
+            BRANCHES='["main", "${{ github.event.pull_request.head.sha }}"]'
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
             # Parse space-separated branches input into JSON array
-            # All branches from workflow_dispatch are assumed to be from the current repository
             echo "Workflow dispatch with branches input detected"
             BRANCHES_INPUT="${{ github.event.inputs.branches }}"
             BRANCHES="["
@@ -65,22 +52,22 @@ jobs:
               if [[ "$BRANCHES" != "[" ]]; then
                 BRANCHES="$BRANCHES, "
               fi
-              BRANCHES="$BRANCHES{\"branch\":\"$branch\",\"repository\":\"${{ github.repository }}\"}"
+              BRANCHES="$BRANCHES\"$branch\""
               echo "Adding branch to matrix: $branch"
             done
             BRANCHES="$BRANCHES]"
           else
             echo "Default event type. Using main branch only"
-            BRANCHES='[{"branch":"main","repository":"${{ github.repository }}"}]'
+            BRANCHES='["main"]'
           fi
 
           echo "Generated branches matrix: $BRANCHES"
-          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"ref\":$BRANCHES}" >> $GITHUB_OUTPUT
+          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"branch\":$BRANCHES}" >> $GITHUB_OUTPUT
 
   test-avx512:
     needs: generate-matrix
     concurrency:
-      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.ref.repository }}-${{ matrix.ref.branch }}
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.branch }}
       cancel-in-progress: false
     strategy:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
@@ -128,7 +115,7 @@ jobs:
       - name: Print job information
         run: |
           echo "Running benchmark for:"
-          echo "  - Branch: ${{ matrix.ref.branch }}"
+          echo "  - Branch: ${{ matrix.branch }}"
           echo "  - JDK: ${{ matrix.jdk }}"
           echo "  - ISA: ${{ matrix.isa }}"
 
@@ -136,8 +123,7 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.ref.repository }}
-          ref: ${{ matrix.ref.branch }}
+          ref: ${{ matrix.branch }}
           fetch-depth: 0
 
       # ==========================================
@@ -168,14 +154,14 @@ jobs:
         run: |
           # Check if jvector-examples directory and AutoBenchYAML class exist
           if [ ! -d "jvector-examples" ]; then
-            echo "Warning: jvector-examples directory not found in branch ${{ matrix.ref.branch }}. Skipping benchmark."
+            echo "Warning: jvector-examples directory not found in branch ${{ matrix.branch }}. Skipping benchmark."
             exit 0
           fi
 
           # Check if the jar with dependencies was built
           JAR_COUNT=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar 2>/dev/null | wc -l)
           if [ "$JAR_COUNT" -eq 0 ]; then
-            echo "Warning: No jar with dependencies found in branch ${{ matrix.ref.branch }}. Skipping benchmark."
+            echo "Warning: No jar with dependencies found in branch ${{ matrix.branch }}. Skipping benchmark."
             exit 0
           fi
 
@@ -194,7 +180,7 @@ jobs:
           echo "Total memory: ${TOTAL_MEM_GB}GB, using ${HALF_MEM_GB}GB for Java heap"
           
           # Run the benchmark
-          echo "Running benchmark for branch ${{ matrix.ref.branch }}"
+          echo "Running benchmark for branch ${{ matrix.branch }}"
 
           # Determine optional benchmark config argument from workflow input
           BENCH_ARG="${{ github.event.inputs.benchmark_config }}"
@@ -219,11 +205,9 @@ jobs:
             echo "No custom configuration provided, using default autoDefault.yml"
           fi
 
-          # Sanitize branch name and repository for filenames: replace any non-alphanumeric, dash or underscore with underscore
-          SAFE_BRANCH=$(echo "${{ matrix.ref.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
-          SAFE_REPO=$(echo "${{ matrix.ref.repository }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+          # Sanitize branch name for filenames: replace any non-alphanumeric, dash or underscore with underscore
+          SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
           echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
-          echo "safe_repo=$SAFE_REPO" >> $GITHUB_OUTPUT
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
@@ -241,12 +225,12 @@ jobs:
           mv ${SAFE_BRANCH}-bench-results.csv benchmark_results/ || true
           mv ${SAFE_BRANCH}-bench-results.json benchmark_results/ || true
 
-          echo "Completed benchmarks for branch: ${{ matrix.ref.branch }}"
+          echo "Completed benchmarks for branch: ${{ matrix.branch }}"
 
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ steps.run-benchmark.outputs.safe_repo }}-${{ steps.run-benchmark.outputs.safe_branch }}
+          name: benchmark-results-${{ matrix.isa }}-jdk${{ matrix.jdk }}-${{ steps.run-benchmark.outputs.safe_branch }}
           path: |
             benchmark_results/*.csv
             benchmark_results/*.json
