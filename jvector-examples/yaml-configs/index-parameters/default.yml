@@ -24,8 +24,8 @@ construction:
 
 search:
   topKOverquery:
-    10: [1.0, 2.0, 5.0, 10.0]
-    100: [1.0, 2.0]
+    10: [1.0]
+#    100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
     - type: PQ
@@ -36,4 +36,4 @@ search:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
 
-# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
+# Run-level controls, such as benchmarks, console, and logging, are in run-config.yml.

@@ -24,4 +24,4 @@ search:
   compression:
     - type: None
 
-# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
+# Run-level controls, such as benchmarks, console, and logging, are in run-config.yml.

@@ -48,7 +48,7 @@ import java.util.Optional;
 /// the exact key first, then falls back to the key with {@code .hdf5} appended.
 public class DataSetMetadataReader {
 
-    private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset_metadata.yml";
+    private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset-metadata.yml";
 
     private final Map<String, Map<String, Object>> metadata;
 
@@ -56,7 +56,7 @@ public class DataSetMetadataReader {
         this.metadata = metadata != null ? metadata : Map.of();
     }
 
-    /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset_metadata.yml}).
+    /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset-metadata.yml}).
     ///
     /// @return the loaded metadata
     /// @throws RuntimeException if the file cannot be read

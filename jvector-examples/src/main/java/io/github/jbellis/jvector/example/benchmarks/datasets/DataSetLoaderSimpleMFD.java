@@ -141,7 +141,7 @@ import java.util.stream.Stream;
 /// ### Metadata
 ///
 /// Dataset metadata (similarity function, load behavior) is resolved from
-/// {@code dataset_metadata.yml} via {@link DataSetMetadataReader}. A custom metadata reader
+/// {@code dataset-metadata.yml} via {@link DataSetMetadataReader}. A custom metadata reader
 /// can be provided via the 4-argument constructor.
 ///
 /// @see DataSetLoader
@@ -192,7 +192,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         this(null, localPath, false, DataSetMetadataReader.load());
     }
 
-    /// Creates a loader using the default dataset metadata from {@code dataset_metadata.yml}.
+    /// Creates a loader using the default dataset metadata from {@code dataset-metadata.yml}.
     ///
     /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
     /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache

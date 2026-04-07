@@ -380,7 +380,7 @@ public class DataSetPropertiesTest {
 
     @Test
     public void productionMetadataFileLoadsSuccessfully() {
-        // This validates the actual dataset_metadata.yml is well-formed
+        // This validates the actual dataset-metadata.yml is well-formed
         var reader = DataSetMetadataReader.load();
         var props = reader.getProperties("ada002-100k");
         assertTrue(props.isPresent(), "ada002-100k should be in the production metadata file");

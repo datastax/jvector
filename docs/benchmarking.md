@@ -18,7 +18,7 @@ The general procedure for running benchmarks is mentioned below. The following s
 - [Specify the dataset](#specifying-datasets) names to benchmark in `datasets.yml`.
 - Certain datasets will be downloaded automatically. If using a different dataset, make sure the dataset files are downloaded and made available (refer the section on [Custom datasets](#custom-datasets)).
 - Adjust the benchmark parameters in `default.yml`. This will affect the parameters for all datasets to be benchmarked. You can specify custom parameters for a specific dataset by creating a file called `<your-dataset-name>.yml` in the same folder.
-- Decide on the kind of measurements and logging you want and configure them in `run.yml`.
+- Decide on the kind of measurements and logging you want and configure them in `run-config.yml`.
 
 You can run the configured benchmark with maven:
 ```sh
@@ -35,7 +35,7 @@ Datasets are assumed to be Fvec/Ivec based unless the entry in the `datasets.yml
 
 You'll notice that datasets are grouped into categories. The categories can be arbitrarily chosen for convenience and are not currently considered by the benchmarking system.
 
-Dataset similarity functions are configured in `jvector-examples/yaml-configs/dataset_metadata.yml`.
+Dataset similarity functions are configured in `jvector-examples/yaml-configs/dataset-metadata.yml`.
 
 Example `datasets.yml`:
 
@@ -67,7 +67,7 @@ construction:
 ```
 will build and benchmark four graphs, one for each combination of M and ef in {(32, 100), (64, 100), (32, 200), (64, 200)}. This is particularly useful when running a Grid search to identify the best performing parameters.
 
-### run.yml
+### run-config.yml
 
 This file contains configurations for
 - Specifying the measurements you want to report, like QPS, latency and recall
@@ -75,7 +75,7 @@ This file contains configurations for
 
 The configurations in this file are "run-level", meaning that they are shared across all the datasets being benchmarked.
 
-See `run.yml` for a full list of all options.
+See `run-config.yml` for a full list of all options.
 
 ## Running `bench` from the command line
 
@@ -108,7 +108,7 @@ To add a custom fvec/ivec dataset:
       gt: my_ground_truth.ivecs
     ```
 3. Place your fvec/ivec files in the same directory (or specify a `cache_dir` / `base_url` to fetch them from a remote source).
-4. Add the dataset's similarity function to `jvector-examples/yaml-configs/dataset_metadata.yml`:
+4. Add the dataset's similarity function to `jvector-examples/yaml-configs/dataset-metadata.yml`:
     ```yaml
     my-dataset:
       similarity_function: COSINE

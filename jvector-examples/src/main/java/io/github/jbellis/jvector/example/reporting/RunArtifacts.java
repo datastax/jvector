@@ -38,7 +38,7 @@ import java.util.Set;
  * - sys_info.json (RunReporting)
  * - dataset_info.csv (DatasetInfoWriter)
  * - experiments.csv (ExperimentsCsvWriter)
- * - run-level compute/display/log selections from run.yml
+ * - run-level compute/display/log selections from run-config.yml
  */
 public final class RunArtifacts {
 

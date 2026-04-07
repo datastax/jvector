@@ -45,7 +45,7 @@ my-dataset:
 ```
 
 3. Add the appropriate settings to these files as well, so BenchYAML can use the datasets.
-   - `jvector-examples/yaml-configs/dataset_metadata.yml`:
+   - `jvector-examples/yaml-configs/dataset-metadata.yml`:
    - `jvector-examples/yaml-configs/datasets.yml`
 
 ### Hosting remote datasets
