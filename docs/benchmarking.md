@@ -53,7 +53,7 @@ some-other-category:
 
 ### default.yml / \<dataset-name\>.yml
 
-`jvector-examples/yaml-configs/default.yml` specifies the default index construction and search parameters to be used by `bench` for all datasets.
+`jvector-examples/yaml-configs/index-parameters/default.yml` specifies the default index construction and search parameters to be used by `bench` for all datasets.
 
 You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`, but without the `.hdf5` suffix for hdf5 datasets. The format of this file is exactly the same as `default.yml`.
 
@@ -92,12 +92,11 @@ mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs="glove nytimes"
 
 ## Custom Datasets
 
-Datasets are configured via YAML catalog files under `jvector-examples/datasets/`. The loader recursively discovers all `.yaml`/`.yml` files in that directory tree. See `jvector-examples/datasets/public/example_datasets_config.yaml` for the full format reference.
+Datasets are configured via YAML catalog files under `jvector-examples/yaml-configs/dataset-catalogs/`. The loader recursively discovers all `.yaml`/`.yml` files in that directory tree. See `jvector-examples/yaml-configs/dataset-catalogs/local-catalog.yaml` for the full format reference.
 
 To add a custom fvec/ivec dataset:
 
-1. Create a directory under `jvector-examples/datasets/` (e.g. `custom/mydata/`).
-2. Add a `.yaml` file mapping your dataset name to its files:
+1. Add a `.yaml` file to the YAML catalog directory, mapping your dataset name to its files:
     ```yaml
     _defaults:
       cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}
@@ -107,14 +106,14 @@ To add a custom fvec/ivec dataset:
       query: my_query_vectors.fvecs
       gt: my_ground_truth.ivecs
     ```
-3. Place your fvec/ivec files in the same directory (or specify a `cache_dir` / `base_url` to fetch them from a remote source).
-4. Add the dataset's similarity function to `jvector-examples/yaml-configs/dataset-metadata.yml`:
+2. Place your fvec/ivec files at the paths you specified in the YAML (or specify a `cache_dir` / `base_url` to fetch them from a remote source).
+3. Add the dataset's similarity function to `jvector-examples/yaml-configs/dataset-metadata.yml`:
     ```yaml
     my-dataset:
       similarity_function: COSINE
       load_behavior: NO_SCRUB
     ```
-5. Add the dataset name to `jvector-examples/yaml-configs/datasets.yml` so BenchYAML can find it:
+4. Add the dataset name to `jvector-examples/yaml-configs/datasets.yml` so BenchYAML can find it:
     ```yaml
     custom:
       - my-dataset
