@@ -1,6 +1,6 @@
 # Sharing a Dataset
 
-To share a dataset on a hosted URL:
+To share a remotely hosted dataset:
 
 1. **Prepare your files** -- you need three files in fvecs/ivecs format:
    - `base_vectors.fvecs` -- the vectors to index
@@ -20,9 +20,9 @@ To share a dataset on a hosted URL:
      gt: my_ground_truth.ivecs
    ```
 
-4. **Distribute the catalog file.** Recipients drop it into their
-   `jvector-examples/datasets/` directory and the loader picks it up automatically.
-   Files are downloaded and cached locally on first use.
+4. **Distribute the catalog file.** Recipients drop it into
+   `jvector-examples/yaml-configs/dataset-catalogs/` and the loader picks it up automatically.
+   Remote files are downloaded on first use. Downloaded files are cached locally.
 
 For private datasets, use `${VAR}` in the `base_url` to keep secret paths out of the file:
 ```yaml

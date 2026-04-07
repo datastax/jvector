@@ -20,12 +20,12 @@ ann-benchmarks:
   - nytimes-256-angular.hdf5
   - sift-128-euclidean.hdf5
 #other-datasets:
-#  - dpr-1M
-#  - dpr-10M
-#  - cap-1M
-#  - cap-6M
-#  - cohere-english-v3-1M
-#  - cohere-english-v3-10M
+##  - dpr-1M
+##  - dpr-10M
+##  - cap-1M
+##  - cap-6M
+##  - cohere-english-v3-1M
+##  - cohere-english-v3-10M
 
   # - deep-image-96-angular.hdf5 # large files not yet supported
   # - gist-960-euclidean.hdf5 # large files not yet supported

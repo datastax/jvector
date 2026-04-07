@@ -39,6 +39,3 @@
 #   base: private_base.fvecs
 #   query: private_query.fvecs
 #   gt: private_gt.ivecs
-
-_defaults:
-  cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}

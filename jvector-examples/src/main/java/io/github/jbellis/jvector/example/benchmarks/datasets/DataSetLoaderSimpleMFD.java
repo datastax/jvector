@@ -195,9 +195,12 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     /// Creates a loader using the default dataset metadata from {@code dataset-metadata.yml}.
     ///
     /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
-    /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
-    /// directory and that file is used as the catalog. Otherwise, the directory is scanned
-    /// recursively for all {@code .yaml}/{@code .yml} files.
+    /// If it ends in {@code .yaml} or {@code .yml}, that file is used as the catalog.
+    /// Otherwise, the directory is scanned recursively for all {@code .yaml}/{@code .yml} files.
+    ///
+    /// Entries without an explicit {@code cache_dir} default to {@code dataset_cache/}
+    /// under the repository root. Entry-level and {@code _defaults}-level {@code cache_dir}
+    /// values take precedence over this fallback.
     ///
     /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
     ///                        for local-only mode
@@ -224,14 +227,15 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
 
-        // resolve localPath: if it points to a yaml file, use the parent as the cache dir
+        // resolve localPath for catalog discovery; entries without an explicit cache_dir
+        // default to dataset_cache under the repo root
         Path resolvedPath = Paths.get(localPath);
         Path localCatalog;
+        this.localCacheDir = Paths.get("dataset_cache");
+
         if (localPath.endsWith(".yaml") || localPath.endsWith(".yml")) {
-            this.localCacheDir = resolvedPath.getParent() != null ? resolvedPath.getParent() : Paths.get(".");
             localCatalog = resolvedPath;
         } else {
-            this.localCacheDir = resolvedPath;
             localCatalog = resolvedPath.resolve(DEFAULT_CATALOG_FILENAME);
         }
 
@@ -319,7 +323,11 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
         logger.info("Dataset files ready for '{}' in {}s", dataSetName, String.format("%.2f", (System.nanoTime() - startTime) / 1e9));
 
-        var props = metadata.getProperties(dataSetName).orElseThrow();
+        var props = metadata.getProperties(dataSetName)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        String.format(
+                                "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
+                                dataSetName)));
         return Optional.of(new DataSetInfo(props, () -> {
             var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());

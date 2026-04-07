@@ -38,19 +38,13 @@ public class DataSets {
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
 
-        /// Scans the datasets/ directory for .yaml/.yml files.
-        /// - public/  contains jvector-dataset-entries.yaml which _includes the public S3 catalog
-        /// - custom/  contains an entries_example.yaml template for user datasets
+        /// Scans the jvector-examples/yaml-configs/dataset-catalogs/ directory for .yaml/.yml files.
         ///
         /// To add your own datasets:
-        /// 1. Create a directory under jvector-examples/datasets/ (e.g. custom/mydata/)
-        /// 2. Add a .yaml file with your dataset mappings (see entries_example.yaml)
-        /// 3. For private remote datasets, use baseurl with ${SECRET_HASH} style env vars
+        /// 1. Add a .yaml file with your dataset mappings (see local-catalog.yaml for examples)
+        /// 2. For private remote datasets, use baseurl with ${SECRET_HASH} style env vars
         ///
-        /// Two paths are tried so this works whether the working directory is the project root
-        /// or the jvector-examples module directory.
-        add(new DataSetLoaderSimpleMFD("jvector-examples/datasets"));
-        add(new DataSetLoaderSimpleMFD("datasets"));
+        add(new DataSetLoaderSimpleMFD("jvector-examples/yaml-configs/dataset-catalogs"));
 
     }};
 

@@ -3,11 +3,18 @@ local/
 .mvn/wrapper/maven-wrapper.jar
 .java-version
 .bob/
+dataset_
 **/local_datasets/**
 
 ### Bench caches
 pq_cache/
 index_cache/
+dataset_cache/
+
+### Data catalogs
+jvector-examples/yaml-configs/dataset-catalogs/*.yaml
+jvector-examples/yaml-configs/dataset-catalogs/*.yml
+!jvector-examples/yaml-configs/dataset-catalogs/public-catalog.yaml
 
 ### Logging (or whatever you use)
 logging/

@@ -9,19 +9,19 @@ All `.yaml` and `.yml` files under this directory tree are discovered automatica
 This is configured in DataSets.java as a loader parameter.
 
 ```
-datasets/
-  public/
-    jvector-public-datasets.yaml      # _includes the public S3 catalog
-    example_datasets_config.yaml       # reference/template with all options documented
-  custom/
-    my-team-datasets.yaml              # (you create this) your own datasets
+jvector-examples/
+  yaml-configs/
+    dataset-catalogs/
+        public-catalog.yaml      # _includes the public S3 catalog
+        local-catalog.yaml       # reference/template with all options documented
+        my-team-datasets.yaml    # name your own for your own datasets
 ```
 
 ## Quick start
 
 ### Using public datasets
 
-Public datasets work out of the box. The file `public/jvector-public-datasets.yaml` uses
+Public datasets work out of the box. `public-catalog.yaml` uses
 `_include` to pull the dataset catalog from S3, and files are downloaded on first use:
 
 ```sh
@@ -34,7 +34,7 @@ Set the `DATASET_CACHE_DIR` environment variable to change this location.
 
 ### Adding your own local datasets
 
-1. Create a `.yaml` file anywhere under this directory (e.g. `custom/my-datasets.yaml`).
+1. Create a `.yaml` file anywhere under this directory (e.g. `custom-catalog.yaml`).
 2. Map each dataset name to its three files:
 
 ```yaml
@@ -139,7 +139,7 @@ fallback value when the variable is not set.
 1. `cache_dir` on the dataset entry
 2. `cache_dir` in `_defaults`
 3. `DATASET_CACHE_DIR` environment variable
-4. The directory containing the catalog YAML file
+4. `dataset_cache/` under the repository root
 
 ### Supported transport protocols
 
