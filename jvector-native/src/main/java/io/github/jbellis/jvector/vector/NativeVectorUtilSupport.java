@@ -104,4 +104,17 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
         return NativeSimdOps.pq_decoded_cosine_similarity_f32_512(((MemorySegmentByteSequence) encoded).get(), encodedOffset, encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
     }
+
+    @Override
+    public void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+        var nativeCodebook = ((MemorySegmentVectorFloat) codebook).get();
+        var nativeQuery = ((MemorySegmentVectorFloat) query).get();
+        var nativePartialSums = ((MemorySegmentVectorFloat) partialSums).get();
+        int similarityFunction = switch (vsf) {
+            case EUCLIDEAN -> 0;
+            case DOT_PRODUCT -> 1;
+            default -> throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
+        };
+        NativeSimdOps.calculate_partial_sums_f32_512(nativeCodebook, codebookIndex, size, clusterCount, nativeQuery, queryOffset, similarityFunction, nativePartialSums);
+    }
 }
