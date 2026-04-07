@@ -677,9 +677,12 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 FileDownload downloadFile = tm.downloadFile(request);
                 CompletedFileDownload result = downloadFile.completionFuture().join();
                 long downloadedSize = Files.size(localPath);
+                Long expectedSize = result.response().contentLength();
 
-                if (downloadedSize != result.response().contentLength()) {
-                    logger.error("Incomplete download (got {} of {} bytes). Retrying...", downloadedSize, result.response().contentLength());
+                // Null check prevents NullPointerException during unboxing.
+                // If expectedSize is null, we trust the transfer manager's successful completion.
+                if (expectedSize != null && downloadedSize != expectedSize) {
+                    logger.error("Incomplete download (got {} of {} bytes). Retrying...", downloadedSize, expectedSize);
                     Files.deleteIfExists(localPath);
                     continue;
                 }
