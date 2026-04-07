@@ -28,6 +28,7 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
+      - '.github/workflows/run-bench.yml'
 
 jobs:
   # Job to generate the matrix configuration
