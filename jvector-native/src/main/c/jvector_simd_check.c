@@ -17,7 +17,10 @@
 #include <cpuid.h>
 #include "jvector_simd.h"
 
-bool check_compatibility(void) {
+bool check_avx512_compatibility(void) {
+    /* __builtin_cpu_init required when this is used in ifunc
+       resolver/__attribute__((constructor)) context, otherwise the CPU
+       features may not be detected correctly. */
     __builtin_cpu_init();
     return (__builtin_cpu_supports("avx512f") &&
         __builtin_cpu_supports("avx512cd") &&
