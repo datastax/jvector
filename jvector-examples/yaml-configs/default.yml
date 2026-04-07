@@ -13,8 +13,8 @@ construction:
   compression:
     - type: PQ
       parameters:
-        m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
+        # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+        mFactor: 8
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
@@ -30,7 +30,8 @@ search:
   compression:
     - type: PQ
       parameters:
-        m: 192
+        # m: 192
+        mFactor: 8
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)

@@ -1,39 +1,99 @@
-# This file contains the metadata for the datasets (formats) which do not have a dedicated
-# metadata facility. The MFD and hdf5 loaders use this file to determine the similarity function, among other things.
-# (HDF5 metadata support is moot for us since the runtime support fall short in other ways)
+# This file contains authoritative metadata for curated benchmark datasets whose
+# raw formats do not carry the properties we need at runtime.
 #
-# Ideally, this metadata is part of the format and access layer for a given dataset format. This file exists because
-# the dataset names herein are in a form which does _not_ support proper bundled configuration data with the raw data.
-# When possible, these dataset should be provided with another mechanism which fully handles this aspect of dataset
-# management so that we don't have to maintain separate parts in different places.
+# Both the MFD and HDF5 loaders use this file to determine dataset properties such
+# as similarity_function and load_behavior.
 #
-# You can put additional metadata here, but it will not be type-safe and reified properly unless there is an accompanying
-# change in the DataSetProperties interface and associated implementations.
+# load_behavior controls benchmark-loader processing:
+#   LEGACY_SCRUB - preserve the current load-time scrubbing behavior
+#   NO_SCRUB     - load vectors and ground truth exactly as stored
+#
+# During the transition, existing deployed datasets should generally remain on
+# LEGACY_SCRUB until their prescrubbed replacements and matching offline ground
+# truth are ready. New prescrubbed datasets should use NO_SCRUB.
+#
+# Additional metadata requires corresponding support in DataSetProperties and the
+# relevant loader code.
 
-cohere-english-v3-100k:
-  similarity_function: COSINE
-  # examples of supported properties
-  # If not present, presumed to be false
-  # is_normalized: false
-  # is_zero_vector_free: false
-  # is duplicate_vector_free: false
 ada002-100k:
   similarity_function: COSINE
-openai-v3-small-100k:
-  similarity_function: COSINE
-gecko-100k:
-  similarity_function: COSINE
-openai-v3-large-3072-100k:
-  similarity_function: COSINE
-openai-v3-large-1536-100k:
-  similarity_function: COSINE
-e5-small-v2-100k:
-  similarity_function: COSINE
-e5-base-v2-100k:
-  similarity_function: COSINE
-e5-large-v2-100k:
-  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
 ada002-1M:
   similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+cap-1M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: LEGACY_SCRUB
+cap-6M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: LEGACY_SCRUB
+cohere-english-v3-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+cohere-english-v3-1M:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+cohere-english-v3-10M:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
 colbert-1M:
   similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+colbert-10M:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+degen-200k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+dpr-1M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: LEGACY_SCRUB
+dpr-10M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: LEGACY_SCRUB
+e5-small-v2-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+e5-base-v2-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+e5-large-v2-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+gecko-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+nv-qa-v4-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+openai-v3-small-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+openai-v3-large-3072-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+openai-v3-large-1536-100k:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+# ann-benchmarks
+glove-25-angular.hdf5:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+glove-50-angular.hdf5:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+lastfm-64-dot.hdf5:
+  similarity_function: DOT_PRODUCT
+  load_behavior: LEGACY_SCRUB
+glove-100-angular.hdf5:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+glove-200-angular.hdf5:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+nytimes-256-angular.hdf5:
+  similarity_function: COSINE
+  load_behavior: LEGACY_SCRUB
+sift-128-euclidean.hdf5:
+  similarity_function: EUCLIDEAN
+  load_behavior: LEGACY_SCRUB
