@@ -28,6 +28,7 @@ yaml-configs/**/*.yaml
 yaml-configs/**/*.yml
 src/main/resources/logback.xml
 docs/**/*.md
+yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**
 
