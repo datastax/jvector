@@ -75,12 +75,12 @@ jobs:
           fi
 
           echo "Generated branches matrix: $BRANCHES"
-          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"include\":$BRANCHES}" >> $GITHUB_OUTPUT
+          echo "matrix={\"jdk\":[24],\"isa\":[\"isa-avx512f\"],\"ref\":$BRANCHES}" >> $GITHUB_OUTPUT
 
   test-avx512:
     needs: generate-matrix
     concurrency:
-      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.repository }}-${{ matrix.branch }}
+      group: ${{ matrix.isa }}-${{ matrix.jdk }}-${{ matrix.ref.repository }}-${{ matrix.ref.branch }}
       cancel-in-progress: false
     strategy:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
@@ -128,7 +128,7 @@ jobs:
       - name: Print job information
         run: |
           echo "Running benchmark for:"
-          echo "  - Branch: ${{ matrix.branch }}"
+          echo "  - Branch: ${{ matrix.ref.branch }}"
           echo "  - JDK: ${{ matrix.jdk }}"
           echo "  - ISA: ${{ matrix.isa }}"
 
@@ -136,8 +136,8 @@ jobs:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.branch }}
+          repository: ${{ matrix.ref.repository }}
+          ref: ${{ matrix.ref.branch }}
           fetch-depth: 0
 
       # Create a directory to store benchmark results
@@ -156,14 +156,14 @@ jobs:
         run: |
           # Check if jvector-examples directory and AutoBenchYAML class exist
           if [ ! -d "jvector-examples" ]; then
-            echo "Warning: jvector-examples directory not found in branch ${{ matrix.branch }}. Skipping benchmark."
+            echo "Warning: jvector-examples directory not found in branch ${{ matrix.ref.branch }}. Skipping benchmark."
             exit 0
           fi
 
           # Check if the jar with dependencies was built
           JAR_COUNT=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar 2>/dev/null | wc -l)
           if [ "$JAR_COUNT" -eq 0 ]; then
-            echo "Warning: No jar with dependencies found in branch ${{ matrix.branch }}. Skipping benchmark."
+            echo "Warning: No jar with dependencies found in branch ${{ matrix.ref.branch }}. Skipping benchmark."
             exit 0
           fi
 
@@ -182,7 +182,7 @@ jobs:
           echo "Total memory: ${TOTAL_MEM_GB}GB, using ${HALF_MEM_GB}GB for Java heap"
           
           # Run the benchmark
-          echo "Running benchmark for branch ${{ matrix.branch }}"
+          echo "Running benchmark for branch ${{ matrix.ref.branch }}"
 
           # Determine optional benchmark config argument from workflow input
           BENCH_ARG="${{ github.event.inputs.benchmark_config }}"
@@ -208,8 +208,8 @@ jobs:
           fi
 
           # Sanitize branch name and repository for filenames: replace any non-alphanumeric, dash or underscore with underscore
-          SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
-          SAFE_REPO=$(echo "${{ matrix.repository }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+          SAFE_BRANCH=$(echo "${{ matrix.ref.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
+          SAFE_REPO=$(echo "${{ matrix.ref.repository }}" | sed 's/[^A-Za-z0-9_-]/_/g')
           echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
           echo "safe_repo=$SAFE_REPO" >> $GITHUB_OUTPUT
 
@@ -229,7 +229,7 @@ jobs:
           mv ${SAFE_BRANCH}-bench-results.csv benchmark_results/ || true
           mv ${SAFE_BRANCH}-bench-results.json benchmark_results/ || true
 
-          echo "Completed benchmarks for branch: ${{ matrix.branch }}"
+          echo "Completed benchmarks for branch: ${{ matrix.ref.branch }}"
 
       - name: Upload Individual Benchmark Results
         uses: actions/upload-artifact@v4
