@@ -49,7 +49,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -84,7 +83,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private final boolean isHierarchical;
 
-    public OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
+    OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
         this.dimension = dimension;
