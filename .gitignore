@@ -50,3 +50,4 @@ hdf5/
 # JMH generated files
 dependency-reduced-pom.xml
 results.csv
+**/datasets/custom/**

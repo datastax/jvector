@@ -1,0 +1,44 @@
+# This file maps dataset names to their data files (base, query, ground truth).
+# Any .yaml or .yml file under this directory tree is discovered automatically.
+#
+# Required fields per dataset:
+#   base  - path to base vectors file (.fvecs)
+#   query - path to query vectors file (.fvecs)
+#   gt    - path to ground truth indices file (.ivecs)
+#
+# Optional fields:
+#   base_url   - remote URL (S3 or HTTP) to fetch files from when not cached locally
+#   cache_dir - local directory for cached files (relative or absolute path)
+#
+# Special entries:
+#   _defaults - provides default values folded into all other entries in this file.
+#               Entry-level values take precedence over defaults.
+#   Any root key starting with _ is excluded from dataset names.
+#
+# Environment variables:
+#   Field values support ${VAR} and ${VAR:-default} syntax (bash-style).
+#   ${VAR} expands to the environment variable value (error if not set).
+#   ${VAR:-default} uses the default value when the variable is not set.
+#   The DATASET_CACHE_DIR environment variable sets a global default cache_dir
+#   when none is specified at the entry or _defaults level.
+#
+# Example:
+#
+# _defaults:
+#   base_url: s3://my-bucket/${DATASET_HASH:-datasets}/
+#   cache_dir: ${DATASET_CACHE_DIR:-/tmp/dataset-cache}
+#
+# my_local_data:
+#   base: path_to_base_vectors.fvecs
+#   query: path_to_query_vectors.fvecs
+#   gt: path_to_ground_truth_indices.ivecs
+#
+# my_remote_data:
+#   base_url: s3://my-bucket/${SECRET_HASH}/
+#   cache_dir: /fast-ssd/private
+#   base: private_base.fvecs
+#   query: private_query.fvecs
+#   gt: private_gt.ivecs
+
+_defaults:
+  cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}

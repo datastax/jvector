@@ -46,29 +46,59 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 
 /// A dataset loader that works with fvec/ivec datasets described by YAML catalog files
-/// matching the pattern {@code *entries.yaml} (e.g. {@code catalog_entries.yaml},
-/// {@code entries.yaml}, {@code private_entries.yaml}).
+/// matching {@code *.yaml} or {@code *.yml}.
 /// Supports S3, HTTP, local-only, and combined remote+local modes.
 ///
 /// ### Catalog format
 ///
-/// Each {@code catalog_entries.yaml} file lists datasets with their base, query, and ground truth
-/// files. An optional {@code baseurl} field overrides the default remote base URL for that entry:
+/// Each YAML catalog file lists datasets with their base, query, and ground truth
+/// files. Optional fields control where files are stored and fetched:
+///
+/// - {@code base_url} — overrides the default remote base URL for this entry
+/// - {@code cache_dir} — overrides where files are cached locally (relative or absolute path)
+///
+/// A special {@code _defaults} entry provides default values that are folded into all other
+/// entries (unless the entry already specifies a value). Any root key starting with {@code _}
+/// is excluded from dataset names.
+///
+/// The environment variable {@code DATASET_CACHE_DIR} sets a global default cache directory
+/// when no {@code cache_dir} is specified at any level.
+///
+/// Field values may contain {@code ${VAR}} references to environment variables, which are
+/// expanded at load time. The bash-style {@code ${VAR:-default}} syntax is supported to
+/// provide a fallback value when the variable is not set. An {@link IllegalArgumentException}
+/// is thrown if a referenced variable is not set and no default is provided.
+///
+/// A special {@code _include} entry can reference a remote catalog URL. The remote entries
+/// are fetched and merged with the local {@code _defaults}, so a single local file can act
+/// as a thin configuration wrapper around a remote catalog:
 /// ```yaml
+/// _defaults:
+///   cache_dir: ${DATASET_CACHE_DIR:-fvec}
+/// _include:
+///   url: s3://bucket/datasets-clean/catalog_entries.yaml
+/// ```
+///
+/// ```yaml
+/// _defaults:
+///   base_url: s3://my-bucket/${DATASET_HASH}/
+///   cache_dir: /data/cache
+///
 /// ada002-100k:
 ///   base: ada_002_100k_base_99287.fvecs
 ///   query: ada_002_100k_query_10000.fvecs
 ///   gt: ada_002_100k_gt_ip_100.ivecs
 ///
-/// # private dataset with its own remote source
+/// # private dataset with its own remote source and cache location
 /// dpr-1M:
-///   baseurl: s3://my-bucket/SECRET_HASH/dpr/
+///   base_url: s3://my-bucket/SECRET_HASH/dpr/
+///   cache_dir: /fast-ssd/dpr
 ///   base: c4-en_base_1M_norm.fvecs
 ///   query: c4-en_query_10k_norm.fvecs
 ///   gt: dpr_1m_gt_norm_ip_k100.ivecs
 /// ```
-/// Filenames are resolved relative to the catalog's directory (local) or the base URL (remote).
-/// When {@code baseurl} is present on an entry, it is used instead of the loader's default remote
+/// Filenames are resolved relative to the entry's cache directory (local) or the base URL (remote).
+/// When {@code base_url} is present on an entry, it is used instead of the loader's default remote
 /// base URL for that entry's files.
 ///
 /// ### Usage patterns
@@ -85,14 +115,14 @@ import java.util.stream.Stream;
 /// ```
 ///
 /// **Local-only with recursive discovery** — the single-arg constructor accepts a directory
-/// and recursively scans it for all files matching {@code *entries.yaml}. This lets you organise
-/// datasets in subdirectories, including private datasets with per-entry {@code baseurl} overrides:
+/// and recursively scans it for all {@code .yaml}/{@code .yml} files. This lets you organise
+/// datasets in subdirectories, including private datasets with per-entry {@code base_url} overrides:
 /// ```
 /// local_datasets/
 ///   mydatasets/
 ///     user_entries.yaml               # your personal local datasets
 ///   private-infra/
-///     private_entries.yaml            # private remote datasets with baseurl per entry
+///     private_entries.yaml            # private remote datasets with base_url per entry
 /// ```
 /// ```java
 /// var loader = new DataSetLoaderSimpleMFD("local_datasets");
@@ -114,26 +144,28 @@ import java.util.stream.Stream;
 /// {@code dataset_metadata.yml} via {@link DataSetMetadataReader}. A custom metadata reader
 /// can be provided via the 4-argument constructor.
 ///
-/// @see DataSetLoaderMFD
+/// @see DataSetLoader
 public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     private static final Logger logger = LoggerFactory.getLogger(DataSetLoaderSimpleMFD.class);
     private static final String DEFAULT_CATALOG_FILENAME = "catalog_entries.yaml";
-    private static final String CATALOG_GLOB = "*entries.yaml";
+    private static final String CATALOG_GLOB = "*.{yaml,yml}";
 
     /// Resolved entry in the merged catalog. Tracks where the entry came from so that
     /// local file resolution and per-entry remote base URL overrides work correctly.
     private static class CatalogEntry {
         final Map<String, String> fields;
-        final Path localDir;       // directory containing this entry's catalog file
-        final String baseUrl;      // per-entry baseurl override, or null
+        final Path cacheDir;       // where data files are cached locally
+        final String baseUrl;      // per-entry base_url override, or null
 
-        CatalogEntry(Map<String, String> fields, Path localDir, String baseUrl) {
+        CatalogEntry(Map<String, String> fields, Path cacheDir, String baseUrl) {
             this.fields = fields;
-            this.localDir = localDir;
+            this.cacheDir = cacheDir;
             this.baseUrl = baseUrl;
         }
     }
+
+    private static final String ENV_DATASET_CACHE_DIR = "DATASET_CACHE_DIR";
 
     private final String remoteBasePath;
     private final Map<String, CatalogEntry> catalog;
@@ -145,7 +177,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private S3AsyncClient s3Client;
     private S3TransferManager s3TransferManager;
 
-    /// Creates a local-only loader that recursively discovers all {@code *entries.yaml}
+    /// Creates a local-only loader that recursively discovers all {@code .yaml}/{@code .yml}
     /// files under the given path.
     ///
     /// The {@code localPath} may be either a directory (scanned recursively for catalog files)
@@ -165,7 +197,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     /// The {@code localPath} may be either a directory or the full path to a catalog YAML file.
     /// If it ends in {@code .yaml} or {@code .yml}, the parent directory is used as the cache
     /// directory and that file is used as the catalog. Otherwise, the directory is scanned
-    /// recursively for all {@code *entries.yaml} files.
+    /// recursively for all {@code .yaml}/{@code .yml} files.
     ///
     /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
     ///                        for local-only mode
@@ -270,15 +302,15 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         logger.info("Found dataset '{}' in catalog", dataSetName);
         var startTime = System.nanoTime();
 
-        // determine the effective remote base URL for this entry
+        // determine the effective remote base URL and local cache directory for this entry
         String effectiveBaseUrl = entry.baseUrl != null ? entry.baseUrl : remoteBasePath;
-        Path effectiveLocalDir = entry.localDir;
+        Path effectiveCacheDir = entry.cacheDir;
 
         // Execute downloads simultaneously to maximize network bandwidth
         try {
-            var f1 = CompletableFuture.runAsync(() -> ensureQuietly(baseFile, effectiveLocalDir, effectiveBaseUrl));
-            var f2 = CompletableFuture.runAsync(() -> ensureQuietly(queryFile, effectiveLocalDir, effectiveBaseUrl));
-            var f3 = CompletableFuture.runAsync(() -> ensureQuietly(gtFile, effectiveLocalDir, effectiveBaseUrl));
+            var f1 = CompletableFuture.runAsync(() -> ensureQuietly(baseFile, effectiveCacheDir, effectiveBaseUrl));
+            var f2 = CompletableFuture.runAsync(() -> ensureQuietly(queryFile, effectiveCacheDir, effectiveBaseUrl));
+            var f3 = CompletableFuture.runAsync(() -> ensureQuietly(gtFile, effectiveCacheDir, effectiveBaseUrl));
 
             CompletableFuture.allOf(f1, f2, f3).join();
         } catch (Exception e) {
@@ -289,9 +321,9 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
         var props = metadata.getProperties(dataSetName).orElseThrow();
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveLocalDir.resolve(baseFile).toString());
-            var queryVectors = SiftLoader.readFvecs(effectiveLocalDir.resolve(queryFile).toString());
-            var gtVectors = SiftLoader.readIvecs(effectiveLocalDir.resolve(gtFile).toString());
+            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
+            var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
+            var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
         }));
     }
@@ -300,7 +332,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     // CATALOG DISCOVERY & LOADING
     // ========================================================================================
 
-    /// Recursively scans a directory tree for files matching {@code *entries.yaml} and merges
+    /// Recursively scans a directory tree for {@code .yaml}/{@code .yml} files and merges
     /// all entries into the given map. Later entries with the same name override earlier ones.
     private void scanForCatalogs(Path rootDir, Map<String, CatalogEntry> target) {
         try (Stream<Path> paths = Files.walk(rootDir)) {
@@ -313,56 +345,206 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     }
 
     /// Loads entries from a single catalog file into the target map.
+    /// Handles {@code _defaults} folding, {@code _include} remote fetching, and
+    /// {@code _}-prefixed key exclusion.
+    ///
+    /// When {@code _include} is present, its value (after env var expansion) is treated as a
+    /// remote catalog URL. The remote entries are fetched and merged with the local defaults,
+    /// so a single local file can act as a thin wrapper around a remote catalog.
     @SuppressWarnings("unchecked")
     private void loadCatalogEntries(Path catalogFile, Map<String, CatalogEntry> target) {
         var raw = loadCatalogFromFile(catalogFile);
         if (raw.isEmpty()) return;
 
         Path catalogDir = catalogFile.getParent() != null ? catalogFile.getParent() : Paths.get(".");
-        logger.info("Loading catalog from {} ({} entries)", catalogFile, raw.size());
+
+        // extract and expand _defaults if present
+        Map<String, String> defaults = raw.getOrDefault("_defaults", Map.of());
+        if (!defaults.isEmpty()) {
+            defaults = resolveEnvVars(defaults);
+        }
+
+        // handle _include: fetch remote catalog and merge with local defaults
+        Map<String, String> includeEntry = raw.get("_include");
+        if (includeEntry != null) {
+            String includeUrl = includeEntry.get("url");
+            if (includeUrl != null) {
+                includeUrl = expandEnvVars(includeUrl);
+                loadRemoteInclude(includeUrl, defaults, catalogDir, target);
+            }
+        }
+
+        // count real entries (non-underscore keys)
+        long entryCount = raw.keySet().stream().filter(k -> !k.startsWith("_")).count();
+        if (entryCount > 0) {
+            logger.info("Loading catalog from {} ({} entries)", catalogFile, entryCount);
+        }
 
         for (var e : raw.entrySet()) {
             String name = e.getKey();
-            Map<String, String> fields = e.getValue();
-            String baseUrl = fields.get("baseurl");
-            // ensure baseurl ends with / if present
-            if (baseUrl != null && !baseUrl.endsWith("/")) {
-                baseUrl = baseUrl + "/";
+            // skip entries whose key starts with _
+            if (name.startsWith("_")) continue;
+
+            // fold defaults into this entry (entry values take precedence)
+            Map<String, String> fields = new HashMap<>(defaults);
+            if (e.getValue() != null) {
+                fields.putAll(e.getValue());
             }
-            target.put(name, new CatalogEntry(fields, catalogDir, baseUrl));
+
+            target.put(name, buildCatalogEntry(fields, catalogDir));
+        }
+    }
+
+    /// Fetches a remote catalog via {@code _include} and merges its entries with local defaults.
+    private void loadRemoteInclude(String includeUrl, Map<String, String> defaults,
+                                   Path catalogDir, Map<String, CatalogEntry> target) {
+        try {
+            logger.info("Including remote catalog from {}", includeUrl);
+            var remoteCatalog = fetchRemoteCatalogRaw(includeUrl);
+
+            // derive the remote base path from the include URL
+            int lastSlash = includeUrl.lastIndexOf('/');
+            String remoteBase = lastSlash >= 0 ? includeUrl.substring(0, lastSlash + 1) : null;
+
+            for (var e : remoteCatalog.entrySet()) {
+                if (e.getKey().startsWith("_")) continue;
+
+                // fold local defaults into remote entry (remote values take precedence over defaults,
+                // but per-entry local overrides from the same file take precedence — those are
+                // handled in the caller's loop)
+                Map<String, String> fields = new HashMap<>(defaults);
+                if (e.getValue() != null) {
+                    fields.putAll(e.getValue());
+                }
+                // if the entry doesn't already have a base_url, use the remote catalog's base path
+                if (!fields.containsKey("base_url") && remoteBase != null) {
+                    fields.put("base_url", remoteBase);
+                }
+
+                target.put(e.getKey(), buildCatalogEntry(fields, catalogDir));
+            }
+            logger.info("Included {} datasets from remote catalog", remoteCatalog.size());
+        } catch (Exception e) {
+            logger.warn("Failed to include remote catalog from {}: {}", includeUrl, e.getMessage());
         }
     }
 
     /// Converts a raw catalog map (from a remote fetch) into CatalogEntry objects.
+    /// Handles {@code _defaults} folding and {@code _}-prefixed key exclusion.
     private static Map<String, CatalogEntry> toCatalogEntries(Map<String, Map<String, String>> raw, Path localDir) {
+        Map<String, String> defaults = raw.getOrDefault("_defaults", Map.of());
+
         var result = new HashMap<String, CatalogEntry>();
         for (var e : raw.entrySet()) {
-            String baseUrl = e.getValue().get("baseurl");
-            if (baseUrl != null && !baseUrl.endsWith("/")) {
-                baseUrl = baseUrl + "/";
+            if (e.getKey().startsWith("_")) continue;
+
+            Map<String, String> fields = new HashMap<>(defaults);
+            if (e.getValue() != null) {
+                fields.putAll(e.getValue());
             }
-            result.put(e.getKey(), new CatalogEntry(e.getValue(), localDir, baseUrl));
+
+            result.put(e.getKey(), buildCatalogEntry(fields, localDir));
         }
         return result;
+    }
+
+    private static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
+            "base", "query", "gt", "base_url", "cache_dir"
+    );
+
+    /// Builds a CatalogEntry from merged fields, resolving env vars, base_url, and cache_dir.
+    /// Throws if any unknown fields are present.
+    private static CatalogEntry buildCatalogEntry(Map<String, String> fields, Path catalogDir) {
+        // validate that all fields are recognized
+        for (String key : fields.keySet()) {
+            if (!KNOWN_FIELDS.contains(key)) {
+                throw new IllegalArgumentException(
+                        "Unknown field '" + key + "' in catalog entry. Known fields: " + KNOWN_FIELDS);
+            }
+        }
+
+        // expand ${VAR} references in all field values
+        var resolved = resolveEnvVars(fields);
+
+        String baseUrl = resolved.get("base_url");
+        if (baseUrl != null && !baseUrl.endsWith("/")) {
+            baseUrl = baseUrl + "/";
+        }
+
+        // resolve cache_dir: entry field > DATASET_CACHE_DIR env var > catalog file's directory
+        Path cacheDir;
+        String cacheDirField = resolved.get("cache_dir");
+        if (cacheDirField != null && !cacheDirField.isEmpty()) {
+            cacheDir = Paths.get(cacheDirField);
+        } else {
+            String envCacheDir = System.getenv(ENV_DATASET_CACHE_DIR);
+            if (envCacheDir != null && !envCacheDir.isEmpty()) {
+                cacheDir = Paths.get(envCacheDir);
+            } else {
+                cacheDir = catalogDir;
+            }
+        }
+
+        return new CatalogEntry(resolved, cacheDir, baseUrl);
+    }
+
+    /// Matches {@code ${VAR}} and {@code ${VAR:-default}} syntax.
+    private static final java.util.regex.Pattern ENV_VAR_PATTERN =
+            java.util.regex.Pattern.compile("\\$\\{([^:}]+)(?::-((?:[^}]*)?))?}");
+
+    /// Expands {@code ${VAR}} and {@code ${VAR:-default}} references in all field values
+    /// using environment variables. Throws {@link IllegalArgumentException} if a referenced
+    /// variable is not set and no default is provided.
+    private static Map<String, String> resolveEnvVars(Map<String, String> fields) {
+        var resolved = new HashMap<String, String>(fields.size());
+        for (var e : fields.entrySet()) {
+            resolved.put(e.getKey(), expandEnvVars(e.getValue()));
+        }
+        return resolved;
+    }
+
+    /// Expands all {@code ${VAR}} and {@code ${VAR:-default}} occurrences in a single string value.
+    private static String expandEnvVars(String value) {
+        if (value == null || !value.contains("${")) {
+            return value;
+        }
+        var matcher = ENV_VAR_PATTERN.matcher(value);
+        var sb = new StringBuilder();
+        while (matcher.find()) {
+            String varName = matcher.group(1);
+            String defaultValue = matcher.group(2); // null if no :- was present
+            String envValue = System.getenv(varName);
+            if (envValue == null) {
+                if (defaultValue != null) {
+                    envValue = defaultValue;
+                } else {
+                    throw new IllegalArgumentException(
+                            "Environment variable '${" + varName + "}' referenced in catalog entry is not set");
+                }
+            }
+            matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(envValue));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
     }
 
     // ========================================================================================
     // FILE AVAILABILITY
     // ========================================================================================
 
-    private void ensureQuietly(String filename, Path localDir, String baseUrl) {
+    private void ensureQuietly(String filename, Path cacheDir, String baseUrl) {
         try {
-            ensureFileAvailable(filename, localDir, baseUrl);
+            ensureFileAvailable(filename, cacheDir, baseUrl);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    /// Ensures a dataset file is available locally. Checks in the entry's local directory first.
+    /// Ensures a dataset file is available locally. Checks in the entry's cache directory first.
     /// If not found and a remote base URL is available (either per-entry or loader-level),
     /// downloads the file.
-    private void ensureFileAvailable(String filename, Path localDir, String baseUrl) throws IOException {
-        Path localPath = localDir.resolve(filename);
+    private void ensureFileAvailable(String filename, Path cacheDir, String baseUrl) throws IOException {
+        Path localPath = cacheDir.resolve(filename);
         if (Files.exists(localPath)) return;
         if (baseUrl == null) throw new IOException("File not found locally and no remote URL configured: " + localPath);
 

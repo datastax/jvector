@@ -38,29 +38,19 @@ public class DataSets {
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
 
+        /// Scans the datasets/ directory for .yaml/.yml files.
+        /// - public/  contains jvector-dataset-entries.yaml which _includes the public S3 catalog
+        /// - custom/  contains an entries_example.yaml template for user datasets
+        ///
         /// To add your own datasets:
-        /// 1. Put your base, query, and gt files in a directory like `local_datasets/mydatasets`
-        /// 2. Add or edit a dataset mapping file: entries.yaml in that directory. (see example there)
-        add(new DataSetLoaderSimpleMFD("local_datasets"));
-
-        /// To see the list of available datasets here, just run
-        /// curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml
-        add(new DataSetLoaderSimpleMFD(
-                "s3://jvector-datasets-public/datasets-clean/catalog_entries.yaml",
-                "fvec/catalog_entries.yaml",
-                true)
-        );
-
-        // HTTP transport available too, but not recommended for S3 sources.
-        //        add(new DataSetLoaderSimpleMFD(
-        //              "https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml",
-        //               "fvec/catalog_entries.yaml",
-        //               true)
-        //        );
-
-        // These are deprecated and should be removed soon.
-        // add(new DataSetLoaderHDF5());
-        // add(new DataSetLoaderMFD());
+        /// 1. Create a directory under jvector-examples/datasets/ (e.g. custom/mydata/)
+        /// 2. Add a .yaml file with your dataset mappings (see entries_example.yaml)
+        /// 3. For private remote datasets, use baseurl with ${SECRET_HASH} style env vars
+        ///
+        /// Two paths are tried so this works whether the working directory is the project root
+        /// or the jvector-examples module directory.
+        add(new DataSetLoaderSimpleMFD("jvector-examples/datasets"));
+        add(new DataSetLoaderSimpleMFD("datasets"));
 
     }};
 

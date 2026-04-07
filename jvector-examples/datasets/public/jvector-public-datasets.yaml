@@ -1,0 +1,17 @@
+# This will merge in all the values from the referenced file as if it were here,
+# but the data provider can update the catalog as needed based on new datasets,
+# separate from jvector code.
+#
+# hint: you can see what's available here by running
+# curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml
+
+_include:
+  url: s3://jvector-datasets-public/datasets-clean/catalog_entries.yaml
+
+# This sets the local cache directory for the datasets.
+# If it is not set, it is automatically considered the same directory as this file was found in.
+_defaults:
+  cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}/public
+#  cache_dir: ${HOME}/...
+#  cache_dir: /absolute/path/...
+
