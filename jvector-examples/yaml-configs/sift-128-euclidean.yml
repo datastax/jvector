@@ -2,8 +2,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-
-dataset: glove-25-angular
+dataset: sift-128-euclidean
 
 construction:
   outDegree: [32]

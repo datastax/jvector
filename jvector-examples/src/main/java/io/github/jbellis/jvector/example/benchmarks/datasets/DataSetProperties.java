@@ -51,6 +51,21 @@ public interface DataSetProperties {
     /// Canonical key for whether the dataset is free of duplicate vectors ({@link Boolean}).
     String KEY_IS_DUPLICATE_VECTOR_FREE = "is_duplicate_vector_free";
 
+    /// Canonical key for how benchmark loaders should treat the dataset at load time.
+    String KEY_LOAD_BEHAVIOR = "load_behavior";
+
+    /**
+     * Controls benchmark-loader behavior for this dataset.
+     *
+     * <p>LEGACY_SCRUB preserves current behavior (to be deprecated).
+     * NO_SCRUB loads the dataset exactly as provided, without load-time scrubbing
+     * or ground-truth remapping.
+     */
+    enum LoadBehavior {
+        LEGACY_SCRUB,
+        NO_SCRUB
+    }
+
     /**
      * Returns the similarity function for this dataset.
      *
@@ -96,6 +111,18 @@ public interface DataSetProperties {
      * @return true, if all vectors in this dataset are distinct.
      */
     public boolean isDuplicateVectorFree();
+
+    /**
+     * Returns how benchmark loaders should treat this dataset at load time.
+     *
+     * <p>This is a loader policy, not a statement of dataset quality.
+     * The default preserves legacy behavior.
+     *
+     * @return the benchmark loader behavior for this dataset
+     */
+    default LoadBehavior loadBehavior() {
+        return LoadBehavior.LEGACY_SCRUB;
+    }
 
     /**
      * A convenience method to capture the notion of a valid dataset.
@@ -221,6 +248,18 @@ public interface DataSetProperties {
         @Override
         public boolean isDuplicateVectorFree() {
             return Boolean.TRUE.equals(properties.get(KEY_IS_DUPLICATE_VECTOR_FREE));
+        }
+
+        @Override
+        public LoadBehavior loadBehavior() {
+            var value = properties.get(KEY_LOAD_BEHAVIOR);
+            if (value instanceof LoadBehavior) {
+                return (LoadBehavior) value;
+            }
+            if (value instanceof String) {
+                return LoadBehavior.valueOf((String) value);
+            }
+            return LoadBehavior.LEGACY_SCRUB;
         }
     }
 }
