@@ -76,24 +76,24 @@ openai-v3-large-1536-100k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
 # ann-benchmarks
-glove-25-angular.hdf5:
+glove-25-angular:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-glove-50-angular.hdf5:
+glove-50-angular:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-lastfm-64-dot.hdf5:
+lastfm-64-dot:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
-glove-100-angular.hdf5:
+glove-100-angular:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-glove-200-angular.hdf5:
+glove-200-angular:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-nytimes-256-angular.hdf5:
+nytimes-256-angular:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-sift-128-euclidean.hdf5:
+sift-128-euclidean:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB

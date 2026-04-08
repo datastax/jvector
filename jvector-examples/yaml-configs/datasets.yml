@@ -1,24 +1,24 @@
 neighborhood-watch-100k:
-  - cohere-english-v3-100k
-  - ada002-100k
-  - openai-v3-small-1536-100k
+#  - cohere-english-v3-100k
+#  - ada002-100k
+#  - openai-v3-small-1536-100k
   - gecko-100k
-  - openai-v3-large-3072-100k
-  - openai-v3-large-1536-100k
-  - e5-small-v2-100k
-  - e5-base-v2-100k
-  - e5-large-v2-100k
+#  - openai-v3-large-3072-100k
+#  - openai-v3-large-1536-100k
+#  - e5-small-v2-100k
+#  - e5-base-v2-100k
+#  - e5-large-v2-100k
 neighborhood-watch-1M:
-  - ada002-1M
-  - colbert-1M
+#  - ada002-1M
+#  - colbert-1M
 ann-benchmarks:
-  - glove-25-angular.hdf5
-  - glove-50-angular.hdf5
-  - lastfm-64-dot.hdf5
-  - glove-100-angular.hdf5
-  - glove-200-angular.hdf5
-  - nytimes-256-angular.hdf5
-  - sift-128-euclidean.hdf5
+  - glove-25-angular
+  - glove-50-angular
+  - lastfm-64-dot
+  - glove-100-angular
+  - glove-200-angular
+  - nytimes-256-angular
+  - sift-128-euclidean
 #other-datasets:
 ##  - dpr-1M
 ##  - dpr-10M
@@ -27,5 +27,5 @@ ann-benchmarks:
 ##  - cohere-english-v3-1M
 ##  - cohere-english-v3-10M
 
-  # - deep-image-96-angular.hdf5 # large files not yet supported
-  # - gist-960-euclidean.hdf5 # large files not yet supported
+  # - deep-image-96-angular # large files not yet supported
+  # - gist-960-euclidean # large files not yet supported

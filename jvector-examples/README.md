@@ -11,8 +11,8 @@ A simple benchmark for the sift dataset located in the [siftsmall](./siftsmall) 
 Performs grid search across the `GraphIndexBuilder` parameter space to find
 the best tradeoffs between recall and throughput.  
 
-This benchmark requires datasets from [https://github.com/erikbern/ann-benchmarks](https://github.com/erikbern/ann-benchmarks/blob/main/README.md#data-sets) to be downloaded to hdf5 and fvec 
-directories `hdf5` or `fvec` under the project root depending on the dataset format. 
+This benchmark requires `fvecs' versions of datasets from [https://github.com/erikbern/ann-benchmarks](https://github.com/erikbern/ann-benchmarks/blob/main/README.md#data-sets) to be downloaded to `dataset_cache` 
+directory under the project root. 
 
 You can use [`plot_output.py`](./plot_output.py) to graph the [pareto-optimal points](https://en.wikipedia.org/wiki/Pareto_efficiency) found by `Bench`.
 
