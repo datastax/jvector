@@ -126,6 +126,11 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
+      # Decode and write the protected dataset catalog
+      - name: Inject Protected Catalog
+        run: |
+          echo "${{ secrets.PROTECTED_CATALOG_YAML }}" | base64 -d > jvector-examples/yaml-configs/dataset-catalogs/protected-catalog.yaml
+
       # Create a directory to store benchmark results
       - name: Create results directory
         run: mkdir -p benchmark_results
@@ -137,8 +142,6 @@ jobs:
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
         id: run-benchmark
-        env:
-          DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
         run: |
           # Check if jvector-examples directory and AutoBenchYAML class exist
           if [ ! -d "jvector-examples" ]; then
