@@ -220,7 +220,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     ///                        fetched and compared; a warning is logged if they differ.
     ///                        Ignored when catalogUrl is null/empty.
     /// @param metadata        the metadata reader for resolving dataset properties
-    @SuppressWarnings("unchecked")
     public DataSetLoaderSimpleMFD(String catalogUrl, String localPath, boolean checkForUpdates, DataSetMetadataReader metadata) {
         this.metadata = metadata;
         this.httpClient = HttpClient.newBuilder()
@@ -359,7 +358,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     /// When {@code _include} is present, its value (after env var expansion) is treated as a
     /// remote catalog URL. The remote entries are fetched and merged with the local defaults,
     /// so a single local file can act as a thin wrapper around a remote catalog.
-    @SuppressWarnings("unchecked")
     private void loadCatalogEntries(Path catalogFile, Map<String, CatalogEntry> target) {
         var raw = loadCatalogFromFile(catalogFile);
         if (raw.isEmpty()) return;
@@ -570,7 +568,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     // REMOTE CATALOG OPERATIONS
     // ========================================================================================
 
-    @SuppressWarnings("unchecked")
     private Map<String, Map<String, String>> fetchRemoteCatalogRaw(String catalogUrl) {
         try {
             Path tempFile = Files.createTempFile("catalog-", ".tmp");
