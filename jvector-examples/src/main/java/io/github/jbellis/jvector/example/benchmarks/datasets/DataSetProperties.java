@@ -150,7 +150,7 @@ public interface DataSetProperties {
     /// ));
     ///
     /// // From a YAML file, selecting a named entry
-    /// var props = new DataSetProperties.PropertyMap("dataset_metadata.yml", "ada002-100k");
+    /// var props = new DataSetProperties.PropertyMap("dataset-metadata.yml", "ada002-100k");
     ///
     /// // From a flat YAML file (no top-level key)
     /// var props = new DataSetProperties.PropertyMap("my_dataset.yml", null);

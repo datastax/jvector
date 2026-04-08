@@ -37,8 +37,15 @@ public class DataSets {
     private static final Logger logger = LoggerFactory.getLogger(DataSets.class);
 
     public static final List<DataSetLoader> defaultLoaders = new ArrayList<>() {{
-        add(new DataSetLoaderHDF5());
-        add(new DataSetLoaderMFD());
+
+        /// Scans the jvector-examples/yaml-configs/dataset-catalogs/ directory for .yaml/.yml files.
+        ///
+        /// To add your own datasets:
+        /// 1. Add a .yaml file with your dataset mappings (see local-catalog.yaml for examples)
+        /// 2. For private remote datasets, use baseurl with ${SECRET_HASH} style env vars
+        ///
+        add(new DataSetLoaderSimpleMFD("jvector-examples/yaml-configs/dataset-catalogs"));
+
     }};
 
     /// Loads a dataset by name using the {@link #defaultLoaders}.

@@ -21,6 +21,9 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -28,7 +31,7 @@ import java.util.Optional;
 /// Reads dataset metadata from a multi-entry YAML file and provides keyed lookups
 /// for {@link DataSetProperties}.
 ///
-/// This is used by loaders such as {@link DataSetLoaderMFD} and {@link DataSetLoaderHDF5}
+/// This is used by loaders such as {@link DataSetLoaderSimpleMFD}
 /// that do not have an intrinsic way to determine the similarity function from the dataset
 /// name or file format alone.
 ///
@@ -48,7 +51,8 @@ import java.util.Optional;
 /// the exact key first, then falls back to the key with {@code .hdf5} appended.
 public class DataSetMetadataReader {
 
-    private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset_metadata.yml";
+    private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset-metadata.yml";
+    private static final String MODULE_RELATIVE_DEFAULT_FILE = "yaml-configs/dataset-metadata.yml";
 
     private final Map<String, Map<String, Object>> metadata;
 
@@ -56,12 +60,26 @@ public class DataSetMetadataReader {
         this.metadata = metadata != null ? metadata : Map.of();
     }
 
-    /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset_metadata.yml}).
+    /// Loads dataset metadata from the default file ({@code jvector-examples/yaml-configs/dataset-metadata.yml}).
     ///
     /// @return the loaded metadata
     /// @throws RuntimeException if the file cannot be read
     public static DataSetMetadataReader load() {
-        return load(DEFAULT_FILE);
+        Path defaultPath = Paths.get(DEFAULT_FILE);
+        if (Files.isRegularFile(defaultPath)) {
+            return load(defaultPath.toString());
+        }
+
+        Path moduleRelativePath = Paths.get(MODULE_RELATIVE_DEFAULT_FILE);
+        if (Files.isRegularFile(moduleRelativePath)) {
+            return load(moduleRelativePath.toString());
+        }
+
+        throw new RuntimeException(
+                "Failed to load dataset metadata from default locations: "
+                        + defaultPath.toAbsolutePath().normalize()
+                        + " or "
+                        + moduleRelativePath.toAbsolutePath().normalize());
     }
 
     /// Loads dataset metadata from the specified file.

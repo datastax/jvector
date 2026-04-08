@@ -380,7 +380,7 @@ public class DataSetPropertiesTest {
 
     @Test
     public void productionMetadataFileLoadsSuccessfully() {
-        // This validates the actual dataset_metadata.yml is well-formed
+        // This validates the actual dataset-metadata.yml is well-formed
         var reader = DataSetMetadataReader.load();
         var props = reader.getProperties("ada002-100k");
         assertTrue(props.isPresent(), "ada002-100k should be in the production metadata file");
@@ -391,7 +391,7 @@ public class DataSetPropertiesTest {
     public void productionMetadataAllEntriesHaveSimilarityFunction() {
         var reader = DataSetMetadataReader.load();
         // All entries in the production metadata should have a similarity function
-        for (var name : new String[]{"cohere-english-v3-100k", "ada002-100k", "openai-v3-small-100k",
+        for (var name : new String[]{"cohere-english-v3-100k", "ada002-100k", "openai-v3-small-1536-100k",
                 "gecko-100k", "openai-v3-large-3072-100k", "openai-v3-large-1536-100k",
                 "e5-small-v2-100k", "e5-base-v2-100k", "e5-large-v2-100k",
                 "ada002-1M", "colbert-1M"}) {
