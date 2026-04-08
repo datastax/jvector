@@ -15,7 +15,7 @@ JVector supports datasets in the fvecs/ivecs format.  These consist of three fil
 The general procedure for running benchmarks is mentioned below. The following sections describe the process in more detail.
 - [Specify the dataset](#specifying-datasets) names to benchmark in `datasets.yml`.
 - Certain datasets will be downloaded automatically. If using a different dataset, make sure the dataset files are downloaded and made available (refer the section on [Custom datasets](#custom-datasets)).
-- Adjust the benchmark parameters in `default.yml`. This will affect the parameters for all datasets benchmarked. You can specify custom parameters for a specific dataset by creating a file called `<your-dataset-name>.yml` in the same folder.
+- Adjust the benchmark parameters in `default.yml`. This will affect the parameters for all datasets benchmarked. You can specify custom parameters for a specific dataset by creating a file called `<your-dataset-name>.yml` in the `index-parameters` subfolder.
 - Decide on the kind of measurements and logging you want and configure them in `run-config.yml`.
 
 You can run the configured benchmark with maven:
