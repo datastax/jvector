@@ -262,7 +262,36 @@ JV_INLINE float euclidean_f32(const float* a, int aoffset, const float* b, int b
 JV_INLINE void calculate_partial_sums_dot_f32_512(const float* codebook, int codebookIndex, int size, int clusterCount, const float* query, int queryOffset, float* partialSums) {
     int codebookBase = codebookIndex * clusterCount;
     float tempdat[16];
-    if (size == 4) {
+    if (size == 2) {
+        int i = 0;
+        // use a zmm register to calculate 8 partial sums in parallel:
+        __m128 q_lo = _mm_castsi128_ps(_mm_loadl_epi64((__m128i *)(query + queryOffset)));
+        __m512 qq = _mm512_broadcast_f32x2(q_lo); // broadcast 2 query floats to all 8 x 64-bit positions
+        for (; i + 8 <= clusterCount; i += 8) {
+            // load eight consecutive centroids (16 floats) from the codebook into zmm
+            __m512 c = _mm512_loadu_ps(codebook + i * size);
+            __m512 prod = _mm512_mul_ps(c, qq);
+            // horizontal reduce: sum the two products within each 64-bit centroid slot
+            // shuffle swaps pairs within each 128-bit lane: [a,b,c,d] -> [b,a,d,c]
+            __m512 temp = _mm512_shuffle_ps(prod, prod, _MM_SHUFFLE(2, 3, 0, 1));
+            __m512 sum = _mm512_add_ps(prod, temp);
+            // results sit at even positions (0,2,4,6,8,10,12,14)
+            // resgular store and load seem to be better tha vcompress or vpermutex2var for extracting the results
+            _mm512_storeu_ps(tempdat, sum);
+            partialSums[codebookBase + i]     = tempdat[0];
+            partialSums[codebookBase + i + 1] = tempdat[2];
+            partialSums[codebookBase + i + 2] = tempdat[4];
+            partialSums[codebookBase + i + 3] = tempdat[6];
+            partialSums[codebookBase + i + 4] = tempdat[8];
+            partialSums[codebookBase + i + 5] = tempdat[10];
+            partialSums[codebookBase + i + 6] = tempdat[12];
+            partialSums[codebookBase + i + 7] = tempdat[14];
+        }
+        for (; i < clusterCount; i++) {
+          partialSums[codebookBase + i] = dot_product_f32(codebook, i * size, query, queryOffset, size);
+        }
+    }
+    else if (size == 4) {
         int i = 0;
         // use a zmm register to calculate 4 partial sums in parallel:
         __m128 q = _mm_loadu_ps(query + queryOffset);
@@ -339,7 +368,36 @@ JV_INLINE void calculate_partial_sums_dot_f32_512(const float* codebook, int cod
 JV_INLINE void calculate_partial_sums_euclidean_f32_512(const float* codebook, int codebookIndex, int size, int clusterCount, const float* query, int queryOffset, float* partialSums) {
     int codebookBase = codebookIndex * clusterCount;
     float tempdat[16];
-    if (size == 4) {
+    if (size == 2) {
+        int i = 0;
+        // use a zmm register to calculate 8 partial sums in parallel:
+        __m128 q_lo = _mm_castsi128_ps(_mm_loadl_epi64((__m128i *)(query + queryOffset)));
+        __m512 qq = _mm512_broadcast_f32x2(q_lo); // broadcast 2 query floats to all 8 x 64-bit positions
+        for (; i + 8 <= clusterCount; i += 8) {
+            // load eight consecutive centroids (16 floats) from the codebook into zmm
+            __m512 c = _mm512_loadu_ps(codebook + i * size);
+            __m512 diff = _mm512_sub_ps(c, qq);
+            __m512 sq = _mm512_mul_ps(diff, diff);
+            // horizontal reduce: sum the two squared diffs within each 64-bit centroid slot
+            // shuffle swaps pairs within each 128-bit lane: [a,b,c,d] -> [b,a,d,c]
+            __m512 temp = _mm512_shuffle_ps(sq, sq, _MM_SHUFFLE(2, 3, 0, 1));
+            __m512 sum = _mm512_add_ps(sq, temp);
+            // results sit at even positions (0,2,4,6,8,10,12,14)
+            _mm512_storeu_ps(tempdat, sum);
+            partialSums[codebookBase + i]     = tempdat[0];
+            partialSums[codebookBase + i + 1] = tempdat[2];
+            partialSums[codebookBase + i + 2] = tempdat[4];
+            partialSums[codebookBase + i + 3] = tempdat[6];
+            partialSums[codebookBase + i + 4] = tempdat[8];
+            partialSums[codebookBase + i + 5] = tempdat[10];
+            partialSums[codebookBase + i + 6] = tempdat[12];
+            partialSums[codebookBase + i + 7] = tempdat[14];
+        }
+        for (; i < clusterCount; i++) {
+          partialSums[codebookBase + i] = euclidean_f32(codebook, i * size, query, queryOffset, size);
+        }
+    }
+    else if (size == 4) {
         int i = 0;
         // use a zmm register to calculate 4 partial sums in parallel:
         __m128 q = _mm_loadu_ps(query + queryOffset);
