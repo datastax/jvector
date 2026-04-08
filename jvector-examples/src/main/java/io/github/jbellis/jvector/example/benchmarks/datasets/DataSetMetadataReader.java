@@ -21,6 +21,9 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -49,6 +52,7 @@ import java.util.Optional;
 public class DataSetMetadataReader {
 
     private static final String DEFAULT_FILE = "jvector-examples/yaml-configs/dataset-metadata.yml";
+    private static final String MODULE_RELATIVE_DEFAULT_FILE = "yaml-configs/dataset-metadata.yml";
 
     private final Map<String, Map<String, Object>> metadata;
 
@@ -61,7 +65,21 @@ public class DataSetMetadataReader {
     /// @return the loaded metadata
     /// @throws RuntimeException if the file cannot be read
     public static DataSetMetadataReader load() {
-        return load(DEFAULT_FILE);
+        Path defaultPath = Paths.get(DEFAULT_FILE);
+        if (Files.isRegularFile(defaultPath)) {
+            return load(defaultPath.toString());
+        }
+
+        Path moduleRelativePath = Paths.get(MODULE_RELATIVE_DEFAULT_FILE);
+        if (Files.isRegularFile(moduleRelativePath)) {
+            return load(moduleRelativePath.toString());
+        }
+
+        throw new RuntimeException(
+                "Failed to load dataset metadata from default locations: "
+                        + defaultPath.toAbsolutePath().normalize()
+                        + " or "
+                        + moduleRelativePath.toAbsolutePath().normalize());
     }
 
     /// Loads dataset metadata from the specified file.
