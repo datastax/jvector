@@ -15,12 +15,16 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -272,6 +276,82 @@ public class DataSetLoaderSimpleMFDTest {
                 null, cacheDir.toString(), true, testMetadata
         );
         assertTrue(loader.loadDataSet("test-ds").isPresent());
+    }
+
+    // ========================================================================
+    // catalogUrl remote catalog loading
+    // ========================================================================
+
+    @Test
+    public void catalogUrlFetchesRemoteCatalogWhenNoLocalCatalogExists() throws IOException {
+        Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
+        Path remoteCacheDir = tempFolder.newFolder("remote-cache").toPath();
+
+        Files.writeString(remoteDir.resolve("catalog_entries.yaml"),
+                "_defaults:\n" +
+                        "  cache_dir: " + remoteCacheDir + "\n" +
+                        "test-ds:\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(remoteDir);
+
+        assertFalse(Files.exists(cacheDir.resolve("catalog_entries.yaml")),
+                "Precondition: local catalog should not exist");
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            var loader = new DataSetLoaderSimpleMFD(
+                    urlFor(server, "catalog_entries.yaml"),
+                    cacheDir.toString(), false, testMetadata
+            );
+
+            // remote catalog should be cached locally
+            assertTrue(Files.exists(cacheDir.resolve("catalog_entries.yaml")));
+
+            var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
+            assertEquals(5, ds.getBaseVectors().size());
+            assertEquals(2, ds.getQueryVectors().size());
+            assertEquals(2, ds.getGroundTruth().size());
+            assertEquals(4, ds.getDimension());
+
+            // dataset files should be downloaded using the remote catalog's base path
+            assertTrue(Files.exists(remoteCacheDir.resolve("test_base.fvecs")));
+            assertTrue(Files.exists(remoteCacheDir.resolve("test_query.fvecs")));
+            assertTrue(Files.exists(remoteCacheDir.resolve("test_gt.ivecs")));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    public void catalogUrlDoesNotMergeRemoteCatalogWhenLocalCatalogExists() throws IOException {
+        // local catalog should win; remote catalog is only used for update checks in this mode
+        writeTestCatalog(cacheDir);
+        writeTestDataFiles(cacheDir);
+
+        Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
+        Files.writeString(remoteDir.resolve("catalog_entries.yaml"),
+                "sub-ds:\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(remoteDir);
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            var loader = new DataSetLoaderSimpleMFD(
+                    urlFor(server, "catalog_entries.yaml"),
+                    cacheDir.toString(), false, testMetadata
+            );
+
+            assertTrue(loader.loadDataSet("test-ds").isPresent(),
+                    "Local catalog entry should be found");
+            assertFalse(loader.loadDataSet("sub-ds").isPresent(),
+                    "Remote catalog should not be merged when a local catalog exists");
+        } finally {
+            server.stop(0);
+        }
     }
 
     // ========================================================================
@@ -1089,6 +1169,38 @@ public class DataSetLoaderSimpleMFDTest {
     // ========================================================================
     // Helpers
     // ========================================================================
+
+    /// Starts a simple static HTTP file server rooted at the given directory.
+    private static HttpServer startFileServer(Path root) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> serveStaticFile(exchange, root));
+        server.start();
+        return server;
+    }
+
+    /// Returns the full URL for a file served by the test HTTP server.
+    private static String urlFor(HttpServer server, String filename) {
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/" + filename;
+    }
+
+    /// Serves a file from the given root directory, or 404 if it does not exist.
+    private static void serveStaticFile(HttpExchange exchange, Path root) throws IOException {
+        String requestPath = exchange.getRequestURI().getPath();
+        String relativePath = requestPath.startsWith("/") ? requestPath.substring(1) : requestPath;
+        Path file = root.resolve(relativePath).normalize();
+
+        if (!file.startsWith(root) || !Files.isRegularFile(file)) {
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+            return;
+        }
+
+        byte[] bytes = Files.readAllBytes(file);
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+    }
 
     private static void writeTestCatalog(Path dir) throws IOException {
         Files.writeString(dir.resolve("catalog_entries.yaml"),
