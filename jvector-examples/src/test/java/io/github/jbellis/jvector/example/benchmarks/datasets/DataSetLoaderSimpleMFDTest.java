@@ -1167,6 +1167,153 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     // ========================================================================
+    // _include cached remote catalogs
+    // ========================================================================
+
+    @Test
+    public void includeOnlyCatalogLoadsOfflineFromCachedRemoteCatalog() throws IOException {
+        // wrapper catalog points to a remote catalog and caches data files locally
+        Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
+        Path cachedDataDir = tempFolder.newFolder("cached-public-data").toPath();
+
+        Files.writeString(remoteDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(remoteDir);
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            Files.writeString(cacheDir.resolve("public-catalog.yaml"),
+                    "_include:\n" +
+                            "  url: " + urlFor(server, "catalog_entries.yaml") + "\n" +
+                            "_defaults:\n" +
+                            "  cache_dir: " + cachedDataDir + "\n");
+
+            // first run online: include fetch succeeds and data files are cached locally
+            var onlineLoader = new DataSetLoaderSimpleMFD(
+                    null, cacheDir.toString(), false, testMetadata
+            );
+
+            var onlineDs = onlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
+            assertEquals(5, onlineDs.getBaseVectors().size());
+            assertTrue(Files.exists(cachedDataDir.resolve("test_base.fvecs")));
+            assertTrue(Files.exists(cachedDataDir.resolve("test_query.fvecs")));
+            assertTrue(Files.exists(cachedDataDir.resolve("test_gt.ivecs")));
+        } finally {
+            server.stop(0);
+        }
+
+        // second run offline: include fetch fails, but the cached remote catalog still
+        // provides the dataset entry so the cached data files can be loaded
+        var offlineLoader = new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        );
+
+        var offlineDs = offlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
+        assertEquals(5, offlineDs.getBaseVectors().size());
+        assertEquals(2, offlineDs.getQueryVectors().size());
+        assertEquals(2, offlineDs.getGroundTruth().size());
+        assertEquals(4, offlineDs.getDimension());
+    }
+
+    @Test
+    public void localCatalogOverridesCachedIncludedRemoteCatalogOffline() throws IOException {
+        // local dataset should win over a cached included remote dataset of the same name
+        Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
+        Path cachedRemoteDir = tempFolder.newFolder("cached-public-data").toPath();
+        Path localOverrideDir = tempFolder.newFolder("local-override").toPath();
+
+        Files.writeString(remoteDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(remoteDir);
+
+        Files.writeString(cacheDir.resolve("local-override.yaml"),
+                "test-ds:\n" +
+                        "  cache_dir: " + localOverrideDir + "\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeLocalOverrideDataFiles(localOverrideDir);
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            Files.writeString(cacheDir.resolve("public-catalog.yaml"),
+                    "_include:\n" +
+                            "  url: " + urlFor(server, "catalog_entries.yaml") + "\n" +
+                            "_defaults:\n" +
+                            "  cache_dir: " + cachedRemoteDir + "\n");
+
+            // online construction fetches and caches the included remote catalog,
+            // but the local override should still win
+            var onlineLoader = new DataSetLoaderSimpleMFD(
+                    null, cacheDir.toString(), false, testMetadata
+            );
+
+            var onlineDs = onlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
+            assertEquals(1, onlineDs.getBaseVectors().size());
+        } finally {
+            server.stop(0);
+        }
+
+        // offline, the cached remote catalog should still not override the real local dataset
+        var offlineLoader = new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        );
+
+        var offlineDs = offlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
+        assertEquals(1, offlineDs.getBaseVectors().size());
+        assertEquals(1, offlineDs.getQueryVectors().size());
+        assertEquals(1, offlineDs.getGroundTruth().size());
+        assertEquals(4, offlineDs.getDimension());
+    }
+
+    @Test
+    public void cachedIncludedRemoteCatalogStillFailsOfflineWhenDataFilesAreMissing() throws IOException {
+        // a cached remote catalog should not mask missing data files
+        Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
+        Path cachedDataDir = tempFolder.newFolder("cached-public-data").toPath();
+
+        Files.writeString(remoteDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                        "  base: test_base.fvecs\n" +
+                        "  query: test_query.fvecs\n" +
+                        "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(remoteDir);
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            Files.writeString(cacheDir.resolve("public-catalog.yaml"),
+                    "_include:\n" +
+                            "  url: " + urlFor(server, "catalog_entries.yaml") + "\n" +
+                            "_defaults:\n" +
+                            "  cache_dir: " + cachedDataDir + "\n");
+
+            // construct once online so the included remote catalog is cached locally,
+            // but do not load the dataset, so the data files are not downloaded
+            new DataSetLoaderSimpleMFD(
+                    null, cacheDir.toString(), false, testMetadata
+            );
+        } finally {
+            server.stop(0);
+        }
+
+        assertFalse(Files.exists(cachedDataDir.resolve("test_base.fvecs")),
+                "Precondition: dataset files should not have been downloaded");
+
+        var offlineLoader = new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        );
+
+        assertThrows(RuntimeException.class, () -> offlineLoader.loadDataSet("test-ds"),
+                "Cached remote catalog should still fail when the chosen data files are missing offline");
+    }
+
+    // ========================================================================
     // Helpers
     // ========================================================================
 
@@ -1200,6 +1347,19 @@ public class DataSetLoaderSimpleMFDTest {
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
         }
+    }
+
+    /// Writes a small local-override dataset so tests can distinguish it from the remote copy.
+    private static void writeLocalOverrideDataFiles(Path dir) throws IOException {
+        writeTestFvecs(dir.resolve("test_base.fvecs"), 4, new float[][] {
+                {1.0f, 1.0f, 0.0f, 0.0f},
+        });
+        writeTestFvecs(dir.resolve("test_query.fvecs"), 4, new float[][] {
+                {1.0f, 1.0f, 0.0f, 0.0f},
+        });
+        writeTestIvecs(dir.resolve("test_gt.ivecs"), new int[][] {
+                {0},
+        });
     }
 
     private static void writeTestCatalog(Path dir) throws IOException {

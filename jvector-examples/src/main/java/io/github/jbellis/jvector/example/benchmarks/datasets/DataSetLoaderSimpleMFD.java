@@ -35,11 +35,15 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -69,9 +73,12 @@ import java.util.stream.Stream;
 /// provide a fallback value when the variable is not set. An {@link IllegalArgumentException}
 /// is thrown if a referenced variable is not set and no default is provided.
 ///
-/// A special {@code _include} entry can reference a remote catalog URL. The remote entries
-/// are fetched and merged with the local {@code _defaults}, so a single local file can act
-/// as a thin configuration wrapper around a remote catalog:
+/// A special {@code _include} entry can reference a remote catalog URL. The remote catalog
+/// is fetched and its raw contents are cached locally in a hidden snapshot file for offline use.
+/// On each run, the effective included entries are rebuilt by applying the local
+/// {@code _defaults} to the fetched (or cached) remote entries. Local entries in the same
+/// wrapper file are processed afterward and therefore take precedence over included remote entries.
+/// This lets a single local file act as a thin configuration wrapper around a remote catalog:
 /// ```yaml
 /// _defaults:
 ///   cache_dir: ${DATASET_CACHE_DIR:-fvec}
@@ -151,17 +158,25 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private static final String DEFAULT_CATALOG_FILENAME = "catalog_entries.yaml";
     private static final String CATALOG_GLOB = "*.{yaml,yml}";
 
+    /// Entry source. Local entries always take precedence over included remote entries.
+    private enum CatalogSource {
+        LOCAL,
+        INCLUDED_REMOTE
+    }
+
     /// Resolved entry in the merged catalog. Tracks where the entry came from so that
-    /// local file resolution and per-entry remote base URL overrides work correctly.
+    /// local file resolution, precedence, and per-entry remote base URL overrides work correctly.
     private static class CatalogEntry {
         final Map<String, String> fields;
         final Path cacheDir;       // where data files are cached locally
         final String baseUrl;      // per-entry base_url override, or null
+        final CatalogSource source;
 
-        CatalogEntry(Map<String, String> fields, Path cacheDir, String baseUrl) {
+        CatalogEntry(Map<String, String> fields, Path cacheDir, String baseUrl, CatalogSource source) {
             this.fields = fields;
             this.cacheDir = cacheDir;
             this.baseUrl = baseUrl;
+            this.source = source;
         }
     }
 
@@ -198,9 +213,11 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     /// If it ends in {@code .yaml} or {@code .yml}, that file is used as the catalog.
     /// Otherwise, the directory is scanned recursively for all {@code .yaml}/{@code .yml} files.
     ///
-    /// Entries without an explicit {@code cache_dir} default to {@code dataset_cache/}
-    /// under the repository root. Entry-level and {@code _defaults}-level {@code cache_dir}
-    /// values take precedence over this fallback.
+    /// Entries without an explicit {@code cache_dir} default to {@code DATASET_CACHE_DIR}
+    /// when that environment variable is set; otherwise they default to the catalog file's
+    /// directory. In constructor-driven remote-catalog mode (when no local catalog exists and
+    /// {@code catalogUrl} is used), fetched remote entries default to {@code dataset_cache/}.
+    /// Entry-level and {@code _defaults}-level {@code cache_dir} values take precedence.
     ///
     /// @param catalogUrl      the full URL (HTTP or S3) to the remote catalog, or null/empty
     ///                        for local-only mode
@@ -226,8 +243,10 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
 
-        // resolve localPath for catalog discovery; entries without an explicit cache_dir
-        // default to dataset_cache under the repo root
+        // resolve localPath for catalog discovery. For discovered local/include catalogs,
+        // entries without an explicit cache_dir fall back to DATASET_CACHE_DIR or the
+        // catalog file's directory. Pure constructor-driven remote catalogs fall back to
+        // dataset_cache.
         Path resolvedPath = Paths.get(localPath);
         Path localCatalog;
         this.localCacheDir = Paths.get("dataset_cache");
@@ -277,7 +296,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 logger.info("No local catalog found, fetching from {}", catalogUrl);
                 var remoteCatalogData = fetchRemoteCatalogRaw(catalogUrl);
                 this.catalog = toCatalogEntries(remoteCatalogData, localCacheDir);
-                saveCatalogLocally(localCatalog, catalogUrl);
+                saveCatalogLocally(localCatalog, catalogUrl, remoteCatalogData);
             }
         } else {
             if (!localEntries.isEmpty()) {
@@ -339,8 +358,50 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     // CATALOG DISCOVERY & LOADING
     // ========================================================================================
 
+    /// Returns the effective source for a discovered catalog file.
+    /// Generated remote-catalog snapshots are treated as included remote entries so that
+    /// real local catalogs continue to take precedence across runs.
+    private static CatalogSource catalogSource(Map<String, Map<String, String>> raw) {
+        Map<String, String> meta = raw.get("_meta");
+        if (meta != null && "true".equalsIgnoreCase(meta.get("generated_remote_catalog"))) {
+            return CatalogSource.INCLUDED_REMOTE;
+        }
+        return CatalogSource.LOCAL;
+    }
+
+    /// Inserts an entry while preserving the precedence rule that real local entries
+    /// always win over included remote entries.
+    private static void putCatalogEntry(Map<String, CatalogEntry> target, String name, CatalogEntry entry) {
+        CatalogEntry existing = target.get(name);
+        if (existing == null || entry.source == CatalogSource.LOCAL || existing.source != CatalogSource.LOCAL) {
+            target.put(name, entry);
+        }
+    }
+
+    /// Returns the hidden cache file used to persist the raw contents of an included remote catalog.
+    private static Path includeCacheFile(Path catalogDir, String includeUrl) {
+        return catalogDir.resolve(".catalog-cache")
+                .resolve("include-" + sha256Hex(includeUrl) + ".yaml.cache");
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 should always be available", e);
+        }
+    }
+
     /// Recursively scans a directory tree for {@code .yaml}/{@code .yml} files and merges
-    /// all entries into the given map. Later entries with the same name override earlier ones.
+    /// all entries into the given map. Later entries of the same source type may override
+    /// earlier ones, but real local entries always take precedence over included remote entries.
     private void scanForCatalogs(Path rootDir, Map<String, CatalogEntry> target) {
         try (Stream<Path> paths = Files.walk(rootDir)) {
             var matcher = rootDir.getFileSystem().getPathMatcher("glob:" + CATALOG_GLOB);
@@ -363,6 +424,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         if (raw.isEmpty()) return;
 
         Path catalogDir = catalogFile.getParent() != null ? catalogFile.getParent() : Paths.get(".");
+        CatalogSource source = catalogSource(raw);
 
         // extract and expand _defaults if present
         Map<String, String> defaults = raw.getOrDefault("_defaults", Map.of());
@@ -376,7 +438,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             String includeUrl = includeEntry.get("url");
             if (includeUrl != null) {
                 includeUrl = expandEnvVars(includeUrl);
-                loadRemoteInclude(includeUrl, defaults, catalogDir, target);
+                loadRemoteInclude(includeUrl, defaults, catalogDir, includeCacheFile(catalogDir, includeUrl), target);
             }
         }
 
@@ -397,42 +459,59 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 fields.putAll(e.getValue());
             }
 
-            target.put(name, buildCatalogEntry(fields, catalogDir));
+            putCatalogEntry(target, name, buildCatalogEntry(fields, catalogDir, source));
         }
     }
 
-    /// Fetches a remote catalog via {@code _include} and merges its entries with local defaults.
+    /// Fetches a remote catalog via {@code _include}, caches its raw contents locally for
+    /// offline reuse, and merges the resulting entries with the local defaults. If the remote
+    /// fetch fails and a cached snapshot exists, the cached catalog is used instead.
     private void loadRemoteInclude(String includeUrl, Map<String, String> defaults,
-                                   Path catalogDir, Map<String, CatalogEntry> target) {
+                                   Path catalogDir, Path cachedIncludeFile,
+                                   Map<String, CatalogEntry> target) {
+        Map<String, Map<String, String>> remoteCatalog;
+        boolean usedCachedSnapshot = false;
+
         try {
             logger.info("Including remote catalog from {}", includeUrl);
-            var remoteCatalog = fetchRemoteCatalogRaw(includeUrl);
-
-            // derive the remote base path from the include URL
-            int lastSlash = includeUrl.lastIndexOf('/');
-            String remoteBase = lastSlash >= 0 ? includeUrl.substring(0, lastSlash + 1) : null;
-
-            for (var e : remoteCatalog.entrySet()) {
-                if (e.getKey().startsWith("_")) continue;
-
-                // fold local defaults into remote entry (remote values take precedence over defaults,
-                // but per-entry local overrides from the same file take precedence — those are
-                // handled in the caller's loop)
-                Map<String, String> fields = new HashMap<>(defaults);
-                if (e.getValue() != null) {
-                    fields.putAll(e.getValue());
-                }
-                // if the entry doesn't already have a base_url, use the remote catalog's base path
-                if (!fields.containsKey("base_url") && remoteBase != null) {
-                    fields.put("base_url", remoteBase);
-                }
-
-                target.put(e.getKey(), buildCatalogEntry(fields, catalogDir));
-            }
-            logger.info("Included {} datasets from remote catalog", remoteCatalog.size());
+            remoteCatalog = fetchRemoteCatalogRaw(includeUrl, cachedIncludeFile);
         } catch (Exception e) {
-            logger.warn("Failed to include remote catalog from {}: {}", includeUrl, e.getMessage());
+            if (!Files.isRegularFile(cachedIncludeFile)) {
+                logger.warn("Failed to include remote catalog from {}: {}", includeUrl, e.getMessage());
+                return;
+            }
+
+            logger.warn("Failed to include remote catalog from {}: {}. Using cached catalog {}",
+                    includeUrl, e.getMessage(), cachedIncludeFile);
+            remoteCatalog = loadCatalogFromFile(cachedIncludeFile);
+            usedCachedSnapshot = true;
         }
+
+        // derive the remote base path from the include URL
+        int lastSlash = includeUrl.lastIndexOf('/');
+        String remoteBase = lastSlash >= 0 ? includeUrl.substring(0, lastSlash + 1) : null;
+
+        long entryCount = 0;
+        for (var e : remoteCatalog.entrySet()) {
+            if (e.getKey().startsWith("_")) continue;
+            entryCount++;
+
+            // fold local defaults into remote entry (remote values take precedence over defaults,
+            // but local entries always take precedence — those are handled in the caller's loop)
+            Map<String, String> fields = new HashMap<>(defaults);
+            if (e.getValue() != null) {
+                fields.putAll(e.getValue());
+            }
+            // if the entry doesn't already have a base_url, use the remote catalog's base path
+            if (!fields.containsKey("base_url") && remoteBase != null) {
+                fields.put("base_url", remoteBase);
+            }
+
+            putCatalogEntry(target, e.getKey(), buildCatalogEntry(fields, catalogDir, CatalogSource.INCLUDED_REMOTE));
+        }
+
+        logger.info("Included {} datasets from {} catalog", entryCount,
+                usedCachedSnapshot ? "cached" : "remote");
     }
 
     /// Converts a raw catalog map (from a remote fetch) into CatalogEntry objects.
@@ -449,7 +528,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 fields.putAll(e.getValue());
             }
 
-            result.put(e.getKey(), buildCatalogEntry(fields, localDir));
+            putCatalogEntry(result, e.getKey(), buildCatalogEntry(fields, localDir, CatalogSource.INCLUDED_REMOTE));
         }
         return result;
     }
@@ -460,7 +539,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     /// Builds a CatalogEntry from merged fields, resolving env vars, base_url, and cache_dir.
     /// Throws if any unknown fields are present.
-    private static CatalogEntry buildCatalogEntry(Map<String, String> fields, Path catalogDir) {
+    private static CatalogEntry buildCatalogEntry(Map<String, String> fields, Path catalogDir, CatalogSource source) {
         // validate that all fields are recognized
         for (String key : fields.keySet()) {
             if (!KNOWN_FIELDS.contains(key)) {
@@ -491,7 +570,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             }
         }
 
-        return new CatalogEntry(resolved, cacheDir, baseUrl);
+        return new CatalogEntry(resolved, cacheDir, baseUrl, source);
     }
 
     /// Matches {@code ${VAR}} and {@code ${VAR:-default}} syntax.
@@ -569,11 +648,31 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     // ========================================================================================
 
     private Map<String, Map<String, String>> fetchRemoteCatalogRaw(String catalogUrl) {
+        return fetchRemoteCatalogRaw(catalogUrl, null);
+    }
+
+    private Map<String, Map<String, String>> fetchRemoteCatalogRaw(String catalogUrl, Path snapshotFile) {
         try {
-            Path tempFile = Files.createTempFile("catalog-", ".tmp");
+            Path tempDir = snapshotFile != null && snapshotFile.getParent() != null
+                    ? snapshotFile.getParent()
+                    : null;
+            if (tempDir != null) {
+                Files.createDirectories(tempDir);
+            }
+
+            Path tempFile = tempDir != null
+                    ? Files.createTempFile(tempDir, "catalog-", ".tmp")
+                    : Files.createTempFile("catalog-", ".tmp");
             try {
                 downloadUrlToFile(catalogUrl, tempFile);
-                return loadCatalogFromFile(tempFile);
+                var catalog = loadCatalogFromFile(tempFile);
+
+                if (snapshotFile != null) {
+                    Files.move(tempFile, snapshotFile,
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                }
+                return catalog;
             } finally {
                 Files.deleteIfExists(tempFile);
             }
@@ -582,12 +681,28 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
     }
 
-    private void saveCatalogLocally(Path localCatalog, String catalogUrl) {
+    private void saveCatalogLocally(Path localCatalog, String catalogUrl,
+                                    Map<String, Map<String, String>> catalogData) {
         try {
-            Files.createDirectories(localCacheDir);
-            Path tempFile = Files.createTempFile(localCacheDir, "catalog-", ".tmp");
-            downloadUrlToFile(catalogUrl, tempFile);
-            Files.move(tempFile, localCatalog, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            Path parent = localCatalog.getParent() != null ? localCatalog.getParent() : Paths.get(".");
+            Files.createDirectories(parent);
+
+            Path tempFile = Files.createTempFile(parent, "catalog-", ".tmp");
+            try {
+                Map<String, Map<String, String>> annotated = new LinkedHashMap<>();
+                Map<String, String> meta = new LinkedHashMap<>();
+                meta.put("generated_remote_catalog", "true");
+                meta.put("remote_catalog_url", catalogUrl);
+                annotated.put("_meta", meta);
+                annotated.putAll(catalogData);
+
+                Files.writeString(tempFile, new Yaml().dump(annotated));
+                Files.move(tempFile, localCatalog,
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                Files.deleteIfExists(tempFile);
+            }
         } catch (Exception e) {
             logger.warn("Failed to cache catalog locally: {}", e.getMessage());
         }
