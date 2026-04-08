@@ -126,7 +126,15 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
+      # ==========================================
       # Decode and write the protected dataset catalog
+      #
+      # TO UPDATE THIS SECRET:
+      # 1. On your local machine, run:
+      #    base64 -i jvector-examples/yaml-configs/dataset-catalogs/protected-catalog.yaml
+      # 2. Go to GitHub Repo -> Settings -> Secrets and variables -> Actions
+      # 3. Update the PROTECTED_CATALOG_YAML secret with the new Base64 string.
+      # ==========================================
       - name: Inject Protected Catalog
         run: |
           mkdir -p jvector-examples/yaml-configs/dataset-catalogs
