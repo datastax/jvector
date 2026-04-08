@@ -129,6 +129,7 @@ jobs:
       # Decode and write the protected dataset catalog
       - name: Inject Protected Catalog
         run: |
+          mkdir -p jvector-examples/yaml-configs/dataset-catalogs
           echo "${{ secrets.PROTECTED_CATALOG_YAML }}" | base64 -d > jvector-examples/yaml-configs/dataset-catalogs/protected-catalog.yaml
 
       # Create a directory to store benchmark results
