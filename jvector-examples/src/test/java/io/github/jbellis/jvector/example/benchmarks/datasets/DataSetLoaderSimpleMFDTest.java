@@ -1167,6 +1167,107 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     // ========================================================================
+    // Log redaction
+    // ========================================================================
+
+    @Test
+    public void redactReplacesLongHexHash() {
+        // SHA-256 hash (64 hex chars)
+        String url = "s3://bucket/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d/dpr/file.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("6174752e"), "Hash should be redacted: " + redacted);
+        assertTrue(redacted.contains("[[redacted]]"), "Should contain redaction marker: " + redacted);
+        assertTrue(redacted.contains("s3://bucket/"), "Bucket should be preserved: " + redacted);
+        assertTrue(redacted.contains("/dpr/file.fvecs"), "Non-hash path should be preserved: " + redacted);
+    }
+
+    @Test
+    public void redactHandlesHashWithSuffix() {
+        // hash_private pattern
+        String url = "s3://bucket/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/data.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("6174752e"), "Hash should be redacted: " + redacted);
+        assertTrue(redacted.contains("[[redacted]]"));
+    }
+
+    @Test
+    public void redactHandlesHashWithDashes() {
+        // UUID-style or dashed key: a3f8b2c1-d4e5-f6a7-b8c9-d0e1f2a3b4c5
+        String url = "s3://bucket/a3f8b2c1-d4e5-f6a7-b8c9-d0e1f2a3b4c5/data.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("a3f8b2c1"), "Dashed hex should be redacted: " + redacted);
+        assertTrue(redacted.contains("[[redacted]]"));
+    }
+
+    @Test
+    public void redactHandlesHashWithDots() {
+        // dotted hex token
+        String url = "https://host/a3f8b2c1.d4e5f6a7.b8c9d0e1.f2a3b4c5/data.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("a3f8b2c1"), "Dotted hex should be redacted: " + redacted);
+    }
+
+    @Test
+    public void redactHandles0xPrefix() {
+        String url = "s3://bucket/0xa3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5/data.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("a3f8b2c1"), "0x-prefixed hex should be redacted: " + redacted);
+        assertTrue(redacted.contains("[[redacted]]"));
+    }
+
+    @Test
+    public void redactPreservesNonHashPaths() {
+        String url = "s3://jvector-datasets-public/datasets-clean/ada_002_100k_base.fvecs";
+        assertEquals(url, DataSetLoaderSimpleMFD.redact(url), "No hash segments — should be unchanged");
+    }
+
+    @Test
+    public void redactPreservesDatasetNames() {
+        // these have some hex-like chars but are clearly not secrets
+        assertEquals("/data/e5-base-v2-100k/file.fvecs",
+                DataSetLoaderSimpleMFD.redact("/data/e5-base-v2-100k/file.fvecs"));
+        assertEquals("/data/ada002-100k/file.fvecs",
+                DataSetLoaderSimpleMFD.redact("/data/ada002-100k/file.fvecs"));
+        assertEquals("s3://bucket/cohere-english-v3-1M/file.fvecs",
+                DataSetLoaderSimpleMFD.redact("s3://bucket/cohere-english-v3-1M/file.fvecs"));
+    }
+
+    @Test
+    public void redactPreservesShortHexSegments() {
+        String path = "/data/a3f8b2/file.fvecs";
+        assertEquals(path, DataSetLoaderSimpleMFD.redact(path));
+    }
+
+    @Test
+    public void redactHandlesNull() {
+        assertEquals("null", DataSetLoaderSimpleMFD.redact(null));
+    }
+
+    @Test
+    public void redactHandlesMultipleSecretSegments() {
+        String url = "s3://bucket/aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666/sub/1111222233334444555566667777888899990000aaaabbbb/file.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("aaaa1111"), "First hash should be redacted");
+        assertFalse(redacted.contains("11112222"), "Second hash should be redacted");
+        assertTrue(redacted.contains("/sub/"), "Non-hash path preserved");
+    }
+
+    @Test
+    public void redactHandlesWindowsPaths() {
+        String path = "C:\\data\\6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d\\file.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(path);
+        assertFalse(redacted.contains("6174752e"), "Hash should be redacted in Windows paths: " + redacted);
+    }
+
+    @Test
+    public void redactHandlesMixedSeparatorsInSecret() {
+        // underscores and dashes mixed with hex — still predominantly hex
+        String url = "s3://bucket/a1b2c3d4_e5f6a7b8-c9d0e1f2_a3b4c5d6/data.fvecs";
+        String redacted = DataSetLoaderSimpleMFD.redact(url);
+        assertFalse(redacted.contains("a1b2c3d4"), "Mixed-separator hex should be redacted: " + redacted);
+    }
+
+    // ========================================================================
     // _include cached remote catalogs
     // ========================================================================
 

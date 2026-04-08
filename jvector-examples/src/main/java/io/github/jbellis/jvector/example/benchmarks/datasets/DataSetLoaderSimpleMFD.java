@@ -158,6 +158,83 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private static final String DEFAULT_CATALOG_FILENAME = "catalog_entries.yaml";
     private static final String CATALOG_GLOB = "*.{yaml,yml}";
 
+    // ========================================================================================
+    // LOG REDACTION — auto-redacts secret-like path segments to prevent leakage
+    // ========================================================================================
+
+    /// Minimum number of hex characters (ignoring separators) for a path segment to be
+    /// considered a potential secret (hash, API key, token, etc.).
+    private static final int MIN_HEX_CHARS = 20;
+
+    /// Set JVECTOR_LOG_REDACT=false to disable automatic redaction of secret-like path segments.
+    private static final boolean REDACT_ENABLED;
+    static {
+        String env = System.getenv("JVECTOR_LOG_REDACT");
+        REDACT_ENABLED = !"false".equalsIgnoreCase(env);
+    }
+
+    /// Redacts path segments that look like secrets (hashes, API keys, tokens) to prevent
+    /// accidental leakage in log output and exception messages.
+    ///
+    /// A path segment is redacted if it contains {@value #MIN_HEX_CHARS} or more hex
+    /// characters after stripping common separators ({@code -}, {@code .}, {@code _}) and
+    /// the {@code 0x} prefix. This catches SHA-1 (40), SHA-256 (64), API keys, and similar
+    /// patterns while preserving normal names like {@code datasets-clean} or {@code e5-base-v2-100k}.
+    ///
+    /// Set {@code JVECTOR_LOG_REDACT=false} to disable.
+    static String redact(Object value) {
+        if (value == null) return "null";
+        if (!REDACT_ENABLED) return value.toString();
+        String s = value.toString();
+        if (s.isEmpty()) return s;
+
+        var sb = new StringBuilder(s.length());
+        int i = 0;
+        while (i < s.length()) {
+            // find the next path segment (delimited by / or \)
+            int segStart = i;
+            while (i < s.length() && s.charAt(i) != '/' && s.charAt(i) != '\\') {
+                i++;
+            }
+            String segment = s.substring(segStart, i);
+            sb.append(looksLikeSecret(segment) ? "[[redacted]]" : segment);
+
+            // append the delimiter(s)
+            while (i < s.length() && (s.charAt(i) == '/' || s.charAt(i) == '\\')) {
+                sb.append(s.charAt(i));
+                i++;
+            }
+        }
+        return sb.toString();
+    }
+
+    /// Returns true if the segment looks like a hash, token, or API key.
+    /// Strips common separators and 0x prefix, then counts hex characters.
+    private static boolean looksLikeSecret(String segment) {
+        if (segment.isEmpty()) return false;
+
+        String stripped = segment;
+        // strip 0x or 0X prefix
+        if (stripped.startsWith("0x") || stripped.startsWith("0X")) {
+            stripped = stripped.substring(2);
+        }
+
+        int hexCount = 0;
+        int totalSignificant = 0; // non-separator characters
+        for (int i = 0; i < stripped.length(); i++) {
+            char c = stripped.charAt(i);
+            if (c == '-' || c == '.' || c == '_') continue; // ignore separators
+            totalSignificant++;
+            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+                hexCount++;
+            }
+        }
+
+        // must have enough hex chars and they must be the majority of significant chars
+        return hexCount >= MIN_HEX_CHARS && totalSignificant > 0
+                && (double) hexCount / totalSignificant >= 0.75;
+    }
+
     /// Entry source. Local entries always take precedence over included remote entries.
     private enum CatalogSource {
         LOCAL,
@@ -285,7 +362,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
 
         if (!localEntries.isEmpty()) {
-            logger.info("Loaded {} datasets from local catalog(s) under {}", localEntries.size(), localCacheDir);
+            logger.info("Loaded {} datasets from local catalog(s) under {}", localEntries.size(), redact(localCacheDir));
         }
 
         if (isRemote) {
@@ -293,7 +370,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 this.catalog = localEntries;
                 if (checkForUpdates) checkRemoteCatalogForUpdates(catalogUrl, localEntries);
             } else {
-                logger.info("No local catalog found, fetching from {}", catalogUrl);
+                logger.info("No local catalog found, fetching from {}", redact(catalogUrl));
                 var remoteCatalogData = fetchRemoteCatalogRaw(catalogUrl);
                 this.catalog = toCatalogEntries(remoteCatalogData, localCacheDir);
                 saveCatalogLocally(localCatalog, catalogUrl, remoteCatalogData);
@@ -302,7 +379,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             if (!localEntries.isEmpty()) {
                 this.catalog = localEntries;
             } else {
-                logger.info("No catalog found under {}. This loader will not match any datasets.", localCacheDir);
+                logger.info("No catalog found under {}. This loader will not match any datasets.", redact(localCacheDir));
                 this.catalog = Map.of();
             }
         }
@@ -408,7 +485,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             paths.filter(p -> p.getFileName() != null && matcher.matches(p.getFileName()))
                     .forEach(catalogFile -> loadCatalogEntries(catalogFile, target));
         } catch (IOException e) {
-            logger.warn("Error scanning for catalogs under {}: {}", rootDir, e.getMessage());
+            logger.warn("Error scanning for catalogs under {}: {}", redact(rootDir), redact(e.getMessage()));
         }
     }
 
@@ -445,7 +522,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         // count real entries (non-underscore keys)
         long entryCount = raw.keySet().stream().filter(k -> !k.startsWith("_")).count();
         if (entryCount > 0) {
-            logger.info("Loading catalog from {} ({} entries)", catalogFile, entryCount);
+            logger.info("Loading catalog from {} ({} entries)", redact(catalogFile), entryCount);
         }
 
         for (var e : raw.entrySet()) {
@@ -473,16 +550,16 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         boolean usedCachedSnapshot = false;
 
         try {
-            logger.info("Including remote catalog from {}", includeUrl);
+            logger.info("Including remote catalog from {}", redact(includeUrl));
             remoteCatalog = fetchRemoteCatalogRaw(includeUrl, cachedIncludeFile);
         } catch (Exception e) {
             if (!Files.isRegularFile(cachedIncludeFile)) {
-                logger.warn("Failed to include remote catalog from {}: {}", includeUrl, e.getMessage());
+                logger.warn("Failed to include remote catalog from {}: {}", redact(includeUrl), redact(e.getMessage()));
                 return;
             }
 
             logger.warn("Failed to include remote catalog from {}: {}. Using cached catalog {}",
-                    includeUrl, e.getMessage(), cachedIncludeFile);
+                    redact(includeUrl), redact(e.getMessage()), redact(cachedIncludeFile));
             remoteCatalog = loadCatalogFromFile(cachedIncludeFile);
             usedCachedSnapshot = true;
         }
@@ -631,7 +708,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private void ensureFileAvailable(String filename, Path cacheDir, String baseUrl) throws IOException {
         Path localPath = cacheDir.resolve(filename);
         if (Files.exists(localPath)) return;
-        if (baseUrl == null) throw new IOException("File not found locally and no remote URL configured: " + localPath);
+        if (baseUrl == null) throw new IOException("File not found locally and no remote URL configured: " + redact(localPath));
 
         Path parent = localPath.getParent();
         if (parent != null) {
@@ -639,7 +716,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
 
         String url = baseUrl + filename;
-        logger.info("Downloading {} -> {}", url, localPath);
+        logger.info("Downloading {} -> {}", redact(url), redact(localPath));
         downloadUrlToFile(url, localPath);
     }
 
@@ -677,7 +754,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 Files.deleteIfExists(tempFile);
             }
         } catch (IOException e) {
-            throw new RuntimeException("Failed to fetch dataset catalog from " + catalogUrl, e);
+            throw new RuntimeException("Failed to fetch dataset catalog from " + redact(catalogUrl), e);
         }
     }
 
@@ -704,7 +781,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 Files.deleteIfExists(tempFile);
             }
         } catch (Exception e) {
-            logger.warn("Failed to cache catalog locally: {}", e.getMessage());
+            logger.warn("Failed to cache catalog locally: {}", redact(e.getMessage()));
         }
     }
 
@@ -714,7 +791,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
             Map<String, Map<String, String>> result = new Yaml().load(in);
             return result != null ? result : Map.of();
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load catalog from " + path, e);
+            throw new RuntimeException("Failed to load catalog from " + redact(path), e);
         }
     }
 
@@ -736,10 +813,10 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 }
             }
             if (differs) {
-                logger.warn("Remote catalog at {} differs from local catalog. Consider updating your local copy.", catalogUrl);
+                logger.warn("Remote catalog at {} differs from local catalog. Consider updating your local copy.", redact(catalogUrl));
             }
         } catch (Exception e) {
-            logger.warn("Could not check remote catalog for updates: {}", e.getMessage());
+            logger.warn("Could not check remote catalog for updates: {}", redact(e.getMessage()));
         }
     }
 
@@ -753,7 +830,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         } else if (url.startsWith("http://") || url.startsWith("https://")) {
             downloadFileHttp(url, localPath);
         } else {
-            throw new IllegalArgumentException("Unsupported URL scheme for download: " + url);
+            throw new IllegalArgumentException("Unsupported URL scheme for download: " + redact(url));
         }
     }
 
@@ -802,12 +879,12 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 downloaded = true;
                 break;
             } catch (Exception e) {
-                logger.error("Download attempt {} failed for {}: {}", i + 1, key, e.getMessage());
+                logger.error("Download attempt {} failed for {}: {}", i + 1, redact(key), redact(e.getMessage()));
                 Files.deleteIfExists(localPath);
             }
         }
         if (!downloaded) {
-            throw new IOException("Failed to download " + s3Url + " after 3 attempts");
+            throw new IOException("Failed to download " + redact(s3Url) + " after 3 attempts");
         }
     }
 
@@ -836,13 +913,13 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         try {
             var response = httpClient.send(request, HttpResponse.BodyHandlers.ofFile(tempFile));
             if (response.statusCode() != 200) {
-                throw new IOException("HTTP " + response.statusCode() + " downloading " + url);
+                throw new IOException("HTTP " + response.statusCode() + " downloading " + redact(url));
             }
             Files.move(tempFile, localPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             Files.deleteIfExists(tempFile);
-            throw new IOException("Interrupted downloading " + url, e);
+            throw new IOException("Interrupted downloading " + redact(url), e);
         } catch (Exception e) {
             Files.deleteIfExists(tempFile);
             throw e;
