@@ -1,16 +1,16 @@
-neighborhood-watch-100k:
-#  - cohere-english-v3-100k
-#  - ada002-100k
-#  - openai-v3-small-1536-100k
+jvector-100k:
+  - cohere-english-v3-100k
+  - ada002-100k
+  - openai-v3-small-1536-100k
   - gecko-100k
-#  - openai-v3-large-3072-100k
-#  - openai-v3-large-1536-100k
-#  - e5-small-v2-100k
-#  - e5-base-v2-100k
-#  - e5-large-v2-100k
-neighborhood-watch-1M:
-#  - ada002-1M
-#  - colbert-1M
+  - openai-v3-large-3072-100k
+  - openai-v3-large-1536-100k
+  - e5-small-v2-100k
+  - e5-base-v2-100k
+  - e5-large-v2-100k
+jvector-1M:
+  - ada002-1M
+  - colbert-1M
 ann-benchmarks:
   - glove-25-angular
   - glove-50-angular
@@ -20,12 +20,11 @@ ann-benchmarks:
   - nytimes-256-angular
   - sift-128-euclidean
 #other-datasets:
-##  - dpr-1M
-##  - dpr-10M
-##  - cap-1M
-##  - cap-6M
-##  - cohere-english-v3-1M
-##  - cohere-english-v3-10M
-
-  # - deep-image-96-angular # large files not yet supported
-  # - gist-960-euclidean # large files not yet supported
+#  - dpr-1M
+#  - dpr-10M
+#  - cap-1M
+#  - cap-6M
+#  - cohere-english-v3-1M
+#  - cohere-english-v3-10M
+# - deep-image-96-angular # large files not yet supported
+# - gist-960-euclidean # large files not yet supported
