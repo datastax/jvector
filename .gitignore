@@ -15,6 +15,7 @@ dataset_cache/
 jvector-examples/yaml-configs/dataset-catalogs/*.yaml
 jvector-examples/yaml-configs/dataset-catalogs/*.yml
 !jvector-examples/yaml-configs/dataset-catalogs/public-catalog.yaml
+jvector-examples/yaml-configs/dataset-catalogs/.catalog-cache/
 
 ### Logging (or whatever you use)
 logging/
