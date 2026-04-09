@@ -24,8 +24,8 @@ regression-tests:
   - cap-6M
   - cohere-english-v3-1M
   - cohere-english-v3-10M
-  - dpr-gemma-1M
-  - dpr-gemma-10M
+  - dpr-gemma-1m
+  - dpr-gemma-10m
 #other-datasets:
 #  - dpr-1M
 #  - dpr-10M
