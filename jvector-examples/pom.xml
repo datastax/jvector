@@ -28,7 +28,7 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <configuration>
-                    <skip>false</skip>
+                    <skip>true</skip>
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
@@ -85,16 +85,17 @@
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
         </dependency>
-        <!-- Add SLF4J and Logback for logging -->
+        <!-- SLF4J + Log4j2 for logging -->
+
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <version>2.0.9</version>
         </dependency>
         <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>1.4.11</version>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+            <version>2.24.3</version>
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
@@ -110,6 +111,11 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>aws-crt-client</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ec2</artifactId>
             <version>${awssdk.version}</version>
         </dependency>
         <dependency>
@@ -171,7 +177,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -249,7 +255,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -378,7 +384,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>false</skip>
+                            <skip>true</skip>
                         </configuration>
                         <executions>
                             <execution>

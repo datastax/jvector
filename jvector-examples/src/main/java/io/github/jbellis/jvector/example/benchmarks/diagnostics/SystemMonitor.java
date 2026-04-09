@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks.diagnostics;
 
 import java.lang.management.*;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Utility class for monitoring system resources during benchmark execution.
@@ -29,6 +31,7 @@ public class SystemMonitor {
     private final List<GarbageCollectorMXBean> gcBeans;
     private final OperatingSystemMXBean osBean;
     private final ThreadMXBean threadBean;
+    private final com.sun.management.ThreadMXBean sunThreadBean;
     private final com.sun.management.OperatingSystemMXBean sunOsBean;
     private final List<MemoryPoolMXBean> memoryPoolBeans;
     private final List<BufferPoolMXBean> bufferPoolBeans;
@@ -38,9 +41,12 @@ public class SystemMonitor {
         this.gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
         this.osBean = ManagementFactory.getOperatingSystemMXBean();
         this.threadBean = ManagementFactory.getThreadMXBean();
+        this.sunThreadBean = (com.sun.management.ThreadMXBean) threadBean;
         this.sunOsBean = (com.sun.management.OperatingSystemMXBean) osBean;
         this.memoryPoolBeans = ManagementFactory.getMemoryPoolMXBeans();
         this.bufferPoolBeans = ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class);
+
+        sunThreadBean.setThreadAllocatedMemoryEnabled(true);
     }
 
     /**
@@ -108,10 +114,22 @@ public class SystemMonitor {
     }
 
     private ThreadStats captureThreadStats() {
+        long[] threadIds = sunThreadBean.getAllThreadIds();
+        long[] allocatedBytes = sunThreadBean.getThreadAllocatedBytes(threadIds);
+        ThreadInfo[] threadInfos = sunThreadBean.getThreadInfo(threadIds);
+
+        var allocByThread = new HashMap<String, Long>();
+        for (int i = 0; i < threadIds.length; i++) {
+            if (threadInfos[i] != null && allocatedBytes[i] >= 0) {
+                allocByThread.put(threadInfos[i].getThreadName(), allocatedBytes[i]);
+            }
+        }
+
         return new ThreadStats(
             threadBean.getThreadCount(),
             threadBean.getPeakThreadCount(),
-            threadBean.getTotalStartedThreadCount()
+            threadBean.getTotalStartedThreadCount(),
+            new ThreadAllocStats(allocByThread)
         );
     }
 
@@ -153,6 +171,30 @@ public class SystemMonitor {
         ThreadStats threadAfter = after.threadStats;
         System.out.printf("  Threads: %d active, %d peak%n",
             threadAfter.activeThreads, threadAfter.peakThreads);
+
+        // Per-thread allocation deltas
+        if (threadAfter.allocStats != null && before.threadStats.allocStats != null) {
+            Map<String, Long> beforeAlloc = before.threadStats.allocStats.allocatedBytesByThread;
+            Map<String, Long> afterAlloc = threadAfter.allocStats.allocatedBytesByThread;
+            long totalDelta = 0;
+            for (var entry : afterAlloc.entrySet()) {
+                long prev = beforeAlloc.getOrDefault(entry.getKey(), 0L);
+                long delta = entry.getValue() - prev;
+                if (delta > 0) {
+                    totalDelta += delta;
+                }
+            }
+            if (totalDelta > 0) {
+                System.out.printf("  Thread Allocations: %+d MB total delta%n", totalDelta / 1024 / 1024);
+                // Show top 5 allocating threads
+                afterAlloc.entrySet().stream()
+                    .map(e -> Map.entry(e.getKey(), e.getValue() - beforeAlloc.getOrDefault(e.getKey(), 0L)))
+                    .filter(e -> e.getValue() > 0)
+                    .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                    .limit(5)
+                    .forEach(e -> System.out.printf("    %s: %+d MB%n", e.getKey(), e.getValue() / 1024 / 1024));
+            }
+        }
 
         System.out.printf("  Duration: %d ms%n", after.timestamp - before.timestamp);
     }
@@ -257,11 +299,25 @@ public class SystemMonitor {
         public final int activeThreads;
         public final int peakThreads;
         public final long totalStartedThreads;
+        public final ThreadAllocStats allocStats;
 
-        public ThreadStats(int activeThreads, int peakThreads, long totalStartedThreads) {
+        public ThreadStats(int activeThreads, int peakThreads, long totalStartedThreads,
+                          ThreadAllocStats allocStats) {
             this.activeThreads = activeThreads;
             this.peakThreads = peakThreads;
             this.totalStartedThreads = totalStartedThreads;
+            this.allocStats = allocStats;
+        }
+    }
+
+    /// Per-thread heap allocation snapshot captured via
+    /// {@link com.sun.management.ThreadMXBean#getThreadAllocatedBytes(long[])}.
+    public static class ThreadAllocStats {
+        /// Map of thread name to cumulative allocated bytes.
+        public final Map<String, Long> allocatedBytesByThread;
+
+        public ThreadAllocStats(Map<String, Long> allocatedBytesByThread) {
+            this.allocatedBytesByThread = allocatedBytesByThread;
         }
     }
 }

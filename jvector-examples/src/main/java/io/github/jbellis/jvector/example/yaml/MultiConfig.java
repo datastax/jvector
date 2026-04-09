@@ -35,6 +35,7 @@ import java.util.Map;
 public class MultiConfig {
     public ConstructionParameters construction;
     public SearchParameters search;
+    public TestDataPartition partitions = new TestDataPartition(1);
     public String dataset;
 
     private static final String defaultDirectory = "jvector-examples/yaml-configs/index-parameters/";
@@ -49,6 +50,7 @@ public class MultiConfig {
 
     private static final java.util.concurrent.atomic.AtomicReference<File> DEFAULT_FILE_USED =
             new java.util.concurrent.atomic.AtomicReference<>();
+
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
         var name = defaultDirectory + datasetName;
