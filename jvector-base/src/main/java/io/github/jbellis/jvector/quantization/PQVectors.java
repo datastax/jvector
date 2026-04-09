@@ -444,7 +444,7 @@ public abstract class PQVectors implements CompressedVectors {
      * This is emulative of modern Java records, but keeps to J11 standards.
      * This class consolidates the layout calculations for PQ data into one place
      */
-    static class PQLayout {
+    public static class PQLayout {
 
         /**
          * total number of vectors
