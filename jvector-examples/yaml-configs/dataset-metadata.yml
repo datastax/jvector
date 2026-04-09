@@ -51,6 +51,12 @@ dpr-1M:
 dpr-10M:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
+dpr-gemma-1M:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+dpr-gemma-10M:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
 e5-small-v2-100k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
