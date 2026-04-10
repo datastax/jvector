@@ -88,10 +88,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
             List<OrdinalMapper> remappers,
-            List<Path> fpVectorsPaths,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
-        checkBeforeCompact(sources, liveNodes, remappers, fpVectorsPaths);
+        checkBeforeCompact(sources, liveNodes, remappers);
 
         int threads = Runtime.getRuntime().availableProcessors();
         if (executor != null) {
@@ -128,12 +127,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void checkBeforeCompact(
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
-            List<OrdinalMapper> remappers,
-            List<Path> fpVectorsPaths) {
-        validateInputSizes(sources, liveNodes, remappers, fpVectorsPaths);
+            List<OrdinalMapper> remappers) {
+        validateInputSizes(sources, liveNodes, remappers);
         validateLiveNodesBounds(sources, liveNodes);
         validateGraphConfiguration(sources);
-        validateFeatures(sources, fpVectorsPaths);
+        validateFeatures(sources);
     }
 
     /**
@@ -141,8 +139,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void validateInputSizes(List<OnDiskGraphIndex> sources,
                                     List<FixedBitSet> liveNodes,
-                                    List<OrdinalMapper> remappers,
-                                    List<Path> fpVectorsPaths) {
+                                    List<OrdinalMapper> remappers) {
         if (sources.size() < 2) {
             throw new IllegalArgumentException("Must have at least two sources");
         }
@@ -154,9 +151,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         if (sources.size() != remappers.size()) {
             throw new IllegalArgumentException("sources and remappers must have the same size");
-        }
-        if (fpVectorsPaths != null && sources.size() != fpVectorsPaths.size()) {
-            throw new IllegalArgumentException("fpInputPaths must be null or match the number of sources");
         }
     }
 
@@ -197,7 +191,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Validates that all sources have compatible features for compaction.
      */
-    private void validateFeatures(List<OnDiskGraphIndex> sources, List<Path> fpVectorsPaths) {
+    private void validateFeatures(List<OnDiskGraphIndex> sources) {
         Set<FeatureId> refKeys = sources.get(0).getFeatures().keySet();
         boolean sameFeatures = sources.stream()
                 .skip(1)
@@ -207,8 +201,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (!sameFeatures) {
             throw new IllegalArgumentException("Each source must have the same features");
         }
-        if (!refKeys.contains(FeatureId.INLINE_VECTORS) && (fpVectorsPaths == null || fpVectorsPaths.size() != sources.size())) {
-            throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature or corresponding fp vectors path");
+        if (!refKeys.contains(FeatureId.INLINE_VECTORS)) {
+            throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature");
         }
         if (!refKeys.contains(FeatureId.INLINE_VECTORS) && !refKeys.contains(FeatureId.FUSED_PQ)) {
             throw new IllegalArgumentException("Current compaction support INLINE_VECTORS and FUSED_PQ only");

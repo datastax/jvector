@@ -391,7 +391,6 @@ public class CompactorBenchmark {
                 queryVectors = null;
                 groundTruth = null;
                 ravv = null;
-                // TODO: don't hard coded
                 similarityFunction = VectorSimilarityFunction.COSINE;
                 baseVectors = null;
                 dimension = -1;
@@ -677,7 +676,7 @@ public class CompactorBenchmark {
             liveNodes.add(randomLiveNodes(size, liveNodesRate, n));
             globalOrdinal += size;
         }
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, null, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);

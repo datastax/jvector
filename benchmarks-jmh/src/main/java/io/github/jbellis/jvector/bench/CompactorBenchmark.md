@@ -18,446 +18,122 @@
 
 `CompactorBenchmark` evaluates the **performance, memory usage, and recall quality** of graph index compaction using `OnDiskGraphIndexCompactor`.
 
-The benchmark compares compaction against building the index from scratch and supports multiple configurations of compaction precision and compression resources.
+---
+
+# 1. Workload Modes
+
+| Mode | Description |
+|------|-------------|
+| `PARTITION_AND_COMPACT` | **(default)** Build partitions, compact them, then measure recall — all in one run |
+| `PARTITION_ONLY` | Build N partition indexes and exit; no compaction |
+| `COMPACT_ONLY` | Compact existing partitions without loading the dataset |
+| `BUILD_FROM_SCRATCH` | Build a single index over the full dataset |
 
 ---
 
-# 1. Benchmark Goals
+# 2. Quick Start
 
-The benchmark focuses on validating that compaction can:
+## Default: partition and compact in one run
 
-- Run with **significantly lower memory footprint**
-- Produce results comparable to **building from scratch**
-- Support **compressed compaction workflows**
-- Generate optional **PQ artifacts**
+The default mode builds partitions and immediately compacts them. Use this when you want a single-command end-to-end result.
 
-Key metrics include:
-
-- **Peak RSS memory**
-- **Compaction runtime**
-- **Recall@K**
-- **I/O throughput**
-
----
-
-# 2. Workload Modes
-
-The benchmark supports three workload modes.
-
-## BUILD_FROM_SCRATCH
-
-Build the index directly from the dataset.
-
-```
-dataset → build graph → output index
-```
-
-Purpose:
-
-- Baseline runtime
-- Baseline memory usage
-- Reference recall
-
-Example:
-
-```
--p workloadMode=BUILD_FROM_SCRATCH
+```bash
+java -Xmx220g --add-modules jdk.incubator.vector \
+  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -p workloadMode=PARTITION_AND_COMPACT \
+  -p datasetNames=glove-100-angular \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -wi 0 -i 1 -f 1
 ```
 
 ---
 
-## SEGMENTS_AND_COMPACT
+# 3. Measuring Peak Heap During Compaction
 
-Simulates production ingestion by building multiple segments first.
+The two-step workflow (`PARTITION_ONLY` → `COMPACT_ONLY`) exists to isolate compaction's true memory footprint. In `PARTITION_AND_COMPACT` mode the dataset is still resident in heap during compaction, which inflates the apparent memory cost. `COMPACT_ONLY` skips dataset loading entirely, so the heap limit applies only to the compactor itself.
 
+This lets you prove that compaction can run on machines with very little RAM — e.g., `-Xmx5g` is sufficient even for large datasets.
+
+## Step 1: Build partitions
+
+Run with a large heap since the full dataset must be loaded into memory.
+
+```bash
+java -Xmx220g --add-modules jdk.incubator.vector \
+  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -p workloadMode=PARTITION_ONLY \
+  -p datasetNames=glove-100-angular \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -wi 0 -i 1 -f 1
 ```
-dataset
- ├─ segment1
- ├─ segment2
- ├─ ...
- └─ segmentN
 
-segments → compaction → final index
+The partition files are written to disk and reused in the next step.
+
+## Step 2: Compact only (low-memory run)
+
+The dataset is **not** loaded in this mode. Use a small `-Xmx` to measure and prove the compactor's true peak heap.
+
+```bash
+java -Xmx5g --add-modules jdk.incubator.vector \
+  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -p workloadMode=COMPACT_ONLY \
+  -p datasetNames=glove-100-angular \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -wi 0 -i 1 -f 1
 ```
 
-Purpose:
-
-- Evaluate compaction behavior
-- Measure memory savings
-
-Example:
-
-```
--p workloadMode=SEGMENTS_AND_COMPACT
-```
+`durationMs` in the output records only the `compact()` call — not JVM startup or I/O setup.
 
 ---
 
-## COMPACT_ONLY
+# 4. Key Parameters
 
-Compacts already-built segments.
-
-```
-existing segments → compaction → final index
-```
-
-Purpose:
-
-- Isolate compaction performance
-- Debug compaction algorithms
-
-Example:
-
-```
--p workloadMode=COMPACT_ONLY
-```
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `datasetNames` | `glove-100-angular` | Dataset name |
+| `workloadMode` | `PARTITION_AND_COMPACT` | Which phase(s) to run |
+| `numPartitions` | `4` | Number of source partition indexes |
+| `splitDistribution` | — | Data partitioning strategy (`UNIFORM`, `FIBONACCI`, …) |
+| `indexPrecision` | — | `FULLPRECISION` (inline vectors only) or `FUSEDPQ` (inline + FusedPQ) |
+| `storageDirectories` | *(temp dir)* | Comma-separated list of directories where partition files are written; partitions are distributed round-robin across them. Defaults to a JVM temp directory if unset. |
 
 ---
 
-# 3. Compaction Modes
+# 5. Index Precision
 
-`CompactMode` defines how compaction behaves.
+`indexPrecision` controls what features are written into each partition index.
 
-```java
-enum CompactMode {
-    INLINE,
-    PQ_VECTORS_OUTPUT,
-    FUSEDPQ_FROM_SOURCES,
-    FUSEDPQ_FROM_PQVECTORS
-}
-```
-
-Each mode corresponds to a specific `CompactOptions` configuration.
+| Value | Written features |
+|-------|-----------------|
+| `FULLPRECISION` | `INLINE_VECTORS` only |
+| `FUSEDPQ` | `INLINE_VECTORS` + `FUSED_PQ` — required for compressed compaction |
 
 ---
 
-# 4. Mode Descriptions
+# 6. Results
 
-## INLINE
+Results are written as JSONL to:
 
-Exact compaction using full vectors.
-
-Configuration:
-
-```java
-CompactOptions.builder()
-    .writeFeatures(EnumSet.of(INLINE_VECTORS))
-    .precision(EXACT)
-    .compressionConfig(CompressionConfig.none())
-    .build();
+```
+target/benchmark-results/compactor-<timestamp>/compactor-results.jsonl
 ```
 
-Properties:
+Key fields:
 
-- Highest recall
-- Highest memory usage
-- No compression involved
+| Field | Description |
+|-------|-------------|
+| `durationMs` | Time spent in the measured phase only |
+| `recall` | Recall@10 (present when workload mode includes recall, e.g. `PARTITION_AND_COMPACT`) |
+| `peakHeapMb` | Peak JVM heap observed during the run |
 
 ---
 
-## PQ_VECTORS_OUTPUT
+# 7. Memory Footprint
 
-Exact compaction while generating PQVectors.
-
-Configuration:
-
-```java
-CompactOptions.builder()
-    .writeFeatures(EnumSet.of(INLINE_VECTORS))
-    .precision(EXACT)
-    .compressionConfig(
-        CompressionConfig.withPQCodebook(pq, pqVectorsOutputPath)
-    )
-    .build();
-```
-
-Behavior:
-
-- Compaction uses full vectors
-- PQVectors are encoded during compaction
-- PQVectors are written to a **separate file**
-
-Example output:
-
-```
-compacted_index
-compacted_index.pq
-```
-
----
-
-## FUSEDPQ_FROM_SOURCES
-
-Compressed compaction using PQ resources stored in source segments.
-
-Configuration:
-
-```java
-CompactOptions.builder()
-    .writeFeatures(EnumSet.of(INLINE_VECTORS, FUSED_PQ))
-    .precision(COMPRESSED)
-    .compressionConfig(
-        CompressionConfig.withSourcePQ(PQSourcePolicy.AUTO)
-    )
-    .build();
-```
-
-Requirements:
-
-- Source segments must contain `FUSED_PQ`
-
-Behavior:
-
-- Compaction uses compressed scoring
-- PQ information is reused from source indexes
-- Output index contains `FUSED_PQ`
-
-Advantages:
-
-- Much lower memory footprint
-- Faster cross-segment search
-
----
-
-## FUSEDPQ_FROM_PQVECTORS
-
-Compressed compaction using externally provided PQVectors.
-
-Configuration:
-
-```java
-CompactOptions.builder()
-    .writeFeatures(EnumSet.of(INLINE_VECTORS, FUSED_PQ))
-    .precision(COMPRESSED)
-    .compressionConfig(
-        CompressionConfig.withPQVectors(pqVectors)
-    )
-    .build();
-```
-
-Requirements:
-
-```
-pqVectorsInputPath
-```
-
-Behavior:
-
-- Compressed search uses caller-provided PQVectors
-- Output index contains `FUSED_PQ`
-- Does not depend on source PQ features
-
-Advantages:
-
-- Enables compressed compaction even if sources contain only inline vectors
-- Allows global PQ models shared across indexes
-
----
-
-# 5. PQ Parameters
-
-The benchmark distinguishes three PQ-related parameters.
-
-## PQ Codebook
-
-```
-pqPath
-```
-
-Used to load a trained PQ model.
-
-Alternatively PQ can be trained during the benchmark:
-
-```
--p trainPQ=true
-```
-
----
-
-## PQVectors Input
-
-```
-pqVectorsInputPath
-```
-
-Used only for:
-
-```
-FUSEDPQ_FROM_PQVECTORS
-```
-
-This file contains precomputed PQ vectors used during compressed compaction.
-
----
-
-## PQVectors Output
-
-```
-pqVectorsOutputPath
-```
-
-Used only for:
-
-```
-PQ_VECTORS_OUTPUT
-```
-
-This file stores PQ vectors generated during compaction.
-
-If not provided, the benchmark writes:
-
-```
-<compactOutput>.pq
-```
-
----
-
-# 6. Index Precision
-
-Segment indexes can be built with two precision modes.
-
-```
-enum IndexPrecision {
-    FULLPRECISION,
-    FUSEDPQ
-}
-```
-
-### FULLPRECISION
-
-Segments contain:
-
-```
-INLINE_VECTORS
-```
-
-### FUSEDPQ
-
-Segments contain:
-
-```
-INLINE_VECTORS + FUSED_PQ
-```
-
-This enables compressed compaction from sources.
-
----
-
-# 7. Recall Measurement
-
-Recall evaluation can be enabled with:
-
-```
--p enableRecall=true
-```
-
-During recall evaluation:
-
-- INLINE mode uses **exact scoring**
-- PQ modes use **approximate scoring**
-
-Search compares results against the dataset ground truth.
-
-Metrics reported:
-
-- Recall@10
-- Query latency
-
----
-
-# 8. Important Benchmark Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| datasetNames | Dataset name |
-| datasetPortion | Fraction of dataset used |
-| numSegments | Number of segments |
-| graphDegree | Graph connectivity |
-| beamWidth | Graph construction beam |
-| splitDistribution | Data partitioning strategy |
-| parallelWriteThreads | Compaction parallelism |
-| vectorizationProvider | SIMD backend |
-| enableRecall | Enable recall evaluation |
-
----
-
-# 9. Memory Measurement
-
-The benchmark tracks:
-
-- **Peak RSS**
-- **Heap usage**
-- **I/O throughput**
-
-Peak RSS is the primary metric because compaction targets **machines with limited memory**.
-
----
-
-# 10. Typical Workflows
-
-## Baseline Build
-
-```
-BUILD_FROM_SCRATCH
-indexPrecision=FULLPRECISION
-```
-
-Purpose:
-
-- Establish baseline recall and runtime.
-
----
-
-## Segment Compaction
-
-```
-SEGMENTS_AND_COMPACT
-compactMode=INLINE
-```
-
-Purpose:
-
-- Compare compaction vs build-from-scratch.
-
----
-
-## Low-Memory Compaction
-
-```
-SEGMENTS_AND_COMPACT
-indexPrecision=FUSEDPQ
-compactMode=FUSEDPQ_FROM_SOURCES
-```
-
-Purpose:
-
-- Measure compressed compaction performance.
-
----
-
-## External PQVectors Compaction
-
-```
-SEGMENTS_AND_COMPACT
-compactMode=FUSEDPQ_FROM_PQVECTORS
-pqVectorsInputPath=<path>
-```
-
-Purpose:
-
-- Test compressed compaction using externally provided PQ vectors.
-
----
-
-# Summary
-
-`CompactorBenchmark` evaluates multiple compaction strategies:
-
-| Mode | Precision | PQ Source |
-|-----|-----|-----|
-| INLINE | Exact | None |
-| PQ_VECTORS_OUTPUT | Exact | Provided PQ codebook |
-| FUSEDPQ_FROM_SOURCES | Compressed | Source indexes |
-| FUSEDPQ_FROM_PQVECTORS | Compressed | Caller-provided PQVectors |
-
-This framework enables comprehensive evaluation of compaction behavior across different memory, performance, and compression scenarios.
+All datasets in the recall table (see `docs/compaction.md`) can be run under `COMPACT_ONLY` with `-Xmx5g`. Compaction also successfully scales to datasets with 384 dimensions and 50 M vectors (e.g., IBM DataPile) under the same constraint.

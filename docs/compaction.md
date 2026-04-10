@@ -32,7 +32,6 @@ for (var src : sources) {
 
 var compactor = new OnDiskGraphIndexCompactor(
     sources, liveNodes, remappers,
-    /* fpVectorsPaths= */ null,          // null = use FusedPQ vectors from source
     VectorSimilarityFunction.COSINE,
     /* executor= */ null                  // null = create internal ForkJoinPool
 );
@@ -132,7 +131,9 @@ The entry node of the compacted graph is:
 
 ## Benchmarking
 
-Use `CompactorBenchmark` (in `benchmarks-jmh`) to measure compaction performance:
+Use `CompactorBenchmark` (in `benchmarks-jmh`) to measure compaction performance. See `benchmarks-jmh/src/main/java/io/github/jbellis/jvector/bench/CompactorBenchmark.md` for full instructions.
+
+### Default: partition and compact in one run
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
@@ -145,13 +146,45 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
+### Measuring peak heap during compaction
+
+To measure how little RAM compaction actually needs — without the dataset occupying heap — run the two steps separately.
+
+**Step 1: build partitions** (dataset in memory, large heap required)
+
+```bash
+java -Xmx220g --add-modules jdk.incubator.vector \
+  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -p workloadMode=PARTITION_ONLY \
+  -p datasetNames=<dataset> \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -wi 0 -i 1 -f 1
+```
+
+**Step 2: compact only** (dataset not loaded; use a small heap to prove low-memory operation)
+
+```bash
+java -Xmx5g --add-modules jdk.incubator.vector \
+  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -p workloadMode=COMPACT_ONLY \
+  -p datasetNames=<dataset> \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -wi 0 -i 1 -f 1
+```
+
+`COMPACT_ONLY` skips dataset loading entirely, so `-Xmx5g` is sufficient even for large datasets. This lets you confirm that the compactor itself — not the dataset — is the memory bottleneck.
+
 Key `workloadMode` values:
 
-| Mode | Measures |
+| Mode | Description |
 |---|---|
-| `PARTITION_ONLY` | Build N partition indexes |
-| `COMPACT_ONLY` | Compact existing partitions; `durationMs` = `compact()` time |
-| `PARTITION_AND_COMPACT` | Full pipeline: partition + compact + recall |
+| `PARTITION_AND_COMPACT` | **(default)** Build partitions, compact them, then measure recall |
+| `PARTITION_ONLY` | Build N partition indexes and exit; use before `COMPACT_ONLY` |
+| `COMPACT_ONLY` | Compact existing partitions without loading the dataset; `durationMs` = `compact()` time |
 | `BUILD_FROM_SCRATCH` | Build one index over the full dataset; `durationMs` = `build()` time |
 
 Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-results.jsonl`. The `durationMs` field records only the target function time (not dataset loading or JVM startup).

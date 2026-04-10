@@ -97,3 +97,33 @@ nytimes-256-angular:
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB
+dpr-gemma-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+dpr-gemma-10m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+esmc-600-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+esmc-600-6m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+mpnet-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+mpnet-10m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+personahub-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+personahub-10m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+tahoe-x1-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+tahoe-x1-10m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB

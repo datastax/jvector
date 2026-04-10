@@ -74,7 +74,7 @@ You may also use method-level filtering and patterns, e.g.,
 (The `failIfNoSpecifiedTests` option works around a quirk of surefire: it is happy to run `test` with submodules with empty test sets,
 but as soon as you supply a filter, it wants at least one match in every submodule.)
 
-You can run `SiftSmall` and `Bench` directly to get an idea of what all is going on here. `Bench` will automatically download required datasets to the `fvec` and `hdf5` directories.
+You can run `SiftSmall` and `Bench` directly to get an idea of what all is going on here. `Bench` will automatically download required datasets to the `dataset_cache` directories.
 The files used by `SiftSmall` can be found in the [siftsmall directory](./siftsmall) in the project root.
 
 To run either class, you can use the Maven exec-plugin via the following incantations:
