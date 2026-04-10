@@ -204,9 +204,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (!refKeys.contains(FeatureId.INLINE_VECTORS)) {
             throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature");
         }
-        if (!refKeys.contains(FeatureId.INLINE_VECTORS) && !refKeys.contains(FeatureId.FUSED_PQ)) {
-            throw new IllegalArgumentException("Current compaction support INLINE_VECTORS and FUSED_PQ only");
-        }
     }
 
     /**
@@ -651,7 +648,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 candSize++;
             }
         } else {
-            scratch.gs[sourceIdx].initializeInternal(ssp, searchView.entryNode(), Bits.ALL);
+            var entry = searchView.entryNode();
+            scratch.gs[sourceIdx].initializeInternal(ssp, entry, Bits.ALL);
+
+            // Descend greedily through levels above the target level, so the search at
+            // `level` starts from the best-known region rather than the global entry node.
+            // This mirrors how GraphSearcher.searchInternal navigates the hierarchy.
+            for (int l = entry.level; l > level; l--) {
+                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
+                scratch.gs[sourceIdx].setEntryPointsFromPreviousLayer();
+            }
 
             scratch.gs[sourceIdx].searchOneLayer(
                     ssp, params.searchTopK, 0f, level, indexAlive
@@ -1154,7 +1160,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         private boolean isDiverse(OnDiskGraphIndex.View cView, int cNode, VectorFloat<?> cVec, float cScore, float alpha, SelectedVecCache selectedCache) {
             for (int j = 0; j < selectedCache.size; j++) {
                 if (selectedCache.views[j] == cView && selectedCache.nodes[j] == cNode) {
-                    break;
+                    return false; // already selected; don't add a duplicate
                 }
                 if (vsf.compare(cVec, selectedCache.vecs[j]) > cScore * alpha) {
                     return false;

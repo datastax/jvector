@@ -19,6 +19,7 @@ import io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetInfo;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.GitInfo;
 import io.github.jbellis.jvector.example.reporting.JfrRecorder;
@@ -391,12 +392,19 @@ public class CompactorBenchmark {
                 queryVectors = null;
                 groundTruth = null;
                 ravv = null;
-                similarityFunction = VectorSimilarityFunction.COSINE;
                 baseVectors = null;
                 dimension = -1;
 
-                log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, Live nodes rate: {}",
-                        workloadMode, liveNodesRate);
+                var datasetInfo = DataSets.loadDataSet(datasetNames);
+                similarityFunction = datasetInfo
+                        .flatMap(DataSetInfo::similarityFunction)
+                        .orElseGet(() -> {
+                            log.warn("Could not determine similarity function for dataset '{}'; defaulting to COSINE", datasetNames);
+                            return VectorSimilarityFunction.COSINE;
+                        });
+
+                log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, similarityFunction: {}, Live nodes rate: {}",
+                        workloadMode, similarityFunction, liveNodesRate);
             } else {
                 ds = DataSets.loadDataSet(datasetNames)
                         .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames))
