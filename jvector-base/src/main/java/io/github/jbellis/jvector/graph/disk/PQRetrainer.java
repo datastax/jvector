@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -84,7 +84,13 @@ public class PQRetrainer {
 
         log.info("Collected {} training samples", samples.size());
 
-        RandomAccessVectorValues ravv = new SampledRAVV(sources, samples, dimension);
+        // Extract vectors sequentially in sorted (source, node) order so disk reads are
+        // purely sequential and the OS read-ahead can cover them efficiently.  We do this
+        // here rather than letting ProductQuantization.compute() drive the reads via its
+        // parallel stream, which would scatter page faults across a potentially very large
+        // file and cause I/O that scales with dataset size rather than sample count.
+        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
 
         FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
         ProductQuantization basePQ = fpq.getPQ();
@@ -191,6 +197,26 @@ public class PQRetrainer {
     }
 
     /**
+     * Reads sampled vectors sequentially in sorted (source, node) order.
+     * Each source's view is opened once and reused across all samples for that source,
+     * so disk reads are purely ascending and the OS read-ahead covers them efficiently.
+     */
+    private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples) {
+        OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
+        }
+
+        List<VectorFloat<?>> vectors = new ArrayList<>(samples.size());
+        VectorFloat<?> tmp = vectorTypeSupport.createFloatVector(dimension);
+        for (SampleRef ref : samples) {
+            views[ref.source].getVectorInto(ref.node, tmp, 0);
+            vectors.add(tmp.copy());
+        }
+        return vectors;
+    }
+
+    /**
      * Reference to a sampled vector from a specific source index.
      */
     private static final class SampleRef {
@@ -203,60 +229,4 @@ public class PQRetrainer {
         }
     }
 
-    /**
-     * Random access vector values implementation backed by sampled references from source indexes.
-     * Used for PQ training on a representative subset of the compacted data.
-     * Caches one View per source per thread to avoid repeated view creation on every read.
-     */
-    private static final class SampledRAVV implements RandomAccessVectorValues {
-        private final List<OnDiskGraphIndex> sources;
-        private final List<SampleRef> samples;
-        private final int dimension;
-        private final ThreadLocal<OnDiskGraphIndex.View[]> threadLocalViews;
-
-        SampledRAVV(List<OnDiskGraphIndex> sources, List<SampleRef> samples, int dimension) {
-            this.sources = sources;
-            this.samples = samples;
-            this.dimension = dimension;
-            this.threadLocalViews = ThreadLocal.withInitial(() -> {
-                OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
-                for (int s = 0; s < sources.size(); s++)
-                    views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
-                return views;
-            });
-        }
-
-        @Override
-        public int size() {
-            return samples.size();
-        }
-
-        @Override
-        public int dimension() {
-            return dimension;
-        }
-
-        @Override
-        public VectorFloat<?> getVector(int nodeId) {
-            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-            getVectorInto(nodeId, vec, 0);
-            return vec;
-        }
-
-        @Override
-        public void getVectorInto(int i, VectorFloat<?> dest, int offset) {
-            SampleRef ref = samples.get(i);
-            threadLocalViews.get()[ref.source].getVectorInto(ref.node, dest, offset);
-        }
-
-        @Override
-        public boolean isValueShared() {
-            return false;
-        }
-
-        @Override
-        public RandomAccessVectorValues copy() {
-            return null;
-        }
-    }
 }
