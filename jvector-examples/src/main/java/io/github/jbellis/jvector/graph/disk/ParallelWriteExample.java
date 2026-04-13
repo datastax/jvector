@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -226,11 +226,11 @@ public class ParallelWriteExample {
      * Benchmark comparison between sequential and parallel writes using NVQ + FUSED_ADC features.
      * This matches the configuration used in Grid.buildOnDisk for realistic performance testing.
      */
-    public static void benchmarkComparison(ImmutableGraphIndex graph,
-                                          Path sequentialPath,
-                                          Path parallelPath,
-                                          RandomAccessVectorValues floatVectors,
-                                          PQVectors pqVectors) throws IOException {
+    public static void benchmarkComparison(GraphIndex graph,
+                                           Path sequentialPath,
+                                           Path parallelPath,
+                                           RandomAccessVectorValues floatVectors,
+                                           PQVectors pqVectors) throws IOException {
 
         int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
         var nvq = NVQuantization.compute(floatVectors, nSubVectors);

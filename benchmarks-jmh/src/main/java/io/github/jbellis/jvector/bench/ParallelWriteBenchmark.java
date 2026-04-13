@@ -17,7 +17,7 @@ package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -82,7 +82,7 @@ public class ParallelWriteBenchmark {
     // Dataset and index state
     private RandomAccessVectorValues floatVectors;
     private PQVectors pqVectors;
-    private ImmutableGraphIndex graph;
+    private GraphIndex graph;
 
     // Feature state reused between iterations
     private NVQ nvqFeature;
@@ -184,7 +184,7 @@ public class ParallelWriteBenchmark {
         Files.deleteIfExists(parallelPath);
     }
 
-    private void writeGraph(ImmutableGraphIndex graph,
+    private void writeGraph(GraphIndex graph,
                             Path path,
                             boolean parallel) throws IOException {
         try (RandomAccessOnDiskGraphIndexWriter writer = parallel ?

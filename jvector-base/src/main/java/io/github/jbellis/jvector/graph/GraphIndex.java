@@ -35,7 +35,6 @@ import java.util.Objects;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
@@ -47,7 +46,7 @@ import java.util.function.Function;
  * All methods are threadsafe.  Operations that require persistent state are wrapped
  * in a View that should be created per accessing thread.
  */
-public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+public interface GraphIndex extends AutoCloseable, Accountable {
     /** Returns the number of nodes in the graph */
     @Deprecated
     default int size() {
@@ -217,7 +216,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }
 
-    static String prettyPrint(ImmutableGraphIndex graph) {
+    static String prettyPrint(GraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
         sb.append("\n");

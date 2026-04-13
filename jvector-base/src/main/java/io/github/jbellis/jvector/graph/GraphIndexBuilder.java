@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -49,7 +49,7 @@ import static io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
 import static java.lang.Math.*;
 
 /**
- * Builder for Concurrent GraphIndex. See {@link ImmutableGraphIndex} for a high level overview, and the
+ * Builder for Concurrent GraphIndex. See {@link GraphIndex} for a high level overview, and the
  * comments to `addGraphNode` for details on the concurrent building approach.
  * <p>
  * GIB allocates scratch space and copies of the RandomAccessVectorValues for each thread
@@ -436,7 +436,7 @@ public class GraphIndexBuilder implements Closeable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+    public GraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -540,7 +540,7 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
-    public ImmutableGraphIndex getGraph() {
+    public GraphIndex getGraph() {
         return graph;
     }
 
@@ -983,13 +983,13 @@ public class GraphIndexBuilder implements Closeable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                   RemappedRandomAccessVectorValues newVectors,
+                                                   BuildScoreProvider buildScoreProvider,
+                                                   int startingNodeOffset,
+                                                   int beamWidth,
+                                                   float overflowRatio,
+                                                   float alpha) throws IOException {
 
             return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
@@ -1012,15 +1012,15 @@ public class GraphIndexBuilder implements Closeable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha,
-                                                            ForkJoinPool simdExecutor,
-                                                            ForkJoinPool parallelExecutor) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                   RemappedRandomAccessVectorValues newVectors,
+                                                   BuildScoreProvider buildScoreProvider,
+                                                   int startingNodeOffset,
+                                                   int beamWidth,
+                                                   float overflowRatio,
+                                                   float alpha,
+                                                   ForkJoinPool simdExecutor,
+                                                   ForkJoinPool parallelExecutor) throws IOException {
         // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
         //  However, the new inserted vectors do have the new ordinals, so recall:
         //  - recall will be severely affected

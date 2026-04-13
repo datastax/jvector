@@ -1,0 +1,76 @@
+ada002-100k:
+  base: ada_002_100k_base_99287.fvecs
+  query: ada_002_100k_query_10000.fvecs
+  gt: ada_002_100k_gt_ip_100.ivecs
+ada002-1M:
+  base: ada_002_1M_base_982790.fvecs
+  query: ada_002_1M_query_10000.fvecs
+  gt: ada_002_1M_gt_ip_100.ivecs
+cohere-english-v3-100k:
+  base: cohere_english_v3_100k_base_99685.fvecs
+  query: cohere_english_v3_100k_query_10000.fvecs
+  gt: cohere_english_v3_100k_gt_ip_100.ivecs
+colbert-1M:
+  base: colbert_1M_base_1000000.fvecs
+  query: colbert_1M_query_100000.fvecs
+  gt: colbert_1M_gt_ip_100.ivecs
+e5-base-v2-100k:
+  base: e5_base_v2_100k_base_99446.fvecs
+  query: e5_base_v2_100k_query_10000.fvecs
+  gt: e5_base_v2_100k_gt_ip_100.ivecs
+e5-large-v2-100k:
+  base: e5_large_v2_100k_base_99460.fvecs
+  query: e5_large_v2_100k_query_10000.fvecs
+  gt: e5_large_v2_100k_gt_ip_100.ivecs
+e5-small-v2-100k:
+  base: e5_small_v2_100k_base_99443.fvecs
+  query: e5_small_v2_100k_query_10000.fvecs
+  gt: e5_small_v2_100k_gt_ip_100.ivecs
+gecko-100k:
+  base: gecko_100k_base_98391.fvecs
+  query: gecko_100k_query_10000.fvecs
+  gt: gecko_100k_gt_ip_100.ivecs
+glove-100-angular:
+  base: glove_100_angular_base_1183514.fvecs
+  query: glove_100_angular_query_10000.fvecs
+  gt: glove_100_angular_gt_ip_100.ivecs
+glove-200-angular:
+  base: glove_200_angular_base_1183514.fvecs
+  query: glove_200_angular_query_10000.fvecs
+  gt: glove_200_angular_gt_ip_100.ivecs
+glove-25-angular:
+  base: glove_25_angular_base_1183514.fvecs
+  query: glove_25_angular_query_10000.fvecs
+  gt: glove_25_angular_gt_ip_100.ivecs
+glove-50-angular:
+  base: glove_50_angular_base_1183514.fvecs
+  query: glove_50_angular_query_10000.fvecs
+  gt: glove_50_angular_gt_ip_100.ivecs
+lastfm-64-dot:
+  base: lastfm_64_dot_base_292385.fvecs
+  query: lastfm_64_dot_query_49998.fvecs
+  gt: lastfm_64_dot_gt_ip_100.ivecs
+nytimes-256-angular:
+  base: nytimes_256_angular_base_248968.fvecs
+  query: nytimes_256_angular_query_9991.fvecs
+  gt: nytimes_256_angular_gt_ip_100.ivecs
+openai-v3-large-1536-100k:
+  base: openai_v3_large_1536_100k_base_98716.fvecs
+  query: openai_v3_large_1536_100k_query_10000.fvecs
+  gt: openai_v3_large_1536_100k_gt_ip_100.ivecs
+openai-v3-large-3072-100k:
+  base: openai_v3_large_3072_100k_base_98714.fvecs
+  query: openai_v3_large_3072_100k_query_10000.fvecs
+  gt: openai_v3_large_3072_100k_gt_ip_100.ivecs
+openai-v3-small-1536-100k:
+  base: openai_v3_small_1536_100k_base_98548.fvecs
+  query: openai_v3_small_1536_100k_query_10000.fvecs
+  gt: openai_v3_small_1536_100k_gt_ip_100.ivecs
+openai-v3-small-100k:
+  base: openai_v3_small_1536_100k_base_98548.fvecs
+  query: openai_v3_small_1536_100k_query_10000.fvecs
+  gt: openai_v3_small_1536_100k_gt_ip_100.ivecs
+sift-128-euclidean:
+  base: sift_128_euclidean_base_985462.fvecs
+  query: sift_128_euclidean_query_10000.fvecs
+  gt: sift_128_euclidean_gt_ip_100.ivecs

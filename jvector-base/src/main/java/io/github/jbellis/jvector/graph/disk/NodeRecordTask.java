@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ByteBufferIndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -45,8 +45,8 @@ class NodeRecordTask implements Callable<Void> {
     private final int startOrdinal;  // Inclusive
     private final int endOrdinal;    // Exclusive
     private final OrdinalMapper ordinalMapper;
-    private final ImmutableGraphIndex graph;
-    private final ImmutableGraphIndex.View view;
+    private final GraphIndex graph;
+    private final GraphIndex.View view;
     private final List<Feature> inlineFeatures;
     private final Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers;
     private final int recordSize;
@@ -57,8 +57,8 @@ class NodeRecordTask implements Callable<Void> {
     NodeRecordTask(int startOrdinal,
                    int endOrdinal,
                    OrdinalMapper ordinalMapper,
-                   ImmutableGraphIndex graph,
-                   ImmutableGraphIndex.View view,
+                   GraphIndex graph,
+                   GraphIndex.View view,
                    List<Feature> inlineFeatures,
                    Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
                    int recordSize,

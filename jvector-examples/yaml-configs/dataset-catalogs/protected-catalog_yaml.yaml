@@ -1,0 +1,12 @@
+# This is how we can share protected datasets that are not easily publicly discoverable.
+# Please keep the cache_directory /protected.  Do not use the /public cache subdir.
+# To use this file with jvector, just copy it to jvector-examples/yaml-configs/dataset-catalogs.  That's it!
+# The dataset loader will find it and cache datasets as you load them.
+#
+# Be sure to uncomment or add them in datasets.yaml to enable them for running in BenchYAML,
+# and mind the configuration for them in jvector-examples/yaml-configs.
+_defaults:
+  cache_dir: ${DATASET_CACHE_DIR:-dataset_cache}/protected
+
+_include:
+  url: s3://jvector-datasets-infratest-20260401/5b8d452c3f7c0cace29acc6a0a09ad5f4ac62f0b_private/protected-catalog.yaml

@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -172,7 +172,7 @@ public class CommonHeader {
             this.degree = degree;
         }
 
-        public static List<LayerInfo> fromGraph(ImmutableGraphIndex graph, OrdinalMapper mapper) {
+        public static List<LayerInfo> fromGraph(GraphIndex graph, OrdinalMapper mapper) {
             return IntStream.rangeClosed(0, graph.getMaxLevel())
                     .mapToObj(i -> new LayerInfo(graph.size(i), graph.getDegree(i)))
                     .collect(Collectors.toList());

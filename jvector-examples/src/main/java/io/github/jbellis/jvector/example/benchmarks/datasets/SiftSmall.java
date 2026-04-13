@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
@@ -93,7 +93,7 @@ public class SiftSmall {
                                                  true))
         {
             // build the index (in memory)
-            ImmutableGraphIndex index = builder.build(ravv);
+            GraphIndex index = builder.build(ravv);
 
             // search for a random vector
             VectorFloat<?> q = randomVector(originalDimension);
@@ -116,7 +116,7 @@ public class SiftSmall {
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
-            ImmutableGraphIndex index = builder.build(ravv);
+            GraphIndex index = builder.build(ravv);
 
             // search for a random vector using a GraphSearcher and SearchScoreProvider
             VectorFloat<?> q = randomVector(originalDimension);
@@ -137,7 +137,7 @@ public class SiftSmall {
 
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
-            ImmutableGraphIndex index = builder.build(ravv);
+            GraphIndex index = builder.build(ravv);
             // measure our recall against the (exactly computed) ground truth
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> DefaultSearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
             testRecall(index, queryVectors, groundTruth, sspFactory);
@@ -153,7 +153,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             // build the index (in memory)
-            ImmutableGraphIndex index = builder.build(ravv);
+            GraphIndex index = builder.build(ravv);
             // write the index to disk with default options
             OnDiskGraphIndex.write(index, ravv, indexPath);
         }
@@ -176,7 +176,7 @@ public class SiftSmall {
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
-            ImmutableGraphIndex index = builder.build(ravv);
+            GraphIndex index = builder.build(ravv);
             OnDiskGraphIndex.write(index, ravv, indexPath);
         }
 
@@ -354,7 +354,7 @@ public class SiftSmall {
         return vec;
     }
 
-    private static void testRecall(ImmutableGraphIndex graph,
+    private static void testRecall(GraphIndex graph,
                                    List<VectorFloat<?>> queryVectors,
                                    List<List<Integer>> groundTruth,
                                    Function<VectorFloat<?>,

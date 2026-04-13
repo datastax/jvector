@@ -22,7 +22,7 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.NodeQueue;
@@ -341,8 +341,8 @@ public class TestFusedGraphIndex extends RandomizedTest {
         Files.deleteIfExists(outputPath);
     }
 
-    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex.View view, CompressedVectors cv) {
-        var scoringView = (ImmutableGraphIndex.ScoringView) view;
+    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, GraphIndex.View view, CompressedVectors cv) {
+        var scoringView = (GraphIndex.ScoringView) view;
         ScoreFunction.ApproximateScoreFunction asf;
         if (fused) {
             asf = scoringView.approximateScoreFunctionFor(queryVector, similarityFunction);
