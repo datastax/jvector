@@ -244,6 +244,7 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
+            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
 
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
@@ -315,6 +316,7 @@ public class Grid {
                         CompressedVectors cv;
                         if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
                             cv = null;
+                            System.out.format("%s: configured to use FUSED PQ, skipping vector compression%n", ds.getName());
                         } else {
                             constructionMetrics.resetSearch(); // per (index, cpSupplier) config
 
@@ -324,11 +326,17 @@ public class Grid {
 
                             if (compressor == null) {
                                 cv = null;
+                                System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                             } else {
                                 long start = System.nanoTime();
                                 cv = constructionMetrics.search(searchQuantType)
                                         .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
                                 double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                if (cv == null) {
+                                    throw new IllegalStateException(String.format(
+                                            "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                    "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                }
                                 System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
@@ -908,8 +916,29 @@ public class Grid {
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                            CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
-
+                                            // Encode vectors for reranking if a compressor is provided
+                                            CompressedVectors cvArg;
+                                            if (features.contains(FeatureId.FUSED_PQ)) {
+                                                cvArg = null;
+                                                System.out.format("%s: configured to use FUSED PQ, skipping vector compression%n", ds.getName());
+                                            } else {
+                                                if (searchCompressorObj == null) {
+                                                    cvArg = null;
+                                                    System.out.format("%s: No search compressor configured, " +
+                                                            "FULL PRECISION vectors will be used for search%n", ds.getName());
+                                                } else {
+                                                    cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                                    if (cvArg == null) {
+                                                        throw new IllegalStateException(String.format(
+                                                                "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                                        "Aborting to prevent false recall results.",
+                                                                searchCompressorObj, ds.getName()));
+                                                    }
+                                                    System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
+                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            (cvArg.ramBytesUsed() / 1024f / 1024f));
+                                                }
+                                            }
                                             // If cache is disabled, we use the (tmp) testDirectory as the output
                                             Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : testDirectory;
 

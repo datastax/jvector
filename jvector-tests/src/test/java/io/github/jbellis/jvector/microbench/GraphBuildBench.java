@@ -17,7 +17,7 @@ package io.github.jbellis.jvector.microbench;
 
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderHDF5;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -44,9 +44,9 @@ public class GraphBuildBench {
         final ListRandomAccessVectorValues ravv;
 
         public Parameters() {
-            this.ds = new DataSetLoaderHDF5().loadDataSet("hdf5/glove-100-angular.hdf5").orElseThrow(
-                    () -> new RuntimeException("Unable to load dataset: hdf5/glove-100-angular.hdf5" )
-            );
+            this.ds = DataSets.loadDataSet("glove-100-angular").orElseThrow(
+                    () -> new RuntimeException("Unable to load dataset: glove-100-angular")
+            ).getDataSet();
             this.ravv = new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
         }
     }
