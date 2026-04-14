@@ -125,6 +125,7 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+
       # ==========================================
       # Decode and write the protected dataset catalog
       #
@@ -150,8 +151,6 @@ jobs:
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
         id: run-benchmark
-        env:
-          DATASET_HASH: ${{ secrets.DATASETS_KEYPATH }}
         run: |
           # Check if jvector-examples directory and AutoBenchYAML class exist
           if [ ! -d "jvector-examples" ]; then
@@ -214,7 +213,7 @@ jobs:
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} "dpr-1M"
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} dpr-1M
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
