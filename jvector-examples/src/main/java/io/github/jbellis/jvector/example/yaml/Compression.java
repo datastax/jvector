@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.util.Map;
@@ -63,10 +64,9 @@ public class Compression {
             case "ASH":
                 return ds -> {
                     if (parameters == null) {
-                        throw new IllegalArgumentException("ASH requires parameters: encodedBits, optimizer, landmarkCount");
+                        throw new IllegalArgumentException("ASH requires parameters");
                     }
 
-                    int encodedBits = Integer.parseInt(parameters.get("encodedBits"));
                     int landmarkCount = Integer.parseInt(parameters.getOrDefault("landmarkCount", "1"));
 
                     // optimizer can be numeric or name (RANDOM/ITQ/LANDING)
@@ -78,16 +78,62 @@ public class Compression {
                     int optimizer;
                     switch (optStr.trim().toUpperCase()) {
                         case "RANDOM":
-                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.RANDOM;
+                            optimizer = AsymmetricHashing.RANDOM;
                             break;
                         case "ITQ":
-                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.ITQ;
+                            optimizer = AsymmetricHashing.ITQ;
                             break;
                         case "LANDING":
-                            optimizer = io.github.jbellis.jvector.quantization.AsymmetricHashing.LANDING;
+                            optimizer = AsymmetricHashing.LANDING;
                             break;
                         default:
                             optimizer = Integer.parseInt(optStr);
+                    }
+
+                    boolean hasEncodedBits = parameters.containsKey("encodedBits");
+                    boolean hasCompressionRatio = parameters.containsKey("compressionRatio");
+                    if (hasEncodedBits == hasCompressionRatio) {
+                        throw new IllegalArgumentException(
+                                "ASH requires exactly one of 'encodedBits' or 'compressionRatio'");
+                    }
+
+                    int encodedBits;
+                    if (hasEncodedBits) {
+                        encodedBits = Integer.parseInt(parameters.get("encodedBits"));
+                    } else {
+                        int requestedCompressionRatio = Integer.parseInt(parameters.get("compressionRatio"));
+                        if (requestedCompressionRatio != 32
+                                && requestedCompressionRatio != 64
+                                && requestedCompressionRatio != 128
+                                && requestedCompressionRatio != 256) {
+                            throw new IllegalArgumentException(
+                                    "ASH compressionRatio must be one of 32, 64, 128, or 256");
+                        }
+
+                        int originalBits = ds.getDimension() * Float.SIZE;
+                        int targetEncodedBits = Math.max(AsymmetricHashing.HEADER_BITS + 64,
+                                originalBits / requestedCompressionRatio);
+
+                        int payloadTargetBits = Math.max(64, targetEncodedBits - AsymmetricHashing.HEADER_BITS);
+                        int lowerPayloadBits = Math.max(64, (payloadTargetBits / 64) * 64);
+                        int upperPayloadBits = Math.max(64, ((payloadTargetBits + 63) / 64) * 64);
+
+                        int payloadBits = Math.abs(lowerPayloadBits - payloadTargetBits)
+                                <= Math.abs(upperPayloadBits - payloadTargetBits)
+                                ? lowerPayloadBits
+                                : upperPayloadBits;
+
+                        encodedBits = AsymmetricHashing.HEADER_BITS + payloadBits;
+
+                        double actualCompressionRatio = (double) originalBits / encodedBits;
+                        System.out.printf(
+                                "ASH requested compressionRatio=%d resolved to encodedBits=%d "
+                                        + "(header=%d, payload=%d) actualCompressionRatio=%.2f%n",
+                                requestedCompressionRatio,
+                                encodedBits,
+                                AsymmetricHashing.HEADER_BITS,
+                                payloadBits,
+                                actualCompressionRatio);
                     }
 
                     return new CompressorParameters.ASHParameters(optimizer, encodedBits, landmarkCount);

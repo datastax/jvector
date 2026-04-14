@@ -90,7 +90,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     //
     // NOTE: residualNorm (= ||x − μ||) is still computed during encoding for Eq. 6,
     // but it is not stored explicitly once scale is stored.
-    private static final int HEADER_BITS =
+    public static final int HEADER_BITS =
             (Float.BYTES + Float.BYTES + Byte.BYTES) * 8; // 72 bits currently
 
     private static final VectorTypeSupport vectorTypeSupport =

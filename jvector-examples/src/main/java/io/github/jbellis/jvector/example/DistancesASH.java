@@ -28,7 +28,6 @@ import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.io.IOException;
 import java.util.List;
@@ -112,58 +111,9 @@ public class DistancesASH {
         // How many ASH landmarks to use, C = [1, 64]
         final int landmarkCount = 1;
 
-        // Define the benchmark size
-        int maxQueries = 10_000;
-        int maxVectors = 10_000_000;
-
-        int queryCountInFile = SiftLoader.countFvecs(filenameQueries);
-        int vectorCountInFile = SiftLoader.countFvecs(filenameBase);
-
-        // Will benchmark what was requested or the maximum available vectors (if less)
-        int nQueries = Math.min(maxQueries, queryCountInFile);
-        int nVectors = Math.min(maxVectors, vectorCountInFile);
-
-        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase, nVectors);
-        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries, nQueries);
-        List<int[]> groundTruth = SiftLoader.readIvecsAsArrays(filenameGT, nQueries);
-
-        // ------------------------------------------------------------------
-        // Remove zero-norm vectors (undefined for ASH / Eq. 11)
-        // ------------------------------------------------------------------
-
-        int beforeBase = vectors.size();
-
-        // Maps original index to filtered index. Value is -1 if vector was removed.
-        int[] oldToNew = new int[beforeBase];
-        java.util.Arrays.fill(oldToNew, -1);
-
-        List<VectorFloat<?>> filteredBase = new ArrayList<>(beforeBase);
-        for (int i = 0; i < beforeBase; i++) {
-            VectorFloat<?> v = vectors.get(i);
-            if (VectorUtil.dotProduct(v, v) > 0f) {
-                oldToNew[i] = filteredBase.size();
-                filteredBase.add(v);
-            }
-        }
-        vectors = filteredBase;
-
-        int beforeQuery = queries.size();
-        List<VectorFloat<?>> filteredQueries = new ArrayList<>(queries.size());
-        for (VectorFloat<?> q : queries) {
-            if (VectorUtil.dotProduct(q, q) > 0f) {
-                filteredQueries.add(q);
-            }
-        }
-        queries = filteredQueries;
-
-        System.out.println("\tRemoved " + (beforeBase - vectors.size()) + " zero base vectors and "
-                + (beforeQuery - queries.size()) + " zero query vectors");
-
-        // ------------------------------------------------------------
-        // Update counts after filtering
-        // ------------------------------------------------------------
-        final int finalVectorCount = vectors.size();
-        final int finalQueryCount = queries.size();
+        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
+        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+        List<List<Integer>> groundTruth = SiftLoader.readIvecs(filenameGT);
 
         // ASH normalization policy:
         //
@@ -174,7 +124,6 @@ public class DistancesASH {
         // - Queries may be L2-normalized in the benchmark (standard practice),
         //   but are NOT normalized inside the encoder.
         // - No other normalization steps are applied.
-        for (VectorFloat<?> q : queries) VectorUtil.l2normalize(q);
 
         int dimension = vectors.get(0).length();
         int encodedBits = 328; // (dimension / 4) + HEADER_BITS;
@@ -225,7 +174,7 @@ public class DistancesASH {
 
 
         double encSeconds = (endTime - startTime) / 1e9;
-        double encThroughput = finalVectorCount / encSeconds;
+        double encThroughput = vectors.size() / encSeconds;
 
         System.out.println(
                 "\tEncoding throughput = "
@@ -321,7 +270,7 @@ public class DistancesASH {
         ForkJoinPool simdExecutor = new ForkJoinPool(180); // For profiling
 
         int parallelism = simdExecutor.getParallelism();
-        int chunkSize = Math.max(1, (finalQueryCount + parallelism - 1) / parallelism);
+        int chunkSize = Math.max(1, (queries.size() + parallelism - 1) / parallelism);
 
         // ==================================================================
         // [1] Accuracy run (NOT timed)
@@ -329,9 +278,9 @@ public class DistancesASH {
         if(RUN_ACCURACY_CHECK) {
             List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+            for (int start = 0; start < vectors.size(); start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, finalQueryCount);
+                final int e = Math.min(start + chunkSize, queries.size());
 
                 errorTasks.add(simdExecutor.submit(() -> {
                     double localError = 0.0;
@@ -342,7 +291,7 @@ public class DistancesASH {
                         ScoreFunction.ApproximateScoreFunction f =
                                 ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                        for (int j = 0; j < finalVectorCount; j++) {
+                        for (int j = 0; j < vectors.size(); j++) {
                             final int baseOrd = (newToOldFinal == null) ? j : newToOldFinal[j];
                             VectorFloat<?> v = finalVectors.get(baseOrd);
 
@@ -380,9 +329,9 @@ public class DistancesASH {
             List<ForkJoinTask<double[]>> recallTasks = new ArrayList<>();
 
             logProgress("\t[stage] Computing " + RECALL_K + "-Recall@K...");
-            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+            for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, finalQueryCount);
+                final int e = Math.min(start + chunkSize, queries.size());
 
                 recallTasks.add(simdExecutor.submit(() -> {
                     double[] localTotalRecall = new double[atValues.length];
@@ -392,7 +341,7 @@ public class DistancesASH {
 
                         // Min-heap to keep top 50 results (storing score as int bits and ordinal as long)
                         var topCandidates = new java.util.PriorityQueue<long[]>((a, b) -> Float.compare(Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0])));
-                        for (int j = 0; j < finalVectorCount; j++) {
+                        for (int j = 0; j < vectors.size(); j++) {
                             float score = f.similarityTo(j);
                             if (topCandidates.size() < maxAt) {
                                 topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
@@ -405,7 +354,9 @@ public class DistancesASH {
                         int[] topIndices = new int[topCandidates.size()];
                         for (int rank = topCandidates.size() - 1; rank >= 0; rank--) topIndices[rank] = (int) topCandidates.poll()[1];
 
-                        int[] queryGT = groundTruth.get(i);
+                        int[] queryGT = groundTruth.get(i).stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray();
                         for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
                             int at = atValues[aIdx];
                             java.util.Set<Integer> topAtSet = new java.util.HashSet<>();
@@ -435,7 +386,7 @@ public class DistancesASH {
             }
 
             for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
-                System.out.format("\tASH %d-recall@%d = %.4f%n", RECALL_K, atValues[aIdx], totalRecall[aIdx] / finalQueryCount);
+                System.out.format("\tASH %d-recall@%d = %.4f%n", RECALL_K, atValues[aIdx], totalRecall[aIdx] / queries.size());
             }
         }
 
@@ -447,9 +398,9 @@ public class DistancesASH {
 
             long ashStart = System.nanoTime();
 
-            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+            for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, finalQueryCount);
+                final int e = Math.min(start + chunkSize, queries.size());
 
                 ashTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
@@ -459,7 +410,7 @@ public class DistancesASH {
                         ScoreFunction.ApproximateScoreFunction f =
                                 ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
 
-                        for (int j = 0; j < finalVectorCount; j++) {
+                        for (int j = 0; j < vectors.size(); j++) {
                             localSum += f.similarityTo(j);
                         }
                     }
@@ -475,7 +426,7 @@ public class DistancesASH {
             long ashEnd = System.nanoTime();
 
             double singleSeconds = (ashEnd - ashStart) / 1e9;
-            long totalDotProducts = (long) finalQueryCount * (long) finalVectorCount;
+            long totalDotProducts = (long) queries.size() * (long) vectors.size();
             double singleThroughput = totalDotProducts / singleSeconds;
 
             System.out.println("\tSingle " + singleMode + " scoring took "
@@ -503,16 +454,16 @@ public class DistancesASH {
 
             long floatStart = System.nanoTime();
 
-            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+            for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, finalQueryCount);
+                final int e = Math.min(start + chunkSize, queries.size());
 
                 floatTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
 
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
-                        for (int j = 0; j < finalVectorCount; j++) {
+                        for (int j = 0; j < vectors.size(); j++) {
                             localSum += VectorUtil.dotProduct(q, finalVectors.get(j));
                         }
                     }
@@ -560,9 +511,9 @@ public class DistancesASH {
             List<ForkJoinTask<Double>> blockTasks = new ArrayList<>();
             long blockStart = System.nanoTime();
 
-            for (int start = 0; start < finalQueryCount; start += chunkSize) {
+            for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
-                final int e = Math.min(start + chunkSize, finalQueryCount);
+                final int e = Math.min(start + chunkSize, queries.size());
 
                 blockTasks.add(simdExecutor.submit(() -> {
                     double localSum = 0.0;
@@ -577,7 +528,7 @@ public class DistancesASH {
                                 );
 
                         int j = 0;
-                        while (j + blockSize <= finalVectorCount) {
+                        while (j + blockSize <= vectors.size()) {
                             scorer.scoreRange(j, blockSize, scores);
                             for (int k = 0; k < blockSize; k++) {
                                 localSum += scores[k];
@@ -586,14 +537,14 @@ public class DistancesASH {
                         }
 
                         // Tail uses scalar per-vector scorer (correctness-preserving)
-                        if (j < finalVectorCount) {
+                        if (j < vectors.size()) {
                             ScoreFunction.ApproximateScoreFunction f =
                                     ashVecsFinal.scoreFunctionFor(
                                             finalQueries.get(qi),
                                             VectorSimilarityFunction.DOT_PRODUCT
                                     );
 
-                            for (; j < finalVectorCount; j++) {
+                            for (; j < vectors.size(); j++) {
                                 localSum += f.similarityTo(j);
                             }
                         }
@@ -616,7 +567,7 @@ public class DistancesASH {
             );
 
             double blockSeconds = (blockEnd - blockStart) / 1e9;
-            long totalDotProducts = (long) finalQueryCount * (long) finalVectorCount;
+            long totalDotProducts = (long) queries.size() * (long) vectors.size();
 
             double scoreThroughput = totalDotProducts / blockSeconds;
 
