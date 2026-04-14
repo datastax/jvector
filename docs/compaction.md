@@ -61,24 +61,14 @@ remappers.add(new OrdinalMapper.MapMapper(oldToNew));
 
 ### Ordinal Remapping
 
-Each source assigns its own local ordinals starting from 0. The compactor maps them to a new global ordinal space using `OrdinalMapper`:
+Each source assigns its own local ordinals. The compactor maps them to a new global ordinal space using user-provided `OrdinalMapper`.
 
-| Class | Behavior |
-|---|---|
-| `IdentityMapper` | Ordinals unchanged |
-| `OffsetMapper` | `newOrdinal = oldOrdinal + offset` |
-| `MapMapper` | Arbitrary `oldOrdinal → newOrdinal` map |
 
 ### PQ Retraining
 
-If the source indexes use FusedPQ, the compactor retrains the Product Quantization codebook on the combined dataset before writing the output. This is done by `PQRetrainer`, which:
+If the source indexes use FusedPQ, the compactor retrains the Product Quantization codebook on the combined dataset before writing the output. This is done by `PQRetrainer`, which
+performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source).
 
-1. Performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source).
-2. Sorts samples by `(source, node)` so disk reads are sequential, enabling OS read-ahead.
-3. Uses a `ThreadLocal<View[]>` in `SampledRAVV` so each worker thread reuses its file handles instead of opening one per sample read.
-4. Calls `ProductQuantization.compute()` on the samples to produce a new codebook.
-
-Chunked sampling reduces page faults: instead of picking random individual nodes, nodes are grouped into 32-node chunks and the chunk order is shuffled (Fisher-Yates). This cuts random jump frequency by ~32× while preserving statistical randomness.
 
 ### Neighbor Selection (per node)
 
@@ -88,7 +78,10 @@ For each live node at each graph level, the compactor gathers a candidate neighb
 Iterate the node's existing neighbors in its source index. Filter out deleted nodes. Score each with the similarity function. No graph search — neighbors are already precomputed.
 
 **2. Gather from other sources** (`gatherFromOtherSource`)\
-Run a graph search in every other source index starting from that source's entry point. At level 0, a full KNN search is used. At upper levels, a single-layer search is run. If FusedPQ is available, the search uses approximate PQ scoring and rescores the top results exactly.
+Run a graph search in every other source index starting from that source's entry point. If FusedPQ is available, approximate PQ scoring is used during the search and top results are rescored exactly.
+
+- *Level 0*: a full hierarchical graph search is used (`GraphSearcher.search()`), descending from the entry node down to level 0.
+- *Level L > 0*: the compactor first descends greedily from the source's entry node through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
 
 ```
 searchTopK  = max(2,  ceil(degree / numSources) * 2)
@@ -99,15 +92,13 @@ beamWidth   = max(degree, searchTopK) * 2
 Candidates are sorted by score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha:
 
 ```
-alpha ← 1.0
-for each candidate c (highest score first):
-    if ∀ selected neighbor j: similarity(c, j) ≤ score(c) × alpha:
-        select c
-    if |selected| < maxDegree and more candidates remain:
-        alpha += 0.2  (up to 1.2)
+for alpha in [1.0, 1.2]:
+    for each candidate c (highest score first):
+        if c is already selected: skip
+        if ∀ selected neighbor j: similarity(c, j) ≤ score(c) × alpha:
+            select c
+    if |selected| == maxDegree: stop
 ```
-
-Starting at alpha=1.0 ensures the nearest neighbors are preferred; the gradual increase admits diverse candidates when necessary to fill the degree budget.
 
 ### Hierarchical Levels
 
@@ -120,14 +111,6 @@ Processing is batched per source and run in parallel across sources using a `For
 The entry node of the compacted graph is:
 1. The original entry node of `sources[0]`, if it is live.
 2. Otherwise, the first live node found by scanning all sources in order.
-
-## Design Notes
-
-**Beam width scales with degree, not a fixed floor.** An earlier implementation enforced `MIN_BEAM_WIDTH = 100`, which was wasteful for small graphs and could be insufficient for large ones. The current formula ties beam width to the graph's actual degree configuration.
-
-**Scratch space is per-thread.** Each worker thread owns a `Scratch` object with pre-allocated candidate arrays, vector buffers, and `GraphSearcher` instances (one per source). This avoids allocations in the hot path and keeps thread contention low.
-
-**Sorted samples enable sequential I/O.** Sorting `SampleRef` entries by `(source, node)` before PQ training means `extractTrainingVectors` (which runs in a parallel stream) accesses each source's mmap'd file in ascending node order, letting the OS prefetcher cover the data.
 
 ## Benchmarking
 
@@ -194,38 +177,23 @@ Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-
 
 The table compares building from scratch with compaction under the following configurations (results averaged over three runs):
 
-- Build from scratch: Build with PQ; search using FusedPQ with FP reranking.
-- Compaction: Build source indices with PQ; compact using FusedPQ with FP rescoring; search using FusedPQ with FP reranking.
+- Build from scratch: build with PQ; search using FusedPQ with FP reranking.
+- Compaction: build source partitions with PQ; compact using FusedPQ with FP rescoring; search using FusedPQ with FP reranking.
 
-| Dataset                     | Build from Scratch | Compaction | Delta  |
-|----------------------------|------------------:|-----------:|-------:|
-| openai-v3-small-100k       | 0.781             | 0.778      | -0.003 |
-| openai-v3-large-3072-100k  | 0.824             | 0.825      | +0.001 |
-| openai-v3-large-1536-100k  | 0.796             | 0.797      | +0.001 |
-| e5-small-v2-100k           | 0.472             | 0.504      | +0.032 |
-| e5-base-v2-100k            | 0.622             | 0.631      | +0.009 |
-| e5-large-v2-100k           | 0.560             | 0.618      | +0.058 |
-| glove-25-angular           | 0.069             | 0.060      | -0.009 |
-| glove-50-angular           | 0.153             | 0.121      | -0.032 |
-| glove-100-angular          | 0.179             | 0.143      | -0.036 |
-| glove-200-angular          | 0.178             | 0.154      | -0.024 |
-| lastfm-64-dot              | 0.189             | 0.151      | -0.038 |
-| ada002-100k                | 0.687             | 0.714      | +0.027 |
-| colbert-1M                 | 0.385             | 0.318      | -0.067 |
-| gecko-100k                 | 0.610             | 0.635      | +0.025 |
-| nytimes-256-angular        | 0.342             | 0.328      | -0.014 |
-| sift-128-euclidean         | 0.479             | 0.447      | -0.032 |
-| cap-1M                     | 0.658             | 0.645      | -0.013 |
-| cap-6M                     | 0.630             | 0.607      | -0.023 |
-| cohere-english-v3-100k     | 0.743             | 0.738      | -0.005 |
-| cohere-english-v3-1M       | 0.596             | 0.593      | -0.003 |
-| cohere-english-v3-10M      | 0.545             | 0.539      | -0.006 |
-| dpr-1M                     | 0.238             | 0.219      | -0.019 |
-| dpr-10M                    | 0.165             | 0.147      | -0.018 |
-
-One noticeable drop is on colbert-1M, which shows a ~6% decrease in recall. The issue is still under investigation.
+| Dataset              | Dim  | Build from Scratch | Compaction |  Delta |
+|----------------------|-----:|-------------------:|-----------:|-------:|
+| cap-6M               |  768 |              0.626 |      0.619 | -0.008 |
+| cap-1M               |  768 |              0.656 |      0.656 |  0.000 |
+| gecko-100k           |  768 |              0.690 |      0.701 | +0.011 |
+| e5-small-v2-100k     |  384 |              0.572 |      0.586 | +0.014 |
+| ada002-1M            | 1536 |              0.687 |      0.703 | +0.016 |
+| e5-base-v2-100k      |  768 |              0.676 |      0.692 | +0.016 |
+| cohere-english-v3-10M | 1024 |              0.544 |      0.561 | +0.017 |
+| e5-large-v2-100k     | 1024 |              0.686 |      0.703 | +0.017 |
+| ada002-100k          | 1536 |              0.751 |      0.769 | +0.018 |
+| cohere-english-v3-1M | 1024 |              0.593 |      0.612 | +0.019 |
 
 # Memory footprint
 
-All datasets above can be executed with ```-Xmx=5G```. In addition, compaction successfully scales to a dataset with 384 dimensions and 50M vectors (e.g., IBM DataPile) under the same memory constraint.
+All datasets above can be compacted under `COMPACT_ONLY` with `-Xmx5g`. In addition, compaction successfully scales to a dataset with 384 dimensions and 50M vectors under the same memory constraint.
 
