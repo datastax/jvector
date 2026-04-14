@@ -703,10 +703,7 @@ public class Grid {
                             topK,
                             overquery,
                             rerankK,
-                            logOutputs,
-                            false,
-                            null,
-                            null
+                            logOutputs
                     );
                 }
                 printer.printFooter();

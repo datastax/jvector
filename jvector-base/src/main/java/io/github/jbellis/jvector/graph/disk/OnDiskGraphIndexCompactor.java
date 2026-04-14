@@ -251,17 +251,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * if it is live; otherwise falls back to the first live node found across all sources.
      */
     private int resolveEntryNode() {
-        int originalEntry = sources.get(0).getView().entryNode().node;
-        if (liveNodes.get(0).get(originalEntry)) {
-            return remappers.get(0).oldToNew(originalEntry);
-        }
+        int maxLevel = sources.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
+
+        // The on-disk format sets entryNode.level = layerInfo.size() - 1 (i.e. maxLevel).
+        // So the chosen node must actually have neighbors written at maxLevel — meaning it
+        // must exist at maxLevel in its source.  Prefer the designated entry node of a
+        // maxLevel source; fall back to any live node that is at maxLevel.
         for (int s = 0; s < sources.size(); s++) {
-            int first = liveNodes.get(s).nextSetBit(0);
-            if (first != DocIdSetIterator.NO_MORE_DOCS) {
-                return remappers.get(s).oldToNew(first);
+            if (sources.get(s).getMaxLevel() == maxLevel) {
+                int originalEntry = sources.get(s).getView().entryNode().node;
+                if (liveNodes.get(s).get(originalEntry)) {
+                    return remappers.get(s).oldToNew(originalEntry);
+                }
             }
         }
-        throw new IllegalStateException("No live nodes found across all sources");
+
+        // Entry nodes were all deleted: scan for any live node that exists at maxLevel.
+        for (int s = 0; s < sources.size(); s++) {
+            if (sources.get(s).getMaxLevel() < maxLevel) continue;
+            NodesIterator it = sources.get(s).getNodes(maxLevel);
+            while (it.hasNext()) {
+                int node = it.next();
+                if (liveNodes.get(s).get(node)) {
+                    return remappers.get(s).oldToNew(node);
+                }
+            }
+        }
+
+        throw new IllegalStateException("No live nodes found at maxLevel=" + maxLevel);
     }
 
     /**

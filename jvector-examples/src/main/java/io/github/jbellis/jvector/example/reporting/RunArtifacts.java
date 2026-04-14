@@ -225,10 +225,7 @@ public final class RunArtifacts implements AutoCloseable {
                        int topK,
                        double overquery,
                        int rerankK,
-                       List<Metric> logOutputs,
-                       boolean compacted,
-                       Integer numSplits,
-                       String splitDistribution) {
+                       List<Metric> logOutputs) {
         if (experimentsWriter == null || run == null) {
             return;
         }
@@ -247,10 +244,7 @@ public final class RunArtifacts implements AutoCloseable {
                 usePruning,
                 topK,
                 overquery,
-                rerankK,
-                compacted,
-                numSplits,
-                splitDistribution
+                rerankK
         );
 
         try {

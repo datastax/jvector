@@ -18,8 +18,8 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.constructor.Constructor;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.Constructor;
 
 import java.io.*;
 import java.io.File;
@@ -35,7 +35,6 @@ import java.util.Map;
 public class MultiConfig {
     public ConstructionParameters construction;
     public SearchParameters search;
-    public TestDataPartition partitions = new TestDataPartition(1);
     public String dataset;
 
     private static final String defaultDirectory = "jvector-examples/yaml-configs/index-parameters/";
