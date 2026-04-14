@@ -29,7 +29,7 @@ import java.util.UUID;
 /**
  * Bootstraps a benchmark run directory and writes sys_info.json.
  *
- * This class creates a run_id/run_uuid, selects the logging directory from run.yml, captures basic
+ * This class creates a run_id/run_uuid, selects the logging directory from run-config.yml, captures basic
  * environment metadata (OS/JVM/CPU/SIMD/threads/memory), computes a stable system_id, and returns a
  * {@link RunContext} for downstream writers (dataset_info.csv, experiments.csv).
  */

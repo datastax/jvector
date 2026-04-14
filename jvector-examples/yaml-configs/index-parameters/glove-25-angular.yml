@@ -1,0 +1,26 @@
+# This is here for loader testing purposes only, use other datasets for realistic test data
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+dataset: glove-25-angular
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: None
+  reranking:
+    - NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 5.0, 10.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: None

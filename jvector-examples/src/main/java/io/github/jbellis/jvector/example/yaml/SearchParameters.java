@@ -23,6 +23,6 @@ public class SearchParameters extends CommonParameters {
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
 
-    // NOTE: benchmark compute + console/logging selection are now run-level (run.yml)
+    // NOTE: benchmark compute + console/logging selection are now run-level (run-config.yml)
     // and are no longer recognized in dataset configs.
 }

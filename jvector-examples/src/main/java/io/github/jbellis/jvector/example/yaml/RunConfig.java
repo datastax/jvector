@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Run-level configuration loaded from yaml-configs/run.yml.
+ * Run-level configuration loaded from yaml-configs/run-config.yml.
  *
  * This controls:
  * - benchmark computation (benchmarks)
@@ -36,7 +36,7 @@ import java.util.Map;
  */
 public class RunConfig {
     private static final String defaultDirectory = "jvector-examples/yaml-configs/";
-    private static final String defaultRunFile = "run.yml";
+    private static final String defaultRunFile = "run-config.yml";
 
     public int yamlSchemaVersion;
     public int onDiskIndexVersion;

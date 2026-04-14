@@ -94,11 +94,11 @@ public class BenchYAML {
             RunConfig runCfg = RunConfig.loadDefault();
             artifacts = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
-            // Legacy yamlSchemaVersion "0" behavior: no run.yml
+            // Legacy yamlSchemaVersion "0" behavior: no run-config.yml
             // - logging disabled
             // - console shows compute selection
             // - compute selection comes from legacy search.benchmarks if present, else default
-            System.err.println("WARNING: run.yml not found. Falling back to deprecated legacy behavior: "
+            System.err.println("WARNING: run-config.yml not found. Falling back to deprecated legacy behavior: "
                     + "no logging, console mirrors computed benchmarks.");
 
             Map<String, List<String>> legacyBenchmarks = null;
@@ -120,7 +120,7 @@ public class BenchYAML {
             String datasetName = config.dataset;
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
-            );
+            ).getDataSet();
             // Register dataset info the first time we actually load the dataset for benchmarking
             artifacts.registerDataset(datasetName, ds);
 

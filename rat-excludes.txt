@@ -24,6 +24,11 @@ src/test/resources/log4j2-test.xml
 results.csv
 scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
-yaml-configs/*.yml
+yaml-configs/**/*.yaml
+yaml-configs/**/*.yml
 src/main/resources/logback.xml
 docs/**/*.md
+yaml-configs/**/*.md
+local_datasets/**
+**/datasets/**
+

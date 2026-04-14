@@ -2,7 +2,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: glove-25-angular
+dataset: lastfm-64-dot
 
 construction:
   outDegree: [32]
@@ -12,14 +12,10 @@ construction:
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
-    - type: PQ
-      parameters:
-        mFactor: 4
-        centerData: No
-        anisotropicThreshold: -1.0
+    - type: None
   reranking:
     - NVQ
-  useSavedIndexIfExists: Yes
+  useSavedIndexIfExists: No
 
 search:
   topKOverquery:
@@ -27,8 +23,4 @@ search:
     100: [1.0, 2.0]
   useSearchPruning: [Yes]
   compression:
-    - type: PQ
-      parameters:
-        mFactor: 4
-        centerData: No
-        anisotropicThreshold: -1.0
+    - type: None

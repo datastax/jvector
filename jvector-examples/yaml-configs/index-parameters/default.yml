@@ -1,7 +1,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: ada002-100k
+dataset: default
 
 construction:
   outDegree: [32]
@@ -9,18 +9,18 @@ construction:
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
-  fusedGraph: [Yes, No]
+  fusedGraph: [No]
   compression:
     - type: PQ
       parameters:
-        m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
+        # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+        mFactor: 8
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
     - NVQ
-  useSavedIndexIfExists: No
+  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:
@@ -30,9 +30,10 @@ search:
   compression:
     - type: PQ
       parameters:
-        m: 192
+        # m: 192
+        mFactor: 8
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
 
-# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
+# Run-level controls, such as benchmarks, console, and logging, are in run-config.yml.

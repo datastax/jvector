@@ -62,7 +62,7 @@ public class LargerThanMemory {
         // the base vectors in-memory.
         DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
             new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
-        );
+        ).getDataSet();
 
         // Remember that RAVVs need not be in-memory in the general case.
         // We will sample from this RAVV to compute the PQ codebooks.

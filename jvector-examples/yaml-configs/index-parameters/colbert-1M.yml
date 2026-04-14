@@ -1,0 +1,27 @@
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+dataset: colbert-1M
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: None
+  reranking:
+    - NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 5.0, 10.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: None
+
+# Run-level controls, such as benchmarks, console, and logging, are in run-config.yml.

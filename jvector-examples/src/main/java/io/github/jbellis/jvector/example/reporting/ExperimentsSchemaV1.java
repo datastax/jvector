@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.Set;
 
 /**
@@ -30,17 +31,18 @@ import java.util.Set;
  * Output-key columns ({@code Metric.key} strings) are appended after these and are computed per run.
  */
 public final class ExperimentsSchemaV1 {
+    private static final Pattern CSV_SPECIAL_CHARS = Pattern.compile("[\\r\\n\",]");
+
     private ExperimentsSchemaV1() {}
 
     static String csvEscape(String s) {
         if (s == null) return "";
-        boolean needsQuotes =
-                s.indexOf(',') >= 0 ||
-                        s.indexOf('"') >= 0 ||
-                        s.indexOf('\n') >= 0 ||
-                        s.indexOf('\r') >= 0;
 
-        if (!needsQuotes) return s;
+        // Use a Matcher to check for existence
+        if (!CSV_SPECIAL_CHARS.matcher(s).find()) {
+            return s;
+        }
+
         return "\"" + s.replace("\"", "\"\"") + "\"";
     }
 

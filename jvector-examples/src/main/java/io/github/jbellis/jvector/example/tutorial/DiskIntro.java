@@ -52,7 +52,7 @@ public class DiskIntro {
         // This is a preconfigured dataset that will be downloaded automatically.
         DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
             new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
-        );
+        ).getDataSet();
 
         // The loaded DataSet provides a RAVV over the base vectors
         RandomAccessVectorValues ravv = dataset.getBaseRavv();

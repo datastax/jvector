@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderMFD;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
@@ -36,9 +36,9 @@ public class HelloVectorWorld {
         // Run-level policy config (benchmarks/console/logging + run metadata)
         RunConfig runCfg = RunConfig.loadDefault();
 
-        // Load dataset
-        var ds = new DataSetLoaderMFD().loadDataSet(datasetName)
-                .orElseThrow(() -> new RuntimeException("dataset " + datasetName + " not found"));
+        var ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                () -> new RuntimeException("dataset " + datasetName + " not found"))
+                .getDataSet();
 
         // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
         RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));

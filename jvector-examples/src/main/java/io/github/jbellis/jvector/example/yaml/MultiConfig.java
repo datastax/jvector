@@ -37,7 +37,7 @@ public class MultiConfig {
     public SearchParameters search;
     public String dataset;
 
-    private static final String defaultDirectory = "jvector-examples/yaml-configs/";
+    private static final String defaultDirectory = "jvector-examples/yaml-configs/index-parameters/";
     private static final java.util.regex.Pattern YAML_SCHEMA_VERSION_KEY =
             java.util.regex.Pattern.compile("(?m)^\\s*yamlSchemaVersion\\s*:");
 
@@ -127,7 +127,7 @@ public class MultiConfig {
         // Legacy yamlSchemaVersion "0": lenient parsing (ignore unknown fields like search.benchmarks)
         if (WARNED_LEGACY.compareAndSet(false, true)) {
             System.err.println("WARNING: Deprecated legacy YAML schema detected (no yamlSchemaVersion). "
-                    + "Unknown fields will be ignored. Please migrate configs to yamlSchemaVersion: 1 and run.yml.");
+                    + "Unknown fields will be ignored. Please migrate configs to yamlSchemaVersion: 1 and run-config.yml.");
         }
 
         try {
