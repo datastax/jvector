@@ -1,13 +1,13 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: dpr-10M
+dataset: dpr-1M
 
 construction:
   outDegree: [64]
   efConstruction: [200]
   neighborOverflow: [1.6f]
-  addHierarchy: [Yes]
+  addHierarchy: [No]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:

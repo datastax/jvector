@@ -7,7 +7,7 @@ construction:
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
-  addHierarchy: [Yes]
+  addHierarchy: [No]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
