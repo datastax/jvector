@@ -57,9 +57,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
     // Compaction constants
-    private static final int MIN_SAMPLES_PER_SOURCE = 1000;
     private static final float DIVERSITY_ALPHA_STEP = 0.2f;
-    // Removed MIN_BEAM_WIDTH constant; beam width is now degree-relative (see compactLevels)
     private static final int BEAM_WIDTH_MULTIPLIER = 2;
     private static final int TARGET_BATCHES_PER_SOURCE = 40;
     private static final int TARGET_NODES_PER_BATCH = 128;
@@ -111,7 +109,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.numLiveNodesPerSource.add(numLiveNodes);
         }
 
-        maxDegrees = this.sources.get(0).maxDegrees();
+        maxDegrees = this.sources.stream()
+                .max(Comparator.comparingInt(s -> s.maxDegrees().size()))
+                .orElseThrow()
+                .maxDegrees();
         dimension = this.sources.get(0).getDimension();
         for (var mapper : remappers) {
             maxOrdinal = max(mapper.maxOrdinal(), maxOrdinal);
@@ -170,15 +171,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void validateGraphConfiguration(List<OnDiskGraphIndex> sources) {
         int dimension = sources.get(0).getDimension();
-        var maxDegrees = sources.get(0).maxDegrees();
+        var refDegrees = sources.stream()
+                .max(Comparator.comparingInt(s -> s.maxDegrees().size()))
+                .orElseThrow()
+                .maxDegrees();
         var addHierarchy = sources.get(0).isHierarchical();
 
         for (OnDiskGraphIndex source : sources) {
             if (source.getDimension() != dimension) {
                 throw new IllegalArgumentException("sources must have the same dimension");
             }
-            for (int d = 0; d < maxDegrees.size(); d++) {
-                if (!Objects.equals(source.maxDegrees().get(d), maxDegrees.get(d))) {
+            int sharedLevels = Math.min(refDegrees.size(), source.maxDegrees().size());
+            for (int d = 0; d < sharedLevels; d++) {
+                if (!Objects.equals(source.maxDegrees().get(d), refDegrees.get(d))) {
                     throw new IllegalArgumentException("sources must have the same max degrees");
                 }
             }
@@ -382,6 +387,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         for (int s = 0; s < sources.size(); ++s) {
             var source = sources.get(s);
+            if (level > source.getMaxLevel()) continue;
             NodesIterator sourceNodes = source.getNodes(level);
             int numNodes = sourceNodes.size();
             int[] nodes = new int[numNodes];
@@ -649,6 +655,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         } else {
             var entry = searchView.entryNode();
+            if (level > entry.level) return candSize;
             scratch.gs[sourceIdx].initializeInternal(ssp, entry, Bits.ALL);
 
             // Descend greedily through levels above the target level, so the search at
@@ -764,11 +771,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * across all source indexes.
      */
     private List<CommonHeader.LayerInfo> computeLayerInfoFromSources() {
-        int maxLevel = sources.get(0).getMaxLevel();
+        int maxLevel = sources.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
         List<CommonHeader.LayerInfo> layerInfo = new ArrayList<>(maxLevel + 1);
         for (int level = 0; level <= maxLevel; level++) {
             int count = 0;
             for (int s = 0; s < sources.size(); s++) {
+                if (level > sources.get(s).getMaxLevel()) continue;
                 NodesIterator it = sources.get(s).getNodes(level);
                 FixedBitSet alive = liveNodes.get(s);
                 while (it.hasNext()) {
@@ -1115,14 +1123,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * Selects diverse neighbors from candidates using gradually increasing alpha threshold.
          * Update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
-         *
-         * @return the fraction of short edges (neighbors within alpha=1.0)
          */
-        public double retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs) {
+        public void retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs) {
             selectedCache.reset();
-            if (orderSize == 0) return Double.NaN;
+            if (orderSize == 0) return;
             int nSelected = 0;
-            double shortEdges = Double.NaN;
 
             // add diverse candidates, gradually increasing alpha to the threshold
             // (so that the nearest candidates are prioritized)
@@ -1142,15 +1147,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                 }
 
-                if (currentAlpha == 1.0f) {
-                    // this isn't threadsafe, but (for now) we only care about the result after calling cleanup(),
-                    // when we don't have to worry about concurrent changes
-                    shortEdges = nSelected / (float) maxDegree;
-                }
-
                 currentAlpha += DIVERSITY_ALPHA_STEP;
             }
-            return shortEdges;
         }
 
         /**
@@ -1343,10 +1341,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             long fileOffset = startOffset + headerSize + (long) ordinal * recordSize;
             bwriter.reset();
             bwriter.writeInt(ordinal);
-            //TODO: handle omitted nodes?
-            // write inline vector
-            //inlineVectorFeature.writeInline(bwriter, new InlineVectors.State(nw.vec));
-            //vectorTypeSupport.writeFloatVector(bwriter, nw.vec);
 
             for(int i = 0; i < vec.length(); ++i) {
                 bwriter.writeFloat(vec.get(i));
