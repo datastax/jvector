@@ -73,8 +73,5 @@ public class RunConfig {
         public String runId;     // optional template; supports "{ts}" (UTC). Default: "{ts}"
         public String jvectorRef; // tag/commit to record
         public String type;      // e.g. "csv"
-        public boolean sysStats; // optional background /proc stats
-        public boolean jfr;      // optional JFR recording
-        public boolean jfrObjectCount; // optional JFR heap occupancy snapshots
     }
 }

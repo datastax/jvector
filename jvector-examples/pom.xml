@@ -28,7 +28,7 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <configuration>
-                    <skip>true</skip>
+                    <skip>false</skip>
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
@@ -86,7 +86,6 @@
             <version>2.10.1</version>
         </dependency>
         <!-- SLF4J + Log4j2 for logging -->
-
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -177,7 +176,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>true</skip>
+                            <skip>false</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -255,7 +254,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>true</skip>
+                            <skip>false</skip>
                         </configuration>
                         <executions>
                             <execution>
@@ -384,7 +383,7 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <skip>true</skip>
+                            <skip>false</skip>
                         </configuration>
                         <executions>
                             <execution>

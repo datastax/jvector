@@ -18,8 +18,8 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.*;
 import java.io.File;
@@ -49,7 +49,6 @@ public class MultiConfig {
 
     private static final java.util.concurrent.atomic.AtomicReference<File> DEFAULT_FILE_USED =
             new java.util.concurrent.atomic.AtomicReference<>();
-
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
         var name = defaultDirectory + datasetName;

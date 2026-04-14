@@ -272,7 +272,6 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         System.out.println("\n=== BENCHMARK DIAGNOSTICS SUMMARY ===");
         System.out.printf("Diagnostic Level: %s%n", level);
         System.out.printf("System Snapshots: %d%n", snapshots.size());
-        System.out.printf("Disk Snapshots: %d%n", diskSnapshots.size());
         System.out.printf("Timing Analyses: %d%n", timingAnalyses.size());
 
         if (!snapshots.isEmpty()) {
@@ -296,19 +295,6 @@ public class BenchmarkDiagnostics implements AutoCloseable {
             System.out.printf("  Final Off-Heap: Direct=%s, Mapped=%s%n",
                 DiskUsageMonitor.formatBytes(last.memoryStats.directBufferMemory),
                 DiskUsageMonitor.formatBytes(last.memoryStats.mappedBufferMemory));
-        }
-
-        // Disk usage summary
-        if (!diskSnapshots.isEmpty()) {
-            DiskUsageMonitor.MultiDirectorySnapshot firstDisk = diskSnapshots.get(0);
-            DiskUsageMonitor.MultiDirectorySnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
-            DiskUsageMonitor.MultiDirectorySnapshot totalDisk = lastDisk.subtract(firstDisk);
-
-            System.out.printf("\nDisk Usage Summary:%n");
-            System.out.printf("  Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.getTotalBytes()));
-            System.out.printf("  Total Files: %d%n", lastDisk.getTotalFileCount());
-            System.out.printf("  Net Change: %s, %+d files%n",
-                DiskUsageMonitor.formatBytes(totalDisk.getTotalBytes()), totalDisk.getTotalFileCount());
         }
 
         // Performance variance analysis

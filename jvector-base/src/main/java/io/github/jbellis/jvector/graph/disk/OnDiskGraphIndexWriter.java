@@ -179,4 +179,5 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
             return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
         }
     }
+
 }
