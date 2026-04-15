@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import org.slf4j.Logger;
@@ -50,22 +51,7 @@ import java.util.stream.Collectors;
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
-
-    /**
-     * Returns a list of all dataset names.
-     * This replaces the need to load datasets.yml which may not be available in all environments.
-     */
-    private static List<String> getAllDatasetNames() {
-        List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
-        allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
-
-        return allDatasets;
-    }
+    private static final String REGRESSION_TEST_KEY = "regression-tests";
 
     public static void main(String[] args) throws IOException {
         // Check for --output argument (required for this class)
@@ -112,7 +98,8 @@ public class AutoBenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        var datasetNames = getAllDatasetNames().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetCollection = DatasetCollection.load();
+        var datasetNames = datasetCollection.getSection(REGRESSION_TEST_KEY).stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
@@ -148,7 +135,7 @@ public class AutoBenchYAML {
                             config.dataset = normalizedDatasetName;
                         }
                     } else {
-                        config = MultiConfig.getDefaultConfig("autoDefault");
+                        config = MultiConfig.getDefaultConfig(normalizedDatasetName);
                         config.dataset = normalizedDatasetName;
                     }
                     logger.info("Using configuration: {}", config);
