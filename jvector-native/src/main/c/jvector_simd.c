@@ -551,47 +551,125 @@ void calculate_partial_sums_best_euclidean_f32_512(const float* codebook, int co
  * accumulate tildeQ[qOffset + baseDim + i].
  *
  * The bitmap is stored as 64-bit words in allPackedVectors, starting at
- * index packedBase.  Each word covers 64 consecutive dimensions.
+ * index packedBase.  Each word covers 64 consecutive dimensions. Each 64-bit
+ * word is split into four 16-bit __mmask16 values (one per AVX-512 lane group)
+ * and _mm512_mask_add_ps conditionally accumulates only the live lanes.
  *
- * Hot path (safe words): every bit in the word maps to a valid dimension,
- * so four AVX-512 masked-add operations handle the full 64-bit chunk with
- * no bounds checking.  A scalar fallback covers any partial tail word that
- * arises when d is not a multiple of 64.
+ * Unrolling strategy mirrors PanamaVectorUtilSupport.ashMaskedAdd_512:
+ *   d >= 512 : 8 accumulators, 2-word unroll
+ *   d == 384 : 6 accumulators, 3-word unroll (word-1 is interleaved across
+ *              acc4/5 and acc0/1 to match the Java register-reuse pattern)
+ *   d >= 128 : 4 accumulators, no unrolling
+ *   d <  128 : 2 accumulators, no unrolling
+ *
+ * A cleanup loop handles any safe words left over after the unrolled section.
+ * A scalar fallback covers a partial tail word when d % 64 != 0.
  */
 float ash_masked_add_512(const float* tildeQ, int qOffset,
                          const long long* allPackedVectors, int packedBase,
                          int d, int words) {
+    const float* tq = tildeQ + qOffset;
+    int safeWords = d >> 6;   /* d / 64 — words where all 64 bits are valid */
+
+    /* Select accumulator count and unroll factor */
+    int numAcc       = (d >= 512) ? 8 : (d == 384 ? 6 : (d >= 128 ? 4 : 2));
+    int unrollFactor = (d == 384) ? 3 : (d >= 512 ? 2 : 1);
+
     __m512 acc0 = _mm512_setzero_ps();
     __m512 acc1 = _mm512_setzero_ps();
     __m512 acc2 = _mm512_setzero_ps();
     __m512 acc3 = _mm512_setzero_ps();
+    __m512 acc4 = _mm512_setzero_ps();
+    __m512 acc5 = _mm512_setzero_ps();
+    __m512 acc6 = _mm512_setzero_ps();
+    __m512 acc7 = _mm512_setzero_ps();
 
-    const float* tq = tildeQ + qOffset;
-    int safeWords = d >> 6;          /* d / 64 */
+    int w = 0;
 
-    for (int w = 0; w < safeWords; w++) {
+    /* ------------------------------------------------------------------
+     * Main unrolled loop
+     * ------------------------------------------------------------------ */
+    if (unrollFactor == 3) {
+        /* d == 384: 3-word unroll, 6 accumulators, interleaved word-1 */
+        for (; w <= safeWords - 3; w += 3) {
+            int base = w << 6;
+
+            unsigned long long wd0 = (unsigned long long)allPackedVectors[packedBase + w];
+            acc0 = _mm512_mask_add_ps(acc0, (__mmask16)( wd0        & 0xFFFFu), acc0, _mm512_loadu_ps(tq + base));
+            acc1 = _mm512_mask_add_ps(acc1, (__mmask16)((wd0 >> 16) & 0xFFFFu), acc1, _mm512_loadu_ps(tq + base + 16));
+            acc2 = _mm512_mask_add_ps(acc2, (__mmask16)((wd0 >> 32) & 0xFFFFu), acc2, _mm512_loadu_ps(tq + base + 32));
+            acc3 = _mm512_mask_add_ps(acc3, (__mmask16)( wd0 >> 48),            acc3, _mm512_loadu_ps(tq + base + 48));
+
+            unsigned long long wd1 = (unsigned long long)allPackedVectors[packedBase + w + 1];
+            int b1 = base + 64;
+            /* interleave: wd1[0,1] → acc4,acc5; wd1[2,3] → acc0,acc1 */
+            acc4 = _mm512_mask_add_ps(acc4, (__mmask16)( wd1        & 0xFFFFu), acc4, _mm512_loadu_ps(tq + b1));
+            acc5 = _mm512_mask_add_ps(acc5, (__mmask16)((wd1 >> 16) & 0xFFFFu), acc5, _mm512_loadu_ps(tq + b1 + 16));
+            acc0 = _mm512_mask_add_ps(acc0, (__mmask16)((wd1 >> 32) & 0xFFFFu), acc0, _mm512_loadu_ps(tq + b1 + 32));
+            acc1 = _mm512_mask_add_ps(acc1, (__mmask16)( wd1 >> 48),            acc1, _mm512_loadu_ps(tq + b1 + 48));
+
+            unsigned long long wd2 = (unsigned long long)allPackedVectors[packedBase + w + 2];
+            int b2 = base + 128;
+            acc2 = _mm512_mask_add_ps(acc2, (__mmask16)( wd2        & 0xFFFFu), acc2, _mm512_loadu_ps(tq + b2));
+            acc3 = _mm512_mask_add_ps(acc3, (__mmask16)((wd2 >> 16) & 0xFFFFu), acc3, _mm512_loadu_ps(tq + b2 + 16));
+            acc4 = _mm512_mask_add_ps(acc4, (__mmask16)((wd2 >> 32) & 0xFFFFu), acc4, _mm512_loadu_ps(tq + b2 + 32));
+            acc5 = _mm512_mask_add_ps(acc5, (__mmask16)( wd2 >> 48),            acc5, _mm512_loadu_ps(tq + b2 + 48));
+        }
+    } else if (unrollFactor == 2) {
+        /* d >= 512: 2-word unroll, 8 accumulators */
+        for (; w <= safeWords - 2; w += 2) {
+            int base = w << 6;
+
+            unsigned long long wd0 = (unsigned long long)allPackedVectors[packedBase + w];
+            acc0 = _mm512_mask_add_ps(acc0, (__mmask16)( wd0        & 0xFFFFu), acc0, _mm512_loadu_ps(tq + base));
+            acc1 = _mm512_mask_add_ps(acc1, (__mmask16)((wd0 >> 16) & 0xFFFFu), acc1, _mm512_loadu_ps(tq + base + 16));
+            acc2 = _mm512_mask_add_ps(acc2, (__mmask16)((wd0 >> 32) & 0xFFFFu), acc2, _mm512_loadu_ps(tq + base + 32));
+            acc3 = _mm512_mask_add_ps(acc3, (__mmask16)( wd0 >> 48),            acc3, _mm512_loadu_ps(tq + base + 48));
+
+            unsigned long long wd1 = (unsigned long long)allPackedVectors[packedBase + w + 1];
+            int b1 = base + 64;
+            acc4 = _mm512_mask_add_ps(acc4, (__mmask16)( wd1        & 0xFFFFu), acc4, _mm512_loadu_ps(tq + b1));
+            acc5 = _mm512_mask_add_ps(acc5, (__mmask16)((wd1 >> 16) & 0xFFFFu), acc5, _mm512_loadu_ps(tq + b1 + 16));
+            acc6 = _mm512_mask_add_ps(acc6, (__mmask16)((wd1 >> 32) & 0xFFFFu), acc6, _mm512_loadu_ps(tq + b1 + 32));
+            acc7 = _mm512_mask_add_ps(acc7, (__mmask16)( wd1 >> 48),            acc7, _mm512_loadu_ps(tq + b1 + 48));
+        }
+    }
+    /* else unrollFactor == 1: fall through directly to cleanup loop */
+
+    /* ------------------------------------------------------------------
+     * Cleanup loop: remaining safe words not handled by the unrolled section
+     * ------------------------------------------------------------------ */
+    for (; w < safeWords; w++) {
+        int base = w << 6;
         unsigned long long word = (unsigned long long)allPackedVectors[packedBase + w];
-        int base = w << 6;           /* w * 64 */
-
-        /* Split the 64-bit word into four 16-bit masks, one per AVX-512 lane group */
-        __mmask16 m0 = (__mmask16)( word        & 0xFFFFu);
-        __mmask16 m1 = (__mmask16)((word >> 16) & 0xFFFFu);
-        __mmask16 m2 = (__mmask16)((word >> 32) & 0xFFFFu);
-        __mmask16 m3 = (__mmask16)( word >> 48);
-
-        /* For each set bit i in mask mN: accN[i] += tq[base + N*16 + i] */
-        acc0 = _mm512_mask_add_ps(acc0, m0, acc0, _mm512_loadu_ps(tq + base));
-        acc1 = _mm512_mask_add_ps(acc1, m1, acc1, _mm512_loadu_ps(tq + base + 16));
-        acc2 = _mm512_mask_add_ps(acc2, m2, acc2, _mm512_loadu_ps(tq + base + 32));
-        acc3 = _mm512_mask_add_ps(acc3, m3, acc3, _mm512_loadu_ps(tq + base + 48));
+        acc0 = _mm512_mask_add_ps(acc0, (__mmask16)( word        & 0xFFFFu), acc0, _mm512_loadu_ps(tq + base));
+        acc1 = _mm512_mask_add_ps(acc1, (__mmask16)((word >> 16) & 0xFFFFu), acc1, _mm512_loadu_ps(tq + base + 16));
+        if (numAcc >= 4) {
+            acc2 = _mm512_mask_add_ps(acc2, (__mmask16)((word >> 32) & 0xFFFFu), acc2, _mm512_loadu_ps(tq + base + 32));
+            acc3 = _mm512_mask_add_ps(acc3, (__mmask16)( word >> 48),            acc3, _mm512_loadu_ps(tq + base + 48));
+        }
     }
 
-    /* Reduce the four accumulators into a single scalar */
-    float result = _mm512_reduce_add_ps(
-            _mm512_add_ps(_mm512_add_ps(acc0, acc1),
-                          _mm512_add_ps(acc2, acc3)));
+    /* ------------------------------------------------------------------
+     * Reduction tree — mirrors performReduction() in Java
+     * ------------------------------------------------------------------ */
+    __m512 vec;
+    if (numAcc == 8) {
+        vec = _mm512_add_ps(_mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3)),
+                            _mm512_add_ps(_mm512_add_ps(acc4, acc5), _mm512_add_ps(acc6, acc7)));
+    } else if (numAcc == 6) {
+        vec = _mm512_add_ps(_mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3)),
+                            _mm512_add_ps(acc4, acc5));
+    } else if (numAcc == 4) {
+        vec = _mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3));
+    } else {
+        vec = _mm512_add_ps(acc0, acc1);
+    }
+    float total = _mm512_reduce_add_ps(vec);
 
-    /* Scalar tail: handle partial last word when d is not a multiple of 64 */
+    /* ------------------------------------------------------------------
+     * Scalar tail: partial last word when d is not a multiple of 64
+     * ------------------------------------------------------------------ */
     if (safeWords < words) {
         unsigned long long word = (unsigned long long)allPackedVectors[packedBase + safeWords];
         int baseDim = safeWords << 6;
@@ -599,10 +677,10 @@ float ash_masked_add_512(const float* tildeQ, int qOffset,
             int bit = __builtin_ctzll(word);
             int idx = baseDim + bit;
             if (idx < d)
-                result += tq[idx];
+                total += tq[idx];
             word &= word - 1ULL;
         }
     }
 
-    return result;
+    return total;
 }
