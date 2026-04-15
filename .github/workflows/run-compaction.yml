@@ -93,10 +93,18 @@ jobs:
           SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
           echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
 
+          # Select the shaded JMH jar (exclude -javadoc and -sources jars)
+          JMH_JAR=$(ls benchmarks-jmh/target/benchmarks-jmh-*.jar | grep -Ev -- '-(javadoc|sources)\.jar$' | head -1)
+          if [[ -z "$JMH_JAR" ]]; then
+            echo "ERROR: No JMH jar found under benchmarks-jmh/target/"
+            exit 1
+          fi
+          echo "Using JMH jar: $JMH_JAR"
+
           java --enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector \
             -Djvector.experimental.enable_native_vectorization=true \
             -Xmx${HALF_MEM_GB}g \
-            -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+            -jar "$JMH_JAR" CompactorBenchmark \
             -p workloadMode=PARTITION_AND_COMPACT \
             -p datasetNames=$DATASET \
             -p numPartitions=4 \
