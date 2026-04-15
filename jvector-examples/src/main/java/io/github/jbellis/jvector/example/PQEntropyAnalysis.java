@@ -48,7 +48,6 @@ import java.util.concurrent.ForkJoinPool;
  *   <li>No scoring</li>
  *   <li>No SIMD assumptions</li>
  * </ul>
- * </p>
  */
 public class PQEntropyAnalysis {
 

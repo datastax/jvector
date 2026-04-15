@@ -101,19 +101,19 @@ public final class ASHScoreDebug {
     /**
      * Symmetric ASH–ASH dot-product approximation (C=1), consistent with:
      *  - g produces sign vectors in {-1,+1}^d (stored as bits b in {0,1}^d via s = 2b - 1)
-     *  - f(z) = d^{-1/2} A z implies <tilde x, tilde y> ≈ (1/d) <g(tilde x), g(tilde y)>
+     *  - f(z) = d^{-1/2} A z implies &lt;tilde x, tilde y&gt; ≈ (1/d) &lt;g(tilde x), g(tilde y)&gt;
      *
      * With stored header:
      *  - scale  = ||x-μ|| / sqrt(d)
-     *  - offset = <x, μ> - ||μ||^2
+     *  - offset = &lt;x, μ&gt; - ||μ||^2
      *
      * Centered dot term:
-     *  ||x-μ|| ||y-μ|| <tilde x, tilde y> ≈ (scale_x * scale_y) * <g_x, g_y>
+     *  ||x-μ|| ||y-μ|| &lt;tilde x, tilde y&gt; ≈ (scale_x * scale_y) * &lt;g_x, g_y&gt;
      *
-     * And <g_x, g_y> = 2*matches - d, where matches is XNOR-popcount of bit vectors.
+     * And &lt;g_x, g_y&gt; = 2*matches - d, where matches is XNOR-popcount of bit vectors.
      *
      * Full dot:
-     *  <x,y> ≈ scale_x*scale_y*(2*matches - d) + offset_x + offset_y + ||μ||^2
+     *  &lt;x,y&gt; ≈ scale_x*scale_y*(2*matches - d) + offset_x + offset_y + ||μ||^2
      */
     public static float symmetricDot(AsymmetricHashing.QuantizedVector v1,
                                      AsymmetricHashing.QuantizedVector v2,

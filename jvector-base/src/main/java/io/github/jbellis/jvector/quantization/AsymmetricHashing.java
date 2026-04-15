@@ -100,7 +100,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Index-wide immutable state
     // ---------------------------------------------------------------------
 
-    /** Number of landmarks (clusters), C<= 64 */
+    /** Number of landmarks (clusters), {@code C<= 64} */
     public final int landmarkCount;
 
     /** Landmark centroids μ_0... μ_{C−1} */
@@ -126,7 +126,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /**
      * Precomputed landmark projections in the reduced space:
-     *   landmarkProj[c][j] = <A[j], μ_c>  where A is [d][D] and μ_c is length D.
+     *   landmarkProj[c][j] = {@code <A[j], μ_c>}  where A is {@code [d][D]} and μ_c is length {@code D}.
      *
      * Shape: [landmarkCount][quantizedDim]
      */
@@ -1027,7 +1027,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * @param d dimensionality of the projected (embedding) space
      * @param rng random number generator used to sample G
      * @return a {@link StiefelTransform} containing W ∈ R^{D×d} with orthonormal columns
-     * @throws IllegalArgumentException if d <= 0 or d > D
+     * @throws IllegalArgumentException if {@code d <= 0} or {@code d > D}
      * @throws RuntimeException if the native SVD fails
      */
     public static StiefelTransform runWithoutTraining(int D, int d, Random rng) {
