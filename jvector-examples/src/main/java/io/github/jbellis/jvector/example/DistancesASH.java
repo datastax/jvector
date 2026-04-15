@@ -639,7 +639,7 @@ public class DistancesASH {
 
         var baseVectors = "siftsmall/siftsmall_base.fvecs";
         var queryVectors = "siftsmall/siftsmall_query.fvecs";
-        var gtVectors = "";
+        var gtVectors = "siftsmall/siftsmall_groundtruth.ivecs";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
@@ -664,9 +664,9 @@ public class DistancesASH {
     public static void runADA() throws IOException {
         System.out.println("Running ada-002");
 
-        var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
-        var gtVectors = "./fvec/ada-002/ada_002_100000_indices_query_10000.ivec";
+        var baseVectors = "/home/raghuveer/sync-folder/fvec/wikipedia_squad/100k/ada_002_100000_base_vectors.fvec";
+        var queryVectors = "/home/raghuveer/sync-folder/fvec/wikipedia_squad/100k/ada_002_100000_query_vectors_10000.fvec";
+        var gtVectors = "/home/raghuveer/sync-folder/fvec/wikipedia_squad/100k/ada_002_100000_indices_query_10000.ivec";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
@@ -729,11 +729,11 @@ public class DistancesASH {
 //        runGIST();
 //        runColbert();
 //        runCohere100k();
-//        runADA();
+        runADA();
 //        runADANoZeros();
 //        runOpenai1536();
 //        runOpenai3072();
 //        runCap6m();
-        runCohere10m();
+//        runCohere10m();
     }
 }
