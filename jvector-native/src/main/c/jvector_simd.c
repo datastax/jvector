@@ -545,3 +545,64 @@ void calculate_partial_sums_best_euclidean_f32_512(const float* codebook, int co
     }
     partialBestDistances[codebookIndex] = best;
 }
+
+/*
+ * ash_masked_add_512: For each set bit i in the packed bitmap,
+ * accumulate tildeQ[qOffset + baseDim + i].
+ *
+ * The bitmap is stored as 64-bit words in allPackedVectors, starting at
+ * index packedBase.  Each word covers 64 consecutive dimensions.
+ *
+ * Hot path (safe words): every bit in the word maps to a valid dimension,
+ * so four AVX-512 masked-add operations handle the full 64-bit chunk with
+ * no bounds checking.  A scalar fallback covers any partial tail word that
+ * arises when d is not a multiple of 64.
+ */
+float ash_masked_add_512(const float* tildeQ, int qOffset,
+                         const long long* allPackedVectors, int packedBase,
+                         int d, int words) {
+    __m512 acc0 = _mm512_setzero_ps();
+    __m512 acc1 = _mm512_setzero_ps();
+    __m512 acc2 = _mm512_setzero_ps();
+    __m512 acc3 = _mm512_setzero_ps();
+
+    const float* tq = tildeQ + qOffset;
+    int safeWords = d >> 6;          /* d / 64 */
+
+    for (int w = 0; w < safeWords; w++) {
+        unsigned long long word = (unsigned long long)allPackedVectors[packedBase + w];
+        int base = w << 6;           /* w * 64 */
+
+        /* Split the 64-bit word into four 16-bit masks, one per AVX-512 lane group */
+        __mmask16 m0 = (__mmask16)( word        & 0xFFFFu);
+        __mmask16 m1 = (__mmask16)((word >> 16) & 0xFFFFu);
+        __mmask16 m2 = (__mmask16)((word >> 32) & 0xFFFFu);
+        __mmask16 m3 = (__mmask16)( word >> 48);
+
+        /* For each set bit i in mask mN: accN[i] += tq[base + N*16 + i] */
+        acc0 = _mm512_mask_add_ps(acc0, m0, acc0, _mm512_loadu_ps(tq + base));
+        acc1 = _mm512_mask_add_ps(acc1, m1, acc1, _mm512_loadu_ps(tq + base + 16));
+        acc2 = _mm512_mask_add_ps(acc2, m2, acc2, _mm512_loadu_ps(tq + base + 32));
+        acc3 = _mm512_mask_add_ps(acc3, m3, acc3, _mm512_loadu_ps(tq + base + 48));
+    }
+
+    /* Reduce the four accumulators into a single scalar */
+    float result = _mm512_reduce_add_ps(
+            _mm512_add_ps(_mm512_add_ps(acc0, acc1),
+                          _mm512_add_ps(acc2, acc3)));
+
+    /* Scalar tail: handle partial last word when d is not a multiple of 64 */
+    if (safeWords < words) {
+        unsigned long long word = (unsigned long long)allPackedVectors[packedBase + safeWords];
+        int baseDim = safeWords << 6;
+        while (word != 0ULL) {
+            int bit = __builtin_ctzll(word);
+            int idx = baseDim + bit;
+            if (idx < d)
+                result += tq[idx];
+            word &= word - 1ULL;
+        }
+    }
+
+    return result;
+}

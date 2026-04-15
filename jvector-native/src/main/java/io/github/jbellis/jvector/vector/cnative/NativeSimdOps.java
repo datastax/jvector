@@ -847,4 +847,67 @@ public class NativeSimdOps {
             throw new AssertionError("should not reach here", ex$);
         }
     }
+
+    private static class ash_masked_add_512 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+                NativeSimdOps.C_FLOAT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("ash_masked_add_512");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * float ash_masked_add_512(const float *tildeQ, int qOffset, const long long *allPackedVectors, int packedBase, int d, int words)
+     * }
+     */
+    public static FunctionDescriptor ash_masked_add_512$descriptor() {
+        return ash_masked_add_512.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * float ash_masked_add_512(const float *tildeQ, int qOffset, const long long *allPackedVectors, int packedBase, int d, int words)
+     * }
+     */
+    public static MethodHandle ash_masked_add_512$handle() {
+        return ash_masked_add_512.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * float ash_masked_add_512(const float *tildeQ, int qOffset, const long long *allPackedVectors, int packedBase, int d, int words)
+     * }
+     */
+    public static MemorySegment ash_masked_add_512$address() {
+        return ash_masked_add_512.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * float ash_masked_add_512(const float *tildeQ, int qOffset, const long long *allPackedVectors, int packedBase, int d, int words)
+     * }
+     */
+    public static float ash_masked_add_512(MemorySegment tildeQ, int qOffset, MemorySegment allPackedVectors, int packedBase, int d, int words) {
+        var mh$ = ash_masked_add_512.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("ash_masked_add_512", tildeQ, qOffset, allPackedVectors, packedBase, d, words);
+            }
+            return (float)mh$.invokeExact(tildeQ, qOffset, allPackedVectors, packedBase, d, words);
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
 }

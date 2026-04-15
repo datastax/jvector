@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteOrder;
 
 import io.github.jbellis.jvector.annotations.Experimental;
@@ -103,5 +104,13 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         assert encoded.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + encoded.offset();
         // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
         return NativeSimdOps.pq_decoded_cosine_similarity_f32_512(((MemorySegmentByteSequence) encoded).get(), encodedOffset, encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
+    }
+
+    @Override
+    public float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words) {
+        return NativeSimdOps.ash_masked_add_512(
+                MemorySegment.ofArray(tildeQ), qOffset,
+                MemorySegment.ofArray(allPackedVectors), packedBase,
+                d, words);
     }
 }

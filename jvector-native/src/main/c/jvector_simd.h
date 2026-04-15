@@ -34,4 +34,5 @@ void calculate_partial_sums_dot_f32_512(const float* codebook, int codebookBase,
 void calculate_partial_sums_euclidean_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums);
 void calculate_partial_sums_best_dot_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums, float* partialBestDistances);
 void calculate_partial_sums_best_euclidean_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums, float* partialBestDistances);
+float ash_masked_add_512(const float* tildeQ, int qOffset, const long long* allPackedVectors, int packedBase, int d, int words);
 #endif
