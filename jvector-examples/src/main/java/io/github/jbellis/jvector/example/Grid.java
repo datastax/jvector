@@ -899,11 +899,17 @@ public class Grid {
                                             }
 
                                             if (!missing.isEmpty()) {
+                                                // Start peak memory tracking before building
+                                                diagnostics.startBuildMemoryTracking();
+                                                
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
                                                 var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
                                                         ds, outputDir, compressor, handles, null);
                                                 indexes.putAll(newIndexes);
+                                                
+                                                // Stop peak memory tracking after building
+                                                diagnostics.stopBuildMemoryTracking();
                                             }
 
                                             ImmutableGraphIndex index = indexes.get(features);
@@ -913,6 +919,7 @@ public class Grid {
                                             diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
                                             DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
+                                            var buildPeakMemory = diagnostics.getBuildPeakMemory();
 
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                                 int queryRuns = 2;
@@ -955,13 +962,12 @@ public class Grid {
                                                                 allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
                                                             }
 
-                                                            // Add memory metrics if available
-                                                            if (buildSnapshot != null) {
-                                                                allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
-                                                                allMetrics.put("Heap Memory Max (MB)", buildSnapshot.memoryStats.heapMax / 1024.0 / 1024.0);
-                                                                allMetrics.put("Off-Heap Direct (MB)", buildSnapshot.memoryStats.directBufferMemory / 1024.0 / 1024.0);
-                                                                allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
-                                                                allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
+                                                            // Add peak memory metrics from build phase if available
+                                                            if (buildPeakMemory != null) {
+                                                                allMetrics.put("Heap Memory Max (MB)", buildPeakMemory.peakHeapUsed / 1024.0 / 1024.0);
+                                                                allMetrics.put("Off-Heap Direct (MB)", buildPeakMemory.peakDirectBufferMemory / 1024.0 / 1024.0);
+                                                                allMetrics.put("Off-Heap Mapped (MB)", buildPeakMemory.peakMappedBufferMemory / 1024.0 / 1024.0);
+                                                                allMetrics.put("Total Off-Heap (MB)", buildPeakMemory.getTotalPeakOffHeapMemory() / 1024.0 / 1024.0);
                                                             }
 
                                                             // Add disk metrics if available

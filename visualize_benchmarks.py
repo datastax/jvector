@@ -24,7 +24,15 @@ from collections import defaultdict
 from typing import Dict, List, Any, Tuple, Optional
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, FuncFormatter
+
+# Try to import mplcursors for interactive tooltips
+try:
+    import mplcursors
+    MPLCURSORS_AVAILABLE = True
+except ImportError:
+    MPLCURSORS_AVAILABLE = False
+    print("Note: Install mplcursors for interactive tooltips: pip install mplcursors")
 
 
 # Define metrics where higher values are better and lower values are better
@@ -153,12 +161,18 @@ def generate_plots(benchmark_data: BenchmarkData, output_dir: str):
 
     # Create a plot for each metric
     for metric in benchmark_data.metrics:
-        plt.figure(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(12, 7))
+        
+        # Store line objects for interactive tooltips
+        lines = []
+        all_values = []
 
         # Plot one line per dataset
         for dataset in benchmark_data.datasets:
             releases, values = benchmark_data.get_metric_data_for_dataset(metric, dataset)
             if releases and values:
+                all_values.extend(values)
+                
                 # For QPS, try to add error bars using corresponding stddev column
                 if metric == "QPS":
                     std_releases, std_values = benchmark_data.get_metric_data_for_dataset("QPS StdDev", dataset)
@@ -166,23 +180,62 @@ def generate_plots(benchmark_data: BenchmarkData, output_dir: str):
                         # Align stddev values to the QPS releases order
                         std_map = {r: v for r, v in zip(std_releases, std_values)}
                         yerr = [std_map.get(r, 0.0) for r in releases]
-                        plt.errorbar(releases, values, yerr=yerr, marker='o', capsize=4, label=dataset)
+                        line = ax.errorbar(releases, values, yerr=yerr, marker='o', capsize=4, label=dataset)
+                        lines.append(line)
                     else:
-                        plt.plot(releases, values, marker='o', label=dataset)
+                        line, = ax.plot(releases, values, marker='o', label=dataset)
+                        lines.append(line)
                 else:
-                    plt.plot(releases, values, marker='o', label=dataset)
+                    line, = ax.plot(releases, values, marker='o', label=dataset)
+                    lines.append(line)
+                
+                # Annotate each data point with its value (2 decimal places)
+                for i, (release, value) in enumerate(zip(releases, values)):
+                    # Determine text position (alternate left/right to avoid overlap)
+                    if i % 2 == 0:
+                        ha = 'right'
+                        offset_x = -8
+                    else:
+                        ha = 'left'
+                        offset_x = 8
+                    
+                    ax.annotate(f'{value:.2f}',
+                               xy=(release, value),
+                               xytext=(offset_x, 5),
+                               textcoords='offset points',
+                               fontsize=8,
+                               ha=ha,
+                               va='bottom',
+                               bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                                       edgecolor='gray', alpha=0.7))
 
-        plt.title(f"{metric} Over Time")
-        plt.xlabel("Release")
-        plt.ylabel(metric)
+        # Format Y-axis to show 2 decimal places
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:.2f}'))
+        
+        # Add interactive tooltips if mplcursors is available
+        if MPLCURSORS_AVAILABLE and lines:
+            cursor = mplcursors.cursor(lines, hover=True)
+            @cursor.connect("add")
+            def on_add(sel):
+                # Get the dataset name from the line label
+                line = sel.artist
+                label = line.get_label()
+                x_val = sel.target[0]
+                y_val = sel.target[1]
+                sel.annotation.set_text(f'{label}\nRelease: {x_val}\nValue: {y_val:.2f}')
+                sel.annotation.get_bbox_patch().set(facecolor='yellow', alpha=0.9)
+
+        ax.set_title(f"{metric} Over Time")
+        ax.set_xlabel("Release")
+        ax.set_ylabel(metric)
         plt.xticks(rotation=45)
-        plt.grid(True, linestyle='--', alpha=0.7)
-        plt.legend()
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend()
         plt.tight_layout()
 
         # Save the plot
         safe_metric_name = metric.replace('@', '_at_').replace(' ', '_')
-        plt.savefig(os.path.join(output_dir, f"{safe_metric_name}.png"))
+        plt.savefig(os.path.join(output_dir, f"{safe_metric_name}.png"), dpi=150)
         plt.close()
 
     # Create a combined plot with aggregated values for comparison

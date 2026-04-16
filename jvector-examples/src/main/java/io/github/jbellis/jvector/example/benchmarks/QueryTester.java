@@ -88,27 +88,33 @@ public class QueryTester {
             }
 
             diagnostics.capturePrePhaseSnapshot("Query");
+            
+            // Start peak memory tracking before running queries
+            diagnostics.startQueryMemoryTracking();
 
             for (var benchmark : benchmarks) {
                 var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
                 results.addAll(metrics);
             }
+            
+            // Stop peak memory tracking after running queries
+            diagnostics.stopQueryMemoryTracking();
 
             // Capture memory and disk usage after running queries
             diagnostics.capturePostPhaseSnapshot("Query");
 
-            // Add memory and disk metrics to results
-            var systemSnapshot = diagnostics.getLatestSystemSnapshot();
+            // Add peak memory metrics to results
+            var queryPeakMemory = diagnostics.getQueryPeakMemory();
             var diskSnapshot = diagnostics.getLatestDiskSnapshot();
 
-            if (systemSnapshot != null) {
-                // Max heap usage in MB
+            if (queryPeakMemory != null) {
+                // Peak heap usage in MB during queries
                 results.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+                        queryPeakMemory.peakHeapUsed / (1024.0 * 1024.0)));
 
-                // Max off-heap usage (direct + mapped) in MB
+                // Peak off-heap usage (direct + mapped) in MB during queries
                 results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+                        queryPeakMemory.getTotalPeakOffHeapMemory() / (1024.0 * 1024.0)));
             }
 
             if (diskSnapshot != null) {
