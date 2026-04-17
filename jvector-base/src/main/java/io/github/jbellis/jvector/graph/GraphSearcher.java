@@ -123,7 +123,6 @@ public class GraphSearcher extends AbstractSearcher {
         }
     }
 
-    /** @deprecated Use {@link #GraphSearcher(GraphIndex.View)} directly */
     @Deprecated
     public static class Builder {
         private final ImmutableGraphIndex.View view;
