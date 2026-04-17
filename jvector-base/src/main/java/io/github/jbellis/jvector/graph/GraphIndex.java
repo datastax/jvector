@@ -144,6 +144,20 @@ public interface GraphIndex extends AutoCloseable, Accountable {
     }
 
     // -----------------------------------------------------------------------
+    // Search
+    // -----------------------------------------------------------------------
+
+    /**
+     * Returns a new {@link GraphSearcher} backed by this graph.
+     * <p>
+     * The returned searcher is <em>not</em> thread-safe; use one per thread.
+     * The caller is responsible for closing the searcher when done.
+     */
+    default GraphSearcher searcher() {
+        return new GraphSearcher(this);
+    }
+
+    // -----------------------------------------------------------------------
     // Utility
     // -----------------------------------------------------------------------
 
