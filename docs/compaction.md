@@ -175,10 +175,10 @@ Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-
 ## Recall 
 
 
-The table compares building from scratch with compaction under the following configurations (results averaged over three runs):
+Recall comparison (results averaged over three runs):
 
-- Build from scratch: build with PQ; search using FusedPQ with FP reranking.
-- Compaction: build source partitions with PQ; compact using FusedPQ with FP rescoring; search using FusedPQ with FP reranking.
+- Build from scratch: build one index over the full dataset with PQ scoring; search using FusedPQ with FP reranking.
+- Compaction: partition the dataset into 4 source indexes (Fibonacci distribution), build each with PQ scoring, then compact into one index; search using FusedPQ with FP reranking.
 
 | Dataset              | Dim  | Build from Scratch | Compaction |  Delta |
 |----------------------|-----:|-------------------:|-----------:|-------:|
