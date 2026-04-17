@@ -33,8 +33,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.GraphIndexWriterTypes;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
@@ -79,11 +78,10 @@ public class DiskIntro {
         Path graphPath = Files.createTempFile("jvector-example-graph", null);  // or wherever you want to save the graph
         try (
             // Create a writer for the on-heap graph we just built.
-            GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.RANDOM_ACCESS_PARALLEL, heapGraph, graphPath)
+            GraphIndex.WriteBuilder writer = heapGraph.writer(graphPath)
                 // Let the writer know that we'll also be passing in the actual vector data
                 // to be saved "inline" with the data for each corresponding graph node.
                 .with(new InlineVectors(dim))
-                .build();
         ) {
             // Supply one map entry for each feature.
             // The key is a FeatureId enum corresponding to the feature

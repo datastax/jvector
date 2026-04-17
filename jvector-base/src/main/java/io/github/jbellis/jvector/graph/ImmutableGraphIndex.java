@@ -24,262 +24,34 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.disk.IndexWriter;
 
-import java.util.List;
-import java.util.Objects;
-
-import java.io.Closeable;
-import java.io.IOException;
-import java.util.function.Function;
+import java.io.FileNotFoundException;
 
 /**
- * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
- * represented as adjacency lists.
+ * A sealed, fully-built graph index that can be persisted to disk.
  * <p>
- * Mostly this applies to any graph index, but a few methods (e.g. getVector()) are
- * specifically included to support the DiskANN-based design of OnDiskGraphIndex.
- * <p>
- * All methods are threadsafe.  Operations that require persistent state are wrapped
- * in a View that should be created per accessing thread.
+ * Implementations include {@code OnHeapGraphIndex} (built in memory) and
+ * {@code OnDiskGraphIndex} (already on disk).  Both support writing via
+ * {@link #writer(java.nio.file.Path)} (parallel/random-access) and
+ * {@link #writer(IndexWriter)} (sequential, e.g. for Cassandra/Lucene integration).
  */
-public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
-    /** Returns the number of nodes in the graph */
-    @Deprecated
-    default int size() {
-        return size(0);
-    }
+public interface ImmutableGraphIndex extends GraphIndex {
 
     /**
-     * Get all node ordinals included in the graph. The nodes are NOT guaranteed to be
-     * presented in any particular order.
-     *
-     * @return an iterator over nodes where {@code nextInt} returns the next node.
-     */
-    NodesIterator getNodes(int level);
-
-    /**
-     * Return a View with which to navigate the graph.  Views are not threadsafe -- that is,
-     * only one search at a time should be run per View.
+     * Returns a {@link WriteBuilder} that writes this graph sequentially to {@code out}.
      * <p>
-     * Additionally, the View represents a point of consistency in the graph, and in-use
-     * Views prevent the removal of marked-deleted nodes from graphs that are being
-     * concurrently modified.  Thus, it is good (and encouraged) to re-use Views for
-     * on-disk, read-only graphs, but for in-memory graphs, it is better to create a new
-     * View per search.
+     * Sequential writing is suitable for cloud object storage and frameworks such as
+     * Lucene or Cassandra that require or prefer sequential I/O. The header is written
+     * as a footer; the caller is responsible for flushing {@code out}.
      */
-    View getView();
-
-    /**
-     * @return the maximum number of edges per node across any layer
-     */
-    int maxDegree();
-
-    List<Integer> maxDegrees();
-
-    /**
-     * @return the dimension of the vectors in the graph
-     */
-    int getDimension();
-
-    /**
-     * @return the first ordinal greater than all node ids in the graph.  Equal to size() in simple cases;
-     * May be different from size() if nodes are being added concurrently, or if nodes have been
-     * deleted (and cleaned up).
-     */
-    default int getIdUpperBound() {
-        return size();
+    default WriteBuilder writer(IndexWriter out) throws FileNotFoundException {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " does not support sequential writing");
     }
 
-    /**
-     * @return true iff the graph contains the node with the given ordinal id
-     */
-    default boolean containsNode(int nodeId) {
-        return nodeId >= 0 && nodeId < size();
-    }
-
-    @Override
-    void close() throws IOException;
-
-
-    /**
-     * Returns true if this graph is hierarchical, false otherwise.
-     * Note that a graph can be hierarchical even if it has a single layer, i.e., getMaxLevel() == 0.
-     * For example, while building a new hierarchical graph, we may temporarily only have nodes at level 0
-     * because of the random assignment of nodes to levels.
-     */
-    boolean isHierarchical();
-
-    /**
-     * @return The maximum (coarser) level that contains a vector in the graph.
-     */
-    int getMaxLevel();
-
-    /**
-     * Return the maximum out-degree allowed of the given level.
-     * @param level The level of interest
-     * @return the maximum out-degree of the given level
-     */
-    int getDegree(int level);
-
-    /**
-     * Returns the average degree computed over nodes in the specified layer.
-     *
-     * @param level the level of interest.
-     * @return the average degree or NaN if no nodes are present.
-     */
-    double getAverageDegree(int level);
-
-    /**
-     * Return the number of vectors/nodes in the given level.
-     * @param level The level of interest
-     * @return the number of vectors in the given level
-     */
-    int size(int level);
-
-    /**
-     * The steps needed to process a neighbor during a search. That is, adding it to the priority queue, etc.
-     */
-    interface NeighborProcessor {
-        void process(int friendOrd, float similarity);
-    }
-
-    /**
-     * Serves as an abstract interface for marking nodes as visited
-     */
-    @FunctionalInterface
-    interface IntMarker {
-        /**
-         * Marks the node and returns true if it was not marked previously. Returns false otherwise
-         */
-        boolean mark(int value);
-    }
-
-    /**
-     * Encapsulates the state of a graph for searching.  Re-usable across search calls,
-     * but each thread needs its own.
-     */
-    interface View extends Closeable {
-        /**
-         * Iterator over the neighbors of a given node.  Only the most recently instantiated iterator
-         * is guaranteed to be valid.
-         */
-        NodesIterator getNeighborsIterator(int level, int node);
-
-        /**
-         * Iterates over the neighbors of a given node if they have not been visited yet.
-         * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
-         */
-        void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
-
-        /**
-         * This method is deprecated as most View usages should not need size.
-         * Where they do, they could access the graph.
-         * @return the number of nodes in the graph
-         */
-        @Deprecated
-        int size();
-
-        /**
-         * @return the node of the graph to start searches at
-         */
-        NodeAtLevel entryNode();
-
-        /**
-         * Return a Bits instance indicating which nodes are live.  The result is undefined for
-         * ordinals that do not correspond to nodes in the graph.
-         */
-        Bits liveNodes();
-
-        /**
-         * @return the largest ordinal id in the graph.  May be different from size() if nodes have been deleted.
-         */
-        default int getIdUpperBound() {
-            return size();
-        }
-
-        /**
-         * Whether the given node is present in the given layer of the graph.
-         */
-        boolean contains(int level, int node);
-    }
-
-    /**
-     * A View that knows how to compute scores against a query vector.  (This is all Views
-     * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
-     */
-    interface ScoringView extends View {
-        ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
-        ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
-    }
-
+    /** @deprecated use {@link GraphIndex#prettyPrint(GraphIndex)} */
+    @Deprecated
     static String prettyPrint(ImmutableGraphIndex graph) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(graph);
-        sb.append("\n");
-
-        try (var view = graph.getView()) {
-            for (int level = 0; level <= graph.getMaxLevel(); level++) {
-                sb.append(String.format("# Level %d\n", level));
-                NodesIterator it = graph.getNodes(level);
-                while (it.hasNext()) {
-                    int node = it.nextInt();
-                    sb.append("  ").append(node).append(" -> ");
-                    for (var neighbors = view.getNeighborsIterator(level, node); neighbors.hasNext(); ) {
-                        sb.append(" ").append(neighbors.nextInt());
-                    }
-                    sb.append("\n");
-                }
-                sb.append("\n");
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        return sb.toString();
-    }
-
-    // Comparable b/c it gets used in ConcurrentSkipListMap
-    final class NodeAtLevel implements Comparable<NodeAtLevel> {
-        public final int level;
-        public final int node;
-
-        public NodeAtLevel(int level, int node) {
-            assert level >= 0 : level;
-            assert node >= 0 : node;
-            this.level = level;
-            this.node = node;
-        }
-
-        @Override
-        public int compareTo(NodeAtLevel o) {
-            int cmp = Integer.compare(level, o.level);
-            if (cmp == 0) {
-                cmp = Integer.compare(node, o.node);
-            }
-            return cmp;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof NodeAtLevel)) return false;
-            NodeAtLevel that = (NodeAtLevel) o;
-            return level == that.level && node == that.node;
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(level, node);
-        }
-
-        @Override
-        public String toString() {
-            return "NodeAtLevel(level=" + level + ", node=" + node + ")";
-        }
+        return GraphIndex.prettyPrint(graph);
     }
 }

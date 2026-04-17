@@ -205,13 +205,13 @@ public class IPCService
         if (!ctx.isBulkLoad) {
             if (ctx.ravv.size() > 256) {
                 ctx.indexBuilder.cleanup();
-                ctx.index = flushGraphIndex(ctx.indexBuilder.getGraph(), ctx.ravv);
+                ctx.index = flushGraphIndex((ImmutableGraphIndex) ctx.indexBuilder.getGraph(), ctx.ravv);
                 ctx.cv = pqIndex(ctx.ravv, ctx);
                 ctx.indexBuilder = null;
                 ctx.ravv = null;
             } else { //Not enough data for PQ
                 ctx.indexBuilder.cleanup();
-                ctx.index = ctx.indexBuilder.getGraph();
+                ctx.index = (ImmutableGraphIndex) ctx.indexBuilder.getGraph();
                 ctx.cv = null;
             }
 

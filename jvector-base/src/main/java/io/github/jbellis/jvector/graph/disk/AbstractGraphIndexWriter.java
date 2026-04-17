@@ -42,7 +42,7 @@ import java.util.stream.Collectors;
  * Abstract base class for writing graph indexes to disk.
  * @param <T> the type of the output writer
  */
-public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements  GraphIndexWriter {
+abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphIndexWriter {
     /** A magic number to indicate the file footer */
     public static final int FOOTER_MAGIC = 0x4a564244;
     /** The size of the offset in the footer. */

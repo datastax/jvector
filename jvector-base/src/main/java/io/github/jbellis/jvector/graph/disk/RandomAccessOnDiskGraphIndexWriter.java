@@ -39,7 +39,7 @@ import java.util.function.IntFunction;
  *   <li>{@link OnDiskParallelGraphIndexWriter} - Parallel writing with async I/O</li>
  * </ul>
  */
-public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
+abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
     protected final long startOffset;
 
     /**

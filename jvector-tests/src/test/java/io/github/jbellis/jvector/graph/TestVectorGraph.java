@@ -277,7 +277,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
     private static void validateIndex(ImmutableGraphIndex graph) {
@@ -343,7 +343,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
     @Test
@@ -378,7 +378,7 @@ public class TestVectorGraph extends LuceneTestCase {
         }
         // We expect to get approximately 100% recall;
         // the lowest docIds are closest to zero; sum(0,9) = 45
-        assertTrue("sum(result docs)=" + sum + " for " + ImmutableGraphIndex.prettyPrint(builder.graph), sum < 75);
+        assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
     @Test
@@ -414,13 +414,13 @@ public class TestVectorGraph extends LuceneTestCase {
         int[] nodes = Arrays.stream(nn).mapToInt(nodeScore -> nodeScore.node).toArray();
         for (int node : nodes) {
             assertTrue(String.format("the results include a deleted document: %d for %s",
-                    node, ImmutableGraphIndex.prettyPrint(builder.graph)), acceptOrds.get(node));
+                    node, GraphIndex.prettyPrint(builder.graph)), acceptOrds.get(node));
         }
         for (int i = 0; i < acceptOrds.length(); i++) {
             if (acceptOrds.get(i)) {
                 int finalI = i;
                 assertTrue(String.format("the results do not include an accepted document: %d for %s",
-                        i, ImmutableGraphIndex.prettyPrint(builder.graph)), Arrays.stream(nodes).anyMatch(j -> j == finalI));
+                        i, GraphIndex.prettyPrint(builder.graph)), Arrays.stream(nodes).anyMatch(j -> j == finalI));
             }
         }
     }

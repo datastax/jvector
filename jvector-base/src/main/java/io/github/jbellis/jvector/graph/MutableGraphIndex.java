@@ -30,146 +30,105 @@ import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
 import java.util.List;
 import java.util.stream.IntStream;
 
-
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
- * speedups in construction and searching as you add threads.
- *
- * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
- * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
+ * A {@link GraphIndex} that accepts concurrent modifications during construction.
+ * <p>
+ * Typical graphs will see significant throughput improvements as additional threads
+ * are used for construction and searching.
+ * <p>
+ * The base layer (layer 0) contains all nodes; higher layers are stored in sparse maps.
+ * For searching, obtain a View via {@link #getView()} which supports level-aware operations.
  */
-interface MutableGraphIndex extends ImmutableGraphIndex {
-    /**
-     * Add the given node ordinal with an empty set of neighbors.
-     *
-     * <p>Nodes can be inserted out of order, but it requires that the nodes preceded by the node
-     * inserted out of order are eventually added.
-     *
-     * <p>Actually populating the neighbors, and establishing bidirectional links, is the
-     * responsibility of the caller.
-     *
-     * <p>It is also the responsibility of the caller to ensure that each node is only added once.
-     */
-    void addNode(NodeAtLevel nodeLevel);
+public interface MutableGraphIndex extends GraphIndex {
 
     /**
      * Add the given node ordinal with an empty set of neighbors.
-     *
-     * <p>Nodes can be inserted out of order, but it requires that the nodes preceded by the node
-     * inserted out of order are eventually added.
-     *
-     * <p>Actually populating the neighbors, and establishing bidirectional links, is the
-     * responsibility of the caller.
-     *
-     * <p>It is also the responsibility of the caller to ensure that each node is only added once.
+     * <p>
+     * Nodes may be inserted out of order, but all ordinals below the inserted node
+     * must eventually be added. Populating neighbors and establishing bidirectional
+     * links is the caller's responsibility, as is ensuring each node is added only once.
      */
+    void addNode(GraphIndex.NodeAtLevel nodeLevel);
+
+    /** @see #addNode(GraphIndex.NodeAtLevel) */
     void addNode(int level, int node);
 
-    /**
-     * Whether the given node is present in the graph.
-     */
-    boolean contains(NodeAtLevel nodeLevel);
+    /** @return true iff the given node is present in the graph */
+    boolean contains(GraphIndex.NodeAtLevel nodeLevel);
 
-    /**
-     * Whether the given node is present in the given layer of the graph.
-     */
+    /** @return true iff the given node is present at the given layer */
     boolean contains(int level, int node);
 
     /**
-     * Add the given node ordinal with an empty set of neighbors.
-     *
-     * <p>Nodes can be inserted out of order, but it requires that the nodes preceded by the node
-     * inserted out of order are eventually added.
-     *
-     * <p>Actually populating the neighbors, and establishing bidirectional links, is the
-     * responsibility of the caller.
-     *
-     * <p>It is also the responsibility of the caller to ensure that each node is only added once.
+     * Connect {@code node} at {@code level} to the given neighbor set.
+     * Use with extreme caution.
      */
     void connectNode(int level, int node, NodeArray nodes);
 
-    /**
-     * Use with extreme caution. Used by Builder to load a saved graph and for rescoring.
-     */
-    void connectNode(NodeAtLevel nodeLevel, NodeArray nodes);
+    /** @see #connectNode(int, int, NodeArray) */
+    void connectNode(GraphIndex.NodeAtLevel nodeLevel, NodeArray nodes);
 
-    /**
-     * Mark the given node deleted.  Does NOT remove the node from the graph.
-     */
+    /** Marks the given node as deleted. Does NOT remove it from the graph immediately. */
     void markDeleted(int node);
 
-    /** must be called after addNode once neighbors are linked in all levels. */
-    void markComplete(NodeAtLevel nodeLevel);
+    /** Must be called after {@link #addNode} once all neighbors are linked at all levels. */
+    void markComplete(GraphIndex.NodeAtLevel nodeLevel);
 
-    void updateEntryNode(NodeAtLevel newEntry);
+    void updateEntryNode(GraphIndex.NodeAtLevel newEntry);
 
-    /**
-     * Returns an upper bound on the amount of memory used by a single node, in bytes.
-     */
+    /** @return an upper bound on the RAM used by a single node, in bytes */
     long ramBytesUsedOneNode(int layer);
 
     ThreadSafeGrowableBitSet getDeletedNodes();
 
     void setDegrees(List<Integer> layerDegrees);
 
-    /**
-     * Enforce the degree of the given node in all layers.
-     */
+    /** Enforce the degree constraint on the given node across all layers. */
     void enforceDegree(int node);
 
-    /**
-     * Returns an iterator over the neighbors for the given node at the specified level, which can be empty if the node does not belong to that layer.
-     */
-    NodesIterator getNeighborsIterator(NodeAtLevel nodeLevel);
+    /** Returns an iterator over the neighbors of the given node at the given level. */
+    NodesIterator getNeighborsIterator(GraphIndex.NodeAtLevel nodeLevel);
 
-    /**
-     * Returns an iterator over the neighbors for the given node at the specified level, which can be empty if the node does not belong to that layer.
-     */
+    /** @see #getNeighborsIterator(GraphIndex.NodeAtLevel) */
     NodesIterator getNeighborsIterator(int level, int node);
 
     /**
      * Removes the given node from all layers.
      *
-     * @param node the node id to remove
      * @return the number of layers from which it was removed
      */
     int removeNode(int node);
 
-    /**
-     * Returns an Integer stream with the nodes contained in the specified level.
-     */
+    /** @return an IntStream of node ids contained in the given level */
     IntStream nodeStream(int level);
 
     /**
-     * Returns the maximum (coarser) level that contains a vector in the graph or -1 if the node is not in the graph.
+     * @return the maximum level containing this node, or -1 if the node is not in the graph
      */
     int getMaxLevelForNode(int node);
 
-    /**
-     * @return the node of the graph to start searches at
-     */
-    NodeAtLevel entryNode();
+    /** @return the current entry node for graph traversal */
+    GraphIndex.NodeAtLevel entryNode();
 
     /**
-     * Add the given neighbors to the given node at the specified level, maintaining diversity
-     * It also adds backlinks from the neighbors to the given node.
-     * The edges will only be added if the out-degree of the node is less than overflowRatio times the max degree.
+     * Adds the given neighbors to {@code node} at {@code level}, maintaining diversity.
+     * Also adds backlinks from the neighbors to {@code node}.
+     * Edges are only added while the out-degree is below {@code overflowRatio} times max degree.
      */
     void addEdges(int level, int node, NodeArray candidates, float overflowRatio);
 
     /**
-     * Remove edges to deleted nodes and add the new connections, maintaining diversity
+     * Removes edges to deleted nodes from {@code node} at {@code level} and
+     * replaces them with new connections, maintaining diversity.
      */
     void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
 
     /**
-     * Signals that all mutations have been completed and the graph will not be mutated any further.
-     * Should be called by the builder after all mutations are completed (during cleanup).
+     * Signals that all mutations are complete and the graph will not be mutated further.
+     * Should be called by the builder after cleanup.
      */
     void setAllMutationsCompleted();
 
-    /**
-     * Returns true if all mutations have been completed. This is signaled by calling setAllMutationsCompleted.
-     */
+    /** @return true if {@link #setAllMutationsCompleted()} has been called */
     boolean allMutationsCompleted();
 }

@@ -22,7 +22,7 @@ package io.github.jbellis.jvector.graph.disk;
  * Different writer types offer different tradeoffs between performance,
  * compatibility, and features.
  */
-public enum GraphIndexWriterTypes {
+enum GraphIndexWriterTypes {
     /**
      * Sequential on-disk writer optimized for write-once scenarios.
      * Writes all data sequentially without seeking back, making it suitable

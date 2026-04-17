@@ -53,7 +53,7 @@ import java.util.function.IntFunction;
  * <li> When we embed jVector in frameworks such as Lucene that rely on sequential writes for performance and correctness
  * </ul>
  */
-public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
+class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<IndexWriter> {
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,

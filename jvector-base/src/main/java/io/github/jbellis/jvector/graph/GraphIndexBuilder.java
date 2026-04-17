@@ -19,7 +19,8 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
+import org.agrona.collections.Int2IntHashMap;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -447,7 +448,7 @@ public class GraphIndexBuilder implements Closeable {
         }).join();
 
         cleanup();
-        return graph;
+        return (ImmutableGraphIndex) graph;
     }
     /**
      * Validates that the current entry node has been completely added.
@@ -540,8 +541,27 @@ public class GraphIndexBuilder implements Closeable {
         }
     }
 
-    public ImmutableGraphIndex getGraph() {
+    public MutableGraphIndex getGraph() {
         return graph;
+    }
+
+    /**
+     * Returns a mapping from old ordinals to new sequential ordinals, skipping any gaps
+     * in the ordinal space (e.g. from deleted nodes).
+     */
+    public static Map<Integer, Integer> sequentialRenumbering(GraphIndex graph) {
+        try (var view = graph.getView()) {
+            var oldToNewMap = new Int2IntHashMap(-1);
+            int nextOrdinal = 0;
+            for (int i = 0; i < view.getIdUpperBound(); i++) {
+                if (graph.containsNode(i)) {
+                    oldToNewMap.put(i, nextOrdinal++);
+                }
+            }
+            return oldToNewMap;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
@@ -1052,7 +1072,7 @@ public class GraphIndexBuilder implements Closeable {
             })).join();
 
             builder.cleanup();
-            return builder.getGraph();
+            return (ImmutableGraphIndex) builder.getGraph();
         }
     }
 }

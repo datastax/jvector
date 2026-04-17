@@ -27,15 +27,15 @@ public final class SearchResult {
     private final int visitedCount;
     private final int expandedCount;
     private final int expandedCountL0;
-    private final int rerankedCount;
+    private final int refinedCount;
     private final float worstApproximateScoreInTopK;
 
-    public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int rerankedCount, float worstApproximateScoreInTopK) {
+    public SearchResult(NodeScore[] nodes, int visitedCount, int expandedCount, int expandedCountL0, int refineCount, float worstApproximateScoreInTopK) {
         this.nodes = nodes;
         this.visitedCount = visitedCount;
         this.expandedCount = expandedCount;
         this.expandedCountL0 = expandedCountL0;
-        this.rerankedCount = rerankedCount;
+        this.refinedCount = refineCount;
         this.worstApproximateScoreInTopK = worstApproximateScoreInTopK;
     }
 
@@ -68,16 +68,16 @@ public final class SearchResult {
     }
 
     /**
-     * @return the number of nodes that were reranked during the search
+     * @return the number of nodes that were refined during the search
      */
-    public int getRerankedCount() {
-        return rerankedCount;
+    public int getRefinedCount() {
+        return refinedCount;
     }
 
     /**
      * @return the worst approximate score of the top K nodes in the search result.  Useful
-     * for passing to rerankFloor during search across multiple indexes.  Will be
-     * Float.POSITIVE_INFINITY if no reranking was performed or no results were found.
+     * for passing to refineFloor during search across multiple indexes.  Will be
+     * Float.POSITIVE_INFINITY if no refining was performed or no results were found.
      */
     public float getWorstApproximateScoreInTopK() {
         return worstApproximateScoreInTopK;
@@ -122,11 +122,11 @@ public final class SearchResult {
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) return false;
         SearchResult that = (SearchResult) o;
-        return visitedCount == that.visitedCount && rerankedCount == that.rerankedCount && Float.compare(worstApproximateScoreInTopK, that.worstApproximateScoreInTopK) == 0 && Objects.deepEquals(nodes, that.nodes);
+        return visitedCount == that.visitedCount && refinedCount == that.refinedCount && Float.compare(worstApproximateScoreInTopK, that.worstApproximateScoreInTopK) == 0 && Objects.deepEquals(nodes, that.nodes);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(Arrays.hashCode(nodes), visitedCount, rerankedCount, worstApproximateScoreInTopK);
+        return Objects.hash(Arrays.hashCode(nodes), visitedCount, refinedCount, worstApproximateScoreInTopK);
     }
 }

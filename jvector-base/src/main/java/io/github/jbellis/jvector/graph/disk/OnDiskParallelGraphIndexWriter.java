@@ -64,7 +64,7 @@ import java.util.function.IntFunction;
  * The class supports incremental writing through the writeInline method, which
  * allows writing features for individual nodes without writing the entire graph.
  */
-public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
+class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     private final Path filePath;
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;

@@ -25,8 +25,10 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.GraphIndexPersister;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -39,7 +41,9 @@ import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -59,7 +63,7 @@ import java.util.stream.IntStream;
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-public class OnHeapGraphIndex implements MutableGraphIndex {
+public class OnHeapGraphIndex implements MutableGraphIndex, ImmutableGraphIndex {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
@@ -295,6 +299,16 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public void close() {
         // No resources to close.
+    }
+
+    @Override
+    public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+        return new GraphIndexPersister(this, path);
+    }
+
+    @Override
+    public GraphIndex.WriteBuilder writer(IndexWriter out) {
+        return new GraphIndexPersister(this, out);
     }
 
     @Override

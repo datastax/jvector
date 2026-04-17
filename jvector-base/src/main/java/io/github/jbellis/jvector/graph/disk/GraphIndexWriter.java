@@ -41,7 +41,7 @@ import java.util.function.IntFunction;
  * @see OnDiskGraphIndexWriter
  * @see OnDiskSequentialGraphIndexWriter
  */
-public interface GraphIndexWriter extends Closeable {
+interface GraphIndexWriter extends Closeable {
     /**
      * Write the index header and completed edge lists to the given outputs.  Inline features given in
      * `featureStateSuppliers` will also be written.  (Features that do not have a supplier are assumed

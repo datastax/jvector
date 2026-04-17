@@ -17,8 +17,9 @@
 package io.github.jbellis.jvector;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.disk.GraphIndexPersister;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
@@ -27,7 +28,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -41,6 +42,7 @@ import org.apache.commons.lang3.NotImplementedException;
 
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
@@ -163,30 +165,30 @@ public class TestUtil {
     public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
                                        FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
                                        Path outputPath) throws IOException {
-        var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+        GraphIndex.WriteBuilder writer = graph.writer(outputPath)
                 .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
 
         if (oldToNewOrdinals != null) {
-            builder = builder.withMap(oldToNewOrdinals);
+            writer = writer.withMap(oldToNewOrdinals);
         }
 
         var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
         suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
 
         if (featureId == FeatureId.INLINE_VECTORS) {
-            builder.with(new InlineVectors(ravv.dimension()));
+            writer.with(new InlineVectors(ravv.dimension()));
             suppliers.put(featureId, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
         } else if (featureId == FeatureId.NVQ_VECTORS) {
             int nSubVectors = ravv.dimension() == 2 ? 1 : 2;
             var nvq = NVQuantization.compute(ravv, nSubVectors);
-            builder.with(new NVQ(nvq));
+            writer.with(new NVQ(nvq));
             suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(ravv.getVector(ordinal))));
         } else {
             throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for reranking");
         }
 
-        try (var finalWriter = builder.build()) {
-            finalWriter.write(suppliers);
+        try (var w = writer) {
+            w.write(suppliers);
         }
     }
 
@@ -199,7 +201,7 @@ public class TestUtil {
       return neighbors;
     }
 
-    static List<Integer> sortedNodes(ImmutableGraphIndex h, int level) {
+    static List<Integer> sortedNodes(GraphIndex h, int level) {
           var graphNodes = h.getNodes(level); // TODO
           List<Integer> nodes = new ArrayList<>();
           while (graphNodes.hasNext()) {
@@ -209,10 +211,10 @@ public class TestUtil {
           return nodes;
       }
 
-    public static void assertGraphEquals(ImmutableGraphIndex g, ImmutableGraphIndex h) {
+    public static void assertGraphEquals(GraphIndex g, GraphIndex h) {
         // construct these up front since they call seek which will mess up our test loop
-        String prettyG = ImmutableGraphIndex.prettyPrint(g);
-        String prettyH = ImmutableGraphIndex.prettyPrint(h);
+        String prettyG = GraphIndex.prettyPrint(g);
+        String prettyH = GraphIndex.prettyPrint(h);
         assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
                                    prettyG,
                                    prettyH),
@@ -260,7 +262,7 @@ public class TestUtil {
             builder.addGraphNode(i, vectors.getVector(i));
         }
         builder.cleanup();
-        return builder.getGraph();
+        return (ImmutableGraphIndex) builder.getGraph();
     }
 
     public static class FullyConnectedGraphIndex implements ImmutableGraphIndex {
@@ -382,6 +384,11 @@ public class TestUtil {
             public boolean contains(int level, int node) {
                 return node < layerSizes.get(level);
             }
+        }
+
+        @Override
+        public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+            return new GraphIndexPersister(this, path);
         }
 
         @Override
@@ -536,6 +543,11 @@ public class TestUtil {
 
             @Override
             public void close() { }
+        }
+
+        @Override
+        public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+            return new GraphIndexPersister(this, path);
         }
 
         @Override
