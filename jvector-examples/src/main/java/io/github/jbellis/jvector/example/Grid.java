@@ -673,9 +673,9 @@ public class Grid {
                 printer.resetTable();
 
                 for (var overquery : topKGrid.get(topK)) {
-                    int rerankK = (int) (topK * overquery);
+                    int refineK = (int) (topK * overquery);
 
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                    var results = tester.run(cs, topK, refineK, usePruning, queryRuns);
                     // Merge construction-phase metrics into the runtime results so selections can see them.
                     constructionMetrics.appendTo(results);
 
@@ -703,7 +703,7 @@ public class Grid {
                             usePruning,
                             topK,
                             overquery,
-                            rerankK,
+                            refineK,
                             logOutputs
                     );
                 }
@@ -847,7 +847,7 @@ public class Grid {
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                            // Encode vectors for reranking if a compressor is provided
+                                            // Encode vectors for refining if a compressor is provided
                                             CompressedVectors cvArg;
                                             if (features.contains(FeatureId.FUSED_PQ)) {
                                                 cvArg = null;
@@ -930,8 +930,8 @@ public class Grid {
                                                 for (int topK : topKGrid.keySet()) {
                                                     for (boolean usePruning : usePruningGrid) {
                                                         for (double overquery : topKGrid.get(topK)) {
-                                                            int rerankK = (int) (topK * overquery);
-                                                            List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
+                                                            int refineK = (int) (topK * overquery);
+                                                            List<Metric> metricsList = tester.run(cs, topK, refineK, usePruning, queryRuns);
                                                             Map<String, Object> params = new LinkedHashMap<>();
                                                             params.put("M", m);
                                                             params.put("efConstruction", ef);
@@ -1124,7 +1124,7 @@ public class Grid {
 
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            var rr = scoringView.refinerFor(queryVector, ds.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
         }
 

@@ -101,10 +101,10 @@ public class DiskIntro {
         // number of search results we want
         int topK = 10;
         for (float overqueryFactor : new float[]{1.0f, 1.5f, 2.0f, 5.0f, 10.0f}) {
-            // `rerankK` controls the number of nodes to fetch from the initial graph search.
+            // `refineK` controls the number of nodes to fetch from the initial graph search.
             // which are then re-ranked to return the actual topK results.
-            // Increasing rerankK improves accuracy at the cost of latency and throughput.
-            int rerankK = (int) (topK * overqueryFactor);
+            // Increasing refineK improves accuracy at the cost of latency and throughput.
+            int refineK = (int) (topK * overqueryFactor);
 
             try (GraphSearcher searcher = new GraphSearcher(graph)) {
                 // Views of an OnDiskGraphIndex with inline or separated vectors can be used as RAVVs!
@@ -117,8 +117,8 @@ public class DiskIntro {
                     // use the RAVV from the graph instead of the one from the original dataSet
                     SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, graphRavv);
                     // A slightly more complex overload of `search` which adds three extra parameters.
-                    // Right now we only care about `rerankK`.
-                    SearchResult sr = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+                    // Right now we only care about `refineK`.
+                    SearchResult sr = searcher.search(ssp, topK, refineK, 0.0f, 0.0f, Bits.ALL);
                     results.add(sr);
                 }
 

@@ -228,8 +228,8 @@ public interface GraphIndex extends AutoCloseable, Accountable {
      * Views except {@code OnHeapGraphIndex.ConcurrentGraphIndexView}.
      */
     interface ScoringView extends View {
-        ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
-                                                     VectorSimilarityFunction vsf);
+        ScoreFunction.ExactScoreFunction refinerFor(VectorFloat<?> queryVector,
+                                                    VectorSimilarityFunction vsf);
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector,
                                                                            VectorSimilarityFunction vsf);
     }

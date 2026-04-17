@@ -117,7 +117,7 @@ public final class LoggingSchemaPlanner {
                                        List<MultiConfig> allConfigs) {
         if (prefixes == null || prefixes.isEmpty()) return;
 
-        // Collect quant types from YAML configs (domain is defined by yaml `compression.type` and `reranking`)
+        // Collect quant types from YAML configs (domain is defined by yaml `compression.type` and `refining`)
         Set<String> indexQuantTypes = new HashSet<>();
         Set<String> searchQuantTypes = new HashSet<>();
         boolean wantsNVQ = false;
@@ -134,9 +134,9 @@ public final class LoggingSchemaPlanner {
                 }
             }
 
-            // construction reranking types (FP/NVQ)
-            if (cfg.construction != null && cfg.construction.reranking != null) {
-                if (cfg.construction.reranking.contains("NVQ")) {
+            // construction refining types (FP/NVQ)
+            if (cfg.construction != null && cfg.construction.refining != null) {
+                if (cfg.construction.refining.contains("NVQ")) {
                     wantsNVQ = true;
                 }
             }

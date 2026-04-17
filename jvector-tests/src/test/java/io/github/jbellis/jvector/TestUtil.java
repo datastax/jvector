@@ -184,7 +184,7 @@ public class TestUtil {
             writer.with(new NVQ(nvq));
             suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(ravv.getVector(ordinal))));
         } else {
-            throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for reranking");
+            throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for refining");
         }
 
         try (var w = writer) {

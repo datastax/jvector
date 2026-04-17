@@ -96,7 +96,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -117,7 +117,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             for (int i = 0; i < totalQueries; i++) {
                 long start = System.nanoTime();
                 SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
+                        cs, topK, refineK, usePruning, i);
                 long duration = System.nanoTime() - start;
                 // record latency for percentile computation
                 latencies.add(duration);

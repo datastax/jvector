@@ -928,7 +928,7 @@ public class GraphIndexBuilder implements Closeable {
 
                 var searchProvider = scoreProvider.searchProviderFor(nodeId);
                 ScoreFunction sf;
-                if (level > 0 || searchProvider.reranker() == null) {
+                if (level > 0 || searchProvider.refiner() == null) {
                     sf = searchProvider.scoreFunction();
                 } else {
                     sf = searchProvider.exactScoreFunction();
@@ -969,7 +969,7 @@ public class GraphIndexBuilder implements Closeable {
 
             var searchProvider = scoreProvider.searchProviderFor(nodeId);
             ScoreFunction sf;
-            if (searchProvider.reranker() == null) {
+            if (searchProvider.refiner() == null) {
                 sf = searchProvider.scoreFunction();
             } else {
                 sf = searchProvider.exactScoreFunction();

@@ -52,7 +52,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -67,7 +67,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
                     .parallel()
                     .forEach(i -> {
                         SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                                cs, topK, refineK, usePruning, i);
                         SINK += sr.getVisitedCount();
                     });
 

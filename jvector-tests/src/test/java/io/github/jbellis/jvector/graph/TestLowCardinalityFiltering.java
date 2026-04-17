@@ -88,7 +88,7 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
             VectorFloat<?> query = TestUtil.randomVector(R, dimensions);
             boolean queryClass = R.nextBoolean();
 
-            var sf = ravv.rerankerFor(query, similarityFunction);
+            var sf = ravv.refinerFor(query, similarityFunction);
             var result = searcher.search(new DefaultSearchScoreProvider(sf), topK, 0, bitSets.get(queryClass));
 
             float recall = getRecall(ravv, bitSets, similarityFunction, query, queryClass, topK, result);

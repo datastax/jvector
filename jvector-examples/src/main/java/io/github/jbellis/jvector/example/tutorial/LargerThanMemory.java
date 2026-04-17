@@ -174,7 +174,7 @@ public class LargerThanMemory {
 
             int topK = 10;
             for (float overqueryFactor : new float[]{4.0f, 8.0f, 16.0f, 32.0f, 64.0f}) {
-                int rerankK = (int) (topK * overqueryFactor);
+                int refineK = (int) (topK * overqueryFactor);
 
                 try (GraphSearcher searcher = new GraphSearcher(graph)) {
                     var graphRavv = (RandomAccessVectorValues) searcher.getView();
@@ -183,12 +183,12 @@ public class LargerThanMemory {
                     for (VectorFloat<?> query : dataset.getQueryVectors()) {
                         // Two-phase search:
                         // 1. ApproximateScoreFunction (ASF) uses compressed vectors for fast initial search
-                        // 2. Reranker uses full-resolution vectors from disk for accurate final ranking
+                        // 2. refiner uses full-resolution vectors from disk for accurate final ranking
                         var asf = pqVectorsSearch.precomputedScoreFunctionFor(query, vsf);
-                        var reranker = graphRavv.rerankerFor(query, vsf);
-                        SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf, reranker);
+                        var refiner = graphRavv.refinerFor(query, vsf);
+                        SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf, refiner);
 
-                        SearchResult sr = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+                        SearchResult sr = searcher.search(ssp, topK, refineK, 0.0f, 0.0f, Bits.ALL);
                         results.add(sr);
                     }
 

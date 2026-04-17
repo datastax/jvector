@@ -29,14 +29,14 @@ public class ConstructionParameters extends CommonParameters {
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
     public List<Boolean> refineFinalGraph;
-    public List<String> reranking;
+    public List<String> refining;
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
         List<EnumSet<FeatureId>> featureSets = null;
         for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
+            var newFeatures = refining.stream().map(item -> {
                 EnumSet<FeatureId> features;
 
                 switch (item) {

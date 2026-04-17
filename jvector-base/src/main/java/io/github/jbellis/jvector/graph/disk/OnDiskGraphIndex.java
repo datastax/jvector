@@ -684,20 +684,20 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
-        public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        public ScoreFunction.ExactScoreFunction refinerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
-                return RandomAccessVectorValues.super.rerankerFor(queryVector, vsf);
+                return RandomAccessVectorValues.super.refinerFor(queryVector, vsf);
             } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
-                return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).rerankerFor(queryVector, vsf, this);
+                return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).refinerFor(queryVector, vsf, this);
             } else {
-                throw new UnsupportedOperationException("No reranker available for this graph");
+                throw new UnsupportedOperationException("No refiner available for this graph");
             }
         }
 
         @Override
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.FUSED_PQ)) {
-                return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
+                return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, refinerFor(queryVector, vsf));
             } else {
                 throw new UnsupportedOperationException("No approximate score function available for this graph");
             }
