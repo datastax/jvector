@@ -122,7 +122,7 @@ Adjust `-Xmx` to fit the dataset in memory (e.g., 220g for large datasets).
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_AND_COMPACT \
   -p datasetNames=<dataset> \
@@ -140,7 +140,7 @@ To measure how little RAM compaction actually needs — without the dataset occu
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_ONLY \
   -p datasetNames=<dataset> \
@@ -154,7 +154,7 @@ java -Xmx220g --add-modules jdk.incubator.vector \
 
 ```bash
 java -Xmx5g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=COMPACT_ONLY \
   -p datasetNames=<dataset> \

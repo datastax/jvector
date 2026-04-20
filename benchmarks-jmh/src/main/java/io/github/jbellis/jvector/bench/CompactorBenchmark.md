@@ -39,7 +39,7 @@ The default mode builds partitions and immediately compacts them. Use this when 
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_AND_COMPACT \
   -p datasetNames=ada002-100k \
@@ -63,7 +63,7 @@ Run with a large heap since the full dataset must be loaded into memory.
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_ONLY \
   -p datasetNames=ada002-100k \
@@ -81,7 +81,7 @@ The dataset is **not** loaded in this mode. Use a small `-Xmx` to measure and pr
 
 ```bash
 java -Xmx5g --add-modules jdk.incubator.vector \
-  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=COMPACT_ONLY \
   -p datasetNames=ada002-100k \

@@ -93,13 +93,10 @@ jobs:
           SAFE_BRANCH=$(echo "${{ matrix.branch }}" | sed 's/[^A-Za-z0-9_-]/_/g')
           echo "safe_branch=$SAFE_BRANCH" >> $GITHUB_OUTPUT
 
-          JMH_JAR=$(ls benchmarks-jmh/target/benchmarks-jmh-*.jar | grep -Ev -- '-(javadoc|sources)\.jar$' | head -1)
-          echo "Using JMH jar: $JMH_JAR"
-
           java --enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector \
             -Djvector.experimental.enable_native_vectorization=true \
             -Xmx${HALF_MEM_GB}g \
-            -cp "$JMH_JAR" \
+            -cp benchmarks-jmh/target/compactor-benchmark.jar \
             io.github.jbellis.jvector.bench.CompactorBenchmark \
             -p workloadMode=PARTITION_AND_COMPACT \
             -p datasetNames=$DATASET \
