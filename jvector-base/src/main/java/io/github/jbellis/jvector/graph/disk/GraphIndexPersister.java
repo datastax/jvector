@@ -165,7 +165,7 @@ public class GraphIndexPersister implements GraphIndex.WriteBuilder {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    private RandomAccessOnDiskGraphIndexWriter getOrCreateRandomAccessWriter() throws IOException {
+    private synchronized RandomAccessOnDiskGraphIndexWriter getOrCreateRandomAccessWriter() throws IOException {
         if (lazyWriter == null) {
             lazyWriter = buildRandomAccessWriter();
         }
