@@ -42,7 +42,7 @@ import java.io.IOException;
  */
 abstract class AbstractSearcher implements Searcher {
 
-    protected ImmutableGraphIndex.View view;
+    protected PersistableGraphIndex.View view;
 
     // Scratch data structures reused across search() calls
     private final NodeQueue candidates;
@@ -222,7 +222,7 @@ abstract class AbstractSearcher implements Searcher {
                 expandedCount++;
 
                 var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                PersistableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
                     scoreTracker.track(score);
                     candidates.push(node2, score);
                     visitedCount++;

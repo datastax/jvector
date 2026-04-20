@@ -36,7 +36,7 @@ import java.io.FileNotFoundException;
  * {@link #writer(java.nio.file.Path)} (parallel/random-access) and
  * {@link #writer(IndexWriter)} (sequential, e.g. for Cassandra/Lucene integration).
  */
-public interface ImmutableGraphIndex extends GraphIndex {
+public interface PersistableGraphIndex extends GraphIndex {
 
     /**
      * Returns a {@link WriteBuilder} that writes this graph sequentially to {@code out}.
@@ -51,7 +51,7 @@ public interface ImmutableGraphIndex extends GraphIndex {
 
     /** @deprecated use {@link GraphIndex#prettyPrint(GraphIndex)} */
     @Deprecated
-    static String prettyPrint(ImmutableGraphIndex graph) {
+    static String prettyPrint(PersistableGraphIndex graph) {
         return GraphIndex.prettyPrint(graph);
     }
 }

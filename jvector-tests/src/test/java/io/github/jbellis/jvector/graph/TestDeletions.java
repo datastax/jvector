@@ -65,7 +65,7 @@ public class TestDeletions extends LuceneTestCase {
         // check that asking for the entire graph back still doesn't surface the deleted one
         var v = ravv.getVector(n).copy();
         var results = GraphSearcher.search(v, ravv.size(), ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
-        assertEquals(ImmutableGraphIndex.prettyPrint(graph), ravv.size() - 1, results.getNodes().length);
+        assertEquals(PersistableGraphIndex.prettyPrint(graph), ravv.size() - 1, results.getNodes().length);
         for (var ns : results.getNodes()) {
             assertNotEquals(n, ns.node);
         }

@@ -52,7 +52,7 @@ import java.util.function.IntFunction;
  * <p>
  * Subtypes:
  * <ul>
- *   <li>{@link ImmutableGraphIndex} – a sealed, fully-built graph that can be persisted.</li>
+ *   <li>{@link PersistableGraphIndex} – a sealed, fully-built graph that can be persisted.</li>
  *   <li>{@link MutableGraphIndex} – a live graph that accepts concurrent modifications.</li>
  * </ul>
  */
@@ -292,7 +292,7 @@ public interface GraphIndex extends AutoCloseable, Accountable {
      * Fluent builder for persisting a {@link GraphIndex} to disk.
      * <p>
      * Obtain an instance via {@link GraphIndex#writer(Path)} or
-     * {@link ImmutableGraphIndex#writer(IndexWriter)} (for sequential writes).
+     * {@link PersistableGraphIndex#writer(IndexWriter)} (for sequential writes).
      * Configuration methods must be called before the first call to
      * {@link #writeFeaturesInline} or {@link #write}.
      */

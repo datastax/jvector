@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -34,7 +34,7 @@ import java.util.function.IntFunction;
  * <p>
  * Implementations support different strategies for writing graph data,
  * including random access, sequential, and parallel writing modes.
- * Use {@link #getBuilderFor(GraphIndexWriterTypes, ImmutableGraphIndex, Path)}
+ * Use {@link #getBuilderFor(GraphIndexWriterTypes, PersistableGraphIndex, Path)}
  * factory methods to obtain appropriate builder instances.
  *
  * @see GraphIndexWriterTypes
@@ -64,7 +64,7 @@ interface GraphIndexWriter extends Closeable {
      * @throws IllegalArgumentException if the type requires a specific writer type that wasn't provided
      */
     static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends RandomAccessWriter>
-            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, Path out) throws FileNotFoundException {
+            getBuilderFor(GraphIndexWriterTypes type, PersistableGraphIndex graphIndex, Path out) throws FileNotFoundException {
         switch (type) {
             case RANDOM_ACCESS:
                 return new OnDiskGraphIndexWriter.Builder(graphIndex, out);
@@ -76,7 +76,7 @@ interface GraphIndexWriter extends Closeable {
     }
 
     static AbstractGraphIndexWriter.Builder<? extends AbstractGraphIndexWriter<?>, ? extends IndexWriter>
-            getBuilderFor(GraphIndexWriterTypes type, ImmutableGraphIndex graphIndex, IndexWriter out) {
+            getBuilderFor(GraphIndexWriterTypes type, PersistableGraphIndex graphIndex, IndexWriter out) {
         switch (type) {
             case ON_DISK_SEQUENTIAL:
                 return new OnDiskSequentialGraphIndexWriter.Builder(graphIndex, out);

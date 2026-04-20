@@ -58,7 +58,7 @@ public class GraphSearcher extends AbstractSearcher {
     /**
      * Returns the graph view currently being searched.
      */
-    public ImmutableGraphIndex.View getView() {
+    public PersistableGraphIndex.View getView() {
         return view;
     }
 
@@ -69,7 +69,7 @@ public class GraphSearcher extends AbstractSearcher {
      *
      * @param view the new view to use
      */
-    public void setView(ImmutableGraphIndex.View view) {
+    public void setView(PersistableGraphIndex.View view) {
         this.view = view;
     }
 
@@ -101,7 +101,7 @@ public class GraphSearcher extends AbstractSearcher {
      * One-off convenience search with exact scoring and no refining.
      * The caller must be the unique owner of the {@code vectors} instance.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, PersistableGraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
@@ -114,7 +114,7 @@ public class GraphSearcher extends AbstractSearcher {
      * One-off convenience search with exact scoring and a refine pass.
      * The caller must be the unique owner of the {@code vectors} instance.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, int refineK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, int refineK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, PersistableGraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, refineK, 0.f, 0.f, acceptOrds);
@@ -125,9 +125,9 @@ public class GraphSearcher extends AbstractSearcher {
 
     @Deprecated
     public static class Builder {
-        private final ImmutableGraphIndex.View view;
+        private final PersistableGraphIndex.View view;
 
-        public Builder(ImmutableGraphIndex.View view) {
+        public Builder(PersistableGraphIndex.View view) {
             this.view = view;
         }
 

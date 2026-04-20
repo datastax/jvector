@@ -37,7 +37,7 @@ import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -253,7 +253,7 @@ public class Grid {
             String buildCompressorString =
                     (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
 
-            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+            Map<Set<FeatureId>, PersistableGraphIndex> indexes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
             } else {
@@ -365,7 +365,7 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
+    private static Map<Set<FeatureId>, PersistableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
                                                                         int M,
                                                                         int efConstruction,
                                                                         float neighborOverflow,
@@ -466,7 +466,7 @@ public class Grid {
         }
 
         // open indexes
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, PersistableGraphIndex> indexes = new HashMap<>();
         n = 0;
         for (var features : featureSets) {
             Path loadPath = handles.containsKey(features)
@@ -549,7 +549,7 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
+    private static Map<Set<FeatureId>, PersistableGraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
                                                                           int M,
                                                                           int efConstruction,
                                                                           float neighborOverflow,
@@ -560,7 +560,7 @@ public class Grid {
             throws IOException
     {
         var floatVectors = ds.getBaseRavv();
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, PersistableGraphIndex> indexes = new HashMap<>();
         long start;
         var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
@@ -843,7 +843,7 @@ public class Grid {
                                             diagnostics.startMonitoring("testDirectory", testDirectory);
                                             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
-                                            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+                                            Map<Set<FeatureId>, PersistableGraphIndex> indexes = new HashMap<>();
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
@@ -907,7 +907,7 @@ public class Grid {
                                                 indexes.putAll(newIndexes);
                                             }
 
-                                            ImmutableGraphIndex index = indexes.get(features);
+                                            PersistableGraphIndex index = indexes.get(features);
 
                                             // Capture post-build state
                                             diagnostics.capturePostPhaseSnapshot("Build");
@@ -1096,7 +1096,7 @@ public class Grid {
 
     public static class ConfiguredSystem implements AutoCloseable {
         DataSet ds;
-        ImmutableGraphIndex index;
+        PersistableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
 
@@ -1104,15 +1104,15 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(DataSet ds, PersistableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
         }
 
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            var scoringView = (ImmutableGraphIndex.ScoringView) view;
+        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, PersistableGraphIndex.View view) {
+            var scoringView = (PersistableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());

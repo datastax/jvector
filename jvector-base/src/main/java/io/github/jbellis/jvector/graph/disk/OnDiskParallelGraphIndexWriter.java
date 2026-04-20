@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -87,7 +87,7 @@ class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter 
     OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   ImmutableGraphIndex graph,
+                                   PersistableGraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features,
@@ -118,7 +118,7 @@ class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter 
      */
     @Experimental
     @Override
-    protected void writeL0Records(ImmutableGraphIndex.View view,
+    protected void writeL0Records(PersistableGraphIndex.View view,
                                 Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // Flush writer before async writes to ensure buffered data is on disk
         // This is critical when using AsynchronousFileChannel in parallel with BufferedRandomAccessWriter
@@ -174,7 +174,7 @@ class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter 
         private int parallelWorkerThreads = 0;
         private boolean parallelUseDirectBuffers = false;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(PersistableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
             this.filePath = outPath;
         }

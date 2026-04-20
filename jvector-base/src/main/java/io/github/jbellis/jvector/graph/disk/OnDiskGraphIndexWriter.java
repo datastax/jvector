@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -79,7 +79,7 @@ class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   ImmutableGraphIndex graph,
+                                   PersistableGraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features)
@@ -91,7 +91,7 @@ class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
      * Writes L0 records sequentially
      */
     @Override
-    protected void writeL0Records(ImmutableGraphIndex.View view,
+    protected void writeL0Records(PersistableGraphIndex.View view,
                                           Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
@@ -157,11 +157,11 @@ class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(PersistableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             this(graphIndex, new BufferedRandomAccessWriter(outPath));
         }
 
-        public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
+        public Builder(PersistableGraphIndex graphIndex, RandomAccessWriter out) {
             super(graphIndex, out);
         }
 

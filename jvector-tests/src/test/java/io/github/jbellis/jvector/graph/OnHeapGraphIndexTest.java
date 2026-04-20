@@ -79,8 +79,8 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
     private ArrayList<int[]> groundTruthAllVectors;
     private BuildScoreProvider baseBuildScoreProvider;
     private BuildScoreProvider allBuildScoreProvider;
-    private ImmutableGraphIndex baseGraphIndex;
-    private ImmutableGraphIndex allGraphIndex;
+    private PersistableGraphIndex baseGraphIndex;
+    private PersistableGraphIndex allGraphIndex;
 
     @Before
     public void setup() throws IOException {
@@ -266,7 +266,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
             // We will create a trivial 1:1 mapping between the new graph and the ravv
             final int[] graphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).toArray();
             final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, graphToRavvOrdMap);
-            ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+            PersistableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBuildScoreProvider, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
 
             // Verify that the recall is similar across multiple queries
             // Note: Incremental insertion can have slightly different recall than bulk indexing due to the order of insertions
@@ -316,7 +316,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
                 final int[] allGraphToRavvOrdMap = IntStream.range(0, allVectorsRavv.size()).map(i -> allVectorsRavv.size() - 1 - i).toArray();
                 final RemappedRandomAccessVectorValues remappedAllVectorsRavv = new RemappedRandomAccessVectorValues(allVectorsRavv, allGraphToRavvOrdMap);
                 var allBsp = BuildScoreProvider.randomAccessScoreProvider(remappedAllVectorsRavv, SIMILARITY_FUNCTION);
-                ImmutableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+                PersistableGraphIndex reconstructedAllNodeOnHeapGraphIndex = GraphIndexBuilder.buildAndMergeNewNodes(readerSupplier.get(), remappedAllVectorsRavv, allBsp, NUM_BASE_VECTORS, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
 
                 // Verify that the recall is similar across multiple queries
                 // Note: Non-identity mapping can have slightly lower recall due to the complexity of merging with remapped ordinals
@@ -370,7 +370,7 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
      * @param graphToRavvOrdMap optional mapping from graph node IDs to RAVV ordinals
      * @return the average recall across all queries
      */
-    private static float calculateAverageRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider,
+    private static float calculateAverageRecall(PersistableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider,
                                                 ArrayList<VectorFloat<?>> queryVectors, ArrayList<int[]> groundTruths,
                                                 int k, int[] graphToRavvOrdMap) throws IOException {
         float totalRecall = 0.0f;
@@ -380,11 +380,11 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         return totalRecall / queryVectors.size();
     }
 
-    private static float calculateRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k) throws IOException {
+    private static float calculateRecall(PersistableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k) throws IOException {
         return calculateRecall(graphIndex, buildScoreProvider, queryVector, groundTruth, k, null);
     }
 
-    private static float calculateRecall(ImmutableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k, int[] graphToRavvOrdMap) throws IOException {
+    private static float calculateRecall(PersistableGraphIndex graphIndex, BuildScoreProvider buildScoreProvider, VectorFloat<?> queryVector, int[] groundTruth, int k, int[] graphToRavvOrdMap) throws IOException {
         try (GraphSearcher graphSearcher = new GraphSearcher(graphIndex)){
             SearchScoreProvider ssp = buildScoreProvider.searchProviderFor(queryVector);
             var searchResults = graphSearcher.search(ssp, k, Bits.ALL);

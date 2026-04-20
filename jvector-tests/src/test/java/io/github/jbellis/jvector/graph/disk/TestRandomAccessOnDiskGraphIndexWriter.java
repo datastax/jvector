@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -92,7 +92,7 @@ public class TestRandomAccessOnDiskGraphIndexWriter extends LuceneTestCase {
                 alpha,
                 addHierarchy
         );
-        ImmutableGraphIndex graph = TestUtil.buildSequentially(builder, ravv);
+        PersistableGraphIndex graph = TestUtil.buildSequentially(builder, ravv);
 
         // Path for two-phase write
         Path indexPath = testDirectory.resolve("graph_index");

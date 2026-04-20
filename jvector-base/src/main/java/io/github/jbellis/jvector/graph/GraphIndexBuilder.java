@@ -50,7 +50,7 @@ import static io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
 import static java.lang.Math.*;
 
 /**
- * Builder for Concurrent GraphIndex. See {@link ImmutableGraphIndex} for a high level overview, and the
+ * Builder for Concurrent GraphIndex. See {@link PersistableGraphIndex} for a high level overview, and the
  * comments to `addGraphNode` for details on the concurrent building approach.
  * <p>
  * GIB allocates scratch space and copies of the RandomAccessVectorValues for each thread
@@ -437,7 +437,7 @@ public class GraphIndexBuilder implements Closeable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+    public PersistableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -448,7 +448,7 @@ public class GraphIndexBuilder implements Closeable {
         }).join();
 
         cleanup();
-        return (ImmutableGraphIndex) graph;
+        return (PersistableGraphIndex) graph;
     }
     /**
      * Validates that the current entry node has been completely added.
@@ -1003,7 +1003,7 @@ public class GraphIndexBuilder implements Closeable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+    public static PersistableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
@@ -1032,7 +1032,7 @@ public class GraphIndexBuilder implements Closeable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+    public static PersistableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
@@ -1072,7 +1072,7 @@ public class GraphIndexBuilder implements Closeable {
             })).join();
 
             builder.cleanup();
-            return (ImmutableGraphIndex) builder.getGraph();
+            return (PersistableGraphIndex) builder.getGraph();
         }
     }
 }

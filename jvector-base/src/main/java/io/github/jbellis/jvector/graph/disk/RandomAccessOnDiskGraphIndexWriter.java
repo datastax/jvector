@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -56,7 +56,7 @@ abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWrit
     protected RandomAccessOnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                                   int version,
                                                   long startOffset,
-                                                  ImmutableGraphIndex graph,
+                                                  PersistableGraphIndex graph,
                                                   OrdinalMapper oldToNewOrdinals,
                                                   int dimension,
                                                   EnumMap<FeatureId, Feature> features)
@@ -175,7 +175,7 @@ abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWrit
         view.close();
     }
 
-    protected abstract void writeL0Records(ImmutableGraphIndex.View view,
+    protected abstract void writeL0Records(PersistableGraphIndex.View view,
                                            Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
 
     /**
@@ -195,7 +195,7 @@ abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWrit
      * @param view the graph index view
      * @throws IOException if there is an error writing the header
      */
-    public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
+    public synchronized void writeHeader(PersistableGraphIndex.View view) throws IOException {
         out.seek(startOffset);
         super.writeHeader(view, startOffset);
         out.flush();

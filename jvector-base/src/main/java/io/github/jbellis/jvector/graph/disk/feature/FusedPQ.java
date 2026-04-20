@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -122,15 +122,15 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     public static class State implements Feature.State {
-        public final ImmutableGraphIndex.View view;
+        public final PersistableGraphIndex.View view;
         public final IntFunction<ByteSequence<?>> compressedVectorFunction;
         public final int nodeId;
 
-        public State(ImmutableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
+        public State(PersistableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
             this(view, pqVectors::get, nodeId);
         }
 
-        public State(ImmutableGraphIndex.View view, IntFunction<ByteSequence<?>> compressedVectorFunction, int nodeId) {
+        public State(PersistableGraphIndex.View view, IntFunction<ByteSequence<?>> compressedVectorFunction, int nodeId) {
             this.view = view;
             this.compressedVectorFunction = compressedVectorFunction;
             this.nodeId = nodeId;

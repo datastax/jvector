@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
@@ -52,7 +52,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
     /** The total size of the footer. */
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
     final int version;
-    final ImmutableGraphIndex graph;
+    final PersistableGraphIndex graph;
     final OrdinalMapper ordinalMapper;
     final int dimension;
     final Map<FeatureId, Feature> featureMap;
@@ -63,7 +63,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
 
     AbstractGraphIndexWriter(T out,
                              int version,
-                             ImmutableGraphIndex graph,
+                             PersistableGraphIndex graph,
                              OrdinalMapper oldToNewOrdinals,
                              int dimension,
                              EnumMap<FeatureId, Feature> features)
@@ -143,7 +143,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
      * if i &lt; j in `graph` then map[i] &lt; map[j] in the returned map.  "Holes" left by
      * deleted nodes are filled in by shifting down the new ordinals.
      */
-    public static Map<Integer, Integer> sequentialRenumbering(ImmutableGraphIndex graph) {
+    public static Map<Integer, Integer> sequentialRenumbering(PersistableGraphIndex graph) {
         try (var view = graph.getView()) {
             Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
             int nextOrdinal = 0;
@@ -171,7 +171,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
+    void writeFooter(PersistableGraphIndex.View view, long headerOffset) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 dimension,
@@ -193,7 +193,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
      * @param startOffset the start offset
      * @throws IOException if an I/O error occurs
      */
-    protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
+    protected synchronized void writeHeader(PersistableGraphIndex.View view, long startOffset) throws IOException {
         // graph-level properties
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
@@ -206,7 +206,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
         assert out.position() == startOffset + headerSize : String.format("%d != %d", out.position(), startOffset + headerSize);
     }
 
-    void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+    void writeSparseLevels(PersistableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // write sparse levels
         for (int level = 1; level <= graph.getMaxLevel(); level++) {
             int layerSize = graph.size(level);
@@ -321,7 +321,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
      * @param <T> the type of the output stream
      */
     public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> {
-        final ImmutableGraphIndex graphIndex;
+        final PersistableGraphIndex graphIndex;
         final EnumMap<FeatureId, Feature> features;
         final T out;
         OrdinalMapper ordinalMapper;
@@ -332,7 +332,7 @@ abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements GraphI
          * @param graphIndex the graph index
          * @param out the output writer
          */
-        public Builder(ImmutableGraphIndex graphIndex, T out) {
+        public Builder(PersistableGraphIndex graphIndex, T out) {
             this.graphIndex = graphIndex;
             this.out = out;
             this.features = new EnumMap<>(FeatureId.class);

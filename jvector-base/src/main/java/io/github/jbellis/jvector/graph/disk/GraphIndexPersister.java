@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -38,7 +38,7 @@ import java.util.function.IntFunction;
  * based on the graph type and output target.
  * <p>
  * Obtain instances via {@link GraphIndex#writer(Path)} or
- * {@link ImmutableGraphIndex#writer(IndexWriter)}; do not instantiate directly.
+ * {@link PersistableGraphIndex#writer(IndexWriter)}; do not instantiate directly.
  * <p>
  * All configuration methods must be called before the first
  * {@link #writeFeaturesInline} or {@link #write} call.
@@ -46,7 +46,7 @@ import java.util.function.IntFunction;
 public class GraphIndexPersister implements GraphIndex.WriteBuilder {
     private static final Logger logger = LoggerFactory.getLogger(GraphIndexPersister.class);
 
-    private final ImmutableGraphIndex graph;
+    private final PersistableGraphIndex graph;
     private final Path path;                // null for sequential mode
     private final IndexWriter sequentialOut; // null for path mode
 
@@ -61,14 +61,14 @@ public class GraphIndexPersister implements GraphIndex.WriteBuilder {
     private RandomAccessOnDiskGraphIndexWriter lazyWriter;
 
     /** Path-based constructor: uses the parallel writer for on-heap graphs, random-access for on-disk. */
-    public GraphIndexPersister(ImmutableGraphIndex graph, Path path) throws FileNotFoundException {
+    public GraphIndexPersister(PersistableGraphIndex graph, Path path) throws FileNotFoundException {
         this.graph = graph;
         this.path = path;
         this.sequentialOut = null;
     }
 
     /** Sequential constructor: always uses the sequential writer regardless of graph type. */
-    public GraphIndexPersister(ImmutableGraphIndex graph, IndexWriter sequentialOut) {
+    public GraphIndexPersister(PersistableGraphIndex graph, IndexWriter sequentialOut) {
         this.graph = graph;
         this.path = null;
         this.sequentialOut = sequentialOut;
@@ -132,7 +132,7 @@ public class GraphIndexPersister implements GraphIndex.WriteBuilder {
         if (sequentialOut != null) {
             throw new UnsupportedOperationException("writeHeader is not supported for sequential writers");
         }
-        getOrCreateRandomAccessWriter().writeHeader((ImmutableGraphIndex.View) view);
+        getOrCreateRandomAccessWriter().writeHeader((PersistableGraphIndex.View) view);
     }
 
     @Override

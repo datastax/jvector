@@ -21,7 +21,7 @@ import java.util.List;
 
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
@@ -79,7 +79,7 @@ public class VectorIntro {
         boolean refineFinalGraph = true;
 
         // Build the graph index using a Builder
-        ImmutableGraphIndex graph;
+        PersistableGraphIndex graph;
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                 dimension,
                 M,

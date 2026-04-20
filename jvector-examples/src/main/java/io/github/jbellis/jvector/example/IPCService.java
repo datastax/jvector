@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -72,7 +72,7 @@ public class IPCService
         RandomAccessVectorValues ravv;
         CompressedVectors cv;
         GraphIndexBuilder indexBuilder;
-        ImmutableGraphIndex index;
+        PersistableGraphIndex index;
         GraphSearcher searcher;
         final StringBuffer result = new StringBuffer(1024);
     }
@@ -189,7 +189,7 @@ public class IPCService
         return cv;
     }
 
-    private static ImmutableGraphIndex flushGraphIndex(ImmutableGraphIndex index, RandomAccessVectorValues ravv) {
+    private static PersistableGraphIndex flushGraphIndex(PersistableGraphIndex index, RandomAccessVectorValues ravv) {
         try {
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
@@ -205,13 +205,13 @@ public class IPCService
         if (!ctx.isBulkLoad) {
             if (ctx.ravv.size() > 256) {
                 ctx.indexBuilder.cleanup();
-                ctx.index = flushGraphIndex((ImmutableGraphIndex) ctx.indexBuilder.getGraph(), ctx.ravv);
+                ctx.index = flushGraphIndex((PersistableGraphIndex) ctx.indexBuilder.getGraph(), ctx.ravv);
                 ctx.cv = pqIndex(ctx.ravv, ctx);
                 ctx.indexBuilder = null;
                 ctx.ravv = null;
             } else { //Not enough data for PQ
                 ctx.indexBuilder.cleanup();
-                ctx.index = (ImmutableGraphIndex) ctx.indexBuilder.getGraph();
+                ctx.index = (PersistableGraphIndex) ctx.indexBuilder.getGraph();
                 ctx.cv = null;
             }
 
@@ -261,8 +261,8 @@ public class IPCService
             if (ctx.cv != null) {
                 ScoreFunction.ApproximateScoreFunction sf = ctx.cv.precomputedScoreFunctionFor(queryVector, ctx.similarityFunction);
                 try (var view = ctx.index.getView()) {
-                    var rr = view instanceof ImmutableGraphIndex.ScoringView
-                            ? ((ImmutableGraphIndex.ScoringView) view).refinerFor(queryVector, ctx.similarityFunction)
+                    var rr = view instanceof PersistableGraphIndex.ScoringView
+                            ? ((PersistableGraphIndex.ScoringView) view).refinerFor(queryVector, ctx.similarityFunction)
                             : ctx.ravv.refinerFor(queryVector, ctx.similarityFunction);
                     var ssp = new DefaultSearchScoreProvider(sf, rr);
                     r = new GraphSearcher(ctx.index).search(ssp, searchEf, Bits.ALL);

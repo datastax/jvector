@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -69,7 +69,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
-public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
+public class OnDiskGraphIndex implements PersistableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
     public static final int CURRENT_VERSION = 6;
@@ -715,12 +715,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
+    public static void write(PersistableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(ImmutableGraphIndex graph,
+    public static void write(PersistableGraphIndex graph,
                              RandomAccessVectorValues vectors,
                              Map<Integer, Integer> oldToNewOrdinals,
                              Path path)

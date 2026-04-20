@@ -280,7 +280,7 @@ public class TestVectorGraph extends LuceneTestCase {
         assertTrue("sum(result docs)=" + sum + " for " + GraphIndex.prettyPrint(builder.graph), sum < 75);
     }
 
-    private static void validateIndex(ImmutableGraphIndex graph) {
+    private static void validateIndex(PersistableGraphIndex graph) {
         var view = graph.getView();
 
         for (int level = graph.getMaxLevel(); level > 0; level--) {
@@ -612,7 +612,7 @@ public class TestVectorGraph extends LuceneTestCase {
         assertNeighbors(view, 3, 0, 1);
     }
 
-    private void assertNeighbors(ImmutableGraphIndex.View graph, int node, int... expected) {
+    private void assertNeighbors(PersistableGraphIndex.View graph, int node, int... expected) {
         Arrays.sort(expected);
         NodesIterator it = graph.getNeighborsIterator(0, node);
         int[] actual = new int[it.size()];
