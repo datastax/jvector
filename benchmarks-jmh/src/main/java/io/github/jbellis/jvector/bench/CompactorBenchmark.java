@@ -272,7 +272,7 @@ public class CompactorBenchmark {
     private Path scratchOutputPath;     // where build-from-scratch graph is written
 
     // ---------- Params ----------
-    @Param({"glove-100-angular"})
+    @Param({"ada002-100k"})
     public String datasetNames;
 
     @Param({"PARTITION_AND_COMPACT"})

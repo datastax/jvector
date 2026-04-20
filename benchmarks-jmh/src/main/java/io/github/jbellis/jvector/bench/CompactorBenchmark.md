@@ -35,13 +35,14 @@
 
 ## Default: partition and compact in one run
 
-The default mode builds partitions and immediately compacts them. Use this when you want a single-command end-to-end result.
+The default mode builds partitions and immediately compacts them. Use this when you want a single-command end-to-end result. Adjust `-Xmx` to fit the dataset in memory (e.g., 220g for large datasets).
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_AND_COMPACT \
-  -p datasetNames=glove-100-angular \
+  -p datasetNames=ada002-100k \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
   -p indexPrecision=FUSEDPQ \
@@ -62,9 +63,10 @@ Run with a large heap since the full dataset must be loaded into memory.
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
-  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=PARTITION_ONLY \
-  -p datasetNames=glove-100-angular \
+  -p datasetNames=ada002-100k \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
   -p indexPrecision=FUSEDPQ \
@@ -79,9 +81,10 @@ The dataset is **not** loaded in this mode. Use a small `-Xmx` to measure and pr
 
 ```bash
 java -Xmx5g --add-modules jdk.incubator.vector \
-  -jar benchmarks-jmh/target/benchmarks-jmh-*.jar CompactorBenchmark \
+  -cp benchmarks-jmh/target/benchmarks-jmh-*.jar \
+  io.github.jbellis.jvector.bench.CompactorBenchmark \
   -p workloadMode=COMPACT_ONLY \
-  -p datasetNames=glove-100-angular \
+  -p datasetNames=ada002-100k \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
   -p indexPrecision=FUSEDPQ \
@@ -96,7 +99,7 @@ java -Xmx5g --add-modules jdk.incubator.vector \
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `datasetNames` | `glove-100-angular` | Dataset name |
+| `datasetNames` | `ada002-100k` | Dataset name |
 | `workloadMode` | `PARTITION_AND_COMPACT` | Which phase(s) to run |
 | `numPartitions` | `4` | Number of source partition indexes |
 | `splitDistribution` | — | Data partitioning strategy (`UNIFORM`, `FIBONACCI`, …) |
