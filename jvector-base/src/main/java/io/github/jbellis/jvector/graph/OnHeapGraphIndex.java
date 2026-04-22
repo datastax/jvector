@@ -63,7 +63,7 @@ import java.util.stream.IntStream;
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-public class OnHeapGraphIndex implements MutableGraphIndex, PersistableGraphIndex {
+public class OnHeapGraphIndex implements MutableGraphIndex {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 

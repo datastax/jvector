@@ -39,7 +39,7 @@ import java.util.stream.IntStream;
  * The base layer (layer 0) contains all nodes; higher layers are stored in sparse maps.
  * For searching, obtain a View via {@link #getView()} which supports level-aware operations.
  */
-public interface MutableGraphIndex extends GraphIndex {
+public interface MutableGraphIndex extends PersistableGraphIndex {
 
     /**
      * Add the given node ordinal with an empty set of neighbors.

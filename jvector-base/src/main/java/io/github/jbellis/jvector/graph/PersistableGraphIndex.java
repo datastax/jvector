@@ -29,12 +29,15 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import java.io.FileNotFoundException;
 
 /**
- * A sealed, fully-built graph index that can be persisted to disk.
+ * A graph index that can be written to disk.
  * <p>
- * Implementations include {@code OnHeapGraphIndex} (built in memory) and
- * {@code OnDiskGraphIndex} (already on disk).  Both support writing via
- * {@link #writer(java.nio.file.Path)} (parallel/random-access) and
+ * Both {@code OnHeapGraphIndex} (in-memory, potentially still under construction) and
+ * {@code OnDiskGraphIndex} (already on disk) implement this interface. Writing is supported
+ * via {@link #writer(java.nio.file.Path)} (parallel/random-access) and
  * {@link #writer(IndexWriter)} (sequential, e.g. for Cassandra/Lucene integration).
+ * <p>
+ * {@link MutableGraphIndex} extends this interface, so an on-heap graph is persistable
+ * at any point during construction.
  */
 public interface PersistableGraphIndex extends GraphIndex {
 
