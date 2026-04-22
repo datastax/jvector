@@ -107,26 +107,22 @@ public class CompactorBenchmark {
 
     public enum WorkloadMode {
         /**
-         * Build per-source partitions and stop. (No compaction, no recall.)
+         * Build per-source partitions and stop.
          */
-        PARTITION_ONLY,
+        PARTITION,
 
         /**
          * Assume partitions exist on disk; compact them.
          */
-        COMPACT_ONLY,
+        COMPACT,
 
         /**
-         * Assume partitions exist on disk; compact them, then run recall.
+         * Build a single graph for the whole dataset and write it.
          */
-        COMPACT_AND_RECALL,
+        BUILD,
 
         /**
-         * Build a single graph for the whole dataset and write it. Then run recall.
-         */
-        BUILD_FROM_SCRATCH,
-        /**
-         * (Default) Build partitions, compact them, then run recall.
+         * (Default) Build partitions, compact them.
          */
         PARTITION_AND_COMPACT
     }
@@ -278,6 +274,9 @@ public class CompactorBenchmark {
     @Param({"PARTITION_AND_COMPACT"})
     public WorkloadMode workloadMode;
 
+    @Param({"true"})
+    public boolean measureRecall;
+
     @Param({"4"}) // Default value, can be overridden via command line
     public int numPartitions;
 
@@ -387,25 +386,10 @@ public class CompactorBenchmark {
 
             int dimension;
 
-            if (workloadMode == WorkloadMode.COMPACT_ONLY) {
-                ds = null;
-                queryVectors = null;
-                groundTruth = null;
-                ravv = null;
-                baseVectors = null;
-                dimension = -1;
+            boolean needsBaseVectors = workloadMode != WorkloadMode.COMPACT;
+            boolean needsRecallData = measureRecall && workloadMode != WorkloadMode.PARTITION;
 
-                var datasetInfo = DataSets.loadDataSet(datasetNames);
-                similarityFunction = datasetInfo
-                        .flatMap(DataSetInfo::similarityFunction)
-                        .orElseGet(() -> {
-                            log.warn("Could not determine similarity function for dataset '{}'; defaulting to COSINE", datasetNames);
-                            return VectorSimilarityFunction.COSINE;
-                        });
-
-                log.info("Skipping dataset load for COMPACT_ONLY mode without recall. Workload: {}, similarityFunction: {}, Live nodes rate: {}",
-                        workloadMode, similarityFunction, liveNodesRate);
-            } else {
+            if (needsBaseVectors) {
                 ds = DataSets.loadDataSet(datasetNames)
                         .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames))
                         .getDataSet();
@@ -425,13 +409,38 @@ public class CompactorBenchmark {
                     ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
                 }
 
-                queryVectors = ds.getQueryVectors();
-                groundTruth = ds.getGroundTruth();
                 similarityFunction = ds.getSimilarityFunction();
                 dimension = ds.getDimension();
 
-                log.info("Dataset {} loaded with recall data. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, Live nodes rate: {}",
-                        datasetNames, ravv.size(), datasetPortion, queryVectors.size(), dimension, similarityFunction, workloadMode, liveNodesRate);
+                if (needsRecallData) {
+                    queryVectors = ds.getQueryVectors();
+                    groundTruth = ds.getGroundTruth();
+                    log.info("Dataset {} loaded with recall data. Base vectors: {} (portion {}), Query vectors: {}, Dim: {}, Similarity: {}, Workload: {}, measureRecall: {}, Live nodes rate: {}",
+                            datasetNames, ravv.size(), datasetPortion, queryVectors.size(), dimension, similarityFunction, workloadMode, measureRecall, liveNodesRate);
+                } else {
+                    queryVectors = null;
+                    groundTruth = null;
+                    log.info("Dataset {} loaded (base vectors only). Base vectors: {} (portion {}), Dim: {}, Similarity: {}, Workload: {}, measureRecall: {}",
+                            datasetNames, ravv.size(), datasetPortion, dimension, similarityFunction, workloadMode, measureRecall);
+                }
+            } else {
+                ds = null;
+                queryVectors = null;
+                groundTruth = null;
+                ravv = null;
+                baseVectors = null;
+                dimension = -1;
+
+                var datasetInfo = DataSets.loadDataSet(datasetNames);
+                similarityFunction = datasetInfo
+                        .flatMap(DataSetInfo::similarityFunction)
+                        .orElseGet(() -> {
+                            log.warn("Could not determine similarity function for dataset '{}'; defaulting to COSINE", datasetNames);
+                            return VectorSimilarityFunction.COSINE;
+                        });
+
+                log.info("Skipping dataset load for {} mode. similarityFunction: {}, Live nodes rate: {}",
+                        workloadMode, similarityFunction, liveNodesRate);
             }
 
             // Resolve storagePaths + partitionsDir
@@ -440,22 +449,18 @@ public class CompactorBenchmark {
             compactOutputPath = resolveCompactOutputPath(partitionsBaseDir);
             scratchOutputPath = resolveScratchOutputPath(partitionsBaseDir);
 
-            // Clean stale artifacts only if we're going to rebuild them.
-            if (workloadMode == WorkloadMode.COMPACT_ONLY || workloadMode == WorkloadMode.COMPACT_AND_RECALL) {
-                // For compact-only and compact-and-recall, ensure the partition files exist.
+            if (workloadMode == WorkloadMode.COMPACT) {
                 verifyPartitionsExist(partitionsBaseDir, numPartitions);
             }
 
-            // Partition metadata for remapping (needed for compaction)
-            if (workloadMode == WorkloadMode.PARTITION_ONLY || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
+            if (workloadMode == WorkloadMode.PARTITION || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
                 var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
                 vectorsPerSourceCount = partitionedData.sizes;
             } else {
                 vectorsPerSourceCount = null;
             }
 
-            // Build partitions during setup for SEGMENTS_* (matches original benchmark structure)
-            if (workloadMode == WorkloadMode.PARTITION_ONLY || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
+            if (workloadMode == WorkloadMode.PARTITION || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
                 if (jfrPartitioning) {
                     jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
                 }
@@ -472,8 +477,8 @@ public class CompactorBenchmark {
     }
 
     private void validateParams() {
-        if (workloadMode == WorkloadMode.BUILD_FROM_SCRATCH) {
-            log.warn("numPartitions={} ignored in BUILD_FROM_SCRATCH mode", numPartitions);
+        if (workloadMode == WorkloadMode.BUILD) {
+            log.warn("numPartitions={} ignored in BUILD mode", numPartitions);
         }
         else {
            if (numPartitions <= 1) throw new IllegalArgumentException("numPartitions must be larger than one");
@@ -570,7 +575,7 @@ public class CompactorBenchmark {
         for (int i = 0; i < numPartitions; i++) {
             Path seg = partitionsDir.resolve("per-source-graph-" + i);
             if (!Files.exists(seg)) {
-                throw new IllegalStateException("Missing partition file for COMPACT_ONLY or COMPACT_AND_RECALL: " + seg.toAbsolutePath());
+                throw new IllegalStateException("Missing partition file for COMPACT mode: " + seg.toAbsolutePath());
             }
         }
     }
@@ -701,6 +706,14 @@ public class CompactorBenchmark {
 
         int dimension = baseVectors.get(0).length();
         var full = new ListRandomAccessVectorValues(baseVectors, dimension);
+
+        log.info("Building from scratch: vectors={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={} -> {}",
+                full.size(), dimension, similarityFunction,
+                graphDegree, beamWidth, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider,
+                scratchOutputPath.toAbsolutePath());
+
+        long startNanos = System.nanoTime();
+
         ProductQuantization pq = null;
         PQVectors pqVectors = null;
         BuildScoreProvider bsp;
@@ -714,11 +727,6 @@ public class CompactorBenchmark {
             bsp = BuildScoreProvider.randomAccessScoreProvider(full, similarityFunction);
         }
 
-        log.info("Building from scratch: vectors={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={} -> {}",
-                full.size(), dimension, similarityFunction,
-                graphDegree, beamWidth, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider,
-                scratchOutputPath.toAbsolutePath());
-
         var builder = new GraphIndexBuilder(bsp, dimension, graphDegree, beamWidth, 1.2f, 1.2f, true);
         var graph = builder.build(full);
 
@@ -730,19 +738,10 @@ public class CompactorBenchmark {
 
         writerBuilder.with(new InlineVectors(dimension));
 
-//        ProductQuantization pq = null;
-//        PQVectors pqVectors = null;
-//        if (indexPrecision == IndexPrecision.FUSEDPQ) {
-//            boolean centerData = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-//            pq = ProductQuantization.compute(full, dimension / 8, 256, centerData);
-//            pqVectors = (PQVectors) pq.encodeAll(full);
-//            writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
-//        }
         if (indexPrecision == IndexPrecision.FUSEDPQ) {
             writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
         }
 
-        long startNanos = System.nanoTime();
         try (var writer = writerBuilder.build()) {
             var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
             suppliers.put(FeatureId.INLINE_VECTORS, ord -> new InlineVectors.State(full.getVector(ord)));
@@ -814,27 +813,28 @@ public class CompactorBenchmark {
 
             // Execute workload
             switch (workloadMode) {
-                case PARTITION_ONLY:
+                case PARTITION:
                     break;
 
-                case COMPACT_ONLY:
+                case COMPACT:
                     durationMs = compactPartitions();
+                    if (measureRecall) {
+                        recall = runRecall(compactOutputPath);
+                    }
                     break;
 
-                case COMPACT_AND_RECALL:
-                    durationMs = compactPartitions();
-                    recall = runRecall(compactOutputPath);
-                    break;
-
-                case BUILD_FROM_SCRATCH: {
+                case BUILD:
                     durationMs = buildFromScratch(baseVectors);
-                    recall = runRecall(scratchOutputPath);
+                    if (measureRecall) {
+                        recall = runRecall(scratchOutputPath);
+                    }
                     break;
-                }
 
                 case PARTITION_AND_COMPACT:
                     durationMs = compactPartitions();
-                    recall = runRecall(compactOutputPath);
+                    if (measureRecall) {
+                        recall = runRecall(compactOutputPath);
+                    }
                     break;
 
                 default:
@@ -902,6 +902,7 @@ public class CompactorBenchmark {
         params.put("parallelWriteThreads", parallelWriteThreads);
         params.put("vectorizationProvider", resolvedVectorizationProvider);
         params.put("datasetPortion", datasetPortion);
+        params.put("measureRecall", measureRecall);
         params.put("jfrPartitioning", jfrPartitioning);
         params.put("jfrCompacting", jfrCompacting);
         params.put("jfrObjectCount", jfrObjectCount);

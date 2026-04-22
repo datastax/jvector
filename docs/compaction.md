@@ -142,7 +142,7 @@ To measure how little RAM compaction actually needs — without the dataset occu
 java -Xmx220g --add-modules jdk.incubator.vector \
   -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
-  -p workloadMode=PARTITION_ONLY \
+  -p workloadMode=PARTITION \
   -p datasetNames=<dataset> \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
@@ -156,7 +156,8 @@ java -Xmx220g --add-modules jdk.incubator.vector \
 java -Xmx5g --add-modules jdk.incubator.vector \
   -cp benchmarks-jmh/target/compactor-benchmark.jar \
   io.github.jbellis.jvector.bench.CompactorBenchmark \
-  -p workloadMode=COMPACT_ONLY \
+  -p workloadMode=COMPACT \
+  -p measureRecall=false \
   -p datasetNames=<dataset> \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
@@ -164,16 +165,18 @@ java -Xmx5g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
-`COMPACT_ONLY` skips dataset loading entirely, so `-Xmx5g` is sufficient even for large datasets. This lets you confirm that the compactor itself — not the dataset — is the memory bottleneck.
+`COMPACT` with `measureRecall=false` skips dataset loading entirely, so `-Xmx5g` is sufficient even for large datasets. This lets you confirm that the compactor itself — not the dataset — is the memory bottleneck.
 
 Key `workloadMode` values:
 
 | Mode | Description |
 |---|---|
-| `PARTITION_AND_COMPACT` | **(default)** Build partitions, compact them, then measure recall |
-| `PARTITION_ONLY` | Build N partition indexes and exit; use before `COMPACT_ONLY` |
-| `COMPACT_ONLY` | Compact existing partitions without loading the dataset; `durationMs` = `compact()` time |
-| `BUILD_FROM_SCRATCH` | Build one index over the full dataset; `durationMs` = `build()` time |
+| `PARTITION_AND_COMPACT` | **(default)** Build partitions, compact them |
+| `PARTITION` | Build N partition indexes and exit; use before `COMPACT` |
+| `COMPACT` | Compact existing partitions |
+| `BUILD` | Build one index over the full dataset |
+
+Set `-p measureRecall=false` to skip recall measurement (and dataset loading for `COMPACT` mode).
 
 Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-results.jsonl`. The `durationMs` field records only the target function time (not dataset loading or JVM startup).
 
@@ -200,5 +203,5 @@ Recall comparison (results averaged over three runs):
 
 # Memory footprint
 
-All datasets above can be compacted under `COMPACT_ONLY` with `-Xmx5g`. In addition, compaction successfully scales to a dataset with 2560 dimensions and 10M vectors under the same memory constraint.
+All datasets above can be compacted under `COMPACT` with `measureRecall=false` and `-Xmx5g`. In addition, compaction successfully scales to a dataset with 2560 dimensions and 10M vectors under the same memory constraint.
 
