@@ -27,6 +27,7 @@ public class ConstructionParameters extends CommonParameters {
     public List<Integer> outDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
+    public List<Float> alpha;
     public List<Boolean> addHierarchy;
     public List<Boolean> refineFinalGraph;
     public List<String> reranking;

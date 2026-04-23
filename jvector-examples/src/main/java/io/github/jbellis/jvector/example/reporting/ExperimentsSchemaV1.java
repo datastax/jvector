@@ -56,6 +56,7 @@ public final class ExperimentsSchemaV1 {
                 "M",
                 "efConstruction",
                 "neighborOverflow",
+                "alpha",
                 "addHierarchy",
                 "refineFinalGraph",
                 "repetition",
@@ -79,6 +80,7 @@ public final class ExperimentsSchemaV1 {
                                                   int M,
                                                   int efConstruction,
                                                   float neighborOverflow,
+                                                  float alpha,
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
                                                   int repetition,
@@ -99,6 +101,7 @@ public final class ExperimentsSchemaV1 {
         fixed.put("M", Integer.toString(M));
         fixed.put("efConstruction", Integer.toString(efConstruction));
         fixed.put("neighborOverflow", Float.toString(neighborOverflow));
+        fixed.put("alpha", Float.toString(alpha));
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
         fixed.put("repetition", Integer.toString(repetition));
