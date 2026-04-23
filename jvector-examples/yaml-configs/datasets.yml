@@ -35,3 +35,17 @@ regression-tests:
 #  - cohere-english-v3-10M
 # - deep-image-96-angular # large files not yet supported
 # - gist-960-euclidean # large files not yet supported
+#sift-testing:
+#  - "sift1m:label_00"
+#  - "sift1m:label_01"
+#  - "sift1m:label_02"
+#  - "sift1m:label_03"
+#  - "sift1m:label_04"
+#  - "sift1m:label_05"
+#  - "sift1m:label_06"
+#  - "sift1m:label_07"
+#  - "sift1m:label_08"
+#  - "sift1m:label_09"
+#  - "sift1m:label_10"
+#  - "sift1m:label_11"
+#  - "sift1m:default"

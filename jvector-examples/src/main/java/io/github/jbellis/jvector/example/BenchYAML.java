@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
+import io.github.jbellis.jvector.example.util.BenchArgExpander;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
@@ -43,9 +44,10 @@ public class BenchYAML {
         if (args == null) {
             throw new InvalidParameterException("argv[] is null, check your maven exec config");
         }
+        // Expand range shorthand like sift1m:label_[00..11] into 12 separate tokens
+        args = BenchArgExpander.expandAll(args);
         String regex = Arrays.stream(args)
                 .filter(Objects::nonNull)
-                .flatMap(s -> Arrays.stream(s.split("\\s")))
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.joining("|"));
         var pattern = Pattern.compile(regex.isEmpty() ? ".*" : regex);
@@ -124,20 +126,31 @@ public class BenchYAML {
             // Register dataset info the first time we actually load the dataset for benchmarking
             artifacts.registerDataset(datasetName, ds);
 
-            Grid.runAll(ds,
-                    config.construction.useSavedIndexIfExists,
-                    config.construction.outDegree,
-                    config.construction.efConstruction,
-                    config.construction.neighborOverflow,
-                    config.construction.addHierarchy,
-                    config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(),
-                    config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(),
-                    config.search.topKOverquery,
-                    config.search.useSearchPruning,
-                    artifacts);
+            int repetitions = config.repetitionsOrOne();
+            for (int rep = 0; rep < repetitions; rep++) {
+                if (repetitions > 1) {
+                    System.out.printf("%s: repetition %d of %d%n", datasetName, rep + 1, repetitions);
+                }
+                Grid.runAll(ds,
+                        config.construction.useSavedIndexIfExists,
+                        config.construction.outDegree,
+                        config.construction.efConstruction,
+                        config.construction.neighborOverflow,
+                        config.construction.alpha,
+                        config.construction.addHierarchy,
+                        config.construction.refineFinalGraph,
+                        config.construction.getFeatureSets(),
+                        config.construction.getCompressorParameters(),
+                        config.search.getCompressorParameters(),
+                        config.search.topKOverquery,
+                        config.search.useSearchPruning,
+                        config.search.queryRunsOrDefault(),
+                        rep,
+                        artifacts);
+            }
         }
+
+        artifacts.printSummary();
     }
 
     private static String wrapList(java.util.List<String> items, int perLine, String indent) {
