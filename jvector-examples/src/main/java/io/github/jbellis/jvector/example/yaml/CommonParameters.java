@@ -27,6 +27,10 @@ public class CommonParameters {
     public List<Compression> compression;
 
     public List<Function<DataSet, CompressorParameters>> getCompressorParameters() {
-        return compression.stream().map(Compression::getCompressorParameters).collect(Collectors.toList());
+        // Each Compression entry may expand into multiple concrete compressor configs
+        // (Cartesian product of its list-valued parameters); flatten across all entries.
+        return compression.stream()
+                .flatMap(c -> c.getCompressorParameters().stream())
+                .collect(Collectors.toList());
     }
 }
