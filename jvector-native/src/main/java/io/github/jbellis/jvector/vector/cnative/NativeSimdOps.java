@@ -847,4 +847,36 @@ public class NativeSimdOps {
             throw new AssertionError("should not reach here", ex$);
         }
     }
+
+    private static class calculate_partial_sums_f32_512 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_INT,
+                NativeSimdOps.C_POINTER
+        );
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_f32_512");
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void calculate_partial_sums_f32_512(const float *codebook, int codebookIndex, int size, int clusterCount, const float *query, int queryOffset, int similarityFunction, float *partialSums)
+     * }
+     */
+    public static void calculate_partial_sums_f32_512(MemorySegment codebook, int codebookIndex, int size, int clusterCount, MemorySegment query, int queryOffset, int similarityFunction, MemorySegment partialSums) {
+        var mh$ = calculate_partial_sums_f32_512.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("calculate_partial_sums_f32_512", codebook, codebookIndex, size, clusterCount, query, queryOffset, similarityFunction, partialSums);
+            }
+            mh$.invokeExact(codebook, codebookIndex, size, clusterCount, query, queryOffset, similarityFunction, partialSums);
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
 }
