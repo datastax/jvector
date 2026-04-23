@@ -24,9 +24,12 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /// Reads dataset metadata from a multi-entry YAML file and provides keyed lookups
 /// for {@link DataSetProperties}.
@@ -123,8 +126,12 @@ public class DataSetMetadataReader {
             return Optional.of(entry);
         }
 
-        if (datasetKey.endsWith(".hdf5")) {
-            return Optional.ofNullable(metadata.get(datasetKey.substring(0, datasetKey.length() - ".hdf5".length())));
+        String alternate = datasetKey.endsWith(".hdf5")
+                ? datasetKey.substring(0, datasetKey.length() - ".hdf5".length())
+                : datasetKey + ".hdf5";
+        entry = metadata.get(alternate);
+        if (entry != null) {
+            return Optional.of(entry);
         }
 
         return Optional.ofNullable(metadata.get(datasetKey + ".hdf5"));

@@ -190,6 +190,7 @@ public final class RunArtifacts {
                        float neighborOverflow,
                        boolean addHierarchy,
                        boolean refineFinalGraph,
+                       int repetition,
                        Set<FeatureId> featureSetForIndex,
                        String buildCompressorString,
                        String searchCompressorString,
@@ -210,6 +211,7 @@ public final class RunArtifacts {
                 neighborOverflow,
                 addHierarchy,
                 refineFinalGraph,
+                repetition,
                 featureSetForIndex,
                 buildCompressorString,
                 searchCompressorString,
@@ -242,5 +244,25 @@ public final class RunArtifacts {
         }
 
         datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, "", "", "", ds));
+    }
+
+    /**
+     * Print a console summary grouped by everything except {@code repetition},
+     * aggregating each metric column into count/mean/stddev/cv.
+     *
+     * <p>Reads from the experiments.csv written by this run. If logging is disabled
+     * (no writer), emits a one-line notice instead — per the "require logging" policy.</p>
+     */
+    public void printSummary() {
+        if (experimentsWriter == null) {
+            System.out.println("Summary skipped: experiments logging is disabled. "
+                    + "Enable the 'logging:' block in run-config.yml to see run summaries.");
+            return;
+        }
+        try {
+            RunSummaryPrinter.print(experimentsWriter.path(), System.out);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to produce run summary", e);
+        }
     }
 }

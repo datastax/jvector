@@ -57,6 +57,10 @@ public class HelloVectorWorld {
                 config.search.getCompressorParameters(),
                 config.search.topKOverquery,
                 config.search.useSearchPruning,
+                config.search.queryRunsOrDefault(),
+                0,
                 artifacts);
+
+        artifacts.printSummary();
     }
 }

@@ -140,18 +140,28 @@ public class AutoBenchYAML {
                     }
                     logger.info("Using configuration: {}", config);
 
-                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
-                            config.construction.useSavedIndexIfExists,
-                            config.construction.outDegree, 
-                            config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
-                            config.construction.addHierarchy,
-                            config.construction.refineFinalGraph,
-                            config.construction.getFeatureSets(), 
-                            config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
-                            config.search.useSearchPruning);
+                    List<BenchResult> datasetResults = new ArrayList<>();
+                    int repetitions = config.repetitionsOrOne();
+                    for (int rep = 0; rep < repetitions; rep++) {
+                        if (repetitions > 1) {
+                            logger.info("{}: repetition {} of {}", datasetName, rep + 1, repetitions);
+                        }
+                        datasetResults.addAll(Grid.runAllAndCollectResults(ds,
+                                config.construction.useSavedIndexIfExists,
+                                config.construction.outDegree,
+                                config.construction.efConstruction,
+                                config.construction.neighborOverflow,
+                                config.construction.alpha,
+                                config.construction.addHierarchy,
+                                config.construction.refineFinalGraph,
+                                config.construction.getFeatureSets(),
+                                config.construction.getCompressorParameters(),
+                                config.search.getCompressorParameters(),
+                                config.search.topKOverquery,
+                                config.search.useSearchPruning,
+                                config.search.queryRunsOrDefault(),
+                                rep));
+                    }
                     results.addAll(datasetResults);
 
                     logger.info("Benchmark completed for dataset: {}", datasetName);

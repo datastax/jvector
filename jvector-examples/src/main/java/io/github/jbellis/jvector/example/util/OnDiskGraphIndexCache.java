@@ -29,6 +29,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -128,6 +130,7 @@ public final class OnDiskGraphIndexCache {
         public final float alpha;
         public final boolean addHierarchy;
         public final boolean refineFinalGraph;
+        public final int repetition;
         public final String compressorId;
 
         private CacheKey(String datasetName,
@@ -138,6 +141,7 @@ public final class OnDiskGraphIndexCache {
                          float alpha,
                          boolean addHierarchy,
                          boolean refineFinalGraph,
+                         int repetition,
                          String compressorId) {
             this.datasetName = datasetName;
             this.featureSet = featureSet;
@@ -147,6 +151,7 @@ public final class OnDiskGraphIndexCache {
             this.alpha = alpha;
             this.addHierarchy = addHierarchy;
             this.refineFinalGraph = refineFinalGraph;
+            this.repetition = repetition;
             this.compressorId = compressorId;
         }
     }
@@ -154,6 +159,10 @@ public final class OnDiskGraphIndexCache {
     /**
      * Convenience factory for a {@link CacheKey}. Uses {@code buildCompressor.toString()} (whitespace removed)
      * as the compressor id, matching existing naming conventions.
+     *
+     * <p>The {@code repetition} index participates in the signature so that callers using
+     * {@code repetitions &gt; 1} can force a fresh build per repetition even when the on-disk
+     * cache is otherwise enabled.</p>
      */
     public CacheKey key(String datasetName,
                         Set<FeatureId> featureSet,
@@ -163,12 +172,13 @@ public final class OnDiskGraphIndexCache {
                         float alpha,
                         boolean addHierarchy,
                         boolean refineFinalGraph,
+                        int repetition,
                         VectorCompressor<?> buildCompressor) {
         Objects.requireNonNull(datasetName, "datasetName");
         Objects.requireNonNull(featureSet, "featureSet");
         Objects.requireNonNull(buildCompressor, "buildCompressor");
         String compressorId = buildCompressor.toString().replaceAll("\\s+", "");
-        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph, compressorId);
+        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph, repetition, compressorId);
     }
 
     /**
@@ -336,17 +346,23 @@ public final class OnDiskGraphIndexCache {
                     .sorted()
                     .collect(Collectors.joining("-"));
 
-            String signature = String.join("_",
-                    datasetBase,
-                    featureSetName,
-                    "M" + key.M,
-                    "ef" + key.efConstruction,
-                    "of" + key.neighborOverflow,
-                    "alpha" + key.alpha,
-                    key.addHierarchy ? "H1" : "H0",
-                    key.refineFinalGraph ? "R1" : "R0",
-                    key.compressorId
-            );
+            // Include "rep" segment only when repetition > 0 so signatures collapse to
+            // the pre-repetition format when the repetitions knob is unused. This preserves
+            // compatibility with previously cached indexes.
+            List<String> parts = new ArrayList<>();
+            parts.add(datasetBase);
+            parts.add(featureSetName);
+            parts.add("M" + key.M);
+            parts.add("ef" + key.efConstruction);
+            parts.add("of" + key.neighborOverflow);
+            parts.add("alpha" + key.alpha);
+            parts.add(key.addHierarchy ? "H1" : "H0");
+            parts.add(key.refineFinalGraph ? "R1" : "R0");
+            if (key.repetition > 0) {
+                parts.add("rep" + key.repetition);
+            }
+            parts.add(key.compressorId);
+            String signature = String.join("_", parts);
 
             String finalName = sanitizePathComponent("graph_" + signature);
             Path finalPath = cacheDir.resolve(finalName);

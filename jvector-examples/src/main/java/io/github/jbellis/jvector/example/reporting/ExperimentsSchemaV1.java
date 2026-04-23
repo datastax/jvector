@@ -58,6 +58,7 @@ public final class ExperimentsSchemaV1 {
                 "neighborOverflow",
                 "addHierarchy",
                 "refineFinalGraph",
+                "repetition",
                 "feature_set",
                 "build_compressor",
                 "search_compressor",
@@ -80,6 +81,7 @@ public final class ExperimentsSchemaV1 {
                                                   float neighborOverflow,
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
+                                                  int repetition,
                                                   Set<FeatureId> featureSet,
                                                   String buildCompressorString,
                                                   String searchCompressorString,
@@ -99,6 +101,7 @@ public final class ExperimentsSchemaV1 {
         fixed.put("neighborOverflow", Float.toString(neighborOverflow));
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
+        fixed.put("repetition", Integer.toString(repetition));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
         fixed.put("build_compressor", csvEscape(buildCompressorString));
         fixed.put("search_compressor", csvEscape(searchCompressorString));

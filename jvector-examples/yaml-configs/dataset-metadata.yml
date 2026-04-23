@@ -103,3 +103,6 @@ nytimes-256-angular:
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB
+"sift1m:label_*":
+  similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB

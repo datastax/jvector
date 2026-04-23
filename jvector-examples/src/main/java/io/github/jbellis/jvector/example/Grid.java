@@ -107,6 +107,8 @@ public class Grid {
                        List<Function<DataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
+                       int queryRuns,
+                       int repetition,
                        RunArtifacts artifacts
                        ) throws IOException
     {
@@ -184,6 +186,8 @@ public class Grid {
                 compressionGrid,
                 topKGrid,
                 usePruningGrid,
+                SearchParameters.DEFAULT_QUERY_RUNS,
+                0, // repetition
                 RunArtifacts.disabled() // legacy callers do not use reporting
         );
     }
@@ -223,6 +227,8 @@ public class Grid {
                             List<Function<DataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
+                            int queryRuns,
+                            int repetition,
                             RunArtifacts artifacts,
                             DataSet ds,
                             Path workDirectory) throws IOException
@@ -617,12 +623,13 @@ public class Grid {
                                           float neighborOverflow,
                                           boolean addHierarchy,
                                           boolean refineFinalGraph,
+                                          int queryRuns,
+                                          int repetition,
                                           Set<FeatureId> featureSetForIndex,
                                           String buildCompressorString,
                                           RunArtifacts artifacts,
                                           ConstructionMetrics constructionMetrics,
                                           Path testDirectory) {
-        int queryRuns = 2;
         System.out.format("%s: Using %s:%n", cs.ds.getName(), cs.index);
 
         Map<String, List<String>> benchmarksToCompute = artifacts.benchmarksToCompute();
@@ -656,7 +663,8 @@ public class Grid {
                         "efConstruction",     efConstruction,
                         "neighborOverflow",   neighborOverflow,
                         "addHierarchy",       addHierarchy,
-                        "refineFinalGraph",   refineFinalGraph
+                        "refineFinalGraph",   refineFinalGraph,
+                        "repetition",         repetition
                     ),
                     ordered( // Query configuration
                             "usePruning",         usePruning
@@ -696,6 +704,7 @@ public class Grid {
                             neighborOverflow,
                             addHierarchy,
                             refineFinalGraph,
+                            repetition,
                             featureSetForIndex,
                             buildCompressorString,
                             searchCompressorString,
@@ -819,7 +828,9 @@ public class Grid {
             List<Function<DataSet, CompressorParameters>> buildCompressors,
             List<Function<DataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
-            List<Boolean> usePruningGrid) throws IOException {
+            List<Boolean> usePruningGrid,
+            int queryRuns,
+            int repetition) throws IOException {
 
         // Initialize index caching (if enabled)
         final OnDiskGraphIndexCache cache =
@@ -915,7 +926,6 @@ public class Grid {
                                             DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
-                                                int queryRuns = 2;
                                                 List<QueryBenchmark> benchmarks = List.of(
                                                         (diagnostic_level > 0 ?
                                                                 ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
@@ -937,6 +947,7 @@ public class Grid {
                                                             params.put("neighborOverflow", neighborOverflow);
                                                             params.put("addHierarchy", addHierarchy);
                                                             params.put("refineFinalGraph", refineFinalGraph);
+                                                            params.put("repetition", repetition);
                                                             params.put("features", features.toString());
                                                             params.put("buildCompressor", buildCompressor.toString());
                                                             params.put("searchCompressor", searchCompressor.toString());

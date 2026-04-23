@@ -37,6 +37,33 @@ public class MultiConfig {
     public SearchParameters search;
     public String dataset;
 
+    /**
+     * Number of times to repeat the full (build + search) run for this dataset.
+     * Absent or &lt; 1 is treated as 1. Each repetition produces its own set of
+     * experiments.csv rows tagged with a 0-based repetition index.
+     */
+    public Integer repetitions;
+
+    public int repetitionsOrOne() {
+        return (repetitions == null || repetitions < 1) ? 1 : repetitions;
+    }
+
+    /**
+     * Additional dataset names this config should apply to when no dedicated
+     * {@code <datasetName>.yml} file exists under the index-parameters directory.
+     *
+     * <p>Each entry may be either an exact dataset name or a shell-style glob
+     * containing {@code *} (any characters) or {@code ?} (single character).
+     * Example: {@code "sift1m:label_*"} matches {@code sift1m:label_00} through
+     * {@code sift1m:label_11}.</p>
+     *
+     * <p>Resolution order in {@link #getDefaultConfig(String)}: exact filename file
+     * first, then exact also_for match, then glob also_for match, then {@code default.yml}.
+     * The matching config's {@link #dataset} is overwritten with the requested name so
+     * downstream code loads the right dataset.</p>
+     */
+    public List<String> also_for;
+
     private static final String defaultDirectory = "jvector-examples/yaml-configs/index-parameters/";
     private static final java.util.regex.Pattern YAML_SCHEMA_VERSION_KEY =
             java.util.regex.Pattern.compile("(?m)^\\s*yamlSchemaVersion\\s*:");
@@ -51,27 +78,152 @@ public class MultiConfig {
             new java.util.concurrent.atomic.AtomicReference<>();
 
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
+        // 1. Direct filename match: <datasetName>.yml
         var name = defaultDirectory + datasetName;
         if (!name.endsWith(".yml")) {
             name += ".yml";
         }
         File configFile = new File(name);
-        boolean useDefault = !configFile.exists();
-        if (useDefault) {
-            configFile = new File(defaultDirectory + "default.yml");
-
-            // Record fallback usage for a compact summary print later
-            DEFAULT_FILE_USED.compareAndSet(null, configFile);
-            DEFAULT_USED_FOR_DATASETS.add(datasetName);
+        if (configFile.exists()) {
+            return getConfig(configFile);
         }
+
+        // 2. Scan index-parameters/*.yml for a config whose also_for list contains datasetName
+        File aliased = findConfigByAlsoFor(datasetName);
+        if (aliased != null) {
+            var config = getConfig(aliased);
+            // Overwrite dataset so downstream code loads the requested dataset, not the source config's
+            config.dataset = datasetName;
+            ALSO_FOR_USAGE.put(datasetName, aliased);
+            return config;
+        }
+
+        // 3. Fall back to default.yml
+        configFile = new File(defaultDirectory + "default.yml");
+        DEFAULT_FILE_USED.compareAndSet(null, configFile);
+        DEFAULT_USED_FOR_DATASETS.add(datasetName);
 
         var config = getConfig(configFile);
+        config.dataset = datasetName;
+        return config;
+    }
 
-        if (useDefault) {
-            config.dataset = datasetName;
+    /**
+     * Records which dataset names were served via {@code also_for} and which file provided the config.
+     * Exposed for logging/telemetry.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, File> ALSO_FOR_USAGE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Cached alias index: exact-match map plus an ordered list of glob patterns.
+     * Built lazily on first lookup; scans fail-soft so a single malformed yaml does not break the world.
+     */
+    private static volatile AliasIndex ALIAS_INDEX;
+
+    private static final class AliasIndex {
+        final Map<String, File> exact;
+        final List<GlobEntry> globs;
+
+        AliasIndex(Map<String, File> exact, List<GlobEntry> globs) {
+            this.exact = exact;
+            this.globs = globs;
         }
 
-        return config;
+        File find(String datasetName) {
+            File hit = exact.get(datasetName);
+            if (hit != null) return hit;
+            for (GlobEntry g : globs) {
+                if (g.pattern.matcher(datasetName).matches()) {
+                    return g.file;
+                }
+            }
+            return null;
+        }
+    }
+
+    private static final class GlobEntry {
+        final String glob;
+        final java.util.regex.Pattern pattern;
+        final File file;
+
+        GlobEntry(String glob, java.util.regex.Pattern pattern, File file) {
+            this.glob = glob;
+            this.pattern = pattern;
+            this.file = file;
+        }
+    }
+
+    private static File findConfigByAlsoFor(String datasetName) {
+        AliasIndex idx = ALIAS_INDEX;
+        if (idx == null) {
+            synchronized (MultiConfig.class) {
+                idx = ALIAS_INDEX;
+                if (idx == null) {
+                    idx = buildAliasIndex();
+                    ALIAS_INDEX = idx;
+                }
+            }
+        }
+        return idx.find(datasetName);
+    }
+
+    private static boolean isGlob(String alias) {
+        return alias.indexOf('*') >= 0 || alias.indexOf('?') >= 0;
+    }
+
+    /**
+     * Converts a shell-style glob containing {@code *} and {@code ?} wildcards
+     * into an anchored regex pattern. All other regex metacharacters are escaped.
+     */
+    static java.util.regex.Pattern globToPattern(String glob) {
+        StringBuilder sb = new StringBuilder(glob.length() + 4);
+        sb.append('^');
+        for (int i = 0; i < glob.length(); i++) {
+            char c = glob.charAt(i);
+            switch (c) {
+                case '*': sb.append(".*"); break;
+                case '?': sb.append('.'); break;
+                case '.': case '\\': case '+': case '(': case ')':
+                case '|': case '^': case '$': case '[': case ']':
+                case '{': case '}':
+                    sb.append('\\').append(c); break;
+                default: sb.append(c);
+            }
+        }
+        sb.append('$');
+        return java.util.regex.Pattern.compile(sb.toString());
+    }
+
+    private static AliasIndex buildAliasIndex() {
+        Map<String, File> exact = new java.util.HashMap<>();
+        List<GlobEntry> globs = new ArrayList<>();
+        File dir = new File(defaultDirectory);
+        File[] yamls = dir.listFiles((d, n) -> n.endsWith(".yml") || n.endsWith(".yaml"));
+        if (yamls == null) return new AliasIndex(exact, globs);
+        for (File f : yamls) {
+            final MultiConfig cfg;
+            try {
+                cfg = getConfig(f);
+            } catch (Exception e) {
+                // Fail-soft: one bad yaml shouldn't block alias lookups for the rest
+                System.err.println("WARNING: failed to parse " + f.getName() + " during also_for index build: " + e.getMessage());
+                continue;
+            }
+            if (cfg.also_for == null) continue;
+            for (String alias : cfg.also_for) {
+                if (isGlob(alias)) {
+                    globs.add(new GlobEntry(alias, globToPattern(alias), f));
+                } else {
+                    File prev = exact.putIfAbsent(alias, f);
+                    if (prev != null && !prev.equals(f)) {
+                        System.err.println("WARNING: also_for alias '" + alias + "' declared by both "
+                                + prev.getName() + " and " + f.getName() + "; keeping " + prev.getName());
+                    }
+                }
+            }
+        }
+        return new AliasIndex(exact, globs);
     }
 
     public static MultiConfig getConfig(String configName) throws FileNotFoundException {
@@ -198,13 +350,24 @@ public class MultiConfig {
 
     public static void printDefaultConfigUsageSummary() {
         File f = DEFAULT_FILE_USED.get();
-        if (f == null) return;
+        if (f != null) {
+            var datasets = new java.util.ArrayList<>(DEFAULT_USED_FOR_DATASETS);
+            if (!datasets.isEmpty()) {
+                System.out.println("Default YAML used for datasets: " + wrapList(datasets, 6, "  "));
+            }
+        }
 
-        var datasets = new java.util.ArrayList<>(DEFAULT_USED_FOR_DATASETS);
-        if (datasets.isEmpty()) return;
-
-        // Print a wrapped bracket-list similar to "Executing the following datasets"
-        System.out.println("Default YAML used for datasets: " + wrapList(datasets, 6, "  "));
+        if (!ALSO_FOR_USAGE.isEmpty()) {
+            // Group "dataset -> source yaml" reports by the source file for compact output
+            Map<String, List<String>> bySource = new java.util.LinkedHashMap<>();
+            for (var e : ALSO_FOR_USAGE.entrySet()) {
+                bySource.computeIfAbsent(e.getValue().getName(), k -> new ArrayList<>()).add(e.getKey());
+            }
+            for (var entry : bySource.entrySet()) {
+                System.out.println("also_for in " + entry.getKey() + " applied to: "
+                        + wrapList(entry.getValue(), 6, "  "));
+            }
+        }
     }
 
     private static String wrapList(java.util.List<String> items, int perLine, String indent) {
