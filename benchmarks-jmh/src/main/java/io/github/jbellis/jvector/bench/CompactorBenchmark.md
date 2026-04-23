@@ -127,13 +127,29 @@ java -Xmx5g --add-modules jdk.incubator.vector \
 | `workloadMode` | `PARTITION_AND_COMPACT` | Which phase(s) to run (`PARTITION`, `COMPACT`, `BUILD`, `PARTITION_AND_COMPACT`) |
 | `measureRecall` | `true` | Whether to run recall measurement after building/compacting |
 | `numPartitions` | `4` | Number of source partition indexes |
-| `splitDistribution` | — | Data partitioning strategy (`UNIFORM`, `FIBONACCI`, …) |
+| `splitDistribution` | — | Data partitioning strategy (see below) |
 | `indexPrecision` | — | `FULLPRECISION` (inline vectors only) or `FUSEDPQ` (inline + FusedPQ) |
 | `storageDirectories` | *(temp dir)* | Comma-separated list of directories where partition files are written; partitions are distributed round-robin across them. Defaults to a JVM temp directory if unset. |
 
 ---
 
-# 5. Index Precision
+# 5. Split Distributions
+
+`splitDistribution` controls how vectors are divided across partitions.
+
+| Distribution | Weights (example: 4 partitions) | Description |
+|---|---|---|
+| `UNIFORM` | [1, 1, 1, 1] (25% each) | Equal-sized partitions |
+| `FIBONACCI` | [1, 2, 3, 5] (9%, 18%, 27%, 45%) | Fibonacci-weighted; larger partitions grow progressively |
+| `LOG2N` | [1, 2, 4, 8] (7%, 13%, 27%, 53%) | Power-of-two weighted |
+| `TIERED_10_90` | [1, 9] (10%, 90%) | Small + large; simulates compacting a new segment into a large index |
+| `TIERED_1_99` | [1, 99] (1%, 99%) | Very small + very large; extreme tiered compaction scenario |
+
+`TIERED_10_90` and `TIERED_1_99` are designed for 2-partition benchmarks (`-p numPartitions=2`).
+
+---
+
+# 6. Index Precision
 
 `indexPrecision` controls what features are written into each partition index.
 
@@ -144,7 +160,7 @@ java -Xmx5g --add-modules jdk.incubator.vector \
 
 ---
 
-# 6. Results
+# 7. Results
 
 Results are written as JSONL to:
 
@@ -162,6 +178,6 @@ Key fields:
 
 ---
 
-# 7. Memory Footprint
+# 8. Memory Footprint
 
 All datasets in the recall table (see `docs/compaction.md`) can be run under `COMPACT` with `measureRecall=false` and `-Xmx5g`. Compaction also successfully scales to a dataset with 2560 dimensions and 10M vectors under the same constraint.

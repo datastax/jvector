@@ -40,7 +40,11 @@ public class TestDataPartition {
     public enum Distribution {
         UNIFORM,
         FIBONACCI,
-        LOG2N;
+        LOG2N,
+        /** First partition gets 10%, last gets 90%. For N>2, middle partitions are empty. */
+        TIERED_10_90,
+        /** First partition gets 1%, last gets 99%. For N>2, middle partitions are empty. */
+        TIERED_1_99;
 
         public List<Integer> computeSplitSizes(int total, int numSplits) {
             int[] weights = new int[numSplits];
@@ -60,6 +64,14 @@ public class TestDataPartition {
                     break;
                 case LOG2N:
                     for (int i = 0; i < numSplits; i++) weights[i] = 1 << i;
+                    break;
+                case TIERED_10_90:
+                    weights[0] = 1;
+                    weights[numSplits - 1] = 9;
+                    break;
+                case TIERED_1_99:
+                    weights[0] = 1;
+                    weights[numSplits - 1] = 99;
                     break;
             }
 
