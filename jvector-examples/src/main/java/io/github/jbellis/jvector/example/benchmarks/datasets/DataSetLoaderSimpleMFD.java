@@ -628,10 +628,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         // expand ${VAR} references in all field values
         var resolved = resolveEnvVars(fields);
 
-        String baseUrl = resolved.get("base_url");
-        if (baseUrl != null && !baseUrl.endsWith("/")) {
-            baseUrl = baseUrl + "/";
-        }
+        String baseUrl = normalizeBaseUrl(resolved.get("base_url"));
 
         // resolve cache_dir: entry field > DATASET_CACHE_DIR env var > catalog file's directory
         Path cacheDir;
@@ -648,6 +645,38 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
 
         return new CatalogEntry(resolved, cacheDir, baseUrl, source);
+    }
+
+    /// Normalizes a user-supplied {@code base_url} to a directory URL ending in {@code /}.
+    ///
+    /// Two forms are accepted:
+    /// - A directory URL (with or without trailing slash): {@code s3://bucket/path} or
+    ///   {@code s3://bucket/path/} → {@code s3://bucket/path/}
+    /// - A URL whose final segment names a specific entries/catalog file (e.g.
+    ///   {@code knn_entries.yaml}): the filename is stripped so the parent directory
+    ///   becomes the path root for per-entry relative filenames. The "named file"
+    ///   form is retained as a valid way to record which remote catalog the entries
+    ///   correspond to.
+    ///
+    /// Heuristic: if the URL does not end with {@code /} and its final path segment
+    /// contains a {@code .}, that segment is treated as a filename and stripped.
+    /// Otherwise a trailing {@code /} is appended.
+    ///
+    /// Returns {@code null} unchanged.
+    static String normalizeBaseUrl(String baseUrl) {
+        if (baseUrl == null || baseUrl.endsWith("/")) {
+            return baseUrl;
+        }
+        int lastSlash = baseUrl.lastIndexOf('/');
+        if (lastSlash < 0) {
+            return baseUrl + "/";
+        }
+        String lastSegment = baseUrl.substring(lastSlash + 1);
+        if (lastSegment.indexOf('.') >= 0) {
+            // last segment looks like a filename; strip it and keep the directory prefix
+            return baseUrl.substring(0, lastSlash + 1);
+        }
+        return baseUrl + "/";
     }
 
     /// Matches {@code ${VAR}} and {@code ${VAR:-default}} syntax.
