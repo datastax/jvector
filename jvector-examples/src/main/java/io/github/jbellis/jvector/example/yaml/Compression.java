@@ -92,15 +92,24 @@ public class Compression {
 
                     boolean hasEncodedBits = parameters.containsKey("encodedBits");
                     boolean hasCompressionRatio = parameters.containsKey("compressionRatio");
-                    if (hasEncodedBits == hasCompressionRatio) {
+                    boolean hasQuantizedDim = parameters.containsKey("quantizedDim");
+
+                    if ((hasEncodedBits ? 1 : 0) + (hasCompressionRatio ? 1 : 0) + (hasQuantizedDim ? 1 : 0) != 1) {
                         throw new IllegalArgumentException(
-                                "ASH requires exactly one of 'encodedBits' or 'compressionRatio'");
+                                "ASH requires exactly one of 'encodedBits', 'compressionRatio' or 'quantizedDim'");
                     }
 
-                    int encodedBits;
+                    int bitDepth = Integer.parseInt(parameters.getOrDefault("bitDepth", "1"));
+
+                    int quantizedDim;
                     if (hasEncodedBits) {
-                        encodedBits = Integer.parseInt(parameters.get("encodedBits"));
-                    } else {
+                        int encodedBits = Integer.parseInt(parameters.get("encodedBits"));
+                        var payloadBits = encodedBits - AsymmetricHashing.HEADER_BITS;
+                        quantizedDim = payloadBits / bitDepth;
+                        if (quantizedDim * bitDepth != payloadBits) {
+                            throw new IllegalArgumentException("Couldn't create ASH with exactly " + encodedBits + " encoded bits for bit depth " + bitDepth);
+                        }
+                    } else if (hasCompressionRatio) {
                         int requestedCompressionRatio = Integer.parseInt(parameters.get("compressionRatio"));
                         if (requestedCompressionRatio != 32
                                 && requestedCompressionRatio != 64
@@ -123,9 +132,10 @@ public class Compression {
                                 ? lowerPayloadBits
                                 : upperPayloadBits;
 
-                        encodedBits = AsymmetricHashing.HEADER_BITS + payloadBits;
+                        int encodedBits = AsymmetricHashing.HEADER_BITS + payloadBits;
 
                         double actualCompressionRatio = (double) originalBits / encodedBits;
+                        // TODO this might no longer hold if the container isn't a long[] anymore
                         System.out.printf(
                                 "ASH requested compressionRatio=%d resolved to encodedBits=%d "
                                         + "(header=%d, payload=%d) actualCompressionRatio=%.2f%n",
@@ -134,9 +144,17 @@ public class Compression {
                                 AsymmetricHashing.HEADER_BITS,
                                 payloadBits,
                                 actualCompressionRatio);
+
+                        quantizedDim = payloadBits / bitDepth;
+                        // TODO this doesn't really play well with the approximation in the previous step
+                        if (quantizedDim * bitDepth != payloadBits) {
+                            throw new IllegalArgumentException("Couldn't create ASH with exactly " + encodedBits + " encoded bits for bit depth " + bitDepth);
+                        }
+                    } else {
+                        quantizedDim = Integer.parseInt(parameters.get("quantizedDim"));
                     }
 
-                    return new CompressorParameters.ASHParameters(optimizer, encodedBits, landmarkCount);
+                    return new CompressorParameters.ASHParameters(optimizer, quantizedDim, bitDepth, landmarkCount);
                 };
             default:
                 throw new IllegalArgumentException("Unsupported compression type: " + type);

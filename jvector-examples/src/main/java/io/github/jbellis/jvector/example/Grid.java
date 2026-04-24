@@ -62,6 +62,7 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -432,8 +433,9 @@ public class Grid {
         if (buildCv instanceof PQVectors) {
             pq = (PQVectors) buildCv;
             bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        } else if (buildCv instanceof ASHVectors) {
-            bsp = BuildScoreProvider.ashBuildScoreProvider(ds.getSimilarityFunction(), (ASHVectors) buildCv);
+        } else if (buildCv instanceof AbstractAshVectors<?>) {
+            var ashv = (AbstractAshVectors<?>) buildCv;
+            bsp = ashv.createBuildScoreProvider(ds.getSimilarityFunction());
         } else {
             throw new IllegalArgumentException("Unsupported build compressor output type: " + buildCv.getClass().getName());
         }

@@ -16,9 +16,12 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing.QuantizedVector;
+import io.github.jbellis.jvector.quantization.ash.AbstractAshScoreFunction;
+import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshQueryPrecompute;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -51,10 +54,8 @@ import java.util.Objects;
  *   <li>Support multi-landmark ASH </li>
  * </ul>
  */
-public class ASHVectors implements CompressedVectors {
+public class ASHVectors extends AbstractAshVectors<AsymmetricHashing.QuantizedVector> {
 
-    final AsymmetricHashing ash;
-    final AsymmetricHashing.QuantizedVector[] compressedVectors;
     final ASHScorer scorer;
 
     enum AshSingleKernel {
@@ -83,11 +84,6 @@ public class ASHVectors implements CompressedVectors {
         }
     }
 
-    // Cached scalar headers (avoid object chasing in blocked scorer)
-    private final float[] scales;   // scale_i = ||x_i − μ|| / sqrt(d)
-    private final float[] offsets;  // offset_i = <x_i, μ> − ||μ||^2
-    private final byte[] landmarks;
-
     // Quantized dimensions
     private final int d;
     private final int words;
@@ -109,82 +105,11 @@ public class ASHVectors implements CompressedVectors {
      */
     public ASHVectors(AsymmetricHashing ash,
                       AsymmetricHashing.QuantizedVector[] compressedVectors) {
-        this.ash = ash;
-        this.compressedVectors = compressedVectors;
-        this.scorer = new ASHScorer(ash);
+        super(ash, compressedVectors);
 
+        this.scorer = new ASHScorer(ash);
         this.d = ash.quantizedDim;
         this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
-
-        int n = compressedVectors.length;
-        this.scales = new float[n];
-        this.offsets = new float[n];
-        this.landmarks = new byte[n];
-        for (int i = 0; i < n; i++) {
-            var v = compressedVectors[i];
-            scales[i]    = v.scale;
-            offsets[i]   = v.offset;
-            landmarks[i] = v.landmark;
-        }
-
-    }
-
-    // Private constructor that trusts prebuilt arrays (for vector landmark sorting)
-    private ASHVectors(AsymmetricHashing ash,
-                       AsymmetricHashing.QuantizedVector[] compressedVectors,
-                       float[] scales,
-                       float[] offsets,
-                       byte[] landmarks) {
-        this.ash = ash;
-        this.compressedVectors = compressedVectors;
-        this.scorer = new ASHScorer(ash);
-
-        this.d = ash.quantizedDim;
-        this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
-
-        // Defensive sanity checks (cheap)
-        if (scales.length != compressedVectors.length ||
-                offsets.length != compressedVectors.length ||
-                landmarks.length != compressedVectors.length) {
-            throw new IllegalArgumentException("Header arrays must match compressedVectors length");
-        }
-
-        this.scales = scales;
-        this.offsets = offsets;
-        this.landmarks = landmarks;
-
-        // packedBits cache starts empty (as usual)
-        this.packedBlockSize = -1;
-        this.packedBits = null;
-        this.packedBlockCount = 0;
-    }
-
-    @Override
-    public int count() {
-        return compressedVectors.length;
-    }
-
-    /**
-     * Serialize the compressor followed by the compressed vectors.
-     *
-     * <p>
-     * NOTE:
-     * This format is intentionally simple and versioned only at the compressor level.
-     * Additional per-vector metadata (e.g., multiple landmarks) must be versioned
-     * carefully when introduced.
-     */
-    @Override
-    public void write(IndexWriter out, int version) throws IOException {
-        // Write ASH compressor first
-        ash.write(out, version);
-
-        // Write vector count
-        out.writeInt(compressedVectors.length);
-
-        // Write vectors
-        for (var v : compressedVectors) {
-            v.write(out, ash.quantizedDim);
-        }
     }
 
     public static ASHVectors load(RandomAccessReader in) throws IOException {
@@ -913,64 +838,6 @@ public class ASHVectors implements CompressedVectors {
         }
     }
 
-    /**
-     * Stable, linear-time reorder by landmark id (C <= 64).
-     * Fills reordered header arrays in the same pass (no second constructor scan).
-     */
-    public LandmarkOrder reorderByLandmarkFast() {
-        final int n = compressedVectors.length;
-        final int C = ash.landmarkCount;
-
-        // Count per landmark
-        final int[] counts = new int[C];
-        for (int i = 0; i < n; i++) {
-            int c = this.landmarks[i] & 0xFF;
-            if (c >= C) {
-                throw new IllegalStateException("Invalid landmark id " + c + " at ordinal " + i + " (C=" + C + ")");
-            }
-            counts[c]++;
-        }
-
-        // Prefix sums: landmarkOffsets[c] is start of landmark c, length C+1
-        final int[] landmarkOffsets = new int[C + 1];
-        landmarkOffsets[0] = 0;
-        for (int c = 0; c < C; c++) {
-            landmarkOffsets[c + 1] = landmarkOffsets[c] + counts[c];
-        }
-        if (landmarkOffsets[C] != n) {
-            throw new IllegalStateException("landmarkOffsets[C] != n: " + landmarkOffsets[C] + " != " + n);
-        }
-
-        final int[] writePos = landmarkOffsets.clone();
-
-        final AsymmetricHashing.QuantizedVector[] newVecs = new AsymmetricHashing.QuantizedVector[n];
-        final float[] newScales = new float[n];
-        final float[] newOffsets = new float[n];
-        final byte[] newLandmarks = new byte[n];
-        final int[] newToOld = new int[n];
-
-        // Preserve an ordinal map so we can go back and forth
-        for (int oldOrd = 0; oldOrd < n; oldOrd++) {
-            final int c = this.landmarks[oldOrd] & 0xFF;
-            final int newOrd = writePos[c]++;
-
-            newVecs[newOrd] = this.compressedVectors[oldOrd];
-            newScales[newOrd] = this.scales[oldOrd];
-            newOffsets[newOrd] = this.offsets[oldOrd];
-            newLandmarks[newOrd] = this.landmarks[oldOrd];
-
-            newToOld[newOrd] = oldOrd;
-        }
-
-        final int[] oldToNew = new int[n];
-        for (int newOrd = 0; newOrd < n; newOrd++) {
-            oldToNew[newToOld[newOrd]] = newOrd;
-        }
-
-        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks);
-        return new LandmarkOrder(reordered, newToOld, oldToNew, landmarkOffsets);
-    }
-
     public static final class LandmarkRunStats {
         public final int n;
         public final int runCount;
@@ -1034,50 +901,8 @@ public class ASHVectors implements CompressedVectors {
         return new LandmarkRunStats(n, runCount, avg, max, stddev);
     }
 
-    /**
-     * For ASH, precomputed and non-precomputed scoring are currently identical.
-     *
-     * <p>
-     * TODO:
-     *  - Evaluate caching projected queries or other query-dependent state.
-     */
-    @Override
-    public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(
-            VectorFloat<?> query,
-            VectorSimilarityFunction similarityFunction) {
-        return scoreFunctionFor(query, similarityFunction);
-    }
-
-    /**
-     * Diversity-aware scoring is not supported for ASH at this stage.
-     *
-     * <p>
-     * TODO: Define how diversity should be measured.
-     */
-    @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(
-            int node1,
-            VectorSimilarityFunction similarityFunction) {
-        throw new UnsupportedOperationException("ASH diversity scoring not implemented");
-    }
-
     public AsymmetricHashing.QuantizedVector get(int ordinal) {
         return compressedVectors[ordinal];
-    }
-
-    @Override
-    public int getOriginalSize() {
-        return ash.originalDimension * Float.BYTES;
-    }
-
-    @Override
-    public int getCompressedSize() {
-        return ash.compressedVectorSize();
-    }
-
-    @Override
-    public AsymmetricHashing getCompressor() {
-        return ash;
     }
 
     @Override
@@ -1114,5 +939,22 @@ public class ASHVectors implements CompressedVectors {
     public String toString() {
         return "ASHVectors{count=" + compressedVectors.length +
                 ", ash=" + ash + '}';
+    }
+
+    @Override
+    public AbstractAshScoreFunction<QuantizedVector> createScoreFunction(AshQueryPrecompute qp) {
+        throw new UnsupportedOperationException("Should never be called: not required since scoreFunctionFor is overriden directly");
+    }
+
+    @Override
+    public float calcInnerDot(QuantizedVector v, float[] queryPool, int queryPoolOffset, int quantizedDim) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'calcInnerDot'");
+    }
+
+    @Override
+    public float calcSymmetricInnerDot(QuantizedVector v1, QuantizedVector v2) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'calcSymmetricInnerDot'");
     }
 }

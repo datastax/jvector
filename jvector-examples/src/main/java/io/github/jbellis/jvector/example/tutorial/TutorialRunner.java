@@ -38,6 +38,15 @@ public class TutorialRunner {
             case "ltm":
                 LargerThanMemory.main(forwardArgs);
                 break;
+            case "ash":
+                AshTest.main(forwardArgs);
+                break;
+            case "sweep":
+                AshSweep.main(forwardArgs);
+                break;
+            case "ashtray":
+                Ashtray3.main(forwardArgs);
+                break;
             default:
                 throw new IllegalArgumentException("Unknown example" + args[0]);
         }

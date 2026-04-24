@@ -42,7 +42,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
         <revision>4.0.0-rc.9-SNAPSHOT</revision>
-        <ludovic.netlib.version>3.0.3</ludovic.netlib.version>
+        <ludovic.netlib.version>3.1.0</ludovic.netlib.version>
+        <lombok.version>1.18.44</lombok.version>
+        <junit5.version>5.14.3</junit5.version>
     </properties>
     <modules>
         <module>jvector-base</module>
@@ -85,6 +87,13 @@
                 <version>3.11.0</version>
                 <configuration>
                     <release>11</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
             <plugin>
@@ -103,7 +112,7 @@
                     <dependency>
                         <groupId>org.junit.vintage</groupId>
                         <artifactId>junit-vintage-engine</artifactId>
-                        <version>5.9.1</version>
+                        <version>${junit5.version}</version>
                     </dependency>
                 </dependencies>
             </plugin>
@@ -188,6 +197,12 @@
             <version>1.20.0</version>
         </dependency>
         <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <version>2.0.16</version>
@@ -226,9 +241,11 @@
                 <version>${ludovic.netlib.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.junit.jupiter</groupId>
-                <artifactId>junit-jupiter-engine</artifactId>
-                <version>5.9.1</version>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit5.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <dependency>
                 <groupId>com.carrotsearch.randomizedtesting</groupId>

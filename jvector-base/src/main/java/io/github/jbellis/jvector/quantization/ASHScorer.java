@@ -114,14 +114,14 @@ public final class ASHScorer {
         }
 
         return (AsymmetricHashing.QuantizedVector v) -> {
-            final int c = v.landmark & 0xFF; // unsigned [0,C)
+            final int c = v.getLandmark() & 0xFF; // unsigned [0,C)
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
             // scale = ||x − μ_c|| / √d  (precomputed at encode-time)
-            final float scale = v.scale;
+            final float scale = v.getScale();
 
             // offset = <x, μ_c> − ||μ_c||²  (precomputed at encode-time)
-            final float offset = v.offset;
+            final float offset = v.getOffset();
 
             // maskedAdd = <q̃_c, b>
             // b ∈ {0,1}^d stored as packed longs

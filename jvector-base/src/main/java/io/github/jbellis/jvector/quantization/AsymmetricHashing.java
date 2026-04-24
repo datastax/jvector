@@ -21,6 +21,9 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshQuantizedVector;
+import io.github.jbellis.jvector.quantization.ash.NbAshFactory;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -28,7 +31,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
-
+import lombok.Getter;
 import dev.ludovic.netlib.blas.BLAS;
 import dev.ludovic.netlib.lapack.LAPACK;
 import java.io.IOException;
@@ -59,9 +62,10 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * Encodes each vector into a fixed-length binary code using a learned or random
  * orthonormal projection and sign thresholding.
  */
-public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
+public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, Accountable {
     public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
-    private static final int MAGIC = 0x75EC4012;  // TODO update the magic number?
+    private static final int MAGIC = 0xA54C04F2;  // ASHCOMPR if you squint
+    private static final int ASH_SERIALIZE_VERSION = 1;
 
     // ---------------------------------------------------------------------
     // Training configuration (reference defaults; TODO tune later)
@@ -124,6 +128,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Learned or random Stiefel transform */
     public final StiefelTransform stiefelTransform;
 
+    private final NbAshFactory nbFactory;
+    @Getter
+    private final int bitDepth;
+
     /**
      * Precomputed landmark projections in the reduced space:
      *   landmarkProj[c][j] = <A[j], μ_c>  where A is [d][D] and μ_c is length D.
@@ -144,27 +152,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     @VisibleForTesting
     public boolean learn = true;
 
-    // ---------------------------------------------------------------------
-    // Quantizer instances (cached)
-    // ---------------------------------------------------------------------
-
-    private final BinaryQuantizer randomQuantizer = new RandomBinaryQuantizer();
-    private final BinaryQuantizer itqQuantizer = new ItqBinaryQuantizer();
-    private final BinaryQuantizer landingQuantizer = new LandingBinaryQuantizer();
-
-    private BinaryQuantizer quantizer() {
-        switch (optimizer) {
-            case RANDOM:
-                return randomQuantizer;
-            case ITQ:
-                return itqQuantizer;
-            case LANDING:
-                return landingQuantizer;
-            default:
-                throw new IllegalStateException("Unknown optimizer " + optimizer);
-        }
-    }
-
     /**
      * Class constructor.
      * @param originalDim the dimensionality of the vectors to be quantized
@@ -176,11 +163,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                               int optimizer,
                               VectorFloat<?>[] landmarks,
                               StiefelTransform stiefelTransform,
+                              int bitDepth,
                               float[][] landmarkProj,
                               float[] landmarkProjSum) {
         this.originalDimension = originalDim;
         this.encodedBits = encodedBits;
         this.quantizedDim = quantizedDim;
+
+        this.bitDepth = bitDepth;
+        this.nbFactory = NbAshFactory.get(bitDepth);
 
         // Defensive check for consistency
         if (encodedBits - HEADER_BITS != quantizedDim) {
@@ -255,6 +246,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
                                                int optimizer,
                                                int encodedBits,
+                                               int bitDepth,
                                                int landmarkCount) throws IOException {
 
         final int quantizedDim = encodedBits - HEADER_BITS;
@@ -366,6 +358,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 optimizer,
                 landmarks,
                 stiefelTransform,
+                bitDepth,
                 lp.proj,
                 lp.sum
         );
@@ -495,8 +488,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         int version = in.readInt();
-        if (version > OnDiskGraphIndex.CURRENT_VERSION) {
-            throw new IllegalArgumentException("Unsupported ASH version " + version);
+        if (version != ASH_SERIALIZE_VERSION) {
+            throw new IllegalArgumentException("Unsupported ASH version " + version + ", wanted " + ASH_SERIALIZE_VERSION);
         }
 
         int originalDimension = in.readInt();
@@ -516,6 +509,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         int optimizer = in.readInt();
+        int bitDepth = in.readInt();
 
         // Multi-landmark support
         int landmarkCount = in.readInt();
@@ -552,6 +546,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 optimizer,
                 landmarks,
                 stiefelTransform,
+                bitDepth,
                 lp.proj,
                 lp.sum
         );
@@ -566,17 +561,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * @throws IOException if there is a problem writing to out.
      */
     public void write(IndexWriter out, int version) throws IOException {
+
         if (version > OnDiskGraphIndex.CURRENT_VERSION) {
             throw new IllegalArgumentException("Unsupported version " + version);
         }
 
         out.writeInt(MAGIC);
-        out.writeInt(version);
+        out.writeInt(ASH_SERIALIZE_VERSION);
 
         out.writeInt(originalDimension);
         out.writeInt(encodedBits);
         out.writeInt(quantizedDim);
         out.writeInt(optimizer);
+        out.writeInt(bitDepth);
 
         // Multi-landmark serialization
         out.writeInt(landmarkCount);
@@ -592,177 +589,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     // ---------------------------------------------------------------------
-    // Index-level quantization entry point
-    // ---------------------------------------------------------------------
-
-    public void quantizeVector(VectorFloat<?> vector,
-                               float residualNorm,
-                               byte landmark,
-                               QuantizedVector dest) {
-
-        if (quantizedDim > originalDimension) {
-            throw new IllegalArgumentException(
-                    "quantizedDim (" + quantizedDim +
-                            ") exceeds original dimension (" + originalDimension + ")");
-        }
-
-        if ((landmark & 0xFF) >= landmarkCount) {
-            throw new IllegalArgumentException("Invalid landmark id " + (landmark & 0xFF)
-                    + " for landmarkCount=" + landmarkCount);
-        }
-
-        // Landmark-specific mean (C=1 → landmarks[0] == dataset mean)
-        final VectorFloat<?> mu = landmarks[landmark];
-
-        QuantizedVector.quantizeTo(
-                vector,
-                residualNorm,
-                quantizedDim,
-                mu,
-                stiefelTransform,
-                quantizer(),
-                dest
-        );
-    }
-
-    // ---------------------------------------------------------------------
-    // Binary quantization strategies
-    // ---------------------------------------------------------------------
-
-    public interface BinaryQuantizer {
-        void quantizeBody(VectorFloat<?> vector,
-                          VectorFloat<?> mu,
-                          float residualNorm,
-                          int quantizedDim,
-                          StiefelTransform stiefel,
-                          long[] outWords);
-    }
-
-    public static final class RandomBinaryQuantizer implements BinaryQuantizer {
-        // ThreadLocal to hold the reusable buffers.
-        // Using a simple container class to avoid multiple ThreadLocal lookups.
-        private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
-
-        private static final class Workspace {
-            float[] x;
-            float[] muArr;
-            float[] xhat;
-
-            void ensureCapacity(int dim) {
-                if (x == null || x.length < dim) {
-                    x = new float[dim];
-                    muArr = new float[dim];
-                    xhat = new float[dim];
-                }
-            }
-        }
-
-        @Override
-        public void quantizeBody(VectorFloat<?> vector,
-                                 VectorFloat<?> mu,
-                                 float residualNorm,
-                                 int quantizedDim,
-                                 StiefelTransform stiefel,
-                                 long[] outWords) {
-
-            final float[][] A = stiefel.AFloat;
-            final int originalDim = stiefel.cols;
-
-            // Get workspace for this thread and ensure correct sizing (originalDim may have changed)
-            Workspace ws = WORKSPACE.get();
-            ws.ensureCapacity(originalDim);
-
-            // Alias for readability (no new allocations)
-            final float[] x = ws.x;
-            final float[] muArr = ws.muArr;
-            final float[] xhat = ws.xhat;
-
-            final var vecUtil =
-                    io.github.jbellis.jvector.vector.VectorizationProvider
-                            .getInstance()
-                            .getVectorUtilSupport();
-
-            // Copy vector and mean once into workspace
-            for (int d = 0; d < originalDim; d++) {
-                x[d] = vector.get(d);
-                muArr[d] = mu.get(d);
-            }
-
-            // ASH paper, Eq. 6, normalization
-            final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
-
-            // Compute normalized residual x̂
-            for (int d = 0; d < originalDim; d++) {
-                xhat[d] = (x[d] - muArr[d]) * invNorm;
-            }
-
-            // Binarize directly from per-row projection
-            final int words = QuantizedVector.wordsForDims(quantizedDim);
-            for (int w = 0; w < words; w++) {
-                long bits = 0L;
-                int base = w << 6;
-                int rem = Math.min(64, quantizedDim - base);
-
-                for (int j = 0; j < rem; j++) {
-                    int bitIndex = base + j;
-                    float acc = vecUtil.ashDotRow(A[bitIndex], xhat);
-                    if (acc > 0.0f) {
-                        bits |= (1L << j);
-                    }
-                }
-                outWords[w] = bits;
-            }
-        }
-    }
-
-    public static final class ItqBinaryQuantizer implements BinaryQuantizer {
-        // Same binarization math for all optimizers; only the learned transform differs.
-        // TODO consolidate quantizeBody across learners/random
-        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
-
-        @Override
-        public void quantizeBody(VectorFloat<?> vector,
-                                 VectorFloat<?> mu,
-                                 float residualNorm,
-                                 int quantizedDim,
-                                 StiefelTransform stiefel,
-                                 long[] outWords) {
-            delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, stiefel, outWords);
-        }
-    }
-
-    public static final class LandingBinaryQuantizer implements BinaryQuantizer {
-        // Same binarization math for all optimizers; only the learned transform differs.
-        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
-
-        @Override
-        public void quantizeBody(VectorFloat<?> vector,
-                                 VectorFloat<?> mu,
-                                 float residualNorm,
-                                 int quantizedDim,
-                                 StiefelTransform stiefel,
-                                 long[] outWords) {
-            delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, stiefel, outWords);
-        }
-    }
-
-    // ---------------------------------------------------------------------
     // Quantized vector (per-vector data)
     // ---------------------------------------------------------------------
 
-    public static class QuantizedVector {
-        public float scale; // d^{-1/2} ||x_i - μ_i*||_2
-        public float offset; // offset_i = <x_i, μ_i*> - ||μ_i*||^2
-        public byte landmark; // c_i*, unsigned [0, C)
+    public static class QuantizedVector extends AshQuantizedVector {
+
+        // Quantization depends only on StiefelTransform, so `RandomBinaryQuantizer` supports everything
+        private static final BinaryQuantizer quantizer = new RandomBinaryQuantizer();
+
         public long[] binaryVector; // bin(x̂_i)
 
         private QuantizedVector(float scale,
                                 float offset,
                                 byte landmark,
                                 long[] binaryVector) {
-            this.scale = scale;
-            this.offset = offset;
-            this.landmark = landmark;
+            super(scale, offset, landmark);
             this.binaryVector = binaryVector;
         }
 
@@ -784,53 +625,131 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     + wordsForDims(quantizedDim) * Long.BYTES;
         }
 
-        /**
-         * Writes only the binary body into {@code dest.binaryVector}.
-         *
-         * <p>Header fields ({@code scale}, {@code offset}, {@code landmark}) must be
-         * set by the caller prior to calling this method.</p>
-         *
-         * @param residualNorm  ||x - μ||_2, required for Eq. 6 normalization during binarization
-         */
-        static void quantizeTo(VectorFloat<?> vector,
-                               float residualNorm,
-                               int quantizedDim,
-                               VectorFloat<?> mu,
-                               StiefelTransform stiefel,
-                               BinaryQuantizer quantizer,
-                               QuantizedVector dest) {
+        private interface BinaryQuantizer {
+            void quantizeBody(VectorFloat<?> vector,
+                            VectorFloat<?> mu,
+                            float residualNorm,
+                            int quantizedDim,
+                            StiefelTransform stiefel,
+                            long[] outWords);
+        }
+
+        private static final class RandomBinaryQuantizer implements BinaryQuantizer {
+            // ThreadLocal to hold the reusable buffers.
+            // Using a simple container class to avoid multiple ThreadLocal lookups.
+            private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
+
+            private static final class Workspace {
+                float[] x;
+                float[] muArr;
+                float[] xhat;
+
+                void ensureCapacity(int dim) {
+                    if (x == null || x.length < dim) {
+                        x = new float[dim];
+                        muArr = new float[dim];
+                        xhat = new float[dim];
+                    }
+                }
+            }
+
+            @Override
+            public void quantizeBody(VectorFloat<?> vector,
+                                    VectorFloat<?> mu,
+                                    float residualNorm,
+                                    int quantizedDim,
+                                    StiefelTransform stiefel,
+                                    long[] outWords) {
+
+                final float[][] A = stiefel.AFloat;
+                final int originalDim = stiefel.cols;
+
+                // Get workspace for this thread and ensure correct sizing (originalDim may have changed)
+                Workspace ws = WORKSPACE.get();
+                ws.ensureCapacity(originalDim);
+
+                // Alias for readability (no new allocations)
+                final float[] x = ws.x;
+                final float[] muArr = ws.muArr;
+                final float[] xhat = ws.xhat;
+
+                final var vecUtil =
+                        io.github.jbellis.jvector.vector.VectorizationProvider
+                                .getInstance()
+                                .getVectorUtilSupport();
+
+                // Copy vector and mean once into workspace
+                for (int d = 0; d < originalDim; d++) {
+                    x[d] = vector.get(d);
+                    muArr[d] = mu.get(d);
+                }
+
+                // ASH paper, Eq. 6, normalization
+                final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
+
+                // Compute normalized residual x̂
+                for (int d = 0; d < originalDim; d++) {
+                    xhat[d] = (x[d] - muArr[d]) * invNorm;
+                }
+
+                // Binarize directly from per-row projection
+                final int words = QuantizedVector.wordsForDims(quantizedDim);
+                for (int w = 0; w < words; w++) {
+                    long bits = 0L;
+                    int base = w << 6;
+                    int rem = Math.min(64, quantizedDim - base);
+
+                    for (int j = 0; j < rem; j++) {
+                        int bitIndex = base + j;
+                        float acc = vecUtil.ashDotRow(A[bitIndex], xhat);
+                        if (acc > 0.0f) {
+                            bits |= (1L << j);
+                        }
+                    }
+                    outWords[w] = bits;
+                }
+            }
+        }
+
+        // TODO:ashkrisk is this working?
+        /** {@inheritDoc} */
+        @Override
+        public void quantizeVectorInto(
+                VectorFloat<?> vector, 
+                float residualNorm,
+                StiefelTransform stiefel,
+                VectorFloat<?> mu) {
 
             // encodeTo() must have initialized header
-            if (Float.isNaN(dest.scale) || Float.isNaN(dest.offset)) {
+            if (Float.isNaN(this.getScale()) || Float.isNaN(this.getOffset())) {
                 throw new IllegalStateException(
                         "QuantizedVector header not initialized before quantizeTo()"
                 );
             }
 
-            assert Float.isFinite(dest.scale) : "scale is not finite";
-            assert Float.isFinite(dest.offset) : "offset is not finite";
+            assert Float.isFinite(this.getScale()) : "scale is not finite";
+            assert Float.isFinite(this.getOffset()) : "offset is not finite";
+
+            int quantizedDim = stiefel.quantizedDim();
 
             int words = wordsForDims(quantizedDim);
-            if (dest.binaryVector.length < words) {
+            if (this.binaryVector.length < words) {
                 throw new IllegalArgumentException("binaryVector too short");
             }
 
-            Arrays.fill(dest.binaryVector, 0, words, 0L);
+            Arrays.fill(this.binaryVector, 0, words, 0L);
             quantizer.quantizeBody(
                     vector,
                     mu,
                     residualNorm,
                     quantizedDim,
                     stiefel,
-                    dest.binaryVector
+                    this.binaryVector
             );
         }
 
-        public void write(IndexWriter out, int quantizedDim) throws IOException {
-            out.writeFloat(scale);
-            out.writeFloat(offset);
-            out.writeByte(landmark);
-
+        @Override
+        public void writeBinaryVector(IndexWriter out, int quantizedDim) throws IOException {
             int words = wordsForDims(quantizedDim);
             for (int i = 0; i < words; i++) {
                 out.writeLong(binaryVector[i]);
@@ -857,68 +776,20 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return new QuantizedVector(scale, offset, landmark, body);
         }
 
-        public static void loadInto(RandomAccessReader in,
-                                    QuantizedVector dest,
-                                    int quantizedDim) throws IOException {
-            dest.scale = in.readFloat();
-            dest.offset = in.readFloat();
-            if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
-                dest.landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
-            } else {
-                throw new IOException("ASH requires ByteReadable reader for landmark");
-            }
-
-            int words = wordsForDims(quantizedDim);
-            for (int i = 0; i < words; i++) {
-                dest.binaryVector[i] = in.readLong();
-            }
+        @Override
+        public int getBitDepth() {
+            return 1;
         }
 
-        /**
-         * Compares two ASH quantized vectors for exact encoded equality.
-         *
-         * <p>
-         * Equality is defined as bitwise equality of all encoded components:
-         * <ul>
-         *   <li>Binary code payload</li>
-         *   <li>Associated landmark index</li>
-         *   <li>Auxiliary scalar values (residual norm, dot-with-landmark)</li>
-         * </ul>
-         *
-         * <p>
-         * Floating-point values are compared using their raw bit representations
-         * rather than tolerance-based comparisons. This is intentional: quantized
-         * vectors are expected to be deterministic outputs of the encoder, and
-         * approximate equality would be ambiguous and unsafe for hashing.
-         * </p>
-         */
         @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-
-            QuantizedVector that = (QuantizedVector) o;
-            return Float.floatToIntBits(scale) == Float.floatToIntBits(that.scale)
-                    && Float.floatToIntBits(offset) == Float.floatToIntBits(that.offset)
-                    && landmark == that.landmark
-                    && Arrays.equals(binaryVector, that.binaryVector);
+        public void binarizeIntoFromQuantized(int[] quantized) {
+            throw new UnsupportedOperationException("Shoule never be called since quantizeVectorInto is overriden directly");
         }
 
-        /**
-         * Hash code consistent with {@link #equals(Object)}.
-         *
-         * <p>
-         * This hash reflects the full encoded state of the vector and is suitable
-         * for use in hash-based collections during testing, debugging, or caching.
-         * </p>
-         */
         @Override
-        public int hashCode() {
-            int result = Integer.hashCode(Float.floatToIntBits(scale));
-            result = 31 * result + Integer.hashCode(Float.floatToIntBits(offset));
-            result = 31 * result + Short.hashCode(landmark);
-            result = 31 * result + Arrays.hashCode(binaryVector);
-            return result;
+        public int getRawComponentSum() {
+            // TODO Auto-generated method stub
+            throw new UnsupportedOperationException("Unimplemented method 'getRawComponentSum'");
         }
     }
 
@@ -966,6 +837,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         /** Number of columns in A (originalDim = D). */
         public final int cols;
+
+        public int quantizedDim() {
+            return rows;
+        }
+
+        public int originalDim() {
+            return cols;
+        }
 
         public StiefelTransform(RealMatrix W) {
             this.W = Objects.requireNonNull(W, "W");
@@ -1088,7 +967,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      */
 
     @Override
-    public ASHVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public AbstractAshVectors<?> encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         final int n = ravv.size();
 
         // The caller controls parallelism; we derive a bounded number of tasks
@@ -1100,7 +979,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // guarantees each ordinal is written exactly once.
         final int chunkSize = (n + parallelism - 1) / parallelism;
 
-        final QuantizedVector[] out = new QuantizedVector[n];
+        final AshQuantizedVector[] out = new AshQuantizedVector[n];
         final var ravvSupplier = ravv.threadLocalSupplier();
 
         // NOTE:
@@ -1128,7 +1007,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     if (v != null) {
                         out[i] = encode(v);
                     } else {
-                        out[i] = QuantizedVector.createEmpty(quantizedDim);
+                        out[i] = nbFactory.createEmptyVector(quantizedDim);
                     }
                 }
             }));
@@ -1140,7 +1019,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             task.join();
         }
 
-        return new ASHVectors(this, out);
+        return nbFactory.newVectors(this, out);
     }
 
 
@@ -1149,14 +1028,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * @return the header and binary vector payload
      */
     @Override
-    public QuantizedVector encode(VectorFloat<?> vector) {
-        var qv = QuantizedVector.createEmpty(this.quantizedDim);
+    public AshQuantizedVector encode(VectorFloat<?> vector) {
+        var qv = nbFactory.createEmptyVector(this.quantizedDim);
         encodeTo(vector, qv);
         return qv;
     }
 
     @Override
-    public void encodeTo(VectorFloat<?> vector, QuantizedVector dest) {
+    public void encodeTo(VectorFloat<?> vector, AshQuantizedVector dest) {
         // NOTE:
         // Single-landmark baseline configuration (Table 2, C = 1).
         // All vectors are encoded relative to landmark μ_c (C=1 => μ_0 is the dataset mean).
@@ -1176,34 +1055,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         final VectorFloat<?> mu = landmarks[landmark & 0xFF];
 
-        // Compute <x, μ>
-        final float dotXMu = VectorUtil.dotProduct(vector, mu);
-
-        // Compute ||x_i − μ_i*||_2
-        // We store the true L2 norm (not squared), matching the paper’s use in Eq. 6 normalization.
-        final float sqDist = VectorUtil.squareL2Distance(vector, mu);
-        final float residualNorm = (float) Math.sqrt(sqDist);
-
-        // Sanity: quantizedDim already accounts for physical header bits
-        // Binary body uses exactly quantizedDim bits.
-        assert quantizedDim > 0;
-
-        // Store:
-        //   scale  = ||x − μ|| / sqrt(d)
-        //   offset = <x, μ> − ||μ||^2
-        // NOTE: we still compute residualNorm (||x − μ||) even though we don't store it alone,
-        // because the binarizer needs it for Eq. 6 normalization.
-        final float invSqrtD = (float) (1.0 / Math.sqrt(quantizedDim));
-        final float scale = residualNorm * invSqrtD;
-        final float offset = dotXMu - landmarkNormSq[landmark];
-
-        // Write the new header fields into dest (requires QuantizedVector fields renamed, see below)
-        dest.scale = scale;
-        dest.offset = offset;
-        dest.landmark = landmark;
-
-        // Binary body: sign(A · (x − μ)) with Eq. 6 normalization inside quantizer
-        quantizeVector(vector, residualNorm, landmark, dest);
+        dest.encodeInto(vector, mu, landmark, landmarkNormSq[landmark], stiefelTransform);
     }
 
     // ---------------------------------------------------------------------
@@ -1856,6 +1708,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     @Override
     public int compressedVectorSize() {
+        // TODO fix
+        if (this.bitDepth != 1) {
+            throw new UnsupportedOperationException("Get compressed size is not supported for N-bit yet");
+        }
         int words = QuantizedVector.wordsForDims(quantizedDim);
         return Float.BYTES           // scale
                 + Float.BYTES           // offset
@@ -2089,9 +1945,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         return String.format(
-                "AsymmetricHashing[origDim=%d, encodedBits=%d, quantizedDim=%d, optimizer=%s, landmarks=%d]",
+                "AsymmetricHashing[origDim=%d, bitDepth=%d, quantizedDim=%d, optimizer=%s, landmarks=%d]",
                 originalDimension,
-                encodedBits,
+                bitDepth,
                 quantizedDim,
                 optimizerName,
                 landmarkCount

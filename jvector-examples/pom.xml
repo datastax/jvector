@@ -158,7 +158,6 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>5.11.4</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -390,7 +389,11 @@
                                         <argument>--enable-native-access=ALL-UNNAMED</argument>
                                         <argument>--add-modules=jdk.incubator.vector</argument>
                                         <argument>-ea</argument>
+                                        <argument>-Xmx10G</argument>
                                         <argument>-Djvector.experimental.enable_native_vectorization=true</argument>
+                                        <argument>-Djvector.physical_core_count=8</argument>
+                                        <argument>-Djvector.ash.singleKernel=scalar</argument>
+                                        <argument>-Djvector.ash.blockKernel=scalar</argument>
                                         <argument>io.github.jbellis.jvector.example.tutorial.TutorialRunner</argument>
                                         <argument>${tutorial}</argument>
                                     </arguments>

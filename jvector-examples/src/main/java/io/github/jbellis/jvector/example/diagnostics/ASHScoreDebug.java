@@ -143,7 +143,7 @@ public final class ASHScoreDebug {
         // sign-dot in {-1,+1}^d
         float signDot = 2.0f * (float) matches - (float) d;
 
-        return (v1.scale * v2.scale) * signDot + v1.offset + v2.offset + muNormSq;
+        return (v1.getScale() * v2.getScale()) * signDot + v1.getOffset() + v2.getOffset() + muNormSq;
     }
 
     private static void printCorrelations(double[] gt, double[] asym, double[] sym) {

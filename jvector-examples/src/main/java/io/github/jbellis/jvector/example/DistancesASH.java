@@ -111,6 +111,8 @@ public class DistancesASH {
         // How many ASH landmarks to use, C = [1, 64]
         final int landmarkCount = 1;
 
+        final int bitDepth = 1;
+
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
         List<List<Integer>> groundTruth = SiftLoader.readIvecs(filenameGT);
@@ -162,7 +164,7 @@ public class DistancesASH {
 
         logProgress("\t[stage] ASH initialize: starting (centroids + training)");
         long initStart = System.nanoTime();
-        var ash = AsymmetricHashing.initialize(ravv, optimizer, encodedBits, landmarkCount);
+        var ash = AsymmetricHashing.initialize(ravv, optimizer, encodedBits, bitDepth, landmarkCount);
         long initEnd = System.nanoTime();
         logProgress("\t[stage] ASH initialize: done in " + (initEnd - initStart) / 1e9 + " seconds");
 
@@ -196,31 +198,7 @@ public class DistancesASH {
         final int[] newToOldFinal;
 
         if (REORDER_BY_LANDMARK) {
-            long stat0 = System.nanoTime();
-            var beforeStats = ashVectors.landmarkRunStats();
-            long stat1 = System.nanoTime();
-
-            System.out.println("\tLandmark run stats BEFORE reorder: " + beforeStats
-                    + " (computed in " + (stat1 - stat0) / 1e9 + " s)");
-
-            long t0 = System.nanoTime();
-            ASHVectors.LandmarkOrder order = ashVectors.reorderByLandmarkFast();
-            long t1 = System.nanoTime();
-
-            ASHVectors reordered = order.vectors;
-
-            long stat2 = System.nanoTime();
-            var afterStats = reordered.landmarkRunStats();
-            long stat3 = System.nanoTime();
-
-            System.out.println("\tLandmark reorder took " + (t1 - t0) / 1e9 + " s");
-            System.out.println("\tLandmark run stats AFTER  reorder: " + afterStats
-                    + " (computed in " + (stat3 - stat2) / 1e9 + " s)");
-            System.out.println("--");
-
-            ashVectorsFinal = reordered;
-            ashVecsFinal = reordered;         // CompressedVectors view used by scoreFunctionFor
-            newToOldFinal = order.newToOld;   // map reordered ordinal -> original base ordinal
+            throw new IllegalArgumentException("reorder support removed");
         } else {
             System.out.println("\tLandmark reorder disabled (-Djvector.ash.reorderByLandmark=false)");
             ashVectorsFinal = ashVectors;

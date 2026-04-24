@@ -106,19 +106,21 @@ public abstract class CompressorParameters {
     }
     public static class ASHParameters extends CompressorParameters {
         private final int optimizer;
-        private final int encodedBits;
+        private final int quantizedDim;
+        private final int bitDepth;
         private final int landmarkCount;
 
-        public ASHParameters(int optimizer, int encodedBits, int landmarkCount) {
+        public ASHParameters(int optimizer, int quantizedDim, int bitDepth, int landmarkCount) {
             this.optimizer = optimizer;
-            this.encodedBits = encodedBits;
+            this.quantizedDim = quantizedDim;
             this.landmarkCount = landmarkCount;
+            this.bitDepth = bitDepth;
         }
 
         @Override
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             try {
-                return AsymmetricHashing.initialize(ds.getBaseRavv(), optimizer, encodedBits, landmarkCount);
+                return AsymmetricHashing.initialize(ds.getBaseRavv(), optimizer, quantizedDim + AsymmetricHashing.HEADER_BITS, bitDepth, landmarkCount);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -126,7 +128,7 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("ASH_%s_opt%d_bits%d_C%d", ds.getName(), optimizer, encodedBits, landmarkCount);
+            return String.format("ASH_%s_opt%d_bd%d_quantDim%d_C%d", ds.getName(), optimizer, bitDepth, quantizedDim, landmarkCount);
         }
 
         // TODO set to true for production after debug is complete.

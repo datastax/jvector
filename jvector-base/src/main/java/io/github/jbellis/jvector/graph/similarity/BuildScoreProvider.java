@@ -271,7 +271,7 @@ public interface BuildScoreProvider {
      * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark) and
      * {@link VectorSimilarityFunction#DOT_PRODUCT}.
      */
-    static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
+    static BuildScoreProvider __ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
         if (vsf != VectorSimilarityFunction.DOT_PRODUCT) {
             throw new UnsupportedOperationException("ASH build scoring supports DOT_PRODUCT only");
         }
@@ -354,7 +354,7 @@ public interface BuildScoreProvider {
                         //   offset = <x,μ> - ||μ||^2
                         // and decoder scaling f(z)=d^{-1/2}Az implies <tilde x, tilde y> ≈ (1/d)<g(tilde x), g(tilde y)>
                         // so centered term becomes: scale_x * scale_y * <g_x, g_y>
-                        return (v1.scale * v2.scale) * signDot + v1.offset + v2.offset + muNormSq;
+                        return (v1.getScale() * v2.getScale()) * signDot + v1.getOffset() + v2.getOffset() + muNormSq;
                     }
                 });
             }

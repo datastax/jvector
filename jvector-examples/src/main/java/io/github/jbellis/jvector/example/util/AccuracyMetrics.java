@@ -48,6 +48,57 @@ public class AccuracyMetrics {
         return (double) correctCount / (kGT * gt.size());
     }
 
+    public static double recallFromResults(List<? extends List<Integer>> gt, List<? extends List<Integer>> retrieved, int kGT, int kRetrieved) {
+        if (gt.size() != retrieved.size()) {
+            throw new IllegalArgumentException("Insufficient ground truth for the number of retrieved elements");
+        }
+        long correctCount = 0;
+        for (int i = 0; i < gt.size(); i++) {
+            correctCount += topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved);
+        }
+        return (double) correctCount / (kGT * gt.size());
+    }
+
+    private static long topKCorrect(List<Integer> gt, List<Integer> retrieved, int kGT, int kRetrieved) {
+        // Exception validation
+        if (kGT > kRetrieved) {
+            throw new IllegalArgumentException("kGT: " + kGT + " > kRetrieved: " + kRetrieved);
+        }
+        if (kGT > gt.size()) {
+            throw new IllegalArgumentException("kGT: " + kGT + " > Gt size: " + gt.size());
+        }
+        if (kRetrieved > retrieved.size()) {
+            throw new IllegalArgumentException("kRetrieved: " + kRetrieved + " > retrieved size: " + retrieved.size());
+        }
+
+        // Build HashSet with explicit capacity to avoid rehashing.
+        // Load factor is 0.75, so sized to kGT / 0.75.
+        Set<Integer> gtSet = new HashSet<>((int) (kGT / 0.75f) + 1);
+        for (int i = 0; i < kGT; i++) {
+            Integer ord = gt.get(i);
+            if (ord == null) {
+                throw new IllegalArgumentException("Null ground truth ordinal in top-" + kGT + " at index " + i);
+            }
+            if (!gtSet.add(ord)) {
+                throw new IllegalArgumentException("Duplicate ground truth ordinal in top-" + kGT + ": " + ord);
+            }
+        }
+
+        Set<Integer> seenRetrieved = new HashSet<>((int) (kRetrieved / 0.75f) + 1);
+        int hits = 0;
+        for (int i = 0; i < kRetrieved; i++) {
+            int p = retrieved.get(i);
+            if (!seenRetrieved.add(p)) {
+                throw new IllegalArgumentException("Duplicate retrieved ordinal in top-" + kRetrieved + ": " + p);
+            }
+            if (gtSet.contains(p)) {
+                hits++;
+            }
+        }
+
+        return hits;
+    }
+
     private static long topKCorrect(List<Integer> gt, SearchResult retrieved, int kGT, int kRetrieved) {
         // Exception validation
         var nodes = retrieved.getNodes();
