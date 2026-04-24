@@ -36,10 +36,12 @@ import io.github.jbellis.jvector.util.DenseIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -49,7 +51,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -59,7 +60,7 @@ import java.util.stream.IntStream;
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-public class OnHeapGraphIndex implements MutableGraphIndex {
+public class OnHeapGraphIndex implements MutableGraphIndex, InMemoryGraphIndex {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
 
@@ -394,6 +395,34 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public boolean allMutationsCompleted() {
         return allMutationsCompleted;
+    }
+
+    @Override
+    public PersistedGraphIndex persist(Path path) {
+        //TODO: implement
+        return null;
+    }
+
+    @Override
+    public InMemoryGraphIndex load(GraphIndex index) {
+        //TODO: implement
+        return null;
+    }
+
+    @Override
+    public InMemoryGraphIndex load(Path path) {
+        //TODO: implement
+        return null;
+    }
+
+    @Override
+    public long addGraphNode(int node, VectorFloat<?> vector) {
+        return 0;
+    }
+
+    @Override
+    public long addGraphNodes(VectorFloat<?> vector) {
+        return 0;
     }
 
     /**
