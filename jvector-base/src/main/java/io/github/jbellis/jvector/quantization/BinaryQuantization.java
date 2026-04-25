@@ -64,18 +64,20 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
 
     @Override
     public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        var ravvCopy = ravv.threadLocalSupplier();
-        var cv = simdExecutor.submit(() -> IntStream.range(0, ravv.size())
-                .parallel()
-                .mapToObj(i -> {
-                    var localRavv = ravvCopy.get();
-                    VectorFloat<?> v = localRavv.getVector(i);
-                    return v == null
-                            ? new long[compressedVectorSize() / Long.BYTES]
-                            : encode(v);
-                        })
-                .toArray(long[][]::new))
-                .join();
+        final long[][] cv;
+        try (var ravvCopy = ravv.closeableThreadLocalSupplier()) {
+            cv = simdExecutor.submit(() -> IntStream.range(0, ravv.size())
+                    .parallel()
+                    .mapToObj(i -> {
+                        var localRavv = ravvCopy.get();
+                        VectorFloat<?> v = localRavv.getVector(i);
+                        return v == null
+                                ? new long[compressedVectorSize() / Long.BYTES]
+                                : encode(v);
+                            })
+                    .toArray(long[][]::new))
+                    .join();
+        }
         return new ImmutableBQVectors(this, cv);
     }
 

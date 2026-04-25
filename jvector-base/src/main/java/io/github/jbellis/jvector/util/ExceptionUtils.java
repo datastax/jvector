@@ -30,4 +30,27 @@ public class ExceptionUtils {
             throw new RuntimeException(t);
         }
     }
+
+    public static void closeAll(AutoCloseable... closeables) throws IOException {
+        Throwable thrown = null;
+        for (AutoCloseable closeable : closeables) {
+            if (closeable == null) {
+                continue;
+            }
+
+            try {
+                closeable.close();
+            } catch (Throwable t) {
+                if (thrown == null) {
+                    thrown = t;
+                } else {
+                    thrown.addSuppressed(t);
+                }
+            }
+        }
+
+        if (thrown != null) {
+            throwIoException(thrown);
+        }
+    }
 }

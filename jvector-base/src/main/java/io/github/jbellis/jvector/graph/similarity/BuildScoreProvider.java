@@ -29,8 +29,12 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 /**
  * Encapsulates comparing node distances for GraphIndexBuilder.
  */
-public interface BuildScoreProvider {
+public interface BuildScoreProvider extends AutoCloseable {
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    @Override
+    default void close() {
+    }
 
     /**
      * @return true if the primary score functions used for construction are exact.  This
@@ -106,8 +110,8 @@ public interface BuildScoreProvider {
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
-        var vectors = ravv.threadLocalSupplier();
-        var vectorsCopy = ravv.threadLocalSupplier();
+        var vectors = ravv.closeableThreadLocalSupplier();
+        var vectorsCopy = ravv.closeableThreadLocalSupplier();
 
         return new BuildScoreProvider() {
             @Override
@@ -156,6 +160,15 @@ public interface BuildScoreProvider {
                 var vc = vectorsCopy.get();
                 // don't use ESF.reranker, we need thread safety here
                 return (ScoreFunction.ExactScoreFunction) node2 -> similarityFunction.compare(v, vc.getVector(node2));
+            }
+
+            @Override
+            public void close() {
+                try {
+                    vectors.close();
+                } finally {
+                    vectorsCopy.close();
+                }
             }
         };
     }
