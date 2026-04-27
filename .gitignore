@@ -6,6 +6,10 @@ local/
 dataset_
 **/local_datasets/**
 
+### Testing Results
+**results**.json
+**results**.jsonl
+
 ### Bench caches
 pq_cache/
 index_cache/
