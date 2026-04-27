@@ -164,15 +164,16 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             ordinalStream = IntStream.of(ordinalArray);
         }
 
-        var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> ordinalStream.parallel()
-                        .mapToObj(targetOrd -> {
-                            var localRavv = ravvCopy.get();
-                            VectorFloat<?> v = localRavv.getVector(targetOrd);
-                            return localRavv.isValueShared() ? v.copy() : v;
-                        })
-                        .collect(Collectors.toList()))
-                .join();
+        try (var ravvCopy = ravv.closeableThreadLocalSupplier()) {
+            return parallelExecutor.submit(() -> ordinalStream.parallel()
+                            .mapToObj(targetOrd -> {
+                                var localRavv = ravvCopy.get();
+                                VectorFloat<?> v = localRavv.getVector(targetOrd);
+                                return localRavv.isValueShared() ? v.copy() : v;
+                            })
+                            .collect(Collectors.toList()))
+                    .join();
+        }
     }
 
     /**

@@ -77,38 +77,38 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
 
     @Test
     public void testConcurrentReadsWritesDeletes() throws ExecutionException, InterruptedException {
-        var vv = ravv.threadLocalSupplier();
+        try (var vv = ravv.closeableThreadLocalSupplier()) {
+            testConcurrentOps(i -> {
+                var R = getRandom();
+                if (R.nextDouble() < 0.2 || keysInserted.isEmpty())
+                {
+                    // In the future, we could improve this test by acquiring the lock earlier and executing other
+                    writeLock.lock();
+                    try {
+                        builder.addGraphNode(i, vv.get().getVector(i));
+                        liveNodes.set(i);
+                        keysInserted.add(i);
+                    } finally {
+                        writeLock.unlock();
+                    }
+                } else if (R.nextDouble() < 0.1) {
+                    var key = keysInserted.getRandom();
+                    if (!keysRemoved.contains(key)) {
+                        liveNodes.flip(key);
+                        keysRemoved.add(key);
+                    }
+                } else {
+                    var queryVector = randomVector(getRandom(), dimension);
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, ravv);
 
-        testConcurrentOps(i -> {
-            var R = getRandom();
-            if (R.nextDouble() < 0.2 || keysInserted.isEmpty())
-            {
-                // In the future, we could improve this test by acquiring the lock earlier and executing other
-                writeLock.lock();
-                try {
-                    builder.addGraphNode(i, vv.get().getVector(i));
-                    liveNodes.set(i);
-                    keysInserted.add(i);
-                } finally {
-                    writeLock.unlock();
+                    int topK = Math.min(1, keysInserted.size());
+                    int rerankK = Math.min(50, keysInserted.size());
+
+                    GraphSearcher searcher = new GraphSearcher(builder.getGraph());
+                    searcher.search(ssp, topK, rerankK, 0.f, 0.f, liveNodes);
                 }
-            } else if (R.nextDouble() < 0.1) {
-                var key = keysInserted.getRandom();
-                if (!keysRemoved.contains(key)) {
-                    liveNodes.flip(key);
-                    keysRemoved.add(key);
-                }
-            } else {
-                var queryVector = randomVector(getRandom(), dimension);
-                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, ravv);
-
-                int topK = Math.min(1, keysInserted.size());
-                int rerankK = Math.min(50, keysInserted.size());
-
-                GraphSearcher searcher = new GraphSearcher(builder.getGraph());
-                searcher.search(ssp, topK, rerankK, 0.f, 0.f, liveNodes);
-            }
-        });
+            });
+        }
     }
 
     @FunctionalInterface

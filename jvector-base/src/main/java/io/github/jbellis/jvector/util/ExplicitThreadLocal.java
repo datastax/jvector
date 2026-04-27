@@ -37,7 +37,7 @@ import java.util.function.Supplier;
  * <p>
  * ExplicitThreadLocal is a drop-in replacement for ThreadLocal, and is used in the same way.
  */
-public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
+public abstract class ExplicitThreadLocal<U> implements CloseableSupplier<U> {
     // thread id -> instance
     private final ConcurrentHashMap<Long, U> map = new ConcurrentHashMap<>();
 
@@ -58,13 +58,33 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
      * Not threadsafe.
      */
     @Override
-    public void close() throws Exception {
-        for (U value : map.values()) {
-            if (value instanceof AutoCloseable) {
-                ((AutoCloseable) value).close();
+    public void close() {
+        Throwable thrown = null;
+        try {
+            for (U value : map.values()) {
+                if (value instanceof AutoCloseable) {
+                    try {
+                        ((AutoCloseable) value).close();
+                    } catch (Throwable t) {
+                        if (thrown == null) {
+                            thrown = t;
+                        } else {
+                            thrown.addSuppressed(t);
+                        }
+                    }
+                }
             }
+        } finally {
+            map.clear();
         }
-        map.clear();
+
+        if (thrown instanceof RuntimeException) {
+            throw (RuntimeException) thrown;
+        } else if (thrown instanceof Error) {
+            throw (Error) thrown;
+        } else if (thrown != null) {
+            throw new RuntimeException(thrown);
+        }
     }
 
     public static <U> ExplicitThreadLocal<U> withInitial(Supplier<U> initialValue) {
