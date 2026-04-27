@@ -50,6 +50,7 @@ public class HelloVectorWorld {
                 config.construction.outDegree,
                 config.construction.efConstruction,
                 config.construction.neighborOverflow,
+                config.construction.alpha,
                 config.construction.addHierarchy,
                 config.construction.refineFinalGraph,
                 config.construction.getFeatureSets(),
@@ -57,6 +58,10 @@ public class HelloVectorWorld {
                 config.search.getCompressorParameters(),
                 config.search.topKOverquery,
                 config.search.useSearchPruning,
+                config.search.queryRunsOrDefault(),
+                0,
                 artifacts);
+
+        artifacts.printSummary();
     }
 }

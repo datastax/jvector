@@ -1,0 +1,46 @@
+# This is here for loader testing purposes only, use other datasets for realistic test data
+# This file captures the equivalent test parameters which would be used by C*5.0.7 with the version of jvector then.
+# This is not a direct 1:1 test, and results should be taken as anecdotal at best, given changes across versions.
+# to use this file, copy its contents into the file which matches the dataset name: sift-128-euclidean.yml
+
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+dataset: sift-128-euclidean
+
+construction:
+  outDegree: [16]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  alpha: [1.4f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: PQ
+      parameters:
+        # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+        mFactor: 2
+        # k: 256 # optional parameter. By default, k=256
+        centerData: No
+        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+  reranking:
+    - NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+#   optimize_for: LATENCY  (K=10 -> topK=16, K=100 -> topK=110)
+#     10: [1.68]
+#     100: [1.10]
+#   optimize_for: RECALL   (K=10 -> topK=42, K=100 -> topK=200)
+    10: [4.27]
+    100: [2.00]
+  useSearchPruning: [No]
+  compression:
+    - type: None
+  queryRuns: 3
+repetitions: 3
+
+also_for:
+  - "sift1m:label_*"

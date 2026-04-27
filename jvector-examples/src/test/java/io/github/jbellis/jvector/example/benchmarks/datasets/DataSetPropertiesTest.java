@@ -315,6 +315,62 @@ public class DataSetPropertiesTest {
                 DataSetMetadataReader.load("/no/such/file.yml"));
     }
 
+    @Test
+    public void metadataReaderMatchesGlobKey() {
+        var reader = DataSetMetadataReader.load(testResource("glob_entries.yml"));
+        for (String k : new String[]{"sift1m:label_00", "sift1m:label_01", "sift1m:label_11"}) {
+            var props = reader.getProperties(k);
+            assertTrue(props.isPresent(), "Expected glob match for " + k);
+            assertEquals(k, props.get().getName());
+            assertEquals(VectorSimilarityFunction.EUCLIDEAN, props.get().similarityFunction().orElse(null));
+            assertEquals(DataSetProperties.LoadBehavior.NO_SCRUB, props.get().loadBehavior());
+        }
+    }
+
+    @Test
+    public void metadataReaderExactKeyPreferredOverGlob() {
+        // sift-128-euclidean is both an exact key and a potential glob match for "sift-*"-style patterns;
+        // exact match must win regardless.
+        var reader = DataSetMetadataReader.load(testResource("glob_entries.yml"));
+        var props = reader.getProperties("sift-128-euclidean");
+        assertTrue(props.isPresent());
+        assertEquals(128000, props.get().numVectors());
+    }
+
+    @Test
+    public void metadataReaderQuestionMarkGlob() {
+        var reader = DataSetMetadataReader.load(testResource("glob_entries.yml"));
+        assertTrue(reader.getProperties("cohere-en").isPresent());
+        // "cohere-eng" has three chars after the dash and should NOT match "cohere-??"
+        assertTrue(reader.getProperties("cohere-eng").isEmpty());
+    }
+
+    @Test
+    public void metadataReaderGlobMissReturnsEmpty() {
+        var reader = DataSetMetadataReader.load(testResource("glob_entries.yml"));
+        assertTrue(reader.getProperties("totally-unrelated-dataset").isEmpty());
+    }
+
+    @Test
+    public void metadataReaderAmbiguousGlobsThrow() {
+        var reader = DataSetMetadataReader.load(testResource("ambiguous_globs.yml"));
+        // "sift1m:label_00" matches BOTH "sift1m:label_*" and "sift1m:*_00"
+        var ex = assertThrows(IllegalStateException.class,
+                () -> reader.getProperties("sift1m:label_00"));
+        assertTrue(ex.getMessage().contains("sift1m:label_00"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("sift1m:label_*"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("sift1m:*_00"), ex.getMessage());
+    }
+
+    @Test
+    public void metadataReaderAmbiguousGlobsDoNotThrowForUnambiguousKeys() {
+        // Same file, but a key that only one glob claims should resolve cleanly.
+        var reader = DataSetMetadataReader.load(testResource("ambiguous_globs.yml"));
+        var props = reader.getProperties("sift1m:label_05");
+        assertTrue(props.isPresent());
+        assertEquals(VectorSimilarityFunction.EUCLIDEAN, props.get().similarityFunction().orElse(null));
+    }
+
     // ========================================================================
     // DataSetInfo delegation
     // ========================================================================

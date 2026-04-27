@@ -23,6 +23,19 @@ public class SearchParameters extends CommonParameters {
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
 
+    /**
+     * Number of times to repeat the query phase against a built index. Each
+     * benchmark (latency, throughput, count, accuracy) aggregates across this many runs.
+     * Absent or &lt; 1 falls back to {@link #DEFAULT_QUERY_RUNS}.
+     */
+    public Integer queryRuns;
+
+    public static final int DEFAULT_QUERY_RUNS = 2;
+
+    public int queryRunsOrDefault() {
+        return (queryRuns == null || queryRuns < 1) ? DEFAULT_QUERY_RUNS : queryRuns;
+    }
+
     // NOTE: benchmark compute + console/logging selection are now run-level (run-config.yml)
     // and are no longer recognized in dataset configs.
 }

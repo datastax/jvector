@@ -56,8 +56,10 @@ public final class ExperimentsSchemaV1 {
                 "M",
                 "efConstruction",
                 "neighborOverflow",
+                "alpha",
                 "addHierarchy",
                 "refineFinalGraph",
+                "repetition",
                 "feature_set",
                 "build_compressor",
                 "search_compressor",
@@ -78,8 +80,10 @@ public final class ExperimentsSchemaV1 {
                                                   int M,
                                                   int efConstruction,
                                                   float neighborOverflow,
+                                                  float alpha,
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
+                                                  int repetition,
                                                   Set<FeatureId> featureSet,
                                                   String buildCompressorString,
                                                   String searchCompressorString,
@@ -97,8 +101,10 @@ public final class ExperimentsSchemaV1 {
         fixed.put("M", Integer.toString(M));
         fixed.put("efConstruction", Integer.toString(efConstruction));
         fixed.put("neighborOverflow", Float.toString(neighborOverflow));
+        fixed.put("alpha", Float.toString(alpha));
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
+        fixed.put("repetition", Integer.toString(repetition));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
         fixed.put("build_compressor", csvEscape(buildCompressorString));
         fixed.put("search_compressor", csvEscape(searchCompressorString));

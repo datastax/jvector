@@ -528,6 +528,35 @@ public class DataSetLoaderSimpleMFDTest {
                 "Any .yaml file should be discovered");
     }
 
+    // ========================================================================
+    // base_url normalization
+    // ========================================================================
+
+    @Test
+    public void normalizeBaseUrl_nullAndTrailingSlashArePreserved() {
+        assertNull(DataSetLoaderSimpleMFD.normalizeBaseUrl(null));
+        assertEquals("s3://bucket/path/",
+                DataSetLoaderSimpleMFD.normalizeBaseUrl("s3://bucket/path/"));
+    }
+
+    @Test
+    public void normalizeBaseUrl_directoryWithoutTrailingSlashGetsSlash() {
+        assertEquals("s3://bucket/path/",
+                DataSetLoaderSimpleMFD.normalizeBaseUrl("s3://bucket/path"));
+        assertEquals("https://example.com/data/",
+                DataSetLoaderSimpleMFD.normalizeBaseUrl("https://example.com/data"));
+    }
+
+    @Test
+    public void normalizeBaseUrl_specificallyNamedEntriesFileIsStrippedToParent() {
+        // Pointing base_url at a specifically-named catalog file is a valid form;
+        // the loader resolves entry filenames against the parent directory.
+        assertEquals("s3://bucket/sift1m/",
+                DataSetLoaderSimpleMFD.normalizeBaseUrl("s3://bucket/sift1m/knn_entries.yaml"));
+        assertEquals("https://example.com/path/",
+                DataSetLoaderSimpleMFD.normalizeBaseUrl("https://example.com/path/catalog.yml"));
+    }
+
     @Test
     public void ymlExtensionAlsoDiscovered() throws IOException {
         Files.writeString(cacheDir.resolve("datasets.yml"),
