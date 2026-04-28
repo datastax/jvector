@@ -713,7 +713,19 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                              Path path)
             throws IOException
     {
-        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path).withMap(oldToNewOrdinals)
+        write(graph, vectors, new OrdinalMapper.MapMapper(oldToNewOrdinals), path);
+    }
+
+    /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
+    @VisibleForTesting
+    static void write(ImmutableGraphIndex graph,
+                             RandomAccessVectorValues vectors,
+                             OrdinalMapper ordinalMapper,
+                             Path path)
+            throws IOException
+    {
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path)
+                .withMapper(ordinalMapper)
                 .with(new InlineVectors(vectors.dimension()))
                 .build())
         {
