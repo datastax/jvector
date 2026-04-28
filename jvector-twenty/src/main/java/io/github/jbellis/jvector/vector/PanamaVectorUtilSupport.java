@@ -1547,4 +1547,1102 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(),  clusterCount, partialSums, aMagnitude, bMagnitude);
     }
+
+    /*-------------------- Score functions--------------------*/
+    //adding SPECIES_64 & SPECIES_128 for completeness, will it get there?
+    /**
+     * Computes the Euclidean distance between two PQ-encoded vectors
+     */
+    float pqScoreEuclideanPreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - codebooks[m].get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    /**
+     * Computes the Euclidean distance between two PQ-encoded vectors, automatically selecting the best vector species.
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param node1Chunk Byte sequence representing the first PQ-encoded vector.
+     * @param node1Offset Offset in the first vector.
+     * @param node2Chunk Byte sequence representing the second PQ-encoded vector.
+     * @param node2Offset Offset in the second vector.
+     * @param subspaceCount Number of subspaces.
+     * @return Euclidean distance between the two PQ vectors.
+     */
+    @Override
+    public float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreEuclideanPreferred(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreEuclidean256( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreEuclidean128( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        return pqScoreEuclidean64( codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+    }
+
+    /**
+     * Computes the Euclidean distance between a PQ-encoded vector and a centered query vector
+     */
+    float pqScoreEuclideanPreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength) ;
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - centeredQuery.get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength) ;
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - centeredQuery.get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength) ;
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - centeredQuery.get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreEuclidean64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength) ;
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2);
+                var diff = a.sub(b);
+                sum = diff.fma(diff,sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2 + i);
+                    var diff = a.sub(b);
+                    sum = diff.fma(diff, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    var diff = codebooks[m].get(length1 + i) - centeredQuery.get(length2 + i);
+                    res += MathUtil.square(diff);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    /**
+     * Overloaded function which computes the Euclidean distance between PQ-encoded vector and centered query vector
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param encodedChunk Byte sequence representing the PQ-encoded vector.
+     * @param encodedOffset Offset in the encoded vector.
+     * @param centeredQuery Centered query vector.
+     * @param subspaceCount Number of subspaces.
+     * @return Euclidean distance between the PQ vector and the query.
+     */
+    @Override
+    public float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreEuclideanPreferred(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreEuclidean256(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreEuclidean128(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        return pqScoreEuclidean64(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+    }
+
+    /**
+     * Computes the dot product score between two PQ-encoded vectors
+     */
+    float pqScoreDotProductPreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    /**
+     * Computes the dot product score between two PQ-encoded vectors
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param node1Chunk Byte sequence representing the first PQ-encoded vector.
+     * @param node1Offset Offset in the first vector.
+     * @param node2Chunk Byte sequence representing the second PQ-encoded vector.
+     * @param node2Offset Offset in the second vector.
+     * @param subspaceCount Number of subspaces.
+     * @return Dot product of the two PQ vectors.
+     */
+    @Override
+    public float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreDotProductPreferred(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreDotProduct256(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreDotProduct128(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
+        }
+        return pqScoreDotProduct64(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset, node2Chunk, node2Offset, subspaceCount);
+    }
+
+    /**
+     * Computes the dot product score between PQ-encoded vector and centered query vector
+     */
+    float pqScoreDotProductPreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    float pqScoreDotProduct64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float res = 0;
+        FloatVector sum = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2);
+                sum = a.fma(b, sum);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2 + i);
+                    sum = a.fma(b, sum);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    res += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        res += sum.reduceLanes(VectorOperators.ADD);
+        return res;
+    }
+
+    /**
+     * Overloaded function which computes the dot product between PQ-encoded vector and centered query vector
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param encodedChunk Byte sequence representing the PQ-encoded vector.
+     * @param encodedOffset Offset in the encoded vector.
+     * @param centeredQuery Centered query vector.
+     * @param subspaceCount Number of subspaces.
+     * @return Dot product between the PQ vector and the query.
+     */
+    @Override
+    public float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreDotProductPreferred(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreDotProduct256(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreDotProduct128(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        return pqScoreDotProduct64(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+    }
+
+    /**
+     * Computes the cosine similarity between two PQ-encoded vectors
+     */
+    float pqScoreCosinePreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += codebooks[m].get(length2 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_256);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_256);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += codebooks[m].get(length2 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_128);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_128);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += codebooks[m].get(length2 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_64);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_64);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+            int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex1 * centroidLength;
+            int length2 = centroidIndex2 * centroidLength;
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * codebooks[m].get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += codebooks[m].get(length2 + i) * codebooks[m].get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    /**
+     * Computes the cosine similarity between two PQ-encoded vectors
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param node1Chunk Byte sequence representing the first PQ-encoded vector.
+     * @param node1Offset Offset in the first vector.
+     * @param node2Chunk Byte sequence representing the second PQ-encoded vector.
+     * @param node2Offset Offset in the second vector.
+     * @param subspaceCount Number of subspaces.
+     * @return cosine similarity between two PQ vectors.
+     */
+    @Override
+    public float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreCosinePreferred(codebooks,  subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreCosine256(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreCosine128(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+        }
+        return pqScoreCosine64(codebooks, subvectorSizesAndOffsets, node1Chunk, node1Offset,  node2Chunk, node2Offset, subspaceCount);
+    }
+
+    /**
+     * Computes the cosine similarity between PQ-encoded vector and centered query vector
+     */
+    float pqScoreCosinePreferred(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_PREFERRED.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_PREFERRED.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_PREFERRED.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_PREFERRED, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_PREFERRED, centeredQuery, length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += centeredQuery.get(length2 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine256(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_256);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_256);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_256);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_256.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_256.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_256.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_256, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_256, centeredQuery, length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += centeredQuery.get(length2 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine128(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_128);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_128);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_128);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_128.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_128.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_128.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_128, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_128, centeredQuery, length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += centeredQuery.get(length2 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    float pqScoreCosine64(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        float sum = 0;
+        float aMagnitude = 0;
+        float bMagnitude = 0 ;
+        FloatVector vSum = FloatVector.zero(FloatVector.SPECIES_64);
+        FloatVector vaMagnitude = FloatVector.zero(FloatVector.SPECIES_64);
+        FloatVector vbMagnitude = FloatVector.zero(FloatVector.SPECIES_64);
+
+        for (int m = 0; m < subspaceCount; m++) {
+            int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+            int centroidLength = subvectorSizesAndOffsets[m][0];
+            final int vectorizedLength = FloatVector.SPECIES_64.loopBound(centroidLength);
+            int length1 = centroidIndex * centroidLength;
+            int length2 = subvectorSizesAndOffsets[m][1];
+
+            if (centroidLength == FloatVector.SPECIES_64.length()) {
+                FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1);
+                FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2);
+                vSum = a.fma(b, vSum);
+                vaMagnitude = a.fma(a, vaMagnitude);
+                vbMagnitude = b.fma(b, vbMagnitude);
+            }
+            else {
+                int i = 0;
+                for (; i < vectorizedLength; i += FloatVector.SPECIES_64.length()) {
+                    FloatVector a = fromVectorFloat(FloatVector.SPECIES_64, codebooks[m], length1 + i);
+                    FloatVector b = fromVectorFloat(FloatVector.SPECIES_64, centeredQuery, length2 + i);
+                    vSum = a.fma(b, vSum);
+                    vaMagnitude = a.fma(a, vaMagnitude);
+                    vbMagnitude = b.fma(b, vbMagnitude);
+                }
+                // Process the tail
+                for (; i < centroidLength ; ++i) {
+                    sum += codebooks[m].get(length1 + i) * centeredQuery.get(length2 + i);
+                    aMagnitude += codebooks[m].get(length1 + i) * codebooks[m].get(length1 + i);
+                    bMagnitude += centeredQuery.get(length2 + i) * centeredQuery.get(length2 + i);
+                }
+            }
+        }
+        sum += vSum.reduceLanes(VectorOperators.ADD);
+        aMagnitude += vaMagnitude.reduceLanes(VectorOperators.ADD);
+        bMagnitude += vbMagnitude.reduceLanes(VectorOperators.ADD);
+        return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+    }
+
+    /**
+     * Overloaded function which computes the cosine similarity between PQ-encoded vector and centered query vector
+     * @param codebooks Array of codebook vectors for each subspace.
+     * @param subvectorSizesAndOffsets Array containing sizes and offsets for each subvector.
+     * @param encodedChunk Byte sequence representing the PQ-encoded vector.
+     * @param encodedOffset Offset in the encoded vector.
+     * @param centeredQuery Centered query vector.
+     * @param subspaceCount Number of subspaces.
+     * @return Cosine similarity between the PQ vector and the query.
+     */
+    @Override
+    public float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+        //Since centroid length can vary, picking the first entry in the array which is the largest one
+        if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_PREFERRED.length()) {
+            return pqScoreCosinePreferred(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if(subvectorSizesAndOffsets[0][0] >= FloatVector.SPECIES_256.length()) {
+            return pqScoreCosine256(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        else if (subvectorSizesAndOffsets[0][0]  >=  FloatVector.SPECIES_128.length()) {
+            return pqScoreCosine128(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+        }
+        return pqScoreCosine64(codebooks, subvectorSizesAndOffsets, encodedChunk, encodedOffset, centeredQuery, subspaceCount);
+    }
 }
