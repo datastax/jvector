@@ -22,15 +22,15 @@ public class NativeSimdOps {
     static final boolean TRACE_DOWNCALLS = Boolean.getBoolean("jextract.trace.downcalls");
 
     static void traceDowncall(String name, Object... args) {
-        String traceArgs = Arrays.stream(args)
-                .map(Object::toString)
-                .collect(Collectors.joining(", "));
-        System.out.printf("%s(%s)\n", name, traceArgs);
+         String traceArgs = Arrays.stream(args)
+                       .map(Object::toString)
+                       .collect(Collectors.joining(", "));
+         System.out.printf("%s(%s)\n", name, traceArgs);
     }
 
     static MemorySegment findOrThrow(String symbol) {
         return SYMBOL_LOOKUP.find(symbol)
-                .orElseThrow(() -> new UnsatisfiedLinkError("unresolved symbol: " + symbol));
+            .orElseThrow(() -> new UnsatisfiedLinkError("unresolved symbol: " + symbol));
     }
 
     static MethodHandle upcallHandle(Class<?> fi, String name, FunctionDescriptor fdesc) {
@@ -98,7 +98,7 @@ public class NativeSimdOps {
 
     private static class check_avx512_compatibility {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-                NativeSimdOps.C_BOOL    );
+            NativeSimdOps.C_BOOL    );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("check_avx512_compatibility");
 
@@ -148,334 +148,18 @@ public class NativeSimdOps {
             }
             return (boolean)mh$.invokeExact();
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class dot_product_f32 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("dot_product_f32");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static FunctionDescriptor dot_product_f32$descriptor() {
-        return dot_product_f32.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static MethodHandle dot_product_f32$handle() {
-        return dot_product_f32.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static MemorySegment dot_product_f32$address() {
-        return dot_product_f32.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * float dot_product_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static float dot_product_f32(int preferred_size, MemorySegment a, int aoffset, MemorySegment b, int boffset, int length) {
-        var mh$ = dot_product_f32.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("dot_product_f32", preferred_size, a, aoffset, b, boffset, length);
-            }
-            return (float)mh$.invokeExact(preferred_size, a, aoffset, b, boffset, length);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class euclidean_f32 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("euclidean_f32");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static FunctionDescriptor euclidean_f32$descriptor() {
-        return euclidean_f32.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static MethodHandle euclidean_f32$handle() {
-        return euclidean_f32.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static MemorySegment euclidean_f32$address() {
-        return euclidean_f32.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * float euclidean_f32(int preferred_size, const float *a, int aoffset, const float *b, int boffset, int length)
-     * }
-     */
-    public static float euclidean_f32(int preferred_size, MemorySegment a, int aoffset, MemorySegment b, int boffset, int length) {
-        var mh$ = euclidean_f32.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("euclidean_f32", preferred_size, a, aoffset, b, boffset, length);
-            }
-            return (float)mh$.invokeExact(preferred_size, a, aoffset, b, boffset, length);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class bulk_quantized_shuffle_dot_f32_512 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_dot_f32_512");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static FunctionDescriptor bulk_quantized_shuffle_dot_f32_512$descriptor() {
-        return bulk_quantized_shuffle_dot_f32_512.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static MethodHandle bulk_quantized_shuffle_dot_f32_512$handle() {
-        return bulk_quantized_shuffle_dot_f32_512.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static MemorySegment bulk_quantized_shuffle_dot_f32_512$address() {
-        return bulk_quantized_shuffle_dot_f32_512.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_dot_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static void bulk_quantized_shuffle_dot_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
-        var mh$ = bulk_quantized_shuffle_dot_f32_512.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("bulk_quantized_shuffle_dot_f32_512", shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-            }
-            mh$.invokeExact(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class bulk_quantized_shuffle_euclidean_f32_512 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_euclidean_f32_512");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static FunctionDescriptor bulk_quantized_shuffle_euclidean_f32_512$descriptor() {
-        return bulk_quantized_shuffle_euclidean_f32_512.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static MethodHandle bulk_quantized_shuffle_euclidean_f32_512$handle() {
-        return bulk_quantized_shuffle_euclidean_f32_512.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static MemorySegment bulk_quantized_shuffle_euclidean_f32_512$address() {
-        return bulk_quantized_shuffle_euclidean_f32_512.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_euclidean_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartials, float delta, float minDistance, float *results)
-     * }
-     */
-    public static void bulk_quantized_shuffle_euclidean_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartials, float delta, float minDistance, MemorySegment results) {
-        var mh$ = bulk_quantized_shuffle_euclidean_f32_512.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("bulk_quantized_shuffle_euclidean_f32_512", shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-            }
-            mh$.invokeExact(shuffles, codebookCount, quantizedPartials, delta, minDistance, results);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class bulk_quantized_shuffle_cosine_f32_512 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("bulk_quantized_shuffle_cosine_f32_512");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
-     * }
-     */
-    public static FunctionDescriptor bulk_quantized_shuffle_cosine_f32_512$descriptor() {
-        return bulk_quantized_shuffle_cosine_f32_512.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
-     * }
-     */
-    public static MethodHandle bulk_quantized_shuffle_cosine_f32_512$handle() {
-        return bulk_quantized_shuffle_cosine_f32_512.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
-     * }
-     */
-    public static MemorySegment bulk_quantized_shuffle_cosine_f32_512$address() {
-        return bulk_quantized_shuffle_cosine_f32_512.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void bulk_quantized_shuffle_cosine_f32_512(const unsigned char *shuffles, int codebookCount, const char *quantizedPartialSums, float sumDelta, float minDistance, const char *quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, float *results)
-     * }
-     */
-    public static void bulk_quantized_shuffle_cosine_f32_512(MemorySegment shuffles, int codebookCount, MemorySegment quantizedPartialSums, float sumDelta, float minDistance, MemorySegment quantizedPartialMagnitudes, float magnitudeDelta, float minMagnitude, float queryMagnitudeSquared, MemorySegment results) {
-        var mh$ = bulk_quantized_shuffle_cosine_f32_512.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("bulk_quantized_shuffle_cosine_f32_512", shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
-            }
-            mh$.invokeExact(shuffles, codebookCount, quantizedPartialSums, sumDelta, minDistance, quantizedPartialMagnitudes, magnitudeDelta, minMagnitude, queryMagnitudeSquared, results);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class assemble_and_sum_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("assemble_and_sum_f32_512");
@@ -526,20 +210,20 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class pq_decoded_cosine_similarity_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-                NativeSimdOps.C_FLOAT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_FLOAT
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_FLOAT
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("pq_decoded_cosine_similarity_f32_512");
@@ -590,82 +274,19 @@ public class NativeSimdOps {
             }
             return (float)mh$.invokeExact(baseOffsets, baseOffsetsOffset, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude);
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class calculate_partial_sums_dot_f32_512 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_dot_f32_512");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
-     * }
-     */
-    public static FunctionDescriptor calculate_partial_sums_dot_f32_512$descriptor() {
-        return calculate_partial_sums_dot_f32_512.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
-     * }
-     */
-    public static MethodHandle calculate_partial_sums_dot_f32_512$handle() {
-        return calculate_partial_sums_dot_f32_512.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
-     * }
-     */
-    public static MemorySegment calculate_partial_sums_dot_f32_512$address() {
-        return calculate_partial_sums_dot_f32_512.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
-     * }
-     */
-    public static void calculate_partial_sums_dot_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums) {
-        var mh$ = calculate_partial_sums_dot_f32_512.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("calculate_partial_sums_dot_f32_512", codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
-            }
-            mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
     private static class calculate_partial_sums_euclidean_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER
         );
 
         public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_euclidean_f32_512");
@@ -716,23 +337,22 @@ public class NativeSimdOps {
             }
             mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
-    private static class calculate_partial_sums_best_dot_f32_512 {
+    private static class calculate_partial_sums_dot_f32_512 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_POINTER
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER
         );
 
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_best_dot_f32_512");
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_dot_f32_512");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
     }
@@ -740,111 +360,48 @@ public class NativeSimdOps {
     /**
      * Function descriptor for:
      * {@snippet lang=c :
-     * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
+     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
      */
-    public static FunctionDescriptor calculate_partial_sums_best_dot_f32_512$descriptor() {
-        return calculate_partial_sums_best_dot_f32_512.DESC;
+    public static FunctionDescriptor calculate_partial_sums_dot_f32_512$descriptor() {
+        return calculate_partial_sums_dot_f32_512.DESC;
     }
 
     /**
      * Downcall method handle for:
      * {@snippet lang=c :
-     * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
+     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
      */
-    public static MethodHandle calculate_partial_sums_best_dot_f32_512$handle() {
-        return calculate_partial_sums_best_dot_f32_512.HANDLE;
+    public static MethodHandle calculate_partial_sums_dot_f32_512$handle() {
+        return calculate_partial_sums_dot_f32_512.HANDLE;
     }
 
     /**
      * Address for:
      * {@snippet lang=c :
-     * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
+     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
      */
-    public static MemorySegment calculate_partial_sums_best_dot_f32_512$address() {
-        return calculate_partial_sums_best_dot_f32_512.ADDR;
+    public static MemorySegment calculate_partial_sums_dot_f32_512$address() {
+        return calculate_partial_sums_dot_f32_512.ADDR;
     }
 
     /**
      * {@snippet lang=c :
-     * void calculate_partial_sums_best_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
+     * void calculate_partial_sums_dot_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums)
      * }
      */
-    public static void calculate_partial_sums_best_dot_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums, MemorySegment partialBestDistances) {
-        var mh$ = calculate_partial_sums_best_dot_f32_512.HANDLE;
+    public static void calculate_partial_sums_dot_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums) {
+        var mh$ = calculate_partial_sums_dot_f32_512.HANDLE;
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("calculate_partial_sums_best_dot_f32_512", codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
+                traceDowncall("calculate_partial_sums_dot_f32_512", codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
             }
-            mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
+            mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums);
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class calculate_partial_sums_best_euclidean_f32_512 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_INT,
-                NativeSimdOps.C_POINTER,
-                NativeSimdOps.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_best_euclidean_f32_512");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
-     * }
-     */
-    public static FunctionDescriptor calculate_partial_sums_best_euclidean_f32_512$descriptor() {
-        return calculate_partial_sums_best_euclidean_f32_512.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
-     * }
-     */
-    public static MethodHandle calculate_partial_sums_best_euclidean_f32_512$handle() {
-        return calculate_partial_sums_best_euclidean_f32_512.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
-     * }
-     */
-    public static MemorySegment calculate_partial_sums_best_euclidean_f32_512$address() {
-        return calculate_partial_sums_best_euclidean_f32_512.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * void calculate_partial_sums_best_euclidean_f32_512(const float *codebook, int codebookBase, int size, int clusterCount, const float *query, int queryOffset, float *partialSums, float *partialBestDistances)
-     * }
-     */
-    public static void calculate_partial_sums_best_euclidean_f32_512(MemorySegment codebook, int codebookBase, int size, int clusterCount, MemorySegment query, int queryOffset, MemorySegment partialSums, MemorySegment partialBestDistances) {
-        var mh$ = calculate_partial_sums_best_euclidean_f32_512.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("calculate_partial_sums_best_euclidean_f32_512", codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
-            }
-            mh$.invokeExact(codebook, codebookBase, size, clusterCount, query, queryOffset, partialSums, partialBestDistances);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 }
+
