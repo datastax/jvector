@@ -110,11 +110,10 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         var nativeCodebook = ((MemorySegmentVectorFloat) codebook).get();
         var nativeQuery = ((MemorySegmentVectorFloat) query).get();
         var nativePartialSums = ((MemorySegmentVectorFloat) partialSums).get();
-        int similarityFunction = switch (vsf) {
-            case EUCLIDEAN -> 0;
-            case DOT_PRODUCT -> 1;
+        switch (vsf) {
+            case EUCLIDEAN -> NativeSimdOps.calculate_partial_sums_euclidean_f32_512(nativeCodebook, codebookIndex, size, clusterCount, nativeQuery, queryOffset, nativePartialSums);
+            case DOT_PRODUCT -> NativeSimdOps.calculate_partial_sums_dot_f32_512(nativeCodebook, codebookIndex, size, clusterCount, nativeQuery, queryOffset, nativePartialSums);
             default -> throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
-        };
-        NativeSimdOps.calculate_partial_sums_f32_512(nativeCodebook, codebookIndex, size, clusterCount, nativeQuery, queryOffset, similarityFunction, nativePartialSums);
+        }
     }
 }
