@@ -44,6 +44,11 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
         this.segment = MemorySegment.ofArray(data);
     }
 
+    /** For slicing */
+    private MemorySegmentVectorFloat(MemorySegment segment) {
+        this.segment = segment;
+    }
+
     @Override
     public long ramBytesUsed()
     {
@@ -101,6 +106,12 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
         MemorySegmentVectorFloat copy = new MemorySegmentVectorFloat(length());
         copy.copyFrom(this, 0, 0, length());
         return copy;
+    }
+
+    @Override
+    public VectorFloat<MemorySegment> slice(int offset, int length)
+    {
+        return new MemorySegmentVectorFloat(segment.asSlice((long) offset * Float.BYTES, (long) length * Float.BYTES));
     }
 
     @Override

@@ -103,6 +103,11 @@ public abstract class CompressorParameters {
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             return null;
         }
+
+        @Override
+        public String idStringFor(DataSet ds) {
+            return "NONE";
+        }
     }
     public static class ASHParameters extends CompressorParameters {
         private final int optimizer;

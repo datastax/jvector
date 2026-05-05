@@ -38,6 +38,8 @@ public interface VectorFloat<T> extends Accountable
 
     VectorFloat<T> copy();
 
+    VectorFloat<T> slice(int offset, int length);
+
     void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length);
 
     float get(int i);

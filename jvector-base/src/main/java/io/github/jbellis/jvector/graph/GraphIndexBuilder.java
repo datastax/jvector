@@ -45,6 +45,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
+import me.tongfei.progressbar.ProgressBar;
+
 import static io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
 import static java.lang.Math.*;
 
@@ -441,9 +443,12 @@ public class GraphIndexBuilder implements Closeable {
         int size = ravv.size();
 
         simdExecutor.submit(() -> {
+            // ProgressBar pb = new ProgressBar("Building graph", size);
             IntStream.range(0, size).parallel().forEach(node -> {
                 addGraphNode(node, vv.get().getVector(node));
+                // pb.step();
             });
+            // pb.close();
         }).join();
 
         cleanup();

@@ -62,7 +62,7 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshVectors;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -433,8 +433,8 @@ public class Grid {
         if (buildCv instanceof PQVectors) {
             pq = (PQVectors) buildCv;
             bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        } else if (buildCv instanceof AbstractAshVectors<?>) {
-            var ashv = (AbstractAshVectors<?>) buildCv;
+        } else if (buildCv instanceof AshVectors) {
+            var ashv = (AshVectors) buildCv;
             bsp = ashv.createBuildScoreProvider(ds.getSimilarityFunction());
         } else {
             throw new IllegalArgumentException("Unsupported build compressor output type: " + buildCv.getClass().getName());
@@ -679,7 +679,8 @@ public class Grid {
     }
 
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
-    static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    // static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    static final Map<String, VectorCompressor<?>> cachedCompressors = new HashMap<>();
 
     private static void testConfiguration(ConfiguredSystem cs,
                                           Map<Integer, List<Double>> topKGrid,
@@ -1129,13 +1130,18 @@ public class Grid {
             return computeAndSaveAction.get();
         };
 
+        var fname = cp.idStringFor(ds);
+        System.out.println("Getting compressor for " + fname);
         // No-cache path
         if (!cp.supportsCaching()) {
-            return executionWrapper.get();
+            System.out.println("Compressor doesn't support caching " + fname);
+            return cachedCompressors.computeIfAbsent(fname, __ -> {
+                System.out.println("Computing compressor for " + fname);
+                return executionWrapper.get();
+            });
         }
 
         // Cache path
-        var fname = cp.idStringFor(ds);
         return cachedCompressors.computeIfAbsent(fname, __ -> {
             Path path = Paths.get(pqCacheDir).resolve(fname);
             if (Files.exists(path)) {

@@ -21,9 +21,8 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshVectors;
 import io.github.jbellis.jvector.quantization.ash.AshQuantizedVector;
-import io.github.jbellis.jvector.quantization.ash.NbAshFactory;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -62,7 +61,7 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * Encodes each vector into a fixed-length binary code using a learned or random
  * orthonormal projection and sign thresholding.
  */
-public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, Accountable {
+public class AsymmetricHashing implements VectorCompressor<AshVectors.AshVector>, Accountable {
     public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
     private static final int MAGIC = 0xA54C04F2;  // ASHCOMPR if you squint
     private static final int ASH_SERIALIZE_VERSION = 1;
@@ -111,7 +110,7 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
     public final VectorFloat<?>[] landmarks;
 
     // One entry per landmark
-    private final float[] landmarkNormSq;
+    public final float[] landmarkNormSq;
 
     /** Original (uncompressed) dimensionality */
     public final int originalDimension;
@@ -128,7 +127,6 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
     /** Learned or random Stiefel transform */
     public final StiefelTransform stiefelTransform;
 
-    private final NbAshFactory nbFactory;
     @Getter
     private final int bitDepth;
 
@@ -171,7 +169,6 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
         this.quantizedDim = quantizedDim;
 
         this.bitDepth = bitDepth;
-        this.nbFactory = NbAshFactory.get(bitDepth);
 
         // Defensive check for consistency
         if (encodedBits - HEADER_BITS != quantizedDim) {
@@ -249,6 +246,26 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
                                                int bitDepth,
                                                int landmarkCount) throws IOException {
 
+        // Keep determinism consistent within ASH.  TODO explore more robust random initialization
+        final Random rng = new Random(103);
+        
+        return AsymmetricHashing.initialize(ravv, optimizer, encodedBits, bitDepth, landmarkCount, rng);
+    }
+
+    /**
+     * Initialize ASH index-wide parameters.
+     *
+     * @param ravv the vectors to quantize
+     * @param optimizer the optimizer to use
+     * @param encodedBits the number of bits used to encode vector, including the header
+     */
+    public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               int optimizer,
+                                               int encodedBits,
+                                               int bitDepth,
+                                               int landmarkCount,
+                                               Random rng) throws IOException {
+
         final int quantizedDim = encodedBits - HEADER_BITS;
 
         if (landmarkCount < 1 || landmarkCount > 64) {
@@ -323,9 +340,6 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
                 landmarks[c] = mu;
             }
         }
-
-        // Keep determinism consistent within ASH.  TODO explore more robust random initialization
-        final Random rng = new Random(103);
 
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
@@ -967,7 +981,7 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
      */
 
     @Override
-    public AbstractAshVectors<?> encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public AshVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         final int n = ravv.size();
 
         // The caller controls parallelism; we derive a bounded number of tasks
@@ -979,7 +993,7 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
         // guarantees each ordinal is written exactly once.
         final int chunkSize = (n + parallelism - 1) / parallelism;
 
-        final AshQuantizedVector[] out = new AshQuantizedVector[n];
+        final var ashv = new AshVectors(this, this.bitDepth, ravv.size());
         final var ravvSupplier = ravv.threadLocalSupplier();
 
         // NOTE:
@@ -1005,9 +1019,9 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
 
                     // Contract: missing vectors are encoded as zero vectors.
                     if (v != null) {
-                        out[i] = encode(v);
+                        ashv.encodeAndSet(i, v);
                     } else {
-                        out[i] = nbFactory.createEmptyVector(quantizedDim);
+                        ashv.setZero(i);
                     }
                 }
             }));
@@ -1019,43 +1033,30 @@ public class AsymmetricHashing implements VectorCompressor<AshQuantizedVector>, 
             task.join();
         }
 
-        return nbFactory.newVectors(this, out);
+        return ashv;
     }
 
 
     /**
      * Encodes the input vector using ASH.
      * @return the header and binary vector payload
+     * @deprecated use {@link AshVectors.encodeAndSet} instead
      */
     @Override
-    public AshQuantizedVector encode(VectorFloat<?> vector) {
-        var qv = nbFactory.createEmptyVector(this.quantizedDim);
-        encodeTo(vector, qv);
-        return qv;
+    @Deprecated
+    public AshVectors.AshVector encode(VectorFloat<?> vector) {
+        var ashv = new AshVectors(this, this.bitDepth, 1);
+        ashv.encodeAndSet(0, vector);
+        return ashv.new AshVector(0);
     }
 
+    /**
+     * @deprecated use {@link AshVectors.encodeAndSet} instead
+     */
     @Override
-    public void encodeTo(VectorFloat<?> vector, AshQuantizedVector dest) {
-        // NOTE:
-        // Single-landmark baseline configuration (Table 2, C = 1).
-        // All vectors are encoded relative to landmark μ_c (C=1 => μ_0 is the dataset mean).
-        // The landmark id is always 0 in this mode.
-
-        // Landmark assignment: nearest centroid by L2 distance
-        byte landmark = 0;
-        float bestDist = Float.POSITIVE_INFINITY;
-
-        for (int c = 0; c < landmarkCount; c++) {
-            float dist = VectorUtil.squareL2Distance(vector, landmarks[c]);
-            if (dist < bestDist) {
-                bestDist = dist;
-                landmark = (byte) c;
-            }
-        }
-
-        final VectorFloat<?> mu = landmarks[landmark & 0xFF];
-
-        dest.encodeInto(vector, mu, landmark, landmarkNormSq[landmark], stiefelTransform);
+    @Deprecated
+    public void encodeTo(VectorFloat<?> vector, AshVectors.AshVector dest) {
+        dest.encodeFrom(vector);
     }
 
     // ---------------------------------------------------------------------

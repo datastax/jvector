@@ -5,18 +5,20 @@ import java.util.Arrays;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
-import lombok.AllArgsConstructor;
 
-@AllArgsConstructor
-public class AshFactoryDBit implements NbAshFactory {
+public class AshDriver2BitPacked implements NbAshDriver {
 
-    // TODO probably don't want non-static vars in a factory class
-    // since it slightly messes up nested classes
-    private final int bitDepth;
+    private static final int BIT_DEPTH = 2;
+    private static final int BYTES_PER_WORD = Integer.BYTES;
+    private static final int BITS_PER_WORD = BYTES_PER_WORD * 8;
+    private static final int PIECE_MASK = 0b11;
+
+    public AshDriver2BitPacked() {
+    }
 
     @Override
     public AshQuantizedVector createEmptyVector(int quantizedDim) {
-        return new QuantizedVector(Float.NaN, Float.NaN, (byte) -1, new long[wordsForDims(quantizedDim)]);
+        return new QuantizedVector(Float.NaN, Float.NaN, (byte) -1, new int[wordsForDims(quantizedDim)]);
     }
 
     @Override
@@ -33,22 +35,22 @@ public class AshFactoryDBit implements NbAshFactory {
     }
 
     private int wordsForDims(int quantizedDim) {
-        return (quantizedDim * bitDepth) + 63 / 64;
+        return ((quantizedDim * BIT_DEPTH) + (BITS_PER_WORD - 1)) / BITS_PER_WORD;
     }
 
     private int getDimsPerWord() {
-        var longBits = Long.BYTES * 8;
-        var dimsPerWord = longBits / bitDepth;
-        assert longBits % bitDepth == 0;
+        var longBits = BYTES_PER_WORD * 8;
+        var dimsPerWord = longBits / BIT_DEPTH;
+        assert longBits % BIT_DEPTH == 0;
         return dimsPerWord;
     }
 
     private class QuantizedVector extends AshQuantizedVector {
 
-        long[] binaryVector;
+        int[] binaryVector;
 
         /** create an empty QuantizedVector */
-        QuantizedVector(float scale, float offset, byte landmark, long[] binaryVector) {
+        QuantizedVector(float scale, float offset, byte landmark, int[] binaryVector) {
             super(scale, offset, landmark);
             this.binaryVector = binaryVector;
         }
@@ -61,7 +63,7 @@ public class AshFactoryDBit implements NbAshFactory {
 
         @Override
         public int getBitDepth() {
-            return bitDepth;
+            return BIT_DEPTH;
         }
 
         @Override
@@ -76,15 +78,15 @@ public class AshFactoryDBit implements NbAshFactory {
 
             // Binarize directly from per-row projection
             for (int w = 0; w < words; w++) {
-                long bits = 0L;
+                int bits = 0;
                 int base = w * dimsPerWord;
                 int rem = Math.min(dimsPerWord, quantizedDim - base);
 
                 for (int j = 0; j < rem; j++) {
                     int bitIndex = base + j;
                     int qval = quantized[bitIndex];
-                    assert ((qval & (-1 << bitDepth)) == 0);  // must be in [0, 2^bitDepth)
-                    bits |= ((long) qval << (j * bitDepth));
+                    assert ((qval & (-1 << BIT_DEPTH)) == 0);  // must be in [0, 2^bitDepth)
+                    bits |= (qval << (j * BIT_DEPTH));
                 }
                 this.binaryVector[w] = bits;
             }
@@ -92,17 +94,15 @@ public class AshFactoryDBit implements NbAshFactory {
 
         @Override
         public int getRawComponentSum() {
-            final long pieceMask = (1L << bitDepth) - 1;
-
             int sum = 0;
 
             for (int w = 0; w < binaryVector.length; w++) {
-                long word = binaryVector[w];
+                int word = binaryVector[w];
 
                 while (word != 0) {
-                    var piece = word & pieceMask;
+                    var piece = word & PIECE_MASK;
                     sum += piece;
-                    word >>>= bitDepth;
+                    word >>>= BIT_DEPTH;
                 }
             }
 
@@ -116,7 +116,6 @@ public class AshFactoryDBit implements NbAshFactory {
             if (words != binaryVector.length) {
                 throw new IllegalArgumentException("binaryVector length mismatch");
             }
-            final long pieceMask = (1L << bitDepth) - 1;
 
             int[] components = new int[quantizedDim];
             int i = 0;
@@ -124,10 +123,10 @@ public class AshFactoryDBit implements NbAshFactory {
                 var word = binaryVector[w];
                 int rem = Math.min(dimsPerWord, quantizedDim - i);
                 for (int j = 0; j < rem; j++) {
-                    var piece = word & pieceMask;
+                    var piece = word & PIECE_MASK;
                     components[i] = (int) piece;
                     i++;
-                    word >>>= bitDepth;
+                    word >>>= BIT_DEPTH;
                 }
             }
 
@@ -158,7 +157,7 @@ public class AshFactoryDBit implements NbAshFactory {
 
                 @Override
                 public int getBitDepth() {
-                    return bitDepth;
+                    return BIT_DEPTH;
                 }
                 
             };
@@ -173,11 +172,10 @@ public class AshFactoryDBit implements NbAshFactory {
         public float calcInnerDot(QuantizedVector v, float[] queryPool, int queryPoolOffset, int quantizedDim) {
             final var d = quantizedDim;
             final int dimsPerWord = getDimsPerWord();
-            final long pieceMask = (1L << bitDepth) - 1;
 
             float innerDot = 0f;
 
-            final long[] bits = v.binaryVector;
+            final int[] bits = v.binaryVector;
             int dimBase = 0;
             for (int w = 0; w < bits.length && dimBase < d; w++, dimBase += dimsPerWord) {
                 long word = bits[w];
@@ -185,11 +183,11 @@ public class AshFactoryDBit implements NbAshFactory {
 
                 for (int j = 0; j < rem; j++) {
                     int idx = dimBase + j;
-                    var piece = word & pieceMask;
+                    var piece = word & PIECE_MASK;
                     var queryPiece = queryPool[queryPoolOffset + idx];
 
                     innerDot += piece * queryPiece;
-                    word >>>= bitDepth;
+                    word >>>= BIT_DEPTH;
                 }
             }
 
@@ -198,25 +196,23 @@ public class AshFactoryDBit implements NbAshFactory {
 
         @Override
         public float calcSymmetricInnerDot(QuantizedVector v1, QuantizedVector v2) {
-            final long pieceMask = ~(~0L << bitDepth);
-
             long innerDot = 0;
 
             var wordCount = v1.binaryVector.length;
             assert wordCount == v2.binaryVector.length;
 
             for (int w = 0; w < wordCount; w++) {
-                long word1 = v1.binaryVector[w];
-                long word2 = v2.binaryVector[w];
+                int word1 = v1.binaryVector[w];
+                int word2 = v2.binaryVector[w];
 
                 while (word1 != 0 && word2 != 0) {
-                    var piece1 = word1 & pieceMask;
-                    var piece2 = word2 & pieceMask;
+                    var piece1 = word1 & PIECE_MASK;
+                    var piece2 = word2 & PIECE_MASK;
 
                     innerDot += piece1 * piece2;
 
-                    word1 >>>= bitDepth;
-                    word2 >>>= bitDepth;
+                    word1 >>>= BIT_DEPTH;
+                    word2 >>>= BIT_DEPTH;
                 }
             }
 
@@ -224,3 +220,4 @@ public class AshFactoryDBit implements NbAshFactory {
         }
     }
 }
+

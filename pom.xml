@@ -212,6 +212,11 @@
             <artifactId>snakeyaml</artifactId>
             <version>2.4</version>
         </dependency>
+        <dependency>
+            <groupId>me.tongfei</groupId>
+            <artifactId>progressbar</artifactId>
+            <version>0.10.2</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>

@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ash.AshDriverFactory;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.lang.Runtime.Version;
@@ -67,6 +68,8 @@ public abstract class VectorizationProvider {
    * implementation
    */
   public abstract VectorTypeSupport getVectorTypeSupport();
+
+  public abstract AshDriverFactory getAshDriverFactory();
 
   // *** Lookup mechanism: ***
 

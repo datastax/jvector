@@ -24,6 +24,8 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ash.AshDriverFactory;
+import io.github.jbellis.jvector.quantization.ash.ScalarAshDriverFactory;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 /** Default provider returning scalar implementations. */
@@ -31,11 +33,12 @@ final public class DefaultVectorizationProvider extends VectorizationProvider {
 
   private final VectorUtilSupport vectorUtilSupport;
   private final VectorTypeSupport vectorTypes;
-
+  private final AshDriverFactory ashDriverFactory;
 
   public DefaultVectorizationProvider() {
     vectorUtilSupport = new DefaultVectorUtilSupport();
     vectorTypes = new ArrayVectorProvider();
+    ashDriverFactory = new ScalarAshDriverFactory();
   }
 
   @Override
@@ -46,5 +49,10 @@ final public class DefaultVectorizationProvider extends VectorizationProvider {
   @Override
   public VectorTypeSupport getVectorTypeSupport() {
     return vectorTypes;
+  }
+
+  @Override
+  public AshDriverFactory getAshDriverFactory() {
+    return ashDriverFactory;
   }
 }

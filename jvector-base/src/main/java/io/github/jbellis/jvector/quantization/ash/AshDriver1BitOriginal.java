@@ -5,7 +5,7 @@ import java.util.Arrays;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 
-public class AshFactory1Bit implements NbAshFactory {
+public class AshDriver1BitOriginal implements NbAshDriver {
     @Override
     public AshQuantizedVector createEmptyVector(int quantizedDim) {
         return AsymmetricHashing.QuantizedVector.createEmpty(quantizedDim);

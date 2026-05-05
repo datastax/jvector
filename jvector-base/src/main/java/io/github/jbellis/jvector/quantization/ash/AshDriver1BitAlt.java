@@ -6,7 +6,7 @@ import java.util.Arrays;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 
-public class AshFactory1BitAlt implements NbAshFactory {
+public class AshDriver1BitAlt implements NbAshDriver {
 
     public static final int bitDepth = 1;
 

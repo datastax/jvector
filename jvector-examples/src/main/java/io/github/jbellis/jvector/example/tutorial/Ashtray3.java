@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshVectors;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -111,7 +112,7 @@ public class Ashtray3 {
     }
 
     static ImmutableGraphIndex createGraph(
-            AbstractAshVectors<?> ashv,
+            AshVectors ashv,
             RandomAccessVectorValues ravv,
             VectorSimilarityFunction vsf
     ) throws IOException {

@@ -6,7 +6,7 @@ import java.util.Arrays;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 
-class NbAshFactoryTemplate implements NbAshFactory {
+class NbAshDriverTemplate implements NbAshDriver {
 
     @Override
     public AshQuantizedVector createEmptyVector(int quantizedDim) {

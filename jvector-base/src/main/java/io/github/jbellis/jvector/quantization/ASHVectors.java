@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing.QuantizedVector;
 import io.github.jbellis.jvector.quantization.ash.AbstractAshScoreFunction;
@@ -956,5 +957,9 @@ public class ASHVectors extends AbstractAshVectors<AsymmetricHashing.QuantizedVe
     public float calcSymmetricInnerDot(QuantizedVector v1, QuantizedVector v2) {
         // TODO Auto-generated method stub
         throw new UnsupportedOperationException("Unimplemented method 'calcSymmetricInnerDot'");
+    }
+
+    public BuildScoreProvider createBuildScoreProvider(VectorSimilarityFunction vsf) {
+        return BuildScoreProvider.__ashBuildScoreProvider(vsf, this);
     }
 }

@@ -6,7 +6,10 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 import java.util.List;
+import java.util.PriorityQueue;
+import java.util.Random;
 import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -14,9 +17,12 @@ import java.util.stream.IntStream;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ash.AbstractAshVectors;
+import io.github.jbellis.jvector.quantization.ash.AshVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -34,13 +40,16 @@ public class AshSweep {
         double recall;
         long initTimeMs;
         long encodeTimeMs;
-        long predTimeMs;
+        long predTimeNs;
+        float qps;
+        int nbase;
+        int nq;
         
         @Override
         public String toString() {
-            return String.format("%s,%s,%.2f,%d,%d,%d,%d,%d,%.4f,%d,%d,%d",
+            return String.format("%s,%s,%.2f,%d,%d,%d,%d,%d,%.4f,%d,%d,%f,%d,%d,%f",
                 dataset, optimizer, quantizeDimRatio, quantizeDim, bitDepth, landmarkCount, predk,
-                encodedBits, recall, initTimeMs, encodeTimeMs, predTimeMs);
+                encodedBits, recall, initTimeMs, encodeTimeMs, predTimeNs / 1e6, nbase, nq, qps);
         }
     }
     
@@ -48,26 +57,31 @@ public class AshSweep {
         System.out.println("Starting ASH Parameter Sweep");
         
         // Define parameter sweep ranges
-        String[] datasets = {"ada002-100k", "cohere-english-v3-100k"};
+        String[] datasets = {
+            "cohere-english-v3-100k",
+            "cohere-english-v3-1M",
+            "openai-v3-large-1536-100k",
+            "openai-v3-large-3072-100k",
+        };
         String[] optimizers = {"RANDOM", "ITQ"};
         float[] quantizeDimRatios = {1.0f, 2.0f};
-        int[] bitDepths = {1, 2};
-        int[] landmarkCounts = {1, 2};
-        int[] predks = {10, 20};
+        int[] bitDepths = {2, 4};
+        int[] landmarkCounts = {1};
+        int[] predks = {10};
         var vsf = VectorSimilarityFunction.DOT_PRODUCT;
         var gtk = 10;
         var maxBase = 100_000_000;
-        var maxQuery = 1000;
+        var maxQuery = 100000;
         
         // Setup CSV files
-        String csvFileBaseName = "ash_parameter_sweep_results";
-        String csvFile = csvFileBaseName + ".csv";
+        String csvFileBasePath = "./local/ash_parameter_sweep_results";
+        String csvFile = csvFileBasePath + ".csv";
         String partCsvFile = csvFile + ".part.csv";
         
         // Initialize the partial CSV file with header
         try (PrintWriter writer = new PrintWriter(new FileWriter(partCsvFile))) {
             writer.println("dataset,optimizer,quantizeDimRatio,quantizeDim,bitDepth,landmarkCount,predk,encodedBits," +
-                "recall,initTimeMs,encodeTimeMs,predTimeMs");
+                "recall,initTimeMs,encodeTimeMs,predTimeMs,nbase,nq,QPS");
         }
         
         int totalCombinations = datasets.length * optimizers.length * quantizeDimRatios.length *
@@ -142,8 +156,8 @@ public class AshSweep {
                                     // Write result immediately to partial CSV
                                     appendResultToCSV(result, partCsvFile);
                                     
-                                    System.out.printf("recall=%.4f (predTime=%dms)%n",
-                                        result.recall, result.predTimeMs);
+                                    System.out.printf("recall=%.4f (predTime=%fms, qps=%f)%n",
+                                        result.recall, result.predTimeNs / 1e6, result.qps);
                                 }
                             } catch (Exception e) {
                                 System.err.printf("  Error running experiment: %s%n", e.getMessage());
@@ -173,7 +187,7 @@ public class AshSweep {
             ListRandomAccessVectorValues ravv,
             List<VectorFloat<?>> query,
             List<List<Integer>> gt,
-            AbstractAshVectors<?> ashv,
+            AshVectors ashv,
             VectorSimilarityFunction vsf,
             String optimizerName,
             float quantizeDimRatio,
@@ -198,25 +212,51 @@ public class AshSweep {
         result.initTimeMs = initTimeMs;
         result.encodeTimeMs = encodeTimeMs;
 
+        // warmup
+        var pred = getPred(query, ashv, ravv, vsf, predk);
+
         // Compute predictions
-        long startPred = System.currentTimeMillis();
-        var pred = query.stream()
-            .map(q -> {
-                var sf = ashv.scoreFunctionFor(q, vsf);
-                return IntStream.range(0, ravv.size())
-                    .mapToObj(i -> new NodeScore(i, sf.similarityTo(i)))
-                    .sorted()
-                    .limit(predk)
-                    .map(ns -> ns.node)
-                    .collect(Collectors.toList());
-            })
-            .collect(Collectors.toList());
-        result.predTimeMs = System.currentTimeMillis() - startPred;
+        int reps = 3;
+        long[] elapsedNs = new long[reps];
+        for (int i = 0; i < reps; i++) {
+            long startPredNs = System.nanoTime();
+            pred = getPred(query, ashv, ravv, vsf, predk);
+            elapsedNs[i] = System.nanoTime() - startPredNs;
+        }
+        result.predTimeNs = (long) Arrays.stream(elapsedNs).average().orElseThrow();
+        // Arrays.stream(elapsedNs).sum() 
+        result.qps = (float) (query.size() / (result.predTimeNs * 1e-9));
+        System.out.println(query.size() + " " + ravv.size());
+
+        result.nbase = ravv.size();
+        result.nq = query.size();
 
         // Calculate recall
+        // result.recall = AccuracyMetrics.recallFromResults(gt, pred, gtk, predk);
         result.recall = AccuracyMetrics.recallFromResults(gt, pred, gtk, predk);
 
         return result;
+    }
+
+    private static final List<List<Integer>> getPred(List<VectorFloat<?>> query, AshVectors ashv, RandomAccessVectorValues ravv, VectorSimilarityFunction vsf, int predk) {
+        var pred = query
+            .parallelStream()
+            .map(q -> {
+                PriorityQueue<NodeScore> pq = new PriorityQueue<>(predk, (a, b) -> Float.compare(a.score, b.score));
+                var sf = ashv.scoreFunctionFor(q, vsf);
+                for (int i = 0; i < ravv.size(); i++) {
+                    float score = sf.similarityTo(i);
+                    if (pq.size() < predk) {
+                        pq.add(new NodeScore(i, score));
+                    } else if (pq.peek().score < score) {
+                        pq.poll();
+                        pq.add(new NodeScore(i, score));
+                    }
+                }
+                return pq.stream().sorted().map(ns -> ns.node).collect(Collectors.toList());
+            })
+            .collect(Collectors.toList());
+        return pred;
     }
 
     private static void appendResultToCSV(SweepResult result, String filename) throws IOException {
@@ -226,5 +266,3 @@ public class AshSweep {
         }
     }
 }
-
-// Made with Bob

@@ -17,6 +17,8 @@
 package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.quantization.ash.AshDriverFactory;
+import io.github.jbellis.jvector.quantization.ash.PanamaAshDriverFactory;
 import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -50,5 +52,10 @@ public class NativeVectorizationProvider extends VectorizationProvider {
     @Override
     public VectorTypeSupport getVectorTypeSupport() {
         return vectorTypeSupport;
+    }
+
+    @Override
+    public AshDriverFactory getAshDriverFactory() {
+        throw new UnsupportedOperationException("not supported yet");
     }
 }

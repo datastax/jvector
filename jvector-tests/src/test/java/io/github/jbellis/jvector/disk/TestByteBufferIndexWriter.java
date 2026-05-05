@@ -242,5 +242,3 @@ public class TestByteBufferIndexWriter extends LuceneTestCase {
         }
     }
 }
-
-// Made with Bob
