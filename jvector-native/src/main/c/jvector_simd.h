@@ -19,14 +19,20 @@
 #ifndef VECTOR_SIMD_DOT_H
 #define VECTOR_SIMD_DOT_H
 
-#define JV_INLINE static inline
-#define JV_FINLINE static inline __attribute__((always_inline))
-// check CPU support
-bool check_avx512_compatibility(void);
 
 // APIs exposed to Java via FFI
+#ifdef __cplusplus
+extern "C" {
+#endif
+bool check_avx512_compatibility(void);
 float assemble_and_sum_f32_512(const float* data, int dataBase, const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
 float pq_decoded_cosine_similarity_f32_512(const unsigned char* baseOffsets, int baseOffsetsOffset, int baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude);
 void calculate_partial_sums_euclidean_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums);
 void calculate_partial_sums_dot_f32_512(const float* codebook, int codebookBase, int size, int clusterCount, const float* query, int queryOffset, float* partialSums);
-#endif
+float dot_product_f32_512_native(const float* a, int aoffset, const float* b, int boffset, int length);
+float cosine_f32_512_native(const float* a, int aoffset, const float* b, int boffset, int length);
+float euclidean_f32_512_native(const float* a, int aoffset, const float* b, int boffset, int length);
+#ifdef __cplusplus
+}
+#endif // extern "C"
+#endif // VECTOR_SIMD_DOT_H
