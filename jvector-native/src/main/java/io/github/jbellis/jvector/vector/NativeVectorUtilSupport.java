@@ -106,6 +106,48 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
+        return NativeSimdOps.dot_product_f32_512_native(((MemorySegmentVectorFloat) v1).get(), 0,
+                                                        ((MemorySegmentVectorFloat) v2).get(), 0,
+                                                        v1.length());
+    }
+
+    @Override
+    public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
+        return NativeSimdOps.dot_product_f32_512_native(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                                        ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                                        length);
+    }
+
+    @Override
+    public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
+        return NativeSimdOps.euclidean_f32_512_native(((MemorySegmentVectorFloat) v1).get(), 0,
+                                                      ((MemorySegmentVectorFloat) v2).get(), 0,
+                                                      v1.length());
+    }
+
+    @Override
+    public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        return NativeSimdOps.euclidean_f32_512_native(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                                      ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                                      length);
+    }
+
+    @Override
+    public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
+        return NativeSimdOps.cosine_f32_512_native(((MemorySegmentVectorFloat) v1).get(), 0,
+                                                   ((MemorySegmentVectorFloat) v2).get(), 0,
+                                                   v1.length());
+    }
+
+    @Override
+    public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        return NativeSimdOps.cosine_f32_512_native(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                                   ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                                   length);
+    }
+
+    @Override
     public void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int queryOffset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
         var nativeCodebook = ((MemorySegmentVectorFloat) codebook).get();
         var nativeQuery = ((MemorySegmentVectorFloat) query).get();
