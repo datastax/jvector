@@ -86,8 +86,7 @@ public class NvqExample {
         var pqv = new MutablePQVectors(pq);
         var bsp = BuildScoreProvider.pqBuildScoreProvider(vsf, pqv);
 
-        var graphPath = Path.of("./local/tmp.jvgraph");
-        Files.deleteIfExists(graphPath);
+        Path graphPath = Files.createTempFile("jvector-nvq-graph", null);
 
         System.out.println("Building graph in streaming mode...");
         try (
@@ -110,7 +109,7 @@ public class NvqExample {
                         
                         // Encode the PQ vector first, then add the graph node
                         pqv.encodeAndSet(ordinal, vec);
-                        builder.addGraphNode(ordinal, base.getVector(ordinal));
+                        builder.addGraphNode(ordinal, vec);
 
                         // Encode and write NVQ vectors for later re-ranking
                         var nvqVec = nvq.encode(vec);
@@ -168,5 +167,8 @@ public class NvqExample {
         // Evaluate search accuracy
         var recall = AccuracyMetrics.recallFromSearchResults(ds.getGroundTruth(), results, topK, topK);
         System.out.println("Recall: " + recall);
+
+        // cleanup
+        Files.deleteIfExists(graphPath);
     }
 }
