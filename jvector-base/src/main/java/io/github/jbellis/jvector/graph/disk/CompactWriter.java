@@ -61,6 +61,7 @@ final class CompactWriter implements AutoCloseable {
     private final ProductQuantization pq;
     private final int baseDegree;
     private final int maxOrdinal;
+    private final int entryNode;
     private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final ThreadLocal<ByteSequence<?>> zeroPQ;
     private final boolean fusedPQEnabled;
@@ -68,6 +69,9 @@ final class CompactWriter implements AutoCloseable {
     private final List<CommonHeader.LayerInfo> configuredLayerInfo;
     private final List<Integer> configuredLayerDegrees;
     private final List<UpperLayerFeatureRecord> level1FeatureRecords;
+    // PQ code for the entry node, required when hierarchy is disabled (no level 1).
+    // Mirrors what AbstractGraphIndexWriter.writeSparseLevels writes in the no-hierarchy branch.
+    private ByteSequence<?> entryNodePqCode;
 
     CompactWriter(Path outputPath,
                   int maxOrdinal,
@@ -91,7 +95,9 @@ final class CompactWriter implements AutoCloseable {
         this.baseDegree = layerDegrees.get(0);
         this.pq = pq;
         this.maxOrdinal = maxOrdinal;
+        this.entryNode = entryNode;
         this.level1FeatureRecords = new ArrayList<>();
+        this.entryNodePqCode = null;
 
         Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
         InlineVectors inlineVectorFeature = new InlineVectors(dimension);
@@ -134,10 +140,21 @@ final class CompactWriter implements AutoCloseable {
     }
 
     void writeFooter() throws IOException {
-        if (fusedPQEnabled && version == 6 && !level1FeatureRecords.isEmpty()) {
-            for (UpperLayerFeatureRecord record : level1FeatureRecords) {
-                writer.writeInt(record.ordinal);
-                vectorTypeSupport.writeByteSequence(writer, record.pqCode);
+        if (fusedPQEnabled && version == 6) {
+            if (!level1FeatureRecords.isEmpty()) {
+                // Hierarchy is enabled: write PQ source feature for every level-1 node.
+                // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel >= 1 branch).
+                for (UpperLayerFeatureRecord record : level1FeatureRecords) {
+                    writer.writeInt(record.ordinal);
+                    vectorTypeSupport.writeByteSequence(writer, record.pqCode);
+                }
+            } else if (entryNodePqCode != null) {
+                // No hierarchy: write the entry node's own PQ code so that
+                // OnDiskGraphIndex.loadInMemoryFeatures can populate hierarchyCachedFeatures
+                // and GraphSearcher.initializeInternal can score the entry point.
+                // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel == 0 branch).
+                writer.writeInt(entryNode);
+                vectorTypeSupport.writeByteSequence(writer, entryNodePqCode);
             }
         }
         long headerOffset = writer.position();
@@ -155,6 +172,10 @@ final class CompactWriter implements AutoCloseable {
 
     public Path getOutputPath() {
         return outputPath;
+    }
+
+    public void setEntryNodePqCode(ByteSequence<?> code) {
+        this.entryNodePqCode = code;
     }
 
     public void writeUpperLayerNode(int level, int ordinal, int[] neighbors, ByteSequence<?> level1PqCode) throws IOException {
