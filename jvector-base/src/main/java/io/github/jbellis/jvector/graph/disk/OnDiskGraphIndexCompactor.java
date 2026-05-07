@@ -223,13 +223,31 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
-        int entryNode = resolveEntryNode();
+        int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
+        int entryNode = remappers.get(entryNodeSource[0]).oldToNew(entryNodeSource[1]);
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
         try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, pq, pqLength, fusedPQEnabled)) {
             writer.writeHeader();
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+
+            // When FusedPQ is enabled and there is no hierarchy (only L0), the reader expects
+            // to find the entry node's own PQ code written after the L0 block, just as
+            // AbstractGraphIndexWriter.writeSparseLevels does in its getMaxLevel == 0 branch.
+            // Without it, loadInMemoryFeatures reads garbage and hierarchyCachedFeatures is
+            // missing the entry node, causing "Node X is not in the hierarchy" on first search.
+            if (fusedPQEnabled && maxDegrees.size() == 1) {
+                try (var entryView = sources.get(entryNodeSource[0]).getView()) {
+                    var entryVec = vectorTypeSupport.createFloatVector(dimension);
+                    entryView.getVectorInto(entryNodeSource[1], entryVec, 0);
+                    var entryPqCode = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    entryPqCode.zero();
+                    pq.encodeTo(entryVec, entryPqCode);
+                    writer.setEntryNodePqCode(entryPqCode);
+                }
+            }
+
             writer.writeFooter();
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
@@ -240,12 +258,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Resolves the entry node for the compacted graph. The chosen node must exist at maxLevel
-     * (since the on-disk format sets entryNode.level = maxLevel). Prefers the designated entry
-     * node of any source whose maxLevel equals the global maxLevel; if all such entry nodes
-     * are deleted, falls back to the first live node at maxLevel across all sources.
+     * Returns {sourceIdx, originalOrdinal} for the entry node of the compacted graph.
+     * The chosen node must exist at maxLevel (since the on-disk format sets entryNode.level =
+     * maxLevel). Prefers the designated entry node of any source whose maxLevel equals the global
+     * maxLevel; if all such entry nodes are deleted, falls back to the first live node at maxLevel
+     * across all sources.
      */
-    private int resolveEntryNode() {
+    private int[] resolveEntryNodeSource() {
         int maxLevel = sources.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
 
         // The on-disk format sets entryNode.level = layerInfo.size() - 1 (i.e. maxLevel).
@@ -256,7 +275,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (sources.get(s).getMaxLevel() == maxLevel) {
                 int originalEntry = sources.get(s).getView().entryNode().node;
                 if (liveNodes.get(s).get(originalEntry)) {
-                    return remappers.get(s).oldToNew(originalEntry);
+                    return new int[]{s, originalEntry};
                 }
             }
         }
@@ -268,7 +287,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             while (it.hasNext()) {
                 int node = it.next();
                 if (liveNodes.get(s).get(node)) {
-                    return remappers.get(s).oldToNew(node);
+                    return new int[]{s, node};
                 }
             }
         }
