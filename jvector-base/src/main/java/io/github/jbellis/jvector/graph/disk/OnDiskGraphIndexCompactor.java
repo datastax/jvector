@@ -20,6 +20,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
@@ -70,6 +71,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
+
+    // Pre-computed PQ codes by new ordinal. Created in precomputePQCodes() before compaction
+    // when fused PQ is enabled, then read by CompactWriter.writeInlineNodeRecord. Lives in a
+    // mmap'd region appended past the projected end of the OUTPUT graph file (rather than a
+    // separate temp file). After compaction completes, the file is truncated back to the
+    // projected end, removing this transient section. Java heap unaffected (mmap is off-heap);
+    // file briefly bloats by ~N * pqCodeSize during compaction.
+    private MappedByteBuffer pqCache;
+    private int pqCacheCodeSize;
+    private long pqCacheTruncateAt;  // file size to truncate to in finally; 0 = no truncate needed
 
     /**
      * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
@@ -229,7 +240,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
         try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, pq, pqLength, fusedPQEnabled)) {
+            // Header has to be written first so the writer's position is past the header
+            // before we mmap a section past the projected end of the output.
             writer.writeHeader();
+
+            // Pre-encode PQ codes for every live node into a section appended past the
+            // projected end of the OUTPUT file. writeInlineNodeRecord copies codes from this
+            // cache instead of re-encoding ~degree times per parent. The transient section
+            // is truncated away in the finally block.
+            if (fusedPQEnabled) {
+                try {
+                    precomputePQCodes(pq, writer);
+                    if (pqCache != null) {
+                        writer.enablePqCodeCache(pqCache, pqCacheCodeSize);
+                    }
+                } catch (IOException e) {
+                    log.warn("PQ pre-encode failed, falling back to per-write encoding: {}", e.getMessage());
+                }
+            }
+
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
 
             // When FusedPQ is enabled and there is no hierarchy (only L0), the reader expects
@@ -253,7 +282,109 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
+            // Drop the mmap reference (the actual unmap happens at GC; truncate works on
+            // POSIX even with a live mapping). Then truncate the output file to remove the
+            // transient PQ-code section appended past projectedOutputSize.
+            if (pqCacheTruncateAt > 0) {
+                pqCache = null;
+                try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
+                    if (fc.size() > pqCacheTruncateAt) {
+                        fc.truncate(pqCacheTruncateAt);
+                    }
+                } catch (IOException e) {
+                    log.warn("Failed to truncate PQ cache section from output file {}: {}",
+                            outputPath, e.getMessage());
+                }
+                pqCacheTruncateAt = 0;
+            }
             if (ownsExecutor) executor.shutdown();
+        }
+    }
+
+    /**
+     * Pre-computes PQ codes for every live node and stores them in a memory-mapped section
+     * appended past the projected end of the OUTPUT graph file (rather than a separate temp
+     * file). After compaction completes, the file is truncated back to the projected end,
+     * removing this section.
+     * <p>
+     * The cache lives off-heap so the Java heap budget is unaffected. Single-mapping size
+     * limit of 2 GB caps this implementation at ~10M nodes (assuming pqCodeSize ≈ 192 B).
+     * For larger datasets a chunked or MemorySegment-based mapping would be needed.
+     */
+    private void precomputePQCodes(ProductQuantization pq, CompactWriter writer) throws IOException {
+        pqCacheCodeSize = pq.getSubspaceCount();
+        long tempSize = (long) (maxOrdinal + 1) * pqCacheCodeSize;
+        if (tempSize <= 0 || tempSize > Integer.MAX_VALUE) {
+            log.info("PQ pre-encode skipped: required cache size {} bytes exceeds single-mapping limit", tempSize);
+            return;
+        }
+
+        // Place the temp section past the projected end of the output file. The writer
+        // never touches this region; it's truncated away in compact()'s finally block.
+        long tempOffset = writer.projectedOutputSize();
+        pqCacheTruncateAt = tempOffset;
+        long totalSize = tempOffset + tempSize;
+
+        // Open a separate FileChannel on the output file, grow it to fit the temp section,
+        // and map only the temp region. The CompactWriter holds an independent handle on
+        // the same file via BufferedRandomAccessWriter — POSIX semantics let multiple FDs
+        // coexist on the same file; since we only mmap a region the writer never writes
+        // to, no coherency issues.
+        try (FileChannel fc = FileChannel.open(writer.getOutputPath(),
+                StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            // Grow file to totalSize by writing one byte at totalSize-1.
+            ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
+            fc.write(pad, totalSize - 1);
+            pqCache = fc.map(FileChannel.MapMode.READ_WRITE, tempOffset, tempSize);
+        }
+
+        // Parallel-encode each live node's PQ code into pqCache. Each task takes a slab of
+        // ordinals from one source so workers don't share the same source's RandomAccessReader.
+        final int pqSize = pqCacheCodeSize;
+        List<Callable<Long>> tasks = new ArrayList<>();
+        int targetTasks = Math.max(taskWindowSize * 4, 16);
+        for (int s = 0; s < sources.size(); s++) {
+            final int sIdx = s;
+            final var source = sources.get(s);
+            final var alive = liveNodes.get(s);
+            final int upper = alive.length();
+            int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
+            for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
+                final int cStart = chunkStart;
+                final int cEnd = Math.min(chunkStart + chunkSize, upper);
+                tasks.add(() -> {
+                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(pqSize);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    long count = 0;
+                    try (var view = source.getView()) {
+                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
+                            if (!alive.get(oldOrd)) continue;
+                            view.getVectorInto(oldOrd, vec, 0);
+                            code.zero();
+                            pq.encodeTo(vec, code);
+                            int newOrd = remappers.get(sIdx).oldToNew(oldOrd);
+                            int offset = newOrd * pqSize;
+                            // Absolute writes are thread-safe across disjoint regions; each
+                            // newOrd is unique so workers never write to the same byte.
+                            for (int i = 0; i < pqSize; i++) {
+                                pqCache.put(offset + i, code.get(i));
+                            }
+                            count++;
+                        }
+                    }
+                    return count;
+                });
+            }
+        }
+        try {
+            long total = 0;
+            for (Future<Long> f : executor.invokeAll(tasks)) {
+                total += f.get();
+            }
+            log.info("PQ pre-encode: {} nodes encoded into {} MB in-output cache (offset {})",
+                    total, tempSize / (1024 * 1024), tempOffset);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new IOException("PQ pre-encode failed", e);
         }
     }
 

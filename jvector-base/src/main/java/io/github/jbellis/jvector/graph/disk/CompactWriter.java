@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -72,6 +73,14 @@ final class CompactWriter implements AutoCloseable {
     // PQ code for the entry node, required when hierarchy is disabled (no level 1).
     // Mirrors what AbstractGraphIndexWriter.writeSparseLevels writes in the no-hierarchy branch.
     private ByteSequence<?> entryNodePqCode;
+
+    // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
+    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
+    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
+    private MappedByteBuffer pqCodeCache;
+    private int pqCodeSize;
+    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
+    private ThreadLocal<byte[]> pqCodeBufPerThread;
 
     CompactWriter(Path outputPath,
                   int maxOrdinal,
@@ -132,6 +141,23 @@ final class CompactWriter implements AutoCloseable {
         });
     }
 
+    /**
+     * Enables the pre-computed PQ code cache. Must be called before any writeInlineNodeRecord
+     * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
+     * re-encoded per write.
+     *
+     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
+     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
+     * @param pqCodeSize  bytes per code (== ProductQuantization.getSubspaceCount() for FusedPQ)
+     */
+    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+        this.pqCodeCache = cache;
+        this.pqCodeSize = pqCodeSize;
+        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
+        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
+        this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
+    }
+
     public void writeHeader() throws IOException {
         writer.seek(startOffset);
         header.write(writer);
@@ -178,6 +204,39 @@ final class CompactWriter implements AutoCloseable {
         this.entryNodePqCode = code;
     }
 
+    /**
+     * Returns the projected end-of-output offset, computed from layer counts and degrees.
+     * Used to place a transient PQ-code mmap section past the end of the output during
+     * compaction; the file is truncated back to this size when compaction completes.
+     */
+    public long projectedOutputSize() {
+        long total = startOffset + headerSize;
+        // Level-0 records: one per ordinal slot.
+        total += (long) (maxOrdinal + 1) * recordSize;
+        // Upper-layer records: written by writeUpperLayerNode as
+        // [ord int][count int][degree neighbor ints].
+        for (int level = 1; level < configuredLayerDegrees.size(); level++) {
+            int degree = configuredLayerDegrees.get(level);
+            int count = configuredLayerInfo.get(level).size;
+            total += (long) count * (Integer.BYTES * 2L + (long) degree * Integer.BYTES);
+        }
+        // PQ feature records written at the start of writeFooter() when v6 + fused PQ:
+        //   - hierarchy enabled: one [ord, code] record per level-1 node;
+        //   - no hierarchy:      one [entryOrd, code] record for the entry node only.
+        if (fusedPQEnabled && version == 6) {
+            int pqSize = pq.getSubspaceCount();
+            if (configuredLayerInfo.size() > 1) {
+                int level1Count = configuredLayerInfo.get(1).size;
+                total += (long) level1Count * (Integer.BYTES + pqSize);
+            } else {
+                total += Integer.BYTES + pqSize;
+            }
+        }
+        // Footer trailer: header copy + headerOffset (long) + magic (int).
+        total += headerSize + FOOTER_SIZE;
+        return total;
+    }
+
     public void writeUpperLayerNode(int level, int ordinal, int[] neighbors, ByteSequence<?> level1PqCode) throws IOException {
         writer.writeInt(ordinal);
         writer.writeInt(neighbors.length);
@@ -217,10 +276,23 @@ final class CompactWriter implements AutoCloseable {
         // we cannot use fusedPQfeature.writeInline
         if (fusedPQEnabled) {
             int k = 0;
-            for (; k < selectedCache.size; k++) {
-                pqCode.zero();
-                pq.encodeTo(selectedCache.vecs[k], pqCode);
-                vectorTypeSupport.writeByteSequence(bwriter, pqCode);
+            if (pqCodeCache != null) {
+                // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
+                ByteBuffer cacheView = pqCacheViewPerThread.get();
+                byte[] codeBuf = pqCodeBufPerThread.get();
+                for (; k < selectedCache.size; k++) {
+                    int newOrd = selectedCache.nodes[k]; // already remapped before this call
+                    int offset = newOrd * pqCodeSize;
+                    cacheView.position(offset);
+                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    bwriter.write(codeBuf, 0, pqCodeSize);
+                }
+            } else {
+                for (; k < selectedCache.size; k++) {
+                    pqCode.zero();
+                    pq.encodeTo(selectedCache.vecs[k], pqCode);
+                    vectorTypeSupport.writeByteSequence(bwriter, pqCode);
+                }
             }
             for (; k < baseDegree; k++) {
                 vectorTypeSupport.writeByteSequence(bwriter, zeroPQ.get());
