@@ -36,6 +36,8 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -59,6 +61,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final int SEARCH_TOP_K_MULTIPLIER = 2;
 
     private final List<OnDiskGraphIndex> sources;
+    // Optional non-fused compressed sidecar, parallel to `sources`. Null when sources carry their
+    // quantization inline (FUSED_PQ) or have none. When non-null, compact(Path, Path) retrains the
+    // compressor on merged vectors and writes a single merged CompressedVectors to compressedPath.
+    private final List<CompressedVectors> sourceCompressed;
     private final List<FixedBitSet> liveNodes;
     private final List<Integer> numLiveNodesPerSource;
     private final List<OrdinalMapper> remappers;
@@ -83,8 +89,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private long pqCacheTruncateAt;  // file size to truncate to in finally; 0 = no truncate needed
 
     /**
-     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
-     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
+     * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
      */
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
@@ -92,7 +98,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
-        checkBeforeCompact(sources, liveNodes, remappers);
+        this(sources, null, liveNodes, remappers, similarityFunction, executor);
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     *
+     * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
+     *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
+     *                         that ship alongside each graph. Pass {@code null} when sources carry
+     *                         quantization inline (FUSED_PQ) or have none. Must not be combined
+     *                         with sources that carry the FUSED_PQ feature.
+     */
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor) {
+        checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
         int threads = Runtime.getRuntime().availableProcessors();
         if (executor != null) {
@@ -104,6 +130,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.taskWindowSize = threads;
 
         this.sources = sources;
+        this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
         this.remappers = remappers;
         this.liveNodes = liveNodes;
         this.numLiveNodesPerSource = new ArrayList<>(this.sources.size());
@@ -131,12 +158,47 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void checkBeforeCompact(
             List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
             List<FixedBitSet> liveNodes,
             List<OrdinalMapper> remappers) {
         validateInputSizes(sources, liveNodes, remappers);
         validateLiveNodesBounds(sources, liveNodes);
         validateGraphConfiguration(sources);
         validateFeatures(sources);
+        validateCompressed(sources, sourceCompressed);
+    }
+
+    /**
+     * Validates that the optional non-fused compressed sidecar list is consistent with
+     * {@code sources}: same size, no nulls, identical compressor type across entries, and not
+     * combined with FUSED_PQ (which already carries codes inline).
+     */
+    private void validateCompressed(List<OnDiskGraphIndex> sources, List<CompressedVectors> sourceCompressed) {
+        if (sourceCompressed == null || sourceCompressed.isEmpty()) {
+            return;
+        }
+        if (sourceCompressed.size() != sources.size()) {
+            throw new IllegalArgumentException("sourceCompressed must have the same size as sources");
+        }
+        if (sources.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ)) {
+            throw new IllegalArgumentException(
+                    "sourceCompressed cannot be combined with FUSED_PQ feature; choose one");
+        }
+        Class<?> compressorClass = null;
+        for (int s = 0; s < sourceCompressed.size(); s++) {
+            CompressedVectors cv = Objects.requireNonNull(sourceCompressed.get(s),
+                    "sourceCompressed[" + s + "] is null");
+            var compressor = Objects.requireNonNull(cv.getCompressor(),
+                    "sourceCompressed[" + s + "].getCompressor() is null");
+            if (compressorClass == null) {
+                compressorClass = compressor.getClass();
+            } else if (compressorClass != compressor.getClass()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed entries must all use the same compressor type; got "
+                                + compressorClass.getSimpleName() + " and "
+                                + compressor.getClass().getSimpleName());
+            }
+        }
     }
 
     /**
@@ -220,6 +282,45 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
     public void compact(Path outputPath) throws FileNotFoundException {
+        try {
+            compactGraphImpl(outputPath);
+        } finally {
+            if (ownsExecutor) executor.shutdown();
+        }
+    }
+
+    /**
+     * Compaction entry point for graphs that ship a non-fused compressed sidecar (e.g.
+     * {@link io.github.jbellis.jvector.quantization.PQVectors}). Writes the merged graph to
+     * {@code graphPath} and the merged compressed vectors to {@code compressedPath}.
+     * <p>
+     * The compressor is retrained on a balanced sample of merged source vectors, then every live
+     * node is re-encoded against the new codebook. Requires that {@code sourceCompressed} was
+     * supplied to the constructor.
+     */
+    public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        if (sourceCompressed == null) {
+            throw new IllegalStateException(
+                    "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
+        }
+        Objects.requireNonNull(compressedPath, "compressedPath");
+
+        try {
+            // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+            // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+            compactGraphImpl(graphPath);
+            writeCompactedCompressed(compressedPath);
+        } finally {
+            if (ownsExecutor) executor.shutdown();
+        }
+    }
+
+    /**
+     * Internal graph-compaction body. Performs the full graph write but does <em>not</em> shut
+     * down {@link #executor}; the public {@code compact(...)} entry points own that lifecycle so
+     * follow-on passes (e.g. {@link #writeCompactedCompressed}) can keep using the executor.
+     */
+    private void compactGraphImpl(Path outputPath) throws FileNotFoundException {
         boolean fusedPQEnabled = hasFusedPQ();
         boolean compressedPrecision = fusedPQEnabled;
 
@@ -297,8 +398,126 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
                 pqCacheTruncateAt = 0;
             }
-            if (ownsExecutor) executor.shutdown();
         }
+    }
+
+    /**
+     * Retrains the (PQ) compressor on merged sources, then streams the merged
+     * {@link io.github.jbellis.jvector.quantization.PQVectors} to {@code compressedPath} in
+     * fixed-size chunks. Each chunk holds {@code VECTORS_PER_CHUNK} codes; chunks are encoded
+     * by parallel workers in batches of {@code parallelism} and written sequentially as each
+     * batch completes, so heap residency is bounded by {@code parallelism * chunkBytes} rather
+     * than the full {@code (maxOrdinal+1) * codeSize} of an in-memory {@code MutablePQVectors}.
+     * <p>
+     * Today only {@link ProductQuantization}-backed sidecars are supported; future quantization
+     * types (e.g. ASH) will dispatch on {@code firstCompressor}'s class.
+     */
+    private void writeCompactedCompressed(Path compressedPath) {
+        var firstCompressor = sourceCompressed.get(0).getCompressor();
+        if (!(firstCompressor instanceof ProductQuantization)) {
+            throw new UnsupportedOperationException(
+                    "Compressed-sidecar compaction currently supports only ProductQuantization; got "
+                            + firstCompressor.getClass().getSimpleName());
+        }
+        ProductQuantization basePQ = (ProductQuantization) firstCompressor;
+
+        log.info("Retraining PQ for compacted compressed sidecar (subspaces={}, clusters={})",
+                basePQ.getSubspaceCount(), basePQ.getClusterCount());
+        PQRetrainer retrainer = new PQRetrainer(sources, liveNodes, dimension);
+        ProductQuantization retrainedPQ = retrainer.retrain(similarityFunction, basePQ);
+
+        // Match MutablePQVectors' chunk size so the on-disk layout is identical to what
+        // PQVectors.load(...) reconstructs into an ImmutablePQVectors.
+        final int VECTORS_PER_CHUNK = 1024;
+        final int codeSize = retrainedPQ.compressedVectorSize();
+        final int subspaceCount = retrainedPQ.getSubspaceCount();
+        final int count = maxOrdinal + 1;
+        final int chunkCount = (count + VECTORS_PER_CHUNK - 1) / VECTORS_PER_CHUNK;
+
+        log.info("Streaming {} merged ordinals to {} ({} chunks of up to {} entries each)",
+                count, compressedPath, chunkCount, VECTORS_PER_CHUNK);
+
+        try (var out = new BufferedRandomAccessWriter(compressedPath)) {
+            // PQVectors header: codebook, count, subspaceCount.
+            retrainedPQ.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+            out.writeInt(count);
+            out.writeInt(subspaceCount);
+
+            // Encode chunks in parallel batches, write batches in order. Heap residency is
+            // bounded by `parallelism` chunks in flight at a time.
+            int parallelism = Math.max(taskWindowSize, 1);
+            for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
+                int batchEnd = Math.min(batchStart + parallelism, chunkCount);
+                List<Callable<ByteSequence<?>>> tasks = new ArrayList<>(batchEnd - batchStart);
+                for (int c = batchStart; c < batchEnd; c++) {
+                    final int chunkStart = c * VECTORS_PER_CHUNK;
+                    final int chunkEnd = Math.min(chunkStart + VECTORS_PER_CHUNK, count);
+                    tasks.add(() -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedPQ));
+                }
+                for (var f : executor.invokeAll(tasks)) {
+                    vectorTypeSupport.writeByteSequence(out, f.get());
+                }
+            }
+        } catch (IOException | InterruptedException | ExecutionException e) {
+            throw new RuntimeException("Failed to write compressed sidecar to " + compressedPath, e);
+        }
+        log.info("Wrote compacted compressed sidecar to {}", compressedPath);
+    }
+
+    /**
+     * Encodes a single output chunk (newOrd range {@code [chunkStart, chunkEnd)}) by reading
+     * each ordinal's raw vector from its originating source view and PQ-encoding it. Holes
+     * (newOrds not covered by any remapper) leave the corresponding slot zero. Views are
+     * opened lazily per source touched within the chunk and closed before returning.
+     */
+    private ByteSequence<?> encodeChunk(int chunkStart, int chunkEnd, int codeSize, ProductQuantization pq) throws IOException {
+        int chunkBytes = (chunkEnd - chunkStart) * codeSize;
+        ByteSequence<?> chunk = vectorTypeSupport.createByteSequence(chunkBytes);
+        chunk.zero();
+
+        OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
+        try {
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+            ByteSequence<?> code = vectorTypeSupport.createByteSequence(codeSize);
+            for (int newOrd = chunkStart; newOrd < chunkEnd; newOrd++) {
+                int[] resolved = resolveSourceForNewOrd(newOrd);
+                if (resolved == null) continue;  // hole; slot stays zero
+                int srcIdx = resolved[0];
+                int oldOrd = resolved[1];
+                if (views[srcIdx] == null) {
+                    views[srcIdx] = (OnDiskGraphIndex.View) sources.get(srcIdx).getView();
+                }
+                views[srcIdx].getVectorInto(oldOrd, vec, 0);
+                code.zero();
+                pq.encodeTo(vec, code);
+                int slotOffset = (newOrd - chunkStart) * codeSize;
+                for (int b = 0; b < codeSize; b++) {
+                    chunk.set(slotOffset + b, code.get(b));
+                }
+            }
+        } finally {
+            for (var v : views) {
+                if (v != null) {
+                    try { v.close(); } catch (Exception ignore) {}
+                }
+            }
+        }
+        return chunk;
+    }
+
+    /**
+     * Resolves a merged (new) ordinal back to its (sourceIdx, oldOrd) pair by consulting each
+     * source's remapper in turn. Returns {@code null} when the ordinal is a hole (not covered
+     * by any source). Each remapper's {@code newToOld} is O(1), so this is O(numSources) per call.
+     */
+    private int[] resolveSourceForNewOrd(int newOrd) {
+        for (int s = 0; s < remappers.size(); s++) {
+            int oldOrd = remappers.get(s).newToOld(newOrd);
+            if (oldOrd != OrdinalMapper.OMITTED) {
+                return new int[]{s, oldOrd};
+            }
+        }
+        return null;
     }
 
     /**
