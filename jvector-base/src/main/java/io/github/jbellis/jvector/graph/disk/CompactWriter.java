@@ -174,6 +174,10 @@ final class CompactWriter implements AutoCloseable {
         return outputPath;
     }
 
+    public int getRecordSize() {
+        return recordSize;
+    }
+
     public void setEntryNodePqCode(ByteSequence<?> code) {
         this.entryNodePqCode = code;
     }
@@ -200,6 +204,63 @@ final class CompactWriter implements AutoCloseable {
         writer.flush();
     }
 
+    /**
+     * Serialises a base-layer node record into a caller-supplied {@code target} buffer and
+     * returns a {@link WriteResult} that owns that buffer.  No heap allocation is performed;
+     * {@code target} must have capacity {@link #getRecordSize()} and is cleared/reset by this
+     * method before writing.  After the call, {@code target} is flipped (position=0,
+     * limit=recordSize) and ready to pass to an async write channel.
+     *
+     * <p>Use this overload when the caller manages buffer pooling (e.g. {@link AsyncBaseLayerWriter}).
+     */
+    public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode, ByteBuffer target) throws IOException
+    {
+        var bwriter = new ByteBufferIndexWriter(target); // clears target before writing
+
+        long fileOffset = startOffset + headerSize + (long) ordinal * recordSize;
+
+        bwriter.writeInt(ordinal);
+
+        for (int i = 0; i < vec.length(); ++i) {
+            bwriter.writeFloat(vec.get(i));
+        }
+
+        if (fusedPQEnabled) {
+            int k = 0;
+            for (; k < selectedCache.size; k++) {
+                pqCode.zero();
+                pq.encodeTo(selectedCache.vecs[k], pqCode);
+                vectorTypeSupport.writeByteSequence(bwriter, pqCode);
+            }
+            for (; k < baseDegree; k++) {
+                vectorTypeSupport.writeByteSequence(bwriter, zeroPQ.get());
+            }
+        }
+
+        bwriter.writeInt(selectedCache.size);
+        int n = 0;
+        for (; n < selectedCache.size; n++) {
+            bwriter.writeInt(selectedCache.nodes[n]);
+        }
+        for (; n < baseDegree; n++) {
+            bwriter.writeInt(-1);
+        }
+
+        if (bwriter.bytesWritten() != recordSize) {
+            throw new IllegalStateException(
+                    String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes, base degree: %d",
+                            ordinal, recordSize, bwriter.bytesWritten(), baseDegree));
+        }
+
+        target.flip(); // position=0, limit=recordSize — ready for channel.write()
+        return new WriteResult(ordinal, fileOffset, target);
+    }
+
+    /**
+     * Serialises a base-layer node record and returns a {@link WriteResult} backed by a
+     * freshly allocated heap {@link ByteBuffer}.  Prefer the overload that accepts a
+     * pre-supplied buffer when pooling is available.
+     */
     public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode) throws IOException
     {
         var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());

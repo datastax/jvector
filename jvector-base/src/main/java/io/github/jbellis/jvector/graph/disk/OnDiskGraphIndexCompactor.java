@@ -18,10 +18,8 @@ package io.github.jbellis.jvector.graph.disk;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.file.StandardOpenOption;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.IntStream;
@@ -336,15 +334,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 ExecutorCompletionService<List<WriteResult>> ecs =
                         new ExecutorCompletionService<>(executor);
 
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
-                        return computeBaseBatch(writer, bs, scratch, params);
-                    });
-                };
+                int maxNodesPerBatch = batches.stream()
+                        .mapToInt(bs -> bs.end - bs.start)
+                        .max()
+                        .orElse(TARGET_NODES_PER_BATCH);
 
-                var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
-                try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
+                try (AsyncBaseLayerWriter asyncWriter = new AsyncBaseLayerWriter(
+                        writer.getOutputPath(), writer.getRecordSize(), taskWindowSize, maxNodesPerBatch)) {
+
+                    java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
+                        ecs.submit(() -> {
+                            Scratch scratch = threadLocalScratch.get();
+                            return computeBaseBatch(writer, bs, scratch, params, asyncWriter);
+                        });
+                    };
 
                     runBatchesWithBackpressure(
                             batches,
@@ -353,18 +356,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             (results) -> {
                                 try {
                                     for (WriteResult r : results) {
-                                        ByteBuffer b = r.data;
-                                        long pos = r.fileOffset;
-                                        while (b.hasRemaining()) {
-                                            int n = fc.write(b, pos);
-                                            pos += n;
-                                        }
+                                        asyncWriter.submit(r);
                                     }
                                 } catch (IOException e) {
                                     throw new RuntimeException(e);
                                 }
                             }
                     );
+
+                    asyncWriter.awaitCompletion();
                 }
 
                 writer.offsetAfterInline();
@@ -449,7 +449,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
    private List<WriteResult> computeBaseBatch(CompactWriter writer,
                                               BatchSpec bs,
                                               Scratch scratch,
-                                              CompactionParams params) throws IOException {
+                                              CompactionParams params,
+                                              AsyncBaseLayerWriter asyncWriter) throws IOException, InterruptedException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
 
@@ -457,7 +458,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int node = bs.nodes[i];
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
 
-            out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params));
+            ByteBuffer buf = asyncWriter.borrowBuffer();
+            out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params, buf));
         }
 
         return out;
@@ -497,7 +499,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int sourceIdx,
             Scratch scratch,
             CompactWriter writer,
-            CompactionParams params
+            CompactionParams params,
+            ByteBuffer buf
     ) throws IOException {
 
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
@@ -536,7 +539,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 newOrdinal,
                 scratch.baseVec,
                 selected,
-                scratch.pqCode
+                scratch.pqCode,
+                buf
         );
     }
 
