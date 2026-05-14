@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
-import io.github.jbellis.jvector.graph.disk.SidecarPQStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -419,10 +418,35 @@ public abstract class PQVectors implements CompressedVectors {
         return pq;
     }
 
+    /** For compaction use. See {@link CompressedVectors#createCompactionStrategy}. */
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
-        return new SidecarPQStrategy(ctx.sources, ctx.sourceCompressed, ctx.liveNodes, ctx.remappers,
-                ctx.dimension, ctx.maxOrdinal, ctx.executor, ctx.taskWindowSize);
+        ProductQuantization basePQ = this.pq;
+        io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
+                vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+                        .retrain(vsf, basePQ);
+        return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
+    }
+
+    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
+    @Override
+    public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        if (!(mergedCompressor instanceof ProductQuantization)) {
+            throw new IllegalArgumentException(
+                    "PQVectors sidecar header requires ProductQuantization; got "
+                            + mergedCompressor.getClass().getSimpleName());
+        }
+        ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
+        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        out.writeInt(count);
+        out.writeInt(mergedPQ.getSubspaceCount());
+    }
+
+    /** For compaction use. See {@link CompressedVectors#sidecarVectorsPerChunk}. */
+    @Override
+    public int sidecarVectorsPerChunk() {
+        // Match MutablePQVectors so the on-disk layout is identical to what PQVectors.load reconstructs.
+        return 1024;
     }
 
     @Override

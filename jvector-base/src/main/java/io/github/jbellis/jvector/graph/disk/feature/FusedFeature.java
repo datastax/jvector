@@ -20,7 +20,9 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 
 import java.io.IOException;
 
@@ -42,18 +44,37 @@ public interface FusedFeature extends Feature {
     InlineSource loadSourceFeature(RandomAccessReader in) throws IOException;
 
     /**
-     * Bytes occupied on disk by a single stored code (one neighbor's payload). For fused
-     * features {@code featureSize() == codeSize() * maxDegree}. Used by callers that allocate
-     * per-thread scratch buffers sized for a single code, e.g. cross-source scoring during
-     * compaction.
+     * For compaction use: bytes occupied on disk by a single stored code (one neighbor's payload).
+     * For fused features {@code featureSize() == codeSize() * maxDegree}. Called by the compactor
+     * (and {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor#ramBytesUsed}) to
+     * size per-thread scratch buffers and by {@code FusedCompactionStrategy} to size the streaming
+     * pre-encode cache.
      */
     int codeSize();
 
     /**
-     * Returns the {@link QuantizationCompactionStrategy} the compactor should run when merging graphs that
-     * carry this fused feature. One strategy instance per compaction; it owns any transient state
-     * (retrained codebook, pre-encode caches) until the compactor releases it via
-     * {@link QuantizationCompactionStrategy#onAfterClose}.
+     * For compaction use: returns the underlying compressor that produced the inline codes carried
+     * by this feature. Returned typed as {@code VectorCompressor<ByteSequence<?>>} so generic
+     * compaction code (the pre-encode pass, the per-write encoding fallback in {@code CompactWriter})
+     * can call {@code encodeTo(VectorFloat, ByteSequence)} without knowing the concrete
+     * quantization scheme.
+     */
+    VectorCompressor<ByteSequence<?>> getCompressor();
+
+    /**
+     * For compaction use: returns a fresh {@link FusedFeature} of this same scheme but
+     * parameterized by a new compressor and max degree. Called by
+     * {@code FusedCompactionStrategy.outputFusedFeature} to construct the merged output's fused
+     * feature from a retrained compressor — every {@link FusedFeature} implementation acts as a
+     * factory for itself in this way so the compactor never references concrete subtypes.
+     */
+    FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree);
+
+    /**
+     * For compaction use: returns the {@link QuantizationCompactionStrategy} the compactor should
+     * run when merging graphs that carry this fused feature. One strategy instance per
+     * compaction; it owns any transient state (retrained codebook, pre-encode caches) until the
+     * compactor releases it via {@link QuantizationCompactionStrategy#onAfterClose}.
      * <p>
      * Implementations must return a fresh strategy on every call — feature instances themselves
      * are read-mostly objects that may be shared by concurrent readers of the source graph.

@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -34,13 +35,18 @@ import java.util.List;
  * compressor produced by {@link #retrain} and any transient resources (e.g. memory-mapped
  * pre-encode caches) until {@link #onAfterClose} releases them.
  * <p>
- * Concrete implementations supplied with this package:
+ * Two concrete implementations cover all quantization schemes:
  * <ul>
- *     <li>{@link FusedPQStrategy} — sources carry the FUSED_PQ feature; codes are written inline
- *         alongside neighbor lists and the compressor is retrained on merged source vectors.</li>
+ *     <li>{@link FusedCompactionStrategy} — sources carry a {@link FusedFeature} with inline codes;
+ *         the strategy is parameterized by a {@link VectorCompressorRetrainer} and the source's
+ *         feature (used as a factory for the merged output's feature via
+ *         {@link FusedFeature#withCompressor}). No PQ- or ASH-specific code lives in the strategy.</li>
+ *     <li>{@link SidecarCompactionStrategy} — sources ship codes as a non-fused
+ *         {@code CompressedVectors} sidecar; the strategy is parameterized by a retrainer plus the
+ *         source's {@code CompressedVectors} (used as a format handle).</li>
  * </ul>
- * Future drop-ins ({@code SidecarPQStrategy}, {@code FusedASHStrategy}, {@code SidecarASHStrategy},
- * …) plug in without touching the compactor body.
+ * Adding a new quantization type (e.g. ASH) requires no strategy classes; the new {@code FusedASH}
+ * and {@code ASHVectors} just return appropriately-parameterized instances of these two strategies.
  */
 public abstract class QuantizationCompactionStrategy {
 
@@ -130,9 +136,19 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * Returns the {@link FusedFeature} the compactor should put in the merged output graph for
+     * an inline strategy. {@code null} for non-inline strategies (NONE and any sidecar strategy).
+     * Called after {@link #retrain} so the strategy can build the output feature from the
+     * retrained compressor.
+     */
+    public FusedFeature outputFusedFeature(int maxDegree) {
+        return null;
+    }
+
+    /**
      * Convenience: returns {@link #compressor()} cast to {@link ProductQuantization}, or
-     * {@code null} if no compressor is held. Useful for the inline path which still threads PQ
-     * through {@link CompactWriter}.
+     * {@code null} if no compressor is held. Kept for backward compat with code paths that still
+     * thread a typed {@code ProductQuantization} through {@link CompactWriter}.
      */
     protected ProductQuantization compressorAsPQ() {
         VectorCompressor<?> c = compressor();

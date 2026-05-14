@@ -353,7 +353,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Internal graph-compaction body. Performs the full graph write but does <em>not</em> shut
      * down {@link #executor}; the public {@code compact(...)} entry points own that lifecycle so
-     * follow-on passes (e.g. a sidecar write via {@link SidecarPQStrategy}) can keep using
+     * follow-on passes (e.g. a sidecar write via {@link SidecarCompactionStrategy}) can keep using
      * the executor.
      * <p>
      * Quantization-aware steps (codebook retrain, pre-encode caches, entry-node tail records,
@@ -365,8 +365,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
         ProductQuantization pq = strategy.compressorAsPQ();
-        int pqLength = pq != null ? pq.compressedVectorSize() : -1;
         boolean compressedPrecision = fusedPQEnabled;
+        int maxBaseDegree = java.util.Collections.max(maxDegrees);
+        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
+                strategy.outputFusedFeature(maxBaseDegree);
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
         int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
@@ -374,7 +376,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, pq, pqLength, fusedPQEnabled)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
