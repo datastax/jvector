@@ -20,7 +20,10 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.FusedPQStrategy;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.FusedPQDecoder;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -77,6 +80,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return pq.compressedVectorSize() * maxDegree;
     }
 
+    @Override
+    public int codeSize() {
+        return pq.compressedVectorSize();
+    }
+
     static FusedPQ load(CommonHeader header, RandomAccessReader reader) {
         try {
             return new FusedPQ(header.layerInfo.get(0).degree, ProductQuantization.load(reader));
@@ -94,6 +102,12 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
         return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
+    }
+
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        return new FusedPQStrategy(ctx.sources, ctx.liveNodes, ctx.remappers,
+                ctx.dimension, ctx.maxOrdinal, ctx.executor, ctx.taskWindowSize);
     }
 
     @Override

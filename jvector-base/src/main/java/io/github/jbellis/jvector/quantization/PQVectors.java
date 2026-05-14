@@ -19,6 +19,9 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.graph.disk.SidecarPQStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -414,6 +417,12 @@ public abstract class PQVectors implements CompressedVectors {
     @Override
     public ProductQuantization getCompressor() {
         return pq;
+    }
+
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        return new SidecarPQStrategy(ctx.sources, ctx.sourceCompressed, ctx.liveNodes, ctx.remappers,
+                ctx.dimension, ctx.maxOrdinal, ctx.executor, ctx.taskWindowSize);
     }
 
     @Override

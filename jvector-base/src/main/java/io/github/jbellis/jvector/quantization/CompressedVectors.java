@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -66,4 +68,19 @@ public interface CompressedVectors extends Accountable {
 
     /** the number of vectors */
     int count();
+
+    /**
+     * Returns the {@link QuantizationCompactionStrategy} the compactor should run when merging graphs whose
+     * non-fused compressed sidecars are this kind of {@code CompressedVectors}. One strategy
+     * instance per compaction; it retrains the compressor on the merged source vectors and
+     * streams the merged sidecar to disk.
+     * <p>
+     * Named to mirror {@code FusedFeature.createCompactionStrategy} — same verb, receiver type
+     * disambiguates whether the returned strategy drives the inline-fused or sidecar workflow.
+     * Default throws — implementations supporting compaction must override.
+     */
+    default QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        throw new UnsupportedOperationException(
+                getClass().getSimpleName() + " does not support sidecar compaction");
+    }
 }

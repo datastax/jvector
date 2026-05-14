@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.util.Accountable;
 
 import java.io.IOException;
@@ -38,4 +40,23 @@ public interface FusedFeature extends Feature {
     interface InlineSource extends Accountable {}
 
     InlineSource loadSourceFeature(RandomAccessReader in) throws IOException;
+
+    /**
+     * Bytes occupied on disk by a single stored code (one neighbor's payload). For fused
+     * features {@code featureSize() == codeSize() * maxDegree}. Used by callers that allocate
+     * per-thread scratch buffers sized for a single code, e.g. cross-source scoring during
+     * compaction.
+     */
+    int codeSize();
+
+    /**
+     * Returns the {@link QuantizationCompactionStrategy} the compactor should run when merging graphs that
+     * carry this fused feature. One strategy instance per compaction; it owns any transient state
+     * (retrained codebook, pre-encode caches) until the compactor releases it via
+     * {@link QuantizationCompactionStrategy#onAfterClose}.
+     * <p>
+     * Implementations must return a fresh strategy on every call — feature instances themselves
+     * are read-mostly objects that may be shared by concurrent readers of the source graph.
+     */
+    QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx);
 }

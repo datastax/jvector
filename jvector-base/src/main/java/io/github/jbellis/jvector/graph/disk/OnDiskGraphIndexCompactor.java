@@ -18,10 +18,9 @@ package io.github.jbellis.jvector.graph.disk;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
@@ -29,6 +28,7 @@ import java.util.stream.IntStream;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -36,7 +36,6 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -77,16 +76,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
-
-    // Pre-computed PQ codes by new ordinal. Created in precomputePQCodes() before compaction
-    // when fused PQ is enabled, then read by CompactWriter.writeInlineNodeRecord. Lives in a
-    // mmap'd region appended past the projected end of the OUTPUT graph file (rather than a
-    // separate temp file). After compaction completes, the file is truncated back to the
-    // projected end, removing this transient section. Java heap unaffected (mmap is off-heap);
-    // file briefly bloats by ~N * pqCodeSize during compaction.
-    private MappedByteBuffer pqCache;
-    private int pqCacheCodeSize;
-    private long pqCacheTruncateAt;  // file size to truncate to in finally; 0 = no truncate needed
 
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
@@ -180,9 +169,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (sourceCompressed.size() != sources.size()) {
             throw new IllegalArgumentException("sourceCompressed must have the same size as sources");
         }
-        if (sources.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ)) {
-            throw new IllegalArgumentException(
-                    "sourceCompressed cannot be combined with FUSED_PQ feature; choose one");
+        // Inline (fused) and sidecar are mutually exclusive ways to carry quantization codes.
+        // Check for any fused feature rather than hard-coding FUSED_PQ so future fused types
+        // (e.g. FUSED_ASH) are rejected here without further edits.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature.isFused()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed cannot be combined with a fused feature ("
+                                + feature.id() + "); choose one");
+            }
         }
         Class<?> compressorClass = null;
         for (int s = 0; s < sourceCompressed.size(); s++) {
@@ -283,7 +278,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     public void compact(Path outputPath) throws FileNotFoundException {
         try {
-            compactGraphImpl(outputPath);
+            QuantizationCompactionStrategy strategy = detectInlineStrategy();
+            compactGraphImpl(outputPath, strategy);
         } finally {
             if (ownsExecutor) executor.shutdown();
         }
@@ -308,31 +304,69 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         try {
             // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
             // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
-            compactGraphImpl(graphPath);
-            writeCompactedCompressed(compressedPath);
+            QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
+            QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
+            sidecarStrategy.retrain(similarityFunction);
+            compactGraphImpl(graphPath, inlineStrategy);
+            sidecarStrategy.writeSidecar(compressedPath);
+        } catch (IOException e) {
+            throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
             if (ownsExecutor) executor.shutdown();
         }
     }
 
     /**
+     * Pick the inline-codes strategy by asking the source's fused feature (if any) for its
+     * compaction strategy. Returns {@link QuantizationCompactionStrategy#NONE} when no fused feature is
+     * present. New fused quantization types extend the compactor purely by implementing
+     * {@link FusedFeature#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectInlineStrategy() {
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                return ((FusedFeature) feature).createCompactionStrategy(buildContext());
+            }
+        }
+        return QuantizationCompactionStrategy.NONE;
+    }
+
+    /**
+     * Pick the sidecar-codes strategy by delegating to the first {@link CompressedVectors}'
+     * own factory. Returns {@link QuantizationCompactionStrategy#NONE} when no sidecar input was supplied
+     * to the constructor. New sidecar quantization types extend the compactor purely by
+     * implementing {@link CompressedVectors#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectSidecarStrategy() {
+        if (sourceCompressed == null) {
+            return QuantizationCompactionStrategy.NONE;
+        }
+        return sourceCompressed.get(0).createCompactionStrategy(buildContext());
+    }
+
+    /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
+    private CompactionContext buildContext() {
+        return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
+                dimension, maxOrdinal, executor, taskWindowSize);
+    }
+
+    /**
      * Internal graph-compaction body. Performs the full graph write but does <em>not</em> shut
      * down {@link #executor}; the public {@code compact(...)} entry points own that lifecycle so
-     * follow-on passes (e.g. {@link #writeCompactedCompressed}) can keep using the executor.
+     * follow-on passes (e.g. a sidecar write via {@link SidecarPQStrategy}) can keep using
+     * the executor.
+     * <p>
+     * Quantization-aware steps (codebook retrain, pre-encode caches, entry-node tail records,
+     * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
+     * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
-    private void compactGraphImpl(Path outputPath) throws FileNotFoundException {
-        boolean fusedPQEnabled = hasFusedPQ();
-        boolean compressedPrecision = fusedPQEnabled;
+    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        strategy.retrain(similarityFunction);
 
-        ProductQuantization pq;
-        int pqLength;
-        if (fusedPQEnabled) {
-            pq = resolvePQFromSources(similarityFunction);
-            pqLength = pq.compressedVectorSize();
-        } else {
-            pq = null;
-            pqLength = -1;
-        }
+        boolean fusedPQEnabled = strategy.writesCodesInline();
+        ProductQuantization pq = strategy.compressorAsPQ();
+        int pqLength = pq != null ? pq.compressedVectorSize() : -1;
+        boolean compressedPrecision = fusedPQEnabled;
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
         int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
@@ -342,268 +376,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
         try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, pq, pqLength, fusedPQEnabled)) {
             // Header has to be written first so the writer's position is past the header
-            // before we mmap a section past the projected end of the output.
+            // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
-
-            // Pre-encode PQ codes for every live node into a section appended past the
-            // projected end of the OUTPUT file. writeInlineNodeRecord copies codes from this
-            // cache instead of re-encoding ~degree times per parent. The transient section
-            // is truncated away in the finally block.
-            if (fusedPQEnabled) {
-                try {
-                    precomputePQCodes(pq, writer);
-                    if (pqCache != null) {
-                        writer.enablePqCodeCache(pqCache, pqCacheCodeSize);
-                    }
-                } catch (IOException e) {
-                    log.warn("PQ pre-encode failed, falling back to per-write encoding: {}", e.getMessage());
-                }
-            }
+            strategy.onAfterHeader(writer);
 
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
 
-            // When FusedPQ is enabled and there is no hierarchy (only L0), the reader expects
-            // to find the entry node's own PQ code written after the L0 block, just as
-            // AbstractGraphIndexWriter.writeSparseLevels does in its getMaxLevel == 0 branch.
-            // Without it, loadInMemoryFeatures reads garbage and hierarchyCachedFeatures is
-            // missing the entry node, causing "Node X is not in the hierarchy" on first search.
-            if (fusedPQEnabled && maxDegrees.size() == 1) {
-                try (var entryView = sources.get(entryNodeSource[0]).getView()) {
-                    var entryVec = vectorTypeSupport.createFloatVector(dimension);
-                    entryView.getVectorInto(entryNodeSource[1], entryVec, 0);
-                    var entryPqCode = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
-                    entryPqCode.zero();
-                    pq.encodeTo(entryVec, entryPqCode);
-                    writer.setEntryNodePqCode(entryPqCode);
-                }
-            }
+            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
             writer.writeFooter();
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            // Drop the mmap reference (the actual unmap happens at GC; truncate works on
-            // POSIX even with a live mapping). Then truncate the output file to remove the
-            // transient PQ-code section appended past projectedOutputSize.
-            if (pqCacheTruncateAt > 0) {
-                pqCache = null;
-                try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
-                    if (fc.size() > pqCacheTruncateAt) {
-                        fc.truncate(pqCacheTruncateAt);
-                    }
-                } catch (IOException e) {
-                    log.warn("Failed to truncate PQ cache section from output file {}: {}",
-                            outputPath, e.getMessage());
-                }
-                pqCacheTruncateAt = 0;
-            }
-        }
-    }
-
-    /**
-     * Retrains the (PQ) compressor on merged sources, then streams the merged
-     * {@link io.github.jbellis.jvector.quantization.PQVectors} to {@code compressedPath} in
-     * fixed-size chunks. Each chunk holds {@code VECTORS_PER_CHUNK} codes; chunks are encoded
-     * by parallel workers in batches of {@code parallelism} and written sequentially as each
-     * batch completes, so heap residency is bounded by {@code parallelism * chunkBytes} rather
-     * than the full {@code (maxOrdinal+1) * codeSize} of an in-memory {@code MutablePQVectors}.
-     * <p>
-     * Today only {@link ProductQuantization}-backed sidecars are supported; future quantization
-     * types (e.g. ASH) will dispatch on {@code firstCompressor}'s class.
-     */
-    private void writeCompactedCompressed(Path compressedPath) {
-        var firstCompressor = sourceCompressed.get(0).getCompressor();
-        if (!(firstCompressor instanceof ProductQuantization)) {
-            throw new UnsupportedOperationException(
-                    "Compressed-sidecar compaction currently supports only ProductQuantization; got "
-                            + firstCompressor.getClass().getSimpleName());
-        }
-        ProductQuantization basePQ = (ProductQuantization) firstCompressor;
-
-        log.info("Retraining PQ for compacted compressed sidecar (subspaces={}, clusters={})",
-                basePQ.getSubspaceCount(), basePQ.getClusterCount());
-        PQRetrainer retrainer = new PQRetrainer(sources, liveNodes, dimension);
-        ProductQuantization retrainedPQ = retrainer.retrain(similarityFunction, basePQ);
-
-        // Match MutablePQVectors' chunk size so the on-disk layout is identical to what
-        // PQVectors.load(...) reconstructs into an ImmutablePQVectors.
-        final int VECTORS_PER_CHUNK = 1024;
-        final int codeSize = retrainedPQ.compressedVectorSize();
-        final int subspaceCount = retrainedPQ.getSubspaceCount();
-        final int count = maxOrdinal + 1;
-        final int chunkCount = (count + VECTORS_PER_CHUNK - 1) / VECTORS_PER_CHUNK;
-
-        log.info("Streaming {} merged ordinals to {} ({} chunks of up to {} entries each)",
-                count, compressedPath, chunkCount, VECTORS_PER_CHUNK);
-
-        try (var out = new BufferedRandomAccessWriter(compressedPath)) {
-            // PQVectors header: codebook, count, subspaceCount.
-            retrainedPQ.write(out, OnDiskGraphIndex.CURRENT_VERSION);
-            out.writeInt(count);
-            out.writeInt(subspaceCount);
-
-            // Encode chunks in parallel batches, write batches in order. Heap residency is
-            // bounded by `parallelism` chunks in flight at a time.
-            int parallelism = Math.max(taskWindowSize, 1);
-            for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
-                int batchEnd = Math.min(batchStart + parallelism, chunkCount);
-                List<Callable<ByteSequence<?>>> tasks = new ArrayList<>(batchEnd - batchStart);
-                for (int c = batchStart; c < batchEnd; c++) {
-                    final int chunkStart = c * VECTORS_PER_CHUNK;
-                    final int chunkEnd = Math.min(chunkStart + VECTORS_PER_CHUNK, count);
-                    tasks.add(() -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedPQ));
-                }
-                for (var f : executor.invokeAll(tasks)) {
-                    vectorTypeSupport.writeByteSequence(out, f.get());
-                }
-            }
-        } catch (IOException | InterruptedException | ExecutionException e) {
-            throw new RuntimeException("Failed to write compressed sidecar to " + compressedPath, e);
-        }
-        log.info("Wrote compacted compressed sidecar to {}", compressedPath);
-    }
-
-    /**
-     * Encodes a single output chunk (newOrd range {@code [chunkStart, chunkEnd)}) by reading
-     * each ordinal's raw vector from its originating source view and PQ-encoding it. Holes
-     * (newOrds not covered by any remapper) leave the corresponding slot zero. Views are
-     * opened lazily per source touched within the chunk and closed before returning.
-     */
-    private ByteSequence<?> encodeChunk(int chunkStart, int chunkEnd, int codeSize, ProductQuantization pq) throws IOException {
-        int chunkBytes = (chunkEnd - chunkStart) * codeSize;
-        ByteSequence<?> chunk = vectorTypeSupport.createByteSequence(chunkBytes);
-        chunk.zero();
-
-        OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
-        try {
-            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-            ByteSequence<?> code = vectorTypeSupport.createByteSequence(codeSize);
-            for (int newOrd = chunkStart; newOrd < chunkEnd; newOrd++) {
-                int[] resolved = resolveSourceForNewOrd(newOrd);
-                if (resolved == null) continue;  // hole; slot stays zero
-                int srcIdx = resolved[0];
-                int oldOrd = resolved[1];
-                if (views[srcIdx] == null) {
-                    views[srcIdx] = (OnDiskGraphIndex.View) sources.get(srcIdx).getView();
-                }
-                views[srcIdx].getVectorInto(oldOrd, vec, 0);
-                code.zero();
-                pq.encodeTo(vec, code);
-                int slotOffset = (newOrd - chunkStart) * codeSize;
-                for (int b = 0; b < codeSize; b++) {
-                    chunk.set(slotOffset + b, code.get(b));
-                }
-            }
-        } finally {
-            for (var v : views) {
-                if (v != null) {
-                    try { v.close(); } catch (Exception ignore) {}
-                }
-            }
-        }
-        return chunk;
-    }
-
-    /**
-     * Resolves a merged (new) ordinal back to its (sourceIdx, oldOrd) pair by consulting each
-     * source's remapper in turn. Returns {@code null} when the ordinal is a hole (not covered
-     * by any source). Each remapper's {@code newToOld} is O(1), so this is O(numSources) per call.
-     */
-    private int[] resolveSourceForNewOrd(int newOrd) {
-        for (int s = 0; s < remappers.size(); s++) {
-            int oldOrd = remappers.get(s).newToOld(newOrd);
-            if (oldOrd != OrdinalMapper.OMITTED) {
-                return new int[]{s, oldOrd};
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Pre-computes PQ codes for every live node and stores them in a memory-mapped section
-     * appended past the projected end of the OUTPUT graph file (rather than a separate temp
-     * file). After compaction completes, the file is truncated back to the projected end,
-     * removing this section.
-     * <p>
-     * The cache lives off-heap so the Java heap budget is unaffected. Single-mapping size
-     * limit of 2 GB caps this implementation at ~10M nodes (assuming pqCodeSize ≈ 192 B).
-     * For larger datasets a chunked or MemorySegment-based mapping would be needed.
-     */
-    private void precomputePQCodes(ProductQuantization pq, CompactWriter writer) throws IOException {
-        pqCacheCodeSize = pq.getSubspaceCount();
-        long tempSize = (long) (maxOrdinal + 1) * pqCacheCodeSize;
-        if (tempSize <= 0 || tempSize > Integer.MAX_VALUE) {
-            log.info("PQ pre-encode skipped: required cache size {} bytes exceeds single-mapping limit", tempSize);
-            return;
-        }
-
-        // Place the temp section past the projected end of the output file. The writer
-        // never touches this region; it's truncated away in compact()'s finally block.
-        long tempOffset = writer.projectedOutputSize();
-        pqCacheTruncateAt = tempOffset;
-        long totalSize = tempOffset + tempSize;
-
-        // Open a separate FileChannel on the output file, grow it to fit the temp section,
-        // and map only the temp region. The CompactWriter holds an independent handle on
-        // the same file via BufferedRandomAccessWriter — POSIX semantics let multiple FDs
-        // coexist on the same file; since we only mmap a region the writer never writes
-        // to, no coherency issues.
-        try (FileChannel fc = FileChannel.open(writer.getOutputPath(),
-                StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-            // Grow file to totalSize by writing one byte at totalSize-1.
-            ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
-            fc.write(pad, totalSize - 1);
-            pqCache = fc.map(FileChannel.MapMode.READ_WRITE, tempOffset, tempSize);
-        }
-
-        // Parallel-encode each live node's PQ code into pqCache. Each task takes a slab of
-        // ordinals from one source so workers don't share the same source's RandomAccessReader.
-        final int pqSize = pqCacheCodeSize;
-        List<Callable<Long>> tasks = new ArrayList<>();
-        int targetTasks = Math.max(taskWindowSize * 4, 16);
-        for (int s = 0; s < sources.size(); s++) {
-            final int sIdx = s;
-            final var source = sources.get(s);
-            final var alive = liveNodes.get(s);
-            final int upper = alive.length();
-            int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
-            for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
-                final int cStart = chunkStart;
-                final int cEnd = Math.min(chunkStart + chunkSize, upper);
-                tasks.add(() -> {
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(pqSize);
-                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-                    long count = 0;
-                    try (var view = source.getView()) {
-                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                            if (!alive.get(oldOrd)) continue;
-                            view.getVectorInto(oldOrd, vec, 0);
-                            code.zero();
-                            pq.encodeTo(vec, code);
-                            int newOrd = remappers.get(sIdx).oldToNew(oldOrd);
-                            int offset = newOrd * pqSize;
-                            // Absolute writes are thread-safe across disjoint regions; each
-                            // newOrd is unique so workers never write to the same byte.
-                            for (int i = 0; i < pqSize; i++) {
-                                pqCache.put(offset + i, code.get(i));
-                            }
-                            count++;
-                        }
-                    }
-                    return count;
-                });
-            }
-        }
-        try {
-            long total = 0;
-            for (Future<Long> f : executor.invokeAll(tasks)) {
-                total += f.get();
-            }
-            log.info("PQ pre-encode: {} nodes encoded into {} MB in-output cache (offset {})",
-                    total, tempSize / (1024 * 1024), tempOffset);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("PQ pre-encode failed", e);
+            strategy.onAfterClose(outputPath);
         }
     }
 
@@ -1171,22 +957,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Trains a new Product Quantization codebook using balanced sampling across all source
-     * indexes. This ensures the PQ is optimized for the combined dataset.
-     */
-    private ProductQuantization resolvePQFromSources(VectorSimilarityFunction similarityFunction) {
-        PQRetrainer retrainer = new PQRetrainer(sources, liveNodes, dimension);
-        return retrainer.retrain(similarityFunction);
-    }
-
-    /**
-     * Checks if the source indexes have FusedPQ feature enabled.
-     */
-    private boolean hasFusedPQ() {
-        return sources.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ);
-    }
-
-    /**
      * Creates a score provider for searching across different source indexes. Uses approximate
      * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
      */
@@ -1317,11 +1087,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Each GraphSearcher has internal state - rough estimate
         scratchSize += (long) sources.size() * (OH + 10L * REF);
 
-        // pqCode ByteSequence (if PQ enabled)
-        if (hasFusedPQ()) {
-            FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-            int subspaceCount = fpq.getPQ().getSubspaceCount();
-            scratchSize += OH + subspaceCount; // ByteSequence
+        // Per-thread scratch ByteSequence holding one code's worth of bytes, for each fused
+        // feature carried by the graph. Generalized over fused types so new quantizations
+        // (e.g. FUSED_ASH) don't need an edit here.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                scratchSize += OH + ((FusedFeature) feature).codeSize();
+            }
         }
 
         return scratchSize;
