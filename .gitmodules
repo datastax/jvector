@@ -1,0 +1,3 @@
+[submodule "jvector-native/src/main/c/third_party/highway"]
+	path = jvector-native/src/main/c/third_party/highway
+	url = https://github.com/google/highway.git

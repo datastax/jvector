@@ -76,7 +76,7 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     {
         assert baseOffsets.offset() == 0 : "Base offsets are expected to have an offset of 0. Found: " + baseOffsets.offset();
         // baseOffsets is a pointer into a PQ chunk - we need to index into it by baseOffsetsOffset and provide baseOffsetsLength to the native code
-        return NativeSimdOps.assemble_and_sum_f32_512(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, baseOffsetsLength);
+        return NativeSimdOps.assemble_and_sum_f32(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, (long) baseOffsetsLength);
     }
 
     @Override
@@ -102,6 +102,6 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int encodedOffset, int encodedLength, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         assert encoded.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + encoded.offset();
         // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
-        return NativeSimdOps.pq_decoded_cosine_similarity_f32_512(((MemorySegmentByteSequence) encoded).get(), encodedOffset, encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
+        return NativeSimdOps.pq_decoded_cosine_similarity_f32(((MemorySegmentByteSequence) encoded).get(), encodedOffset, (long) encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
     }
 }
