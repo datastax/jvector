@@ -215,4 +215,71 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
             default -> throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
         }
     }
+
+    @Override
+    public void nvqShuffleQueryInPlace8bit(VectorFloat<?> vector) {
+        NativeSimdOps.nvq_shuffle_query_in_place_8bit(
+                ((MemorySegmentVectorFloat) vector).get(),
+                (long) vector.length());
+    }
+
+    @Override
+    public void nvqQuantize8bit(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, ByteSequence<?> destination) {
+        NativeSimdOps.nvq_quantize_8bit(
+                ((MemorySegmentVectorFloat) vector).get(),
+                (long) vector.length(),
+                alpha, x0, minValue, maxValue,
+                ((MemorySegmentByteSequence) destination).get());
+    }
+
+    @Override
+    public float nvqLoss(VectorFloat<?> vector, float alpha, float x0, float minValue, float maxValue, int nBits) {
+        return NativeSimdOps.nvq_loss(
+                ((MemorySegmentVectorFloat) vector).get(),
+                (long) vector.length(),
+                alpha, x0, minValue, maxValue, nBits);
+    }
+
+    @Override
+    public float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
+        return NativeSimdOps.nvq_uniform_loss(
+                ((MemorySegmentVectorFloat) vector).get(),
+                (long) vector.length(),
+                minValue, maxValue, nBits);
+    }
+
+    @Override
+    public float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
+                                         float alpha, float x0, float minValue, float maxValue) {
+        return NativeSimdOps.nvq_square_l2_distance_8bit(
+                ((MemorySegmentVectorFloat) vector).get(),
+                ((MemorySegmentByteSequence) quantizedVector).get(),
+                (long) vector.length(),
+                alpha, x0, minValue, maxValue);
+    }
+
+    @Override
+    public float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
+                                   float alpha, float x0, float minValue, float maxValue) {
+        return NativeSimdOps.nvq_dot_product_8bit(
+                ((MemorySegmentVectorFloat) vector).get(),
+                ((MemorySegmentByteSequence) quantizedVector).get(),
+                (long) vector.length(),
+                alpha, x0, minValue, maxValue);
+    }
+
+    @Override
+    public float[] nvqCosine8bit(VectorFloat<?> vector, ByteSequence<?> quantizedVector,
+                                 float alpha, float x0, float minValue, float maxValue,
+                                 VectorFloat<?> centroid) {
+        long packed = NativeSimdOps.nvq_cosine_8bit_packed(
+                ((MemorySegmentVectorFloat) vector).get(),
+                ((MemorySegmentByteSequence) quantizedVector).get(),
+                (long) vector.length(),
+                alpha, x0, minValue, maxValue,
+                ((MemorySegmentVectorFloat) centroid).get());
+        float sum  = Float.intBitsToFloat((int)(packed & 0xFFFFFFFFL));
+        float bMag = Float.intBitsToFloat((int)(packed >>> 32));
+        return new float[]{sum, bMag};
+    }
 }
