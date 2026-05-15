@@ -163,6 +163,18 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * For compaction use. Drops the strategy's hold on the {@link CompactionContext} (and thus the
+     * source graphs) once {@code compactGraphImpl} no longer needs it, so the source graphs become
+     * GC-eligible before the refinement pass loads a second full graph. Called only from the
+     * non-sidecar {@code compact(Path)} path. No-op by default; strategies that retain a context
+     * override. Must not be called before {@code onAfterHeader}/{@code onAfterLevels} have run, and
+     * implementations must keep {@code onAfterClose} working without the context.
+     */
+    public void releaseSources() {
+        // no-op
+    }
+
+    /**
      * Convenience: returns {@link #compressor()} cast to {@link ProductQuantization}, or
      * {@code null} if no compressor is held. Kept for backward compat with code paths that still
      * thread a typed {@code ProductQuantization} through {@link CompactWriter}.

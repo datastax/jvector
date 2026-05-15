@@ -62,14 +62,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final int MIN_SEARCH_TOP_K = 2;
     private static final int SEARCH_TOP_K_MULTIPLIER = 2;
 
-    private final List<OnDiskGraphIndex> sources;
+    // Non-final so releaseSourcesBeforeRefine() can drop the strong reference once compactGraphImpl
+    // has consumed them, letting the source graphs' in-heap upper-layer adjacency + feature buffers
+    // be reclaimed before refineCompactedGraph loads a second full graph. Read only during
+    // compaction (validation, compactGraphImpl, cost estimation) — never after refinement starts.
+    private List<OnDiskGraphIndex> sources;
     // Optional non-fused compressed sidecar, parallel to `sources`. Null when sources carry their
     // quantization inline (FUSED_PQ) or have none. When non-null, compact(Path, Path) retrains the
     // compressor on merged vectors and writes a single merged CompressedVectors to compressedPath.
     private final List<CompressedVectors> sourceCompressed;
-    private final List<FixedBitSet> liveNodes;
+    private List<FixedBitSet> liveNodes;
     private final List<Integer> numLiveNodesPerSource;
-    private final List<OrdinalMapper> remappers;
+    private List<OrdinalMapper> remappers;
     private final List<Integer> maxDegrees;
 
     private final int dimension;
@@ -283,6 +287,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try {
             compactGraphImpl(outputPath, strategy);
+            releaseSourcesBeforeRefine(strategy);
             refineCompactedGraph(outputPath, strategy);
         } finally {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
@@ -323,6 +328,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             inlineStrategy.onAfterClose(graphPath);
             if (ownsExecutor) executor.shutdown();
         }
+    }
+
+    /**
+     * For compaction use. Drops the compactor's strong references to the source graphs and their
+     * per-source live-node / remapper sidecars, and tells the strategy to release its
+     * {@link CompactionContext} hold on the same. Called between {@code compactGraphImpl} and
+     * {@code refineCompactedGraph} so the source graphs' in-heap upper-layer adjacency and feature
+     * buffers become GC-eligible before refinement loads a second full graph — the peak that was
+     * OOM-ing on memory-tight hosts. The underlying {@code ReaderSupplier}s are still owned and
+     * closed by the caller (per {@link OnDiskGraphIndex#close()}'s contract), so we only drop
+     * references, never close. Not used by the sidecar {@code compact(graphPath, compressedPath)}
+     * path: {@code SidecarCompactionStrategy.writeSidecar} re-reads source vectors after refinement.
+     */
+    private void releaseSourcesBeforeRefine(QuantizationCompactionStrategy strategy) {
+        strategy.releaseSources();
+        sources = null;
+        liveNodes = null;
+        remappers = null;
     }
 
     /**
