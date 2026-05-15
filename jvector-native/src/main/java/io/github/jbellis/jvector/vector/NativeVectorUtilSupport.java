@@ -80,6 +80,36 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public void addInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        NativeSimdOps.add_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
+    }
+
+    @Override
+    public void addInPlace(VectorFloat<?> v1, float value) {
+        NativeSimdOps.add_scalar_in_place_f32(((MemorySegmentVectorFloat) v1).get(), value, v1.length());
+    }
+
+    @Override
+    public void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        NativeSimdOps.sub_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
+    }
+
+    @Override
+    public void subInPlace(VectorFloat<?> vector, float value) {
+        NativeSimdOps.sub_scalar_in_place_f32(((MemorySegmentVectorFloat) vector).get(), value, vector.length());
+    }
+
+    @Override
+    public float max(VectorFloat<?> v) {
+        return NativeSimdOps.max_f32(((MemorySegmentVectorFloat) v).get(), v.length());
+    }
+
+    @Override
+    public void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        NativeSimdOps.min_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
+    }
+
+    @Override
     public float assembleAndSumPQ(
             VectorFloat<?> codebookPartialSums,
             int subspaceCount,                  // = M
@@ -103,5 +133,68 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         assert encoded.offset() == 0 : "Bulk shuffle shuffles are expected to have an offset of 0. Found: " + encoded.offset();
         // encoded is a pointer into a PQ chunk - we need to index into it by encodedOffset and provide encodedLength to the native code
         return NativeSimdOps.pq_decoded_cosine_similarity_f32(((MemorySegmentByteSequence) encoded).get(), encodedOffset, (long) encodedLength, clusterCount, ((MemorySegmentVectorFloat) partialSums).get(), ((MemorySegmentVectorFloat) aMagnitude).get(), bMagnitude);
+    }
+
+    @Override
+    public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
+        int length = v1.length();
+        if (length >= 128) {
+            return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                              ((MemorySegmentVectorFloat) v2).get(), 0,
+                                              length);
+        }
+        return super.squareDistance(v1, v2);
+    }
+
+    @Override
+    public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length >= 128) {
+            return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                              ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                              length);
+        }
+        return super.squareDistance(v1, v1offset, v2, v2offset, length);
+    }
+
+    @Override
+    public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
+        int length = v1.length();
+        if (length >= 128) {
+            return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                           ((MemorySegmentVectorFloat) v2).get(), 0,
+                                           length);
+        }
+        return super.cosine(v1, v2);
+    }
+
+    @Override
+    public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length >= 128) {
+            return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                           ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                           length);
+        }
+        return super.cosine(v1, v1offset, v2, v2offset, length);
+    }
+
+    @Override
+    public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
+        int length = v1.length();
+        if (length >= 128) {
+            return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                                 ((MemorySegmentVectorFloat) v2).get(), 0,
+                                                 length);
+        }
+        return super.dotProduct(v1, v2);
+    }
+
+    @Override
+    public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length >= 128) {
+            return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                                 ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                                 length);
+        }
+        return super.dotProduct(v1, v1offset, v2, v2offset, length);
     }
 }
