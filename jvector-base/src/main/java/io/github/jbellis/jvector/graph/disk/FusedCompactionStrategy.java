@@ -89,6 +89,16 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
+    public MappedByteBuffer getCodeCache() {
+        return codeCache;
+    }
+
+    @Override
+    public int getCacheCodeSize() {
+        return cacheCodeSize;
+    }
+
+    @Override
     public boolean writesCodesInline() {
         return true;
     }

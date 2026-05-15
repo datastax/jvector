@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -36,8 +37,10 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.disk.MappedChunkReader;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -277,10 +280,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
     public void compact(Path outputPath) throws FileNotFoundException {
+        QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try {
-            QuantizationCompactionStrategy strategy = detectInlineStrategy();
             compactGraphImpl(outputPath, strategy);
+            refineCompactedGraph(outputPath, strategy);
         } finally {
+            // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
+            // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
+            strategy.onAfterClose(outputPath);
             if (ownsExecutor) executor.shutdown();
         }
     }
@@ -301,17 +308,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         Objects.requireNonNull(compressedPath, "compressedPath");
 
+        // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+        // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+        QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
+        QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
         try {
-            // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
-            // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
-            QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
-            QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
             sidecarStrategy.retrain(similarityFunction);
             compactGraphImpl(graphPath, inlineStrategy);
+            refineCompactedGraph(graphPath, inlineStrategy);
             sidecarStrategy.writeSidecar(compressedPath);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
+            inlineStrategy.onAfterClose(graphPath);
             if (ownsExecutor) executor.shutdown();
         }
     }
@@ -390,8 +399,374 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
-        } finally {
-            strategy.onAfterClose(outputPath);
+        }
+        // strategy.onAfterClose is deferred to the public compact() entry points so refinement
+        // can read from the still-mapped pre-encode cache section past the projected EOF.
+    }
+
+    /**
+     * Second pass over the just-written compacted graph. Mirrors
+     * {@link io.github.jbellis.jvector.graph.GraphIndexBuilder}'s {@code cleanup()} refinement
+     * step: when the merged graph has a hierarchy, iterates only level-1 nodes (which are also
+     * in L0); for each node, descends greedily through upper layers and beam-searches level 0
+     * carrying entry points layer-to-layer, then rewrites the L0 neighbor list (and the inline
+     * per-neighbor PQ codes for fused-PQ outputs) in place. When the merged graph has no
+     * hierarchy, falls back to iterating all live L0 nodes.
+     * <p>
+     * The refinement search uses approximate PQ scoring with an exact reranker when fused-PQ is
+     * available (matching the cross-source path in {@code compactLevels}); otherwise it falls
+     * back to exact-only scoring backed by inline vectors.
+     * <p>
+     * For fused-PQ outputs the per-neighbor code write is a memcpy from the
+     * {@link QuantizationCompactionStrategy#getCodeCache() pre-encode cache} keyed by new
+     * ordinal — no per-neighbor {@code encodeTo} call. The cache lives in the same file past
+     * the projected EOF and is truncated away by {@code onAfterClose} once refinement returns.
+     * <p>
+     * Only L0 records are written. Upper-layer neighbor lists live in an in-memory map after
+     * load and have no addressable file offset, so they're left as written by compactLevels.
+     */
+    private void refineCompactedGraph(Path outputPath, QuantizationCompactionStrategy strategy) {
+        log.info("Refining compacted graph: {}", outputPath);
+        long t0 = System.nanoTime();
+
+        final int baseDegree = maxDegrees.get(0);
+        final boolean hasFusedPQ = strategy.writesCodesInline();
+        @SuppressWarnings("unchecked")
+        final VectorCompressor<ByteSequence<?>> compressor =
+                hasFusedPQ ? (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) strategy.compressor() : null;
+        final int pqCodeSize = hasFusedPQ ? compressor.compressedVectorSize() : 0;
+
+        final int searchTopK = Math.max(MIN_SEARCH_TOP_K, baseDegree * SEARCH_TOP_K_MULTIPLIER);
+        final int beamWidth = Math.max(baseDegree, searchTopK) * BEAM_WIDTH_MULTIPLIER;
+
+        // Code cache may or may not be present; capture once so refineOneNode can take the fast path.
+        // The cache is shared across threads; refineOneNode duplicates per call (cheap; no per-thread
+        // state to track and the duplicates are tiny GC-friendly ByteBuffer wrappers).
+        final java.nio.MappedByteBuffer codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
+        final int cacheCodeSize = hasFusedPQ ? strategy.getCacheCodeSize() : 0;
+
+        try (var supplier = new MappedChunkReader.Supplier(outputPath);
+             FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE, StandardOpenOption.READ)) {
+
+            // useFooter=false because the file's logical EOF (where the v6 footer trailer sits) is
+            // before the still-attached pre-encode cache section. loadFromFooter() would seek to
+            // the actual file length and read garbage as the magic.
+            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, 0, false);
+
+            // Pick the iteration set: when there's a hierarchy, refine only L1 nodes (each also
+            // lives in L0, so their L0 record is what we rewrite). Mirrors GraphIndexBuilder's
+            // cleanup() which gates improveConnections() on `graph.getMaxLevel() > 0` and iterates
+            // `nodeStream(1)`. When there's no hierarchy, fall back to all L0 nodes.
+            int[] liveOrdinals;
+            int iterationLevel = mergedGraph.getMaxLevel() > 0 ? 1 : 0;
+            try (var collectView = mergedGraph.getView()) {
+                NodesIterator it = mergedGraph.getNodes(iterationLevel);
+                liveOrdinals = new int[it.size()];
+                int n = 0;
+                while (it.hasNext()) liveOrdinals[n++] = it.next();
+            }
+
+            final ThreadLocal<RefineScratch> tls = ThreadLocal.withInitial(() ->
+                    new RefineScratch(mergedGraph, baseDegree, dimension, searchTopK, pqCodeSize));
+
+            ExecutorCompletionService<Integer> ecs = new ExecutorCompletionService<>(executor);
+
+            int total = liveOrdinals.length;
+            int targetBatches = Math.max(taskWindowSize * 4, 16);
+            int batchSize = Math.max(1, (total + targetBatches - 1) / targetBatches);
+
+            final int[] ords = liveOrdinals;
+            final boolean fpq = hasFusedPQ;
+            final int codeSize = pqCodeSize;
+            final VectorCompressor<ByteSequence<?>> cmp = compressor;
+            final int bw = beamWidth;
+            final java.nio.MappedByteBuffer cache = codeCache;
+            final int cacheSz = cacheCodeSize;
+            final OnDiskGraphIndex graphRef = mergedGraph;
+
+            log.info("Refining {} live nodes at level {} (hierarchy maxLevel={}, fusedPQ={}, codeCache={})",
+                    total, iterationLevel, mergedGraph.getMaxLevel(), fpq, cache != null);
+
+            int submitted = 0;
+            for (int start = 0; start < total; start += batchSize) {
+                final int s = start;
+                final int e = Math.min(start + batchSize, total);
+                ecs.submit(() -> {
+                    RefineScratch scratch = tls.get();
+                    for (int i = s; i < e; i++) {
+                        int node = ords[i];
+                        refineOneNode(node, scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
+                                graphRef, cache, cacheSz);
+                    }
+                    return e - s;
+                });
+                submitted++;
+            }
+
+            int completed = 0;
+            int nodesDone = 0;
+            int progressStep = Math.max(1, total / 10);
+            int nextProgress = progressStep;
+            while (completed < submitted) {
+                nodesDone += ecs.take().get();
+                completed++;
+                if (nodesDone >= nextProgress) {
+                    log.info("Refinement progress: {}/{} nodes", nodesDone, total);
+                    nextProgress += progressStep;
+                }
+            }
+
+            // Per-thread scratches live in worker-thread ThreadLocals; closing the supplier in
+            // try-with-resources tears down the underlying mapping, so any later access would
+            // fail anyway. The references will be GC'd when the worker threads die.
+        } catch (IOException | InterruptedException | ExecutionException e) {
+            throw new RuntimeException("Refinement failed", e);
+        }
+
+        log.info("Refinement complete in {} ms", (System.nanoTime() - t0) / 1_000_000);
+    }
+
+    /**
+     * Refines a single node by mirroring {@code GraphIndexBuilder.improveConnections}:
+     * descend greedily through upper layers carrying entry points layer-to-layer, then beam
+     * search at L0. Diversity selection + in-place L0 record rewrite happen at the end.
+     * <p>
+     * The {@code SearchScoreProvider} uses approximate PQ scoring with an exact reranker when
+     * fused-PQ is available; otherwise exact-only via the inline-vector reranker. Diversity
+     * always runs over exact scores (so we rescore approximate results after the L0 beam).
+     */
+    private void refineOneNode(int node,
+                               RefineScratch scratch,
+                               FileChannel fc,
+                               int baseDegree,
+                               boolean hasFusedPQ,
+                               int pqCodeSize,
+                               VectorCompressor<ByteSequence<?>> compressor,
+                               int beamWidth,
+                               OnDiskGraphIndex mergedGraph,
+                               java.nio.MappedByteBuffer codeCache,
+                               int cacheCodeSize) {
+        OnDiskGraphIndex.View view = scratch.view;
+        view.getVectorInto(node, scratch.queryVec, 0);
+
+        // Build score provider for this query. Reranker reads the candidate's inline FP vector
+        // (via view.getVectorInto into a worker-private tmp) and computes exact similarity.
+        ScoreFunction.ExactScoreFunction reranker = node2 -> {
+            view.getVectorInto(node2, scratch.tmpVec, 0);
+            return similarityFunction.compare(scratch.queryVec, scratch.tmpVec);
+        };
+        SearchScoreProvider ssp;
+        if (hasFusedPQ) {
+            FusedPQ fpq = (FusedPQ) mergedGraph.getFeatures().get(FeatureId.FUSED_PQ);
+            var asf = fpq.approximateScoreFunctionFor(scratch.queryVec, similarityFunction, view, reranker);
+            ssp = new DefaultSearchScoreProvider(asf, reranker);
+        } else {
+            ssp = new DefaultSearchScoreProvider(reranker);
+        }
+
+        Bits excludeSelf = idx -> idx != node;
+
+        // Per-layer descent. Mirrors GraphSearcher.internalSearch: greedy single-best through
+        // each upper layer, then a beam search at layer 0. Entry points carry forward via
+        // setEntryPointsFromPreviousLayer so the L0 beam starts from the best-known region
+        // rather than the global entry node — much cheaper than the previous full search().
+        GraphSearcher gs = scratch.searcher;
+        var entry = view.entryNode();
+        gs.initializeInternal(ssp, entry, excludeSelf);
+        for (int lvl = entry.level; lvl > 0; lvl--) {
+            gs.searchOneLayer(ssp, 1, 0f, lvl, excludeSelf);
+            gs.setEntryPointsFromPreviousLayer();
+        }
+        gs.searchOneLayer(ssp, beamWidth, 0f, 0, excludeSelf);
+
+        // Collect candidates. Start with the node's existing L0 edges (rescored exact) so
+        // refinement never drops an edge that the search happened to miss — matches the
+        // existing+search union pattern from GraphIndexBuilder.insertDiverse.
+        scratch.candSize = 0;
+        var existing = view.getNeighborsIterator(0, node);
+        while (existing.hasNext()) {
+            int nb = existing.nextInt();
+            if (nb == node) continue;
+            view.getVectorInto(nb, scratch.tmpVec, 0);
+            scratch.candNode[scratch.candSize] = nb;
+            scratch.candScore[scratch.candSize] = similarityFunction.compare(scratch.queryVec, scratch.tmpVec);
+            scratch.candSize++;
+        }
+        // Pull search results from approximateResults. When fused-PQ is on the scores there are
+        // approximate; rescore exact for correct diversity comparison against existing edges.
+        final boolean rescore = hasFusedPQ;
+        gs.approximateResults.foreach((nb, approxScore) -> {
+            if (nb == node) return;
+            for (int k = 0; k < scratch.candSize; k++) {
+                if (scratch.candNode[k] == nb) return; // de-dupe against existing edges
+            }
+            if (scratch.candSize >= scratch.candNode.length) return;
+            float s;
+            if (rescore) {
+                view.getVectorInto(nb, scratch.tmpVec, 0);
+                s = similarityFunction.compare(scratch.queryVec, scratch.tmpVec);
+            } else {
+                s = approxScore;
+            }
+            scratch.candNode[scratch.candSize] = nb;
+            scratch.candScore[scratch.candSize] = s;
+            scratch.candSize++;
+        });
+
+        if (scratch.candSize == 0) {
+            // No live neighbors found — leave the existing record alone.
+            return;
+        }
+
+        // Sort candidates by descending score.
+        int[] order = scratch.order;
+        for (int k = 0; k < scratch.candSize; k++) order[k] = k;
+        sortOrderByScoreDesc(order, scratch.candScore, scratch.candSize);
+
+        // Vamana diversity selection with progressively-relaxed alpha.
+        int selectedSize = retainDiverseSingleSource(
+                view, order, scratch.candNode, scratch.candScore, scratch.candSize,
+                baseDegree, scratch.selectedNodes, scratch.selectedVecs, scratch.tmpVec);
+
+        // Build the trailing-section bytes (PQ codes block — if any — followed by count + neighbors).
+        ByteBuffer rec = scratch.recordBuffer;
+        rec.clear();
+
+        long writeOffset;
+        if (hasFusedPQ) {
+            // PQ codes block sits between the inline vector and the neighbor count.
+            writeOffset = view.offsetFor(node, FeatureId.FUSED_PQ);
+            if (codeCache != null) {
+                // Memcpy from the pre-encoded cache (indexed by new ordinal). Avoids one FP
+                // vector read AND one PQ encode per selected neighbor. duplicate() gives this
+                // call its own position cursor without racing other workers.
+                ByteBuffer cacheView = codeCache.duplicate();
+                byte[] codeBuf = scratch.pqCodeBytes;
+                for (int k = 0; k < selectedSize; k++) {
+                    int newOrd = scratch.selectedNodes[k];
+                    cacheView.position(newOrd * cacheCodeSize);
+                    cacheView.get(codeBuf, 0, cacheCodeSize);
+                    rec.put(codeBuf, 0, cacheCodeSize);
+                }
+            } else {
+                // Fallback: re-encode from the selected neighbor's inline vector. Same as before
+                // the cache-reuse optimization. Used when the cache wasn't built (graph too large
+                // for a single mapping, or pre-encode failure).
+                ByteSequence<?> codeOut = scratch.pqCode;
+                for (int k = 0; k < selectedSize; k++) {
+                    view.getVectorInto(scratch.selectedNodes[k], scratch.tmpVec, 0);
+                    codeOut.zero();
+                    compressor.encodeTo(scratch.tmpVec, codeOut);
+                    for (int b = 0; b < pqCodeSize; b++) {
+                        rec.put(codeOut.get(b));
+                    }
+                }
+            }
+            // Pad remaining slots with zero codes (matches CompactWriter's zeroPQ behavior).
+            int padSlots = baseDegree - selectedSize;
+            for (int s = 0; s < padSlots; s++) {
+                for (int b = 0; b < pqCodeSize; b++) rec.put((byte) 0);
+            }
+        } else {
+            writeOffset = view.neighborsOffsetFor(0, node);
+        }
+
+        // Neighbor count + ordinals (-1 padding for unused slots).
+        rec.putInt(selectedSize);
+        for (int k = 0; k < selectedSize; k++) rec.putInt(scratch.selectedNodes[k]);
+        for (int k = selectedSize; k < baseDegree; k++) rec.putInt(-1);
+
+        rec.flip();
+        try {
+            while (rec.hasRemaining()) {
+                int n = fc.write(rec, writeOffset);
+                writeOffset += n;
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Single-source Vamana diversity selection. Mirrors {@link CompactVamanaDiversityProvider}
+     * but operates on one merged graph rather than per-source views, so candidates are bare
+     * (node, score) pairs.
+     *
+     * @return the number of selected neighbors written into {@code selectedNodes}.
+     */
+    private int retainDiverseSingleSource(OnDiskGraphIndex.View view,
+                                          int[] order, int[] candNode, float[] candScore, int candSize,
+                                          int maxDegree, int[] selectedNodes,
+                                          VectorFloat<?>[] selectedVecs, VectorFloat<?> tmp) {
+        if (candSize == 0) return 0;
+        int nSelected = 0;
+        float currentAlpha = 1.0f;
+        final float alpha = 1.2f;
+        while (currentAlpha <= alpha + 1E-6 && nSelected < maxDegree) {
+            for (int i = 0; i < candSize && nSelected < maxDegree; i++) {
+                int ci = order[i];
+                int cNode = candNode[ci];
+                float cScore = candScore[ci];
+
+                view.getVectorInto(cNode, tmp, 0);
+
+                boolean diverse = true;
+                for (int j = 0; j < nSelected; j++) {
+                    if (selectedNodes[j] == cNode) { diverse = false; break; }
+                    if (similarityFunction.compare(tmp, selectedVecs[j]) > cScore * currentAlpha) {
+                        diverse = false;
+                        break;
+                    }
+                }
+                if (diverse) {
+                    selectedNodes[nSelected] = cNode;
+                    selectedVecs[nSelected].copyFrom(tmp, 0, 0, tmp.length());
+                    nSelected++;
+                }
+            }
+            currentAlpha += DIVERSITY_ALPHA_STEP;
+        }
+        return nSelected;
+    }
+
+    /** Per-thread scratch space for refinement. One per worker thread, populated lazily via ThreadLocal. */
+    private static final class RefineScratch {
+        final OnDiskGraphIndex.View view;
+        final GraphSearcher searcher;
+        final VectorFloat<?> queryVec;
+        final VectorFloat<?> tmpVec;
+        final int[] candNode;
+        final float[] candScore;
+        final int[] order;
+        int candSize;
+        final int[] selectedNodes;
+        final VectorFloat<?>[] selectedVecs;
+        final ByteSequence<?> pqCode;
+        // Heap byte buffer for memcpy from the precomputed code cache into the record buffer.
+        final byte[] pqCodeBytes;
+        final ByteBuffer recordBuffer;
+
+        RefineScratch(OnDiskGraphIndex mergedGraph, int baseDegree, int dimension, int searchTopK, int pqCodeSize) {
+            this.view = mergedGraph.getView();
+            this.searcher = new GraphSearcher(mergedGraph);
+            this.searcher.usePruning(false);
+            this.queryVec = vectorTypeSupport.createFloatVector(dimension);
+            this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
+            // Candidates = existing neighbors (up to baseDegree) ∪ search results (up to searchTopK).
+            int cap = searchTopK + baseDegree + 16;
+            this.candNode = new int[cap];
+            this.candScore = new float[cap];
+            this.order = new int[cap];
+            this.selectedNodes = new int[baseDegree];
+            this.selectedVecs = new VectorFloat<?>[baseDegree];
+            for (int i = 0; i < baseDegree; i++) {
+                this.selectedVecs[i] = vectorTypeSupport.createFloatVector(dimension);
+            }
+            this.pqCode = pqCodeSize > 0 ? vectorTypeSupport.createByteSequence(pqCodeSize) : null;
+            this.pqCodeBytes = pqCodeSize > 0 ? new byte[pqCodeSize] : null;
+            // Trailing section to rewrite: optional PQ codes block + count + neighbor ids.
+            int recordBytes = (pqCodeSize > 0 ? baseDegree * pqCodeSize : 0) + Integer.BYTES + baseDegree * Integer.BYTES;
+            this.recordBuffer = ByteBuffer.allocate(recordBytes).order(java.nio.ByteOrder.BIG_ENDIAN);
         }
     }
 
