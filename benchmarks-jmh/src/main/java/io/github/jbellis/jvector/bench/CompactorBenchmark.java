@@ -424,23 +424,35 @@ public class CompactorBenchmark {
                             datasetNames, ravv.size(), datasetPortion, dimension, similarityFunction, workloadMode, measureRecall);
                 }
             } else {
-                ds = null;
-                queryVectors = null;
-                groundTruth = null;
                 ravv = null;
                 baseVectors = null;
                 dimension = -1;
 
-                var datasetInfo = DataSets.loadDataSet(datasetNames);
-                similarityFunction = datasetInfo
-                        .flatMap(DataSetInfo::similarityFunction)
-                        .orElseGet(() -> {
-                            log.warn("Could not determine similarity function for dataset '{}'; defaulting to COSINE", datasetNames);
-                            return VectorSimilarityFunction.COSINE;
-                        });
+                if (needsRecallData) {
+                    ds = DataSets.loadDataSet(datasetNames)
+                            .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames))
+                            .getDataSet();
+                    queryVectors = ds.getQueryVectors();
+                    groundTruth = ds.getGroundTruth();
+                    similarityFunction = ds.getSimilarityFunction();
+                    log.info("Dataset {} loaded for {} mode with recall data (base vectors skipped). Query vectors: {}, Similarity: {}, Live nodes rate: {}",
+                            datasetNames, workloadMode, queryVectors.size(), similarityFunction, liveNodesRate);
+                } else {
+                    ds = null;
+                    queryVectors = null;
+                    groundTruth = null;
 
-                log.info("Skipping dataset load for {} mode. similarityFunction: {}, Live nodes rate: {}",
-                        workloadMode, similarityFunction, liveNodesRate);
+                    var datasetInfo = DataSets.loadDataSet(datasetNames);
+                    similarityFunction = datasetInfo
+                            .flatMap(DataSetInfo::similarityFunction)
+                            .orElseGet(() -> {
+                                log.warn("Could not determine similarity function for dataset '{}'; defaulting to COSINE", datasetNames);
+                                return VectorSimilarityFunction.COSINE;
+                            });
+
+                    log.info("Skipping dataset load for {} mode. similarityFunction: {}, Live nodes rate: {}",
+                            workloadMode, similarityFunction, liveNodesRate);
+                }
             }
 
             // Resolve storagePaths + partitionsDir
