@@ -37,7 +37,7 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.disk.MappedChunkReader;
+import io.github.jbellis.jvector.disk.SimpleReader;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
@@ -468,7 +468,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final java.nio.MappedByteBuffer codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
         final int cacheCodeSize = hasFusedPQ ? strategy.getCacheCodeSize() : 0;
 
-        try (var supplier = new MappedChunkReader.Supplier(outputPath);
+        try (var supplier = new SimpleReader.Supplier(outputPath);
              FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE, StandardOpenOption.READ)) {
 
             // useFooter=false because the file's logical EOF (where the v6 footer trailer sits) is
