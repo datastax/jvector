@@ -908,6 +908,120 @@ HWY_FLATTEN void calculate_partial_sums_euclidean_f32(const float *codebook,
                                                         partialSums);
 }
 
+// Computes partialSums[codebookIndex * clusterCount + i] = dot(centroid_i, centroid_i)
+// i.e. the squared L2 norm of each codebook centroid. This is the per-subspace
+// contribution to aMagnitude in the PQ cosine similarity formula.
+//
+// Fast paths for size == 2/4/8/16 pack multiple centroids into one SIMD register
+// (kLanes/size per iteration), eliminating the per-centroid ReduceSum overhead.
+// They mirror the structure of calculate_partial_sums_f32 but replace the
+// centroid×query multiply with centroid×centroid (self-square).
+HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
+        const float *HWY_RESTRICT codebook,
+        int codebookIndex,
+        size_t size,
+        int clusterCount,
+        float *HWY_RESTRICT partialSums)
+{
+    const int codebookBase = codebookIndex * clusterCount;
+    using FloatTag = hn::ScalableTag<float>;
+    FloatTag tag;
+    constexpr size_t kLanes = hn::MaxLanes(tag);
+    alignas(64) float tmp[kLanes];
+    int ii = 0;
+
+    if constexpr (kLanes >= 2) {
+        if (size == 2) {
+            constexpr size_t kBlock = 2;
+            constexpr int centroids_per_iter = kLanes / kBlock;
+
+            for (; ii + centroids_per_iter <= clusterCount;
+                 ii += centroids_per_iter) {
+                const float *cptr = codebook + ii * 2;
+                const hn::Vec<FloatTag> cv = hn::LoadU(tag, cptr);
+                hn::Vec<FloatTag> sum = hn::Mul(cv, cv);
+                hn::Vec<FloatTag> swapped = hn::Shuffle2301(sum);
+                sum = hn::Add(sum, swapped);
+                hn::StoreU(sum, tag, tmp);
+#pragma GCC unroll 8
+                for (int jj = 0; jj < centroids_per_iter; ++jj) {
+                    partialSums[codebookBase + ii + jj] = tmp[jj * 2];
+                }
+            }
+        }
+    }
+    if constexpr (kLanes >= 4) {
+        if (size == 4) {
+            constexpr int centroids_per_iter = static_cast<int>(kLanes / 4);
+
+            for (; ii + centroids_per_iter <= clusterCount;
+                 ii += centroids_per_iter) {
+                const float *cptr = codebook + ii * size;
+                const hn::Vec<FloatTag> cv = hn::LoadU(tag, cptr);
+                hn::Vec<FloatTag> sum = hn::Mul(cv, cv);
+                hn::Vec<FloatTag> temp = hn::Shuffle2301(sum);
+                sum = hn::Add(sum, temp);
+                temp = hn::Shuffle1032(sum);
+                sum = hn::Add(sum, temp);
+                hn::StoreU(sum, tag, tmp);
+#pragma GCC unroll 4
+                for (int jj = 0; jj < centroids_per_iter; ++jj) {
+                    partialSums[codebookBase + ii + jj] = tmp[jj * 4];
+                }
+            }
+        }
+    }
+    if constexpr (kLanes >= 8) {
+        if (size == 8) {
+            constexpr int centroids_per_iter = static_cast<int>(kLanes / 8);
+
+            for (; ii + centroids_per_iter <= clusterCount;
+                 ii += centroids_per_iter) {
+                const float *cptr = codebook + ii * size;
+                const hn::Vec<FloatTag> cv = hn::LoadU(tag, cptr);
+                hn::Vec<FloatTag> sum = hn::Mul(cv, cv);
+                hn::Vec<FloatTag> temp = hn::SwapAdjacentBlocks(sum);
+                sum = hn::Add(sum, temp);
+                temp = hn::Shuffle1032(sum);
+                sum = hn::Add(sum, temp);
+                temp = hn::Shuffle2301(sum);
+                sum = hn::Add(sum, temp);
+                hn::StoreU(sum, tag, tmp);
+#pragma GCC unroll 2
+                for (int jj = 0; jj < centroids_per_iter; ++jj) {
+                    partialSums[codebookBase + ii + jj] = tmp[jj * 8];
+                }
+            }
+        }
+    }
+    if constexpr (kLanes == 16) {
+        // AVX-512 only: one full register holds exactly one size==16 centroid.
+        if (size == 16) {
+            for (; ii < clusterCount; ++ii) {
+                const hn::Vec<FloatTag> cv
+                        = hn::LoadU(tag, codebook + ii * size);
+                partialSums[codebookBase + ii]
+                        = hn::ReduceSum(tag, hn::Mul(cv, cv));
+            }
+        }
+    }
+    // General fallback: one centroid at a time, vector-accumulate then reduce.
+    for (; ii < clusterCount; ii++) {
+        const float *cptr = codebook + ii * size;
+        auto accVec = hn::Zero(tag);
+        size_t j = 0;
+        for (; j + kLanes <= size; j += kLanes) {
+            const auto v = hn::LoadU(tag, cptr + j);
+            accVec = hn::MulAdd(v, v, accVec);
+        }
+        float sum = hn::ReduceSum(tag, accVec);
+        for (; j < size; j++) {
+            sum += cptr[j] * cptr[j];
+        }
+        partialSums[codebookBase + ii] = sum;
+    }
+}
+
 // =============================================================================
 // NVQ kernels
 // =============================================================================

@@ -64,6 +64,8 @@ struct KernelVTable {
     void  (*calculate_partial_sums_euclidean_f32)(const float *, int,
                                                   size_t, int,
                                                   const float *, int, float *);
+    void  (*calculate_partial_sums_self_magnitude_f32)(const float *, int,
+                                                       size_t, int, float *);
     /* NVQ kernels */
     void    (*nvq_quantize_8bit)(const float *, size_t,
                                  float, float, float, float,
@@ -101,6 +103,7 @@ struct KernelVTable {
         ISA::pq_decoded_cosine_similarity_f32,                           \
         ISA::calculate_partial_sums_dot_f32,                             \
         ISA::calculate_partial_sums_euclidean_f32,                       \
+        ISA::calculate_partial_sums_self_magnitude_f32,                  \
         ISA::nvq_quantize_8bit,                                          \
         ISA::nvq_loss,                                                   \
         ISA::nvq_uniform_loss,                                           \
@@ -268,6 +271,16 @@ void calculate_partial_sums_euclidean_f32(const float *codebook,
                                                  size, clusterCount,
                                                  query, queryOffset,
                                                  partialSums);
+}
+
+void calculate_partial_sums_self_magnitude_f32(const float *codebook,
+                                               int codebookIndex,
+                                               size_t size, int clusterCount,
+                                               float *partialSums)
+{
+    kernels.calculate_partial_sums_self_magnitude_f32(codebook, codebookIndex,
+                                                      size, clusterCount,
+                                                      partialSums);
 }
 
 /* NVQ kernels */

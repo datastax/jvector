@@ -75,6 +75,11 @@
                                               const float *query, \
                                               int queryOffset, \
                                               float *partialSums); \
+    void calculate_partial_sums_self_magnitude_f32(const float *codebook, \
+                                                   int codebookIndex, \
+                                                   size_t size, \
+                                                   int clusterCount, \
+                                                   float *partialSums); \
     /* NVQ kernels */ \
     void nvq_quantize_8bit(const float *vector, \
                            size_t length, \

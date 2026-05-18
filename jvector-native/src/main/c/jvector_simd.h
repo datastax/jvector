@@ -35,6 +35,7 @@ JVECTOR_SIMD_API float assemble_and_sum_pq_f32(const float* data, size_t subspac
 JVECTOR_SIMD_API float pq_decoded_cosine_similarity_f32(const unsigned char* baseOffsets, int baseOffsetsOffset, size_t baseOffsetsLength, int clusterCount, const float* partialSums, const float* aMagnitude, float bMagnitude);
 JVECTOR_SIMD_API void calculate_partial_sums_euclidean_f32(const float* codebook, int codebookBase, size_t size, int clusterCount, const float* query, int queryOffset, float* partialSums);
 JVECTOR_SIMD_API void calculate_partial_sums_dot_f32(const float* codebook, int codebookBase, size_t size, int clusterCount, const float* query, int queryOffset, float* partialSums);
+JVECTOR_SIMD_API void calculate_partial_sums_self_magnitude_f32(const float* codebook, int codebookBase, size_t size, int clusterCount, float* partialSums);
 
 /* Vector similarity kernels */
 JVECTOR_SIMD_API float dot_product_f32(const float* a, size_t aoffset, const float* b, size_t boffset, size_t length);

@@ -1465,6 +1465,67 @@ public class NativeSimdOps {
         }
     }
 
+    private static class calculate_partial_sums_self_magnitude_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_self_magnitude_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_self_magnitude_f32(const float *codebook, int codebookBase, size_t size, int clusterCount, float *partialSums)
+     * }
+     */
+    public static FunctionDescriptor calculate_partial_sums_self_magnitude_f32$descriptor() {
+        return calculate_partial_sums_self_magnitude_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_self_magnitude_f32(const float *codebook, int codebookBase, size_t size, int clusterCount, float *partialSums)
+     * }
+     */
+    public static MethodHandle calculate_partial_sums_self_magnitude_f32$handle() {
+        return calculate_partial_sums_self_magnitude_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_self_magnitude_f32(const float *codebook, int codebookBase, size_t size, int clusterCount, float *partialSums)
+     * }
+     */
+    public static MemorySegment calculate_partial_sums_self_magnitude_f32$address() {
+        return calculate_partial_sums_self_magnitude_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void calculate_partial_sums_self_magnitude_f32(const float *codebook, int codebookBase, size_t size, int clusterCount, float *partialSums)
+     * }
+     */
+    public static void calculate_partial_sums_self_magnitude_f32(MemorySegment codebook, int codebookBase, long size, int clusterCount, MemorySegment partialSums) {
+        var mh$ = calculate_partial_sums_self_magnitude_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("calculate_partial_sums_self_magnitude_f32", codebook, codebookBase, size, clusterCount, partialSums);
+            }
+            mh$.invokeExact(codebook, codebookBase, size, clusterCount, partialSums);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class dot_product_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             NativeSimdOps.C_FLOAT,
