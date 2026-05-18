@@ -182,6 +182,10 @@ public final class VectorUtil {
     impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums);
   }
 
+  public static void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
+    impl.calculatePartialSelfMagnitudes(codebook, codebookIndex, size, clusterCount, partialMagnitudes);
+  }
+
   /**
    * Calculates the maximum value in the vector.
    * @param v vector

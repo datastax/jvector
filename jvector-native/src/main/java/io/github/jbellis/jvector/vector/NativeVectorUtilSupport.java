@@ -196,6 +196,16 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
+        NativeSimdOps.calculate_partial_sums_self_magnitude_f32(
+                ((MemorySegmentVectorFloat) codebook).get(),
+                codebookIndex,
+                (long) size,
+                clusterCount,
+                ((MemorySegmentVectorFloat) partialMagnitudes).get());
+    }
+
+    @Override
     public void nvqShuffleQueryInPlace8bit(VectorFloat<?> vector) {
         NativeSimdOps.nvq_shuffle_query_in_place_8bit(
                 ((MemorySegmentVectorFloat) vector).get(),
