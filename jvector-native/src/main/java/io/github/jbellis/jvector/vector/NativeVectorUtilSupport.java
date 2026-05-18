@@ -143,65 +143,44 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
-        int length = v1.length();
-        if (length >= 128) {
-            return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                              ((MemorySegmentVectorFloat) v2).get(), 0,
-                                              length);
-        }
-        return super.squareDistance(v1, v2);
+        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                          ((MemorySegmentVectorFloat) v2).get(), 0,
+                                          v1.length());
     }
 
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        if (length >= 128) {
-            return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                              ((MemorySegmentVectorFloat) v2).get(), v2offset,
-                                              length);
-        }
-        return super.squareDistance(v1, v1offset, v2, v2offset, length);
+        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                          ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                          length);
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        int length = v1.length();
-        if (length >= 128) {
-            return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                           ((MemorySegmentVectorFloat) v2).get(), 0,
-                                           length);
-        }
-        return super.cosine(v1, v2);
+        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                       ((MemorySegmentVectorFloat) v2).get(), 0,
+                                       v1.length());
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        if (length >= 128) {
-            return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                           ((MemorySegmentVectorFloat) v2).get(), v2offset,
-                                           length);
-        }
-        return super.cosine(v1, v1offset, v2, v2offset, length);
+        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                       ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                       length);
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
-        int length = v1.length();
-        if (length >= 128) {
-            return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                                 ((MemorySegmentVectorFloat) v2).get(), 0,
-                                                 length);
-        }
-        return super.dotProduct(v1, v2);
+        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
+                                             ((MemorySegmentVectorFloat) v2).get(), 0,
+                                             v1.length());
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        if (length >= 128) {
-            return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                                 ((MemorySegmentVectorFloat) v2).get(), v2offset,
-                                                 length);
-        }
-        return super.dotProduct(v1, v1offset, v2, v2offset, length);
+        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
+                                             ((MemorySegmentVectorFloat) v2).get(), v2offset,
+                                             length);
     }
 
     @Override
