@@ -29,7 +29,7 @@ public interface QueryBenchmark {
     List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns
     );

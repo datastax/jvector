@@ -196,7 +196,7 @@ public final class RunArtifacts {
                        boolean usePruning,
                        int topK,
                        double overquery,
-                       int rerankK,
+                       int refineK,
                        List<Metric> logOutputs) {
         if (experimentsWriter == null || run == null) {
             return;
@@ -216,7 +216,7 @@ public final class RunArtifacts {
                 usePruning,
                 topK,
                 overquery,
-                rerankK
+                refineK
         );
 
         try {

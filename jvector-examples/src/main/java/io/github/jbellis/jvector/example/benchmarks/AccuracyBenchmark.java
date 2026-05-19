@@ -80,7 +80,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -94,7 +94,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         List<SearchResult> results = IntStream.range(0, totalQueries)
                 .parallel()
                 .mapToObj(i -> QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i))
+                        cs, topK, refineK, usePruning, i))
                 .collect(Collectors.toList());
 
         var list = new ArrayList<Metric>();

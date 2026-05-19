@@ -152,7 +152,7 @@ public class TestVectorGraph extends LuceneTestCase {
         var searcher = new GraphSearcher(graph);
         searcher.usePruning(false);
 
-        var ssp = new DefaultSearchScoreProvider(vectors.rerankerFor(query, similarityFunction));
+        var ssp = new DefaultSearchScoreProvider(vectors.refinerFor(query, similarityFunction));
         var initial = searcher.search(ssp, initialTopK, acceptOrds);
         assertEquals(initialTopK, initial.getNodes().length);
 
@@ -175,14 +175,14 @@ public class TestVectorGraph extends LuceneTestCase {
     }
 
     @Test
-    // resuming a search should not need to rerank the nodes that were already evaluated
-    public void testRerankCaching() {
-        testRerankCaching(false);
-        testRerankCaching(true);
+    // resuming a search should not need to refine the nodes that were already evaluated
+    public void testRefineCaching() {
+        testRefineCaching(false);
+        testRefineCaching(true);
     }
 
-    // resuming a search should not need to rerank the nodes that were already evaluated
-    public void testRerankCaching(boolean addHierarchy) {
+    // resuming a search should not need to refine the nodes that were already evaluated
+    public void testRefineCaching(boolean addHierarchy) {
         int size = 1000;
         int dim = 2;
         var vectors = vectorValues(size, dim);
@@ -194,20 +194,20 @@ public class TestVectorGraph extends LuceneTestCase {
         var pqv = pq.encodeAll(vectors);
 
         int topK = 10;
-        int rerankK = 30;
+        int refineK = 30;
         var query = randomVector(dim);
         var searcher = new GraphSearcher(graph);
 
         var ssp = new DefaultSearchScoreProvider(
                 pqv.scoreFunctionFor(query, similarityFunction),
-                vectors.rerankerFor(query, similarityFunction)
+                vectors.refinerFor(query, similarityFunction)
         );
-        var initial = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        var initial = searcher.search(ssp, topK, refineK, 0.0f, 0.0f, Bits.ALL);
         assertEquals(topK, initial.getNodes().length);
-        assertEquals(rerankK, initial.getRerankedCount());
+        assertEquals(refineK, initial.getRefinedCount());
 
-        var resumed = searcher.resume(topK, rerankK);
-        assert resumed.getRerankedCount() < rerankK;
+        var resumed = searcher.resume(topK, refineK);
+        assert resumed.getRefinedCount() < refineK;
     }
 
     // If an exception is thrown during search, the next search should still function
@@ -261,7 +261,7 @@ public class TestVectorGraph extends LuceneTestCase {
         };
 
         var searcher = new GraphSearcher(graph);
-        var ssp = new DefaultSearchScoreProvider(wrappedVectors.rerankerFor(getTargetVector(), similarityFunction));
+        var ssp = new DefaultSearchScoreProvider(wrappedVectors.refinerFor(getTargetVector(), similarityFunction));
 
         assertThrows(RuntimeException.class, () -> {
             searcher.search(ssp, 10, Bits.ALL);

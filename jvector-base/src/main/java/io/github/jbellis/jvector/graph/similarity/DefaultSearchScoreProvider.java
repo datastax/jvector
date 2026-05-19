@@ -23,12 +23,12 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
 public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     private final ScoreFunction scoreFunction;
-    private final ScoreFunction.ExactScoreFunction reranker;
+    private final ScoreFunction.ExactScoreFunction refiner;
 
     /**
      * @param scoreFunction the primary, fast scoring function
      * <p>
-     * No reranking is performed.
+     * No refining is performed.
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction) {
         this(scoreFunction, null);
@@ -36,31 +36,31 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
 
     /**
      * @param scoreFunction the primary, fast scoring function
-     * @param reranker optional reranking function
-     * Generally, reranker will be null iff scoreFunction is an ExactScoreFunction.  However,
-     * it is allowed, and sometimes useful, to only perform approximate scoring without reranking.
+     * @param refiner optional refining function
+     * Generally, refiner will be null iff scoreFunction is an ExactScoreFunction.  However,
+     * it is allowed, and sometimes useful, to only perform approximate scoring without refining.
      * <p>
-     * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
-     * or `ScoringView.rerankerFor`.
+     * Most often it will be convenient to get the refiner either using `RandomAccessVectorValues.refinerFor`
+     * or `ScoringView.refinerFor`.
      */
-    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
+    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction refiner) {
         assert scoreFunction != null;
         this.scoreFunction = scoreFunction;
-        this.reranker = reranker;
+        this.refiner = refiner;
     }
 
     public ScoreFunction scoreFunction() {
         return scoreFunction;
     }
 
-    public ScoreFunction.ExactScoreFunction reranker() {
-        return reranker;
+    public ScoreFunction.ExactScoreFunction refiner() {
+        return refiner;
     }
 
     public ScoreFunction.ExactScoreFunction exactScoreFunction() {
         return scoreFunction.isExact()
                 ? (ScoreFunction.ExactScoreFunction) scoreFunction
-                : reranker;
+                : refiner;
     }
 
     /**
@@ -69,7 +69,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * e.g. during construction.
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
-        // don't use ESF.reranker, we need thread safety here
+        // don't use ESF.refiner, we need thread safety here
         var sf = new ScoreFunction.ExactScoreFunction() {
             @Override
             public float similarityTo(int node2) {
@@ -85,7 +85,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * e.g. during construction.
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
-        // don't use ESF.reranker, we need thread safety here
+        // don't use ESF.refiner, we need thread safety here
         var sf = new ScoreFunction.ExactScoreFunction() {
             @Override
             public float similarityTo(int node2) {

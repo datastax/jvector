@@ -349,7 +349,7 @@ public class TestFusedGraphIndex extends RandomizedTest {
         } else {
             asf = cv.precomputedScoreFunctionFor(queryVector, similarityFunction);
         }
-        var rr = scoringView.rerankerFor(queryVector, similarityFunction);
+        var rr = scoringView.refinerFor(queryVector, similarityFunction);
         return new DefaultSearchScoreProvider(asf, rr);
     }
 

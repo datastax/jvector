@@ -27,23 +27,23 @@ public class QueryExecutor {
      *
      * @param cs         Configured system that contains the query vectors.
      * @param topK       Number of top results.
-     * @param rerankK    Number of candidates for reranking.
+     * @param refineK    Number of candidates for refining.
      * @param usePruning Whether to use pruning.
      * @param i          The query vector index.
      * @return the SearchResult for query i.
      */
-    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int refineK, boolean usePruning, int i) {
         var queryVector = cs.getDataSet().getQueryVectors().get(i);
-        return executeQuery(cs, topK, rerankK, usePruning, queryVector);
+        return executeQuery(cs, topK, refineK, usePruning, queryVector);
     }
 
     // Overload to allow single query injection (e.g., for warm-up with random vectors)
-    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int refineK, boolean usePruning, VectorFloat<?> queryVector
     ) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());
-        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        return searcher.search(sf, topK, refineK, 0.0f, 0.0f, Bits.ALL);
     }
 }
 

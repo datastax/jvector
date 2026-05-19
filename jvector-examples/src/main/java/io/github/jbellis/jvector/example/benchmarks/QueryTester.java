@@ -65,14 +65,14 @@ public class QueryTester {
      *
      * @param cs          the configured system under test
      * @param topK        the top‑K parameter for all benchmarks
-     * @param rerankK     the rerank‑K parameter
+     * @param refineK     the refine‑K parameter
      * @param usePruning  whether to enable pruning
      * @param queryRuns   number of runs for each benchmark
      */
     public List<Metric> run(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -90,7 +90,7 @@ public class QueryTester {
             diagnostics.capturePrePhaseSnapshot("Query");
 
             for (var benchmark : benchmarks) {
-                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                var metrics = benchmark.runBenchmark(cs, topK, refineK, usePruning, queryRuns);
                 results.addAll(metrics);
             }
 

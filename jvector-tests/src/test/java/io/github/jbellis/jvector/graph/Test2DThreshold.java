@@ -67,7 +67,7 @@ public class Test2DThreshold extends LuceneTestCase {
         for (int i = 0; i < nQueries; i++) {
             TestParams tp = createTestParams(vectors);
 
-            var sf = ravv.rerankerFor(tp.q, VectorSimilarityFunction.EUCLIDEAN);
+            var sf = ravv.refinerFor(tp.q, VectorSimilarityFunction.EUCLIDEAN);
             var result = searcher.search(new DefaultSearchScoreProvider(sf), vectors.length, tp.th, Bits.ALL);
 
             meanVisitedRatio += ((float) result.getVisitedCount()) / (vectors.length * nQueries);
@@ -91,9 +91,9 @@ public class Test2DThreshold extends LuceneTestCase {
 //            for (int i = 0; i < 10; i++) {
 //                TestParams tp = createTestParams(vectors);
 //                searcher = new GraphSearcher(onDiskGraph.getView());
-//                var reranker = Reranker.from(tp.q, VectorSimilarityFunction.EUCLIDEAN, view);
+//                var refiner = refiner.from(tp.q, VectorSimilarityFunction.EUCLIDEAN, view);
 //                var asf = cv.precomputedScoreFunctionFor(tp.q, VectorSimilarityFunction.EUCLIDEAN);
-//                var ssp = new SearchScoreProvider(asf, reranker);
+//                var ssp = new SearchScoreProvider(asf, refiner);
 //                var result = searcher.search(ssp, vectors.length, tp.th, Bits.ALL);
 //
 //                // System.out.printf("visited %d to find %d/%d results for threshold %s%n", result.getVisitedCount(), result.getNodes().length, tp.exactCount, tp.th);

@@ -21,7 +21,7 @@ public interface SearchScoreProvider {
 
     ScoreFunction scoreFunction();
 
-    ScoreFunction.ExactScoreFunction reranker();
+    ScoreFunction.ExactScoreFunction refiner();
 
     ScoreFunction.ExactScoreFunction exactScoreFunction();
 }

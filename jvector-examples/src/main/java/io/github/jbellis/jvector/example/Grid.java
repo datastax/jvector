@@ -1123,7 +1123,7 @@ public class Grid {
 
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            var rr = scoringView.refinerFor(queryVector, ds.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
         }
 

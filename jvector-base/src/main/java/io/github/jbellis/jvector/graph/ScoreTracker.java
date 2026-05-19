@@ -35,7 +35,7 @@ public interface ScoreTracker {
             noOpTracker = null;
         }
 
-        public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
+        public ScoreTracker getScoreTracker(boolean pruneSearch, int refineK, float threshold) {
             // track scores to predict when we are done with threshold queries
             final ScoreTracker scoreTracker;
 
@@ -49,9 +49,9 @@ public interface ScoreTracker {
             } else {
                 if (pruneSearch) {
                     if (relaxedMonotonicityTracker == null) {
-                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker(rerankK);
+                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker(refineK);
                     } else {
-                        relaxedMonotonicityTracker.reset(rerankK);
+                        relaxedMonotonicityTracker.reset(refineK);
                     }
                     scoreTracker = relaxedMonotonicityTracker;
                 } else {
@@ -180,7 +180,7 @@ public interface ScoreTracker {
         /**
          * Constructor
          * @param bestScoresTracked the number of tracked scores used to estimate if we are unlikely to improve
-         *                          the results anymore. An empirical rule of thumb is bestScoresTracked=rerankK.
+         *                          the results anymore. An empirical rule of thumb is bestScoresTracked=refineK.
          */
         RelaxedMonotonicityTracker(int bestScoresTracked) {
             this.recentScoresSize = getRecentScoresSize(bestScoresTracked);

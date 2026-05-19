@@ -104,7 +104,7 @@ public class GraphSearcher implements Closeable {
 
     private void initializeScoreProvider(SearchScoreProvider scoreProvider) {
         this.scoreProvider = scoreProvider;
-        if (scoreProvider.reranker() == null) {
+        if (scoreProvider.refiner() == null) {
             cachingReranker = null;
             return;
         }
@@ -550,7 +550,7 @@ public class GraphSearcher implements Closeable {
                 return cachedScores.get(node2);
             }
             rerankCalls++;
-            float score = scoreProvider.reranker().similarityTo(node2);
+            float score = scoreProvider.refiner().similarityTo(node2);
             cachedScores.put(node2, Float.valueOf(score));
             return score;
         }

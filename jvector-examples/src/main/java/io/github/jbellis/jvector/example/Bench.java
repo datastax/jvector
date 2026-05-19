@@ -50,7 +50,7 @@ public class Bench {
                 List.of(1.0, 2.0, 5.0, 10.0), // oq
                 100, // topK
                 List.of(1.0, 2.0) // oq
-        ); // rerankK = oq * topK
+        ); // refineK = oq * topK
         var neighborOverflowGrid = List.of(1.2f); // List.of(1.2f, 2.0f);
         var addHierarchyGrid = List.of(true); // List.of(false, true);
         var refineFinalGraphGrid = List.of(true); // List.of(false, true);

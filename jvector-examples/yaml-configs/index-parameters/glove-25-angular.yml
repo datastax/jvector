@@ -13,7 +13,7 @@ construction:
   fusedGraph: [No]
   compression:
     - type: None
-  reranking:
+  refining:
     - NVQ
   useSavedIndexIfExists: No
 

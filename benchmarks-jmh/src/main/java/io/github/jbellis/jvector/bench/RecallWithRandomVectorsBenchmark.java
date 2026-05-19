@@ -131,27 +131,27 @@ public class RecallWithRandomVectorsBenchmark {
     @State(Scope.Thread)
     public static class RecallCounters {
         public double avgRecall = 0;
-        public double avgReRankedCount = 0;
+        public double avgRefinedCount = 0;
         public double avgVisitedCount = 0;
         public double avgExpandedCount = 0;
         public double avgExpandedCountBaseLayer = 0;
         private int iterations = 0;
         private double totalRecall = 0;
-        private double totalReRankedCount = 0;
+        private double totalRefinedCount = 0;
         private double totalVisitedCount = 0;
         private double totalExpandedCount = 0;
         private double totalExpandedCountBaseLayer = 0;
 
-        public void addResults(double avgIterationRecall, double avgIterationReRankedCount, double avgIterationVisitedCount, double avgIterationExpandedCount, double avgIterationExpandedCountBaseLayer) {
-            log.info("adding results avgIterationRecall: {}, avgIterationReRankedCount: {}, avgIterationVisitedCount: {}, avgIterationExpandedCount: {}, avgIterationExpandedCountBaseLayer: {}", avgIterationRecall, avgIterationReRankedCount, avgIterationVisitedCount, avgIterationExpandedCount, avgIterationExpandedCountBaseLayer);
+        public void addResults(double avgIterationRecall, double avgIterationRefinedCount, double avgIterationVisitedCount, double avgIterationExpandedCount, double avgIterationExpandedCountBaseLayer) {
+            log.info("adding results avgIterationRecall: {}, avgIterationRefinedCount: {}, avgIterationVisitedCount: {}, avgIterationExpandedCount: {}, avgIterationExpandedCountBaseLayer: {}", avgIterationRecall, avgIterationRefinedCount, avgIterationVisitedCount, avgIterationExpandedCount, avgIterationExpandedCountBaseLayer);
             totalRecall += avgIterationRecall;
-            totalReRankedCount += avgIterationReRankedCount;
+            totalRefinedCount += avgIterationRefinedCount;
             totalVisitedCount += avgIterationVisitedCount;
             totalExpandedCount += avgIterationExpandedCount;
             totalExpandedCountBaseLayer += avgIterationExpandedCountBaseLayer;
             iterations++;
             avgRecall = totalRecall / (double) iterations;
-            avgReRankedCount = totalReRankedCount / (double)  iterations;
+            avgRefinedCount = totalRefinedCount / (double)  iterations;
             avgVisitedCount = totalVisitedCount / (double)  iterations;
             avgExpandedCount = totalExpandedCount / (double)  iterations;
             avgExpandedCountBaseLayer = totalExpandedCountBaseLayer / (double)  iterations;
@@ -163,7 +163,7 @@ public class RecallWithRandomVectorsBenchmark {
     public void testOnHeapRandomVectorsWithRecall(Blackhole blackhole, RecallCounters counters) throws IOException {
         double totalRecall = 0.0;
         int numQueries = queryVectors.size();
-        int totalReRankedCount = 0;
+        int totalRefinedCount = 0;
         int totalVisitedCount = 0;
         int totalExpandedCount = 0;
         int totalExpandedCountBaseLayer = 0;
@@ -175,13 +175,13 @@ public class RecallWithRandomVectorsBenchmark {
                 final SearchScoreProvider ssp;
                 if (pqVectors != null) { // Quantized, use the precomputed score function
                     // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
-                    // then reranks with the exact vectors that are stored on disk in the index
+                    // then refines with the exact vectors that are stored on disk in the index
                     ScoreFunction.ApproximateScoreFunction asf = pqVectors.precomputedScoreFunctionFor(
                             queryVector,
                             VectorSimilarityFunction.EUCLIDEAN
                     );
-                    ScoreFunction.ExactScoreFunction reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
-                    ssp = new DefaultSearchScoreProvider(asf, reranker);
+                    ScoreFunction.ExactScoreFunction refiner = ravv.refinerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
+                    ssp = new DefaultSearchScoreProvider(asf, refiner);
                     searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL);
                 } else { // Not quantized, used typical searcher
                     ssp = DefaultSearchScoreProvider.exact(queryVector, VectorSimilarityFunction.EUCLIDEAN, ravv);
@@ -198,7 +198,7 @@ public class RecallWithRandomVectorsBenchmark {
             // Calculate recall for this query
             double recall = calculateRecall(resultIds, groundTruth.get(i), k);
             totalRecall += recall;
-            totalReRankedCount += searchResult.getRerankedCount();
+            totalRefinedCount += searchResult.getRefinedCount();
             totalVisitedCount += searchResult.getVisitedCount();
             totalExpandedCount += searchResult.getExpandedCount();
             totalExpandedCountBaseLayer += searchResult.getExpandedCountBaseLayer();
@@ -206,13 +206,13 @@ public class RecallWithRandomVectorsBenchmark {
         }
 
         double avgRecall = totalRecall / (double) numQueries;
-        double avgReRankedCount = totalReRankedCount / (double) numQueries;
+        double avgRefinedCount = totalRefinedCount / (double) numQueries;
         double avgVisitedCount = totalVisitedCount / (double) numQueries;
         double avgExpandedCount = totalExpandedCount / (double) numQueries;
         double avgExpandedCountBaseLayer = totalExpandedCountBaseLayer / (double) numQueries;
 
         // Store metrics in aux counters - these will appear in JMH output
-        counters.addResults(avgRecall, avgReRankedCount, avgVisitedCount, avgExpandedCount, avgExpandedCountBaseLayer);
+        counters.addResults(avgRecall, avgRefinedCount, avgVisitedCount, avgExpandedCount, avgExpandedCountBaseLayer);
 
         blackhole.consume(avgRecall);
     }

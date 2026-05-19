@@ -109,9 +109,9 @@ public interface RandomAccessVectorValues {
     }
 
     /**
-     * Convenience method to create an ExactScoreFunction for reranking.  The resulting function is NOT thread-safe.
+     * Convenience method to create an ExactScoreFunction for refining.  The resulting function is NOT thread-safe.
      */
-    default ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+    default ScoreFunction.ExactScoreFunction refinerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
         return new ScoreFunction.ExactScoreFunction() {
             private final VectorFloat<?> scratch = vts.createFloatVector(dimension());
 

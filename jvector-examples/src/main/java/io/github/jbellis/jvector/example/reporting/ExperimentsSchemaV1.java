@@ -64,7 +64,7 @@ public final class ExperimentsSchemaV1 {
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
+                "refineK"
         );
     }
 
@@ -86,7 +86,7 @@ public final class ExperimentsSchemaV1 {
                                                   boolean usePruning,
                                                   int topK,
                                                   double overquery,
-                                                  int rerankK) {
+                                                  int refineK) {
         Map<String, String> fixed = new HashMap<>();
         fixed.put("schema_version", Integer.toString(run.schemaVersion()));
         fixed.put("run_id", run.runId());
@@ -106,7 +106,7 @@ public final class ExperimentsSchemaV1 {
         fixed.put("usePruning", Boolean.toString(usePruning));
         fixed.put("topK", Integer.toString(topK));
         fixed.put("overquery", Double.toString(overquery));
-        fixed.put("rerankK", Integer.toString(rerankK));
+        fixed.put("refineK", Integer.toString(refineK));
 
         return fixed;
     }

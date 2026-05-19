@@ -100,7 +100,7 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
         return nvq.globalMean.length();
     }
 
-    ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
+    ScoreFunction.ExactScoreFunction refinerFor(VectorFloat<?> queryVector,
                                                 VectorSimilarityFunction vsf,
                                                 FeatureSource source) {
         var function = scorer.scoreFunctionFor(queryVector, vsf);

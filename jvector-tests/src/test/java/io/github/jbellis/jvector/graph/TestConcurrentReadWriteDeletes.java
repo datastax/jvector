@@ -103,10 +103,10 @@ public class TestConcurrentReadWriteDeletes extends RandomizedTest {
                 SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, ravv);
 
                 int topK = Math.min(1, keysInserted.size());
-                int rerankK = Math.min(50, keysInserted.size());
+                int refineK = Math.min(50, keysInserted.size());
 
                 GraphSearcher searcher = new GraphSearcher(builder.getGraph());
-                searcher.search(ssp, topK, rerankK, 0.f, 0.f, liveNodes);
+                searcher.search(ssp, topK, refineK, 0.f, 0.f, liveNodes);
             }
         });
     }

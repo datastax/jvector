@@ -204,7 +204,7 @@ public class SiftSmall {
                 // then reranks with the exact vectors that are stored on disk in the index
                 Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                     ApproximateScoreFunction asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                    ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                    ExactScoreFunction reranker = index.getView().refinerFor(q, VectorSimilarityFunction.EUCLIDEAN);
                     return new DefaultSearchScoreProvider(asf, reranker);
                 };
                 // measure our recall against the (exactly computed) ground truth
@@ -267,7 +267,7 @@ public class SiftSmall {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                ExactScoreFunction reranker = index.getView().refinerFor(q, VectorSimilarityFunction.EUCLIDEAN);
                 return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);
@@ -330,7 +330,7 @@ public class SiftSmall {
             var pqvSearch = PQVectors.load(in);
             Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
                 ApproximateScoreFunction asf = pqvSearch.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                ExactScoreFunction reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
+                ExactScoreFunction reranker = index.getView().refinerFor(q, VectorSimilarityFunction.EUCLIDEAN);
                 return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);

@@ -94,7 +94,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -112,7 +112,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
                     .parallel()
                     .forEach(i -> {
                         SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                                cs, topK, refineK, usePruning, i);
                         nodesVisited.add(sr.getVisitedCount());
                         nodesExpanded.add(sr.getExpandedCount());
                         nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());

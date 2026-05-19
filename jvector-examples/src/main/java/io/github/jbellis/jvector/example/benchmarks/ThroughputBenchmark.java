@@ -131,7 +131,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     public List<Metric> runBenchmark(
             ConfiguredSystem cs,
             int topK,
-            int rerankK,
+            int refineK,
             boolean usePruning,
             int queryRuns) {
 
@@ -161,7 +161,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                                 }
                                 VectorUtil.l2normalize(randQ);
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, randQ);
+                                        cs, topK, refineK, usePruning, randQ);
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();
@@ -215,7 +215,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                                 long queryStart = System.nanoTime();
 
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, i);
+                                        cs, topK, refineK, usePruning, i);
                                 // "Use" the result to prevent optimization
                                 visitedAdder.add(sr.getVisitedCount());
 

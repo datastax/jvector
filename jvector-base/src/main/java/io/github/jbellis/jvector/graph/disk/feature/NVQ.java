@@ -31,7 +31,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 
 /**
- * Implements the storage of NuVeQ vectors in an on-disk graph index.  These can be used for reranking.
+ * Implements the storage of NuVeQ vectors in an on-disk graph index.  These can be used for refining.
  */
 public class NVQ extends AbstractFeature {
     private final NVQuantization nvq;
@@ -88,7 +88,7 @@ public class NVQ extends AbstractFeature {
         }
     }
 
-    public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
+    public ScoreFunction.ExactScoreFunction refinerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {
         var function = scorer.scoreFunctionFor(queryVector, vsf);
