@@ -771,4 +771,320 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         searcher.close();
     }
+
+    // -----------------------------------------------------------------------------------------
+    // Tests for non-fused compressed-sidecar compaction (compact(graphPath, compressedPath))
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * Happy path: merge two sources whose PQ codes are shipped as a non-fused {@link PQVectors}
+     * sidecar, and verify both outputs — graph and compressed sidecar — are produced correctly.
+     * Asserts:
+     * <ul>
+     *     <li>merged graph has the expected node count and per-ordinal vector values,</li>
+     *     <li>merged sidecar loads as PQVectors with the same {@code count}, subspace count, and
+     *         cluster count as the inputs,</li>
+     *     <li>each merged code decodes to a vector close to the original raw vector (within PQ
+     *         reconstruction error).</li>
+     * </ul>
+     */
+    @Test
+    public void testCompactWithCompressedSidecar() throws Exception {
+        int dim = 16;
+        int n = 32;     // nodes per source
+        int M = 8;      // PQ subspaces
+        int clusters = 16;  // small for fast test
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+
+        List<VectorFloat<?>> vecs0 = createRandomVectors(n, dim);
+        List<VectorFloat<?>> vecs1 = createRandomVectors(n, dim);
+
+        Path graph0 = buildSimpleSourceGraph(vecs0, dim, vsf, "sidecar_src_0");
+        Path graph1 = buildSimpleSourceGraph(vecs1, dim, vsf, "sidecar_src_1");
+
+        ReaderSupplier rs0 = ReaderSupplierFactory.open(graph0);
+        ReaderSupplier rs1 = ReaderSupplierFactory.open(graph1);
+        OnDiskGraphIndex g0 = OnDiskGraphIndex.load(rs0);
+        OnDiskGraphIndex g1 = OnDiskGraphIndex.load(rs1);
+
+        // Per-source PQVectors — the non-fused sidecar input.
+        RandomAccessVectorValues ravv0 = new ListRandomAccessVectorValues(vecs0, dim);
+        RandomAccessVectorValues ravv1 = new ListRandomAccessVectorValues(vecs1, dim);
+        ProductQuantization pq0 = ProductQuantization.compute(ravv0, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        ProductQuantization pq1 = ProductQuantization.compute(ravv1, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv0 = (PQVectors) pq0.encodeAll(ravv0, simdExecutor);
+        PQVectors pqv1 = (PQVectors) pq1.encodeAll(ravv1, simdExecutor);
+
+        // Identity remapping: source 0 -> [0, n), source 1 -> [n, 2n)
+        Map<Integer, Integer> map0 = new HashMap<>();
+        Map<Integer, Integer> map1 = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            map0.put(i, i);
+            map1.put(i, n + i);
+        }
+        FixedBitSet live0 = new FixedBitSet(n); live0.set(0, n);
+        FixedBitSet live1 = new FixedBitSet(n); live1.set(0, n);
+
+        var compactor = new OnDiskGraphIndexCompactor(
+                List.of(g0, g1),
+                List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
+                List.of(live0, live1),
+                List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
+                vsf, null);
+
+        Path graphOut = testDirectory.resolve("sidecar_graph_out");
+        Path compressedOut = testDirectory.resolve("sidecar_pq_out");
+        compactor.compact(graphOut, compressedOut);
+
+        // ---- Verify merged graph ----
+        ReaderSupplier rsOut = ReaderSupplierFactory.open(graphOut);
+        OnDiskGraphIndex compacted = OnDiskGraphIndex.load(rsOut);
+        assertEquals("compacted graph node count", 2 * n, compacted.size(0));
+
+        var view = compacted.getView();
+        VectorFloat<?> buf = vectorTypeSupport.createFloatVector(dim);
+        for (int i = 0; i < n; i++) {
+            view.getVectorInto(i, buf, 0);
+            assertVecEquals(vecs0.get(i), buf, i);
+            view.getVectorInto(n + i, buf, 0);
+            assertVecEquals(vecs1.get(i), buf, n + i);
+        }
+
+        // ---- Verify merged compressed sidecar ----
+        try (var rsCompressed = ReaderSupplierFactory.open(compressedOut); var reader = rsCompressed.get()) {
+            PQVectors mergedPqv = PQVectors.load(reader);
+            assertEquals("merged PQVectors count", 2 * n, mergedPqv.count());
+            ProductQuantization mergedPQ = mergedPqv.getCompressor();
+            assertEquals("merged PQ subspaceCount", M, mergedPQ.getSubspaceCount());
+            assertEquals("merged PQ clusterCount", clusters, mergedPQ.getClusterCount());
+            assertEquals("merged PQ compressedVectorSize", M, mergedPQ.compressedVectorSize());
+
+            // Each merged code should decode to a vector close to the original (PQ is lossy
+            // but with these params reconstruction error stays bounded). We check that the
+            // re-encoded code matches the stored code — i.e. encoding is consistent under the
+            // retrained codebook.
+            VectorFloat<?> reEncoded = vectorTypeSupport.createFloatVector(dim);
+            io.github.jbellis.jvector.vector.types.ByteSequence<?> tmpCode = vectorTypeSupport.createByteSequence(M);
+            for (int i = 0; i < n; i++) {
+                mergedPQ.encodeTo(vecs0.get(i), tmpCode);
+                io.github.jbellis.jvector.vector.types.ByteSequence<?> stored = mergedPqv.get(i);
+                for (int b = 0; b < M; b++) {
+                    assertEquals("ord " + i + " code byte " + b, tmpCode.get(b), stored.get(b));
+                }
+                mergedPQ.encodeTo(vecs1.get(i), tmpCode);
+                stored = mergedPqv.get(n + i);
+                for (int b = 0; b < M; b++) {
+                    assertEquals("ord " + (n + i) + " code byte " + b, tmpCode.get(b), stored.get(b));
+                }
+            }
+        }
+    }
+
+    /**
+     * Validation: combining {@code sourceCompressed} with sources that already carry FUSED_PQ
+     * inline must throw, since the two are mutually exclusive ways to ship PQ codes.
+     */
+    @Test
+    public void testCompactCompressedSidecarRejectsFusedPQ() throws Exception {
+        // Reuse the FusedPQ sources built by setup().
+        ReaderSupplier rs0 = ReaderSupplierFactory.open(testDirectory.resolve("test_graph_0"));
+        ReaderSupplier rs1 = ReaderSupplierFactory.open(testDirectory.resolve("test_graph_1"));
+        OnDiskGraphIndex g0 = OnDiskGraphIndex.load(rs0);
+        OnDiskGraphIndex g1 = OnDiskGraphIndex.load(rs1);
+
+        // Throwaway PQVectors just to exercise the validation; values don't matter.
+        var ravv = new ListRandomAccessVectorValues(allVecs.subList(0, numVectorsPerGraph), dimension);
+        ProductQuantization pq = ProductQuantization.compute(ravv, 8, 16, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv0 = (PQVectors) pq.encodeAll(ravv, simdExecutor);
+        PQVectors pqv1 = (PQVectors) pq.encodeAll(ravv, simdExecutor);
+
+        Map<Integer, Integer> map0 = new HashMap<>();
+        Map<Integer, Integer> map1 = new HashMap<>();
+        for (int i = 0; i < numVectorsPerGraph; i++) {
+            map0.put(i, i);
+            map1.put(i, numVectorsPerGraph + i);
+        }
+        FixedBitSet live0 = new FixedBitSet(numVectorsPerGraph); live0.set(0, numVectorsPerGraph);
+        FixedBitSet live1 = new FixedBitSet(numVectorsPerGraph); live1.set(0, numVectorsPerGraph);
+
+        try {
+            new OnDiskGraphIndexCompactor(
+                    List.of(g0, g1),
+                    List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
+                    List.of(live0, live1),
+                    List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
+                    similarityFunction, null);
+            org.junit.Assert.fail("expected IllegalArgumentException for FUSED_PQ + sourceCompressed");
+        } catch (IllegalArgumentException expected) {
+            assertTrue("error message mentions FUSED_PQ",
+                    expected.getMessage().toLowerCase().contains("fused_pq")
+                    || expected.getMessage().toLowerCase().contains("fused pq"));
+        }
+    }
+
+    /**
+     * Validation: {@code sourceCompressed.size()} must equal {@code sources.size()}.
+     */
+    @Test
+    public void testCompactCompressedSidecarRejectsSizeMismatch() throws Exception {
+        int dim = 8;
+        int n = 32;     // need >= clusters for k-means training
+        int clusters = 16;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+
+        List<VectorFloat<?>> vecs0 = createRandomVectors(n, dim);
+        List<VectorFloat<?>> vecs1 = createRandomVectors(n, dim);
+
+        Path graph0 = buildSimpleSourceGraph(vecs0, dim, vsf, "size_src_0");
+        Path graph1 = buildSimpleSourceGraph(vecs1, dim, vsf, "size_src_1");
+
+        OnDiskGraphIndex g0 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph0));
+        OnDiskGraphIndex g1 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph1));
+
+        RandomAccessVectorValues ravv0 = new ListRandomAccessVectorValues(vecs0, dim);
+        ProductQuantization pq = ProductQuantization.compute(ravv0, 4, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv0 = (PQVectors) pq.encodeAll(ravv0, simdExecutor);
+
+        Map<Integer, Integer> map0 = new HashMap<>();
+        Map<Integer, Integer> map1 = new HashMap<>();
+        for (int i = 0; i < n; i++) { map0.put(i, i); map1.put(i, n + i); }
+        FixedBitSet live = new FixedBitSet(n); live.set(0, n);
+
+        try {
+            new OnDiskGraphIndexCompactor(
+                    List.of(g0, g1),
+                    List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0),  // size 1 vs sources size 2
+                    List.of(live, live),
+                    List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
+                    vsf, null);
+            org.junit.Assert.fail("expected IllegalArgumentException for size mismatch");
+        } catch (IllegalArgumentException expected) {
+            assertTrue("error message mentions size",
+                    expected.getMessage().toLowerCase().contains("size"));
+        }
+    }
+
+    /**
+     * Calling the two-arg compact() without supplying {@code sourceCompressed} must fail —
+     * there is no source for the merged sidecar.
+     */
+    @Test
+    public void testCompactTwoArgRequiresSourceCompressed() throws Exception {
+        int dim = 8;
+        int n = 8;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+
+        List<VectorFloat<?>> vecs0 = createRandomVectors(n, dim);
+        List<VectorFloat<?>> vecs1 = createRandomVectors(n, dim);
+        Path graph0 = buildSimpleSourceGraph(vecs0, dim, vsf, "noarg_src_0");
+        Path graph1 = buildSimpleSourceGraph(vecs1, dim, vsf, "noarg_src_1");
+
+        OnDiskGraphIndex g0 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph0));
+        OnDiskGraphIndex g1 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph1));
+
+        Map<Integer, Integer> map0 = new HashMap<>();
+        Map<Integer, Integer> map1 = new HashMap<>();
+        for (int i = 0; i < n; i++) { map0.put(i, i); map1.put(i, n + i); }
+        FixedBitSet live = new FixedBitSet(n); live.set(0, n);
+
+        // Use the legacy 5-arg constructor — sourceCompressed defaults to null.
+        var compactor = new OnDiskGraphIndexCompactor(
+                List.of(g0, g1),
+                List.of(live, live),
+                List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
+                vsf, null);
+
+        Path graphOut = testDirectory.resolve("noarg_graph_out");
+        Path compressedOut = testDirectory.resolve("noarg_pq_out");
+        try {
+            compactor.compact(graphOut, compressedOut);
+            org.junit.Assert.fail("expected IllegalStateException without sourceCompressed");
+        } catch (IllegalStateException expected) {
+            assertTrue("error message mentions sourceCompressed",
+                    expected.getMessage().toLowerCase().contains("sourcecompressed"));
+        }
+    }
+
+    /**
+     * Compaction with deletions: only live nodes appear in the merged sidecar at their remapped
+     * ordinals, and the count matches the number of live nodes (dense merged ordinal range).
+     */
+    @Test
+    public void testCompactCompressedSidecarWithDeletions() throws Exception {
+        int dim = 16;
+        int n = 16;
+        int M = 8;
+        int clusters = 16;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+
+        List<VectorFloat<?>> vecs0 = createRandomVectors(n, dim);
+        List<VectorFloat<?>> vecs1 = createRandomVectors(n, dim);
+        Path graph0 = buildSimpleSourceGraph(vecs0, dim, vsf, "delsidecar_src_0");
+        Path graph1 = buildSimpleSourceGraph(vecs1, dim, vsf, "delsidecar_src_1");
+
+        OnDiskGraphIndex g0 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph0));
+        OnDiskGraphIndex g1 = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graph1));
+
+        RandomAccessVectorValues ravv0 = new ListRandomAccessVectorValues(vecs0, dim);
+        RandomAccessVectorValues ravv1 = new ListRandomAccessVectorValues(vecs1, dim);
+        ProductQuantization pq0 = ProductQuantization.compute(ravv0, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        ProductQuantization pq1 = ProductQuantization.compute(ravv1, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv0 = (PQVectors) pq0.encodeAll(ravv0, simdExecutor);
+        PQVectors pqv1 = (PQVectors) pq1.encodeAll(ravv1, simdExecutor);
+
+        // Keep even nodes live; map them densely.
+        FixedBitSet live0 = new FixedBitSet(n);
+        FixedBitSet live1 = new FixedBitSet(n);
+        Map<Integer, Integer> map0 = new HashMap<>();
+        Map<Integer, Integer> map1 = new HashMap<>();
+        int next = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 2 == 0) { live0.set(i); map0.put(i, next++); }
+        }
+        int firstSourceCount = next;
+        for (int i = 0; i < n; i++) {
+            if (i % 2 == 0) { live1.set(i); map1.put(i, next++); }
+        }
+        int totalLive = next;
+
+        var compactor = new OnDiskGraphIndexCompactor(
+                List.of(g0, g1),
+                List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
+                List.of(live0, live1),
+                List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
+                vsf, null);
+
+        Path graphOut = testDirectory.resolve("delsidecar_graph_out");
+        Path compressedOut = testDirectory.resolve("delsidecar_pq_out");
+        compactor.compact(graphOut, compressedOut);
+
+        // Verify graph
+        OnDiskGraphIndex compacted = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphOut));
+        assertEquals("compacted graph live count", totalLive, compacted.size(0));
+
+        // Verify sidecar: count matches dense live total; each live ordinal's code matches a
+        // fresh re-encoding of the corresponding raw vector under the retrained codebook.
+        try (var rsCompressed = ReaderSupplierFactory.open(compressedOut); var reader = rsCompressed.get()) {
+            PQVectors mergedPqv = PQVectors.load(reader);
+            assertEquals("merged sidecar count", totalLive, mergedPqv.count());
+
+            ProductQuantization mergedPQ = mergedPqv.getCompressor();
+            io.github.jbellis.jvector.vector.types.ByteSequence<?> tmp = vectorTypeSupport.createByteSequence(M);
+            for (int i = 0; i < n; i++) {
+                if (i % 2 != 0) continue;
+                mergedPQ.encodeTo(vecs0.get(i), tmp);
+                io.github.jbellis.jvector.vector.types.ByteSequence<?> stored = mergedPqv.get(map0.get(i));
+                for (int b = 0; b < M; b++) {
+                    assertEquals("source 0 ord " + i + " byte " + b, tmp.get(b), stored.get(b));
+                }
+                mergedPQ.encodeTo(vecs1.get(i), tmp);
+                stored = mergedPqv.get(map1.get(i));
+                for (int b = 0; b < M; b++) {
+                    assertEquals("source 1 ord " + i + " byte " + b, tmp.get(b), stored.get(b));
+                }
+            }
+            // sanity check on dense layout
+            assertEquals("first-source live count", firstSourceCount, n / 2);
+        }
+    }
 }

@@ -18,9 +18,9 @@ package io.github.jbellis.jvector.graph.disk;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
@@ -28,6 +28,7 @@ import java.util.stream.IntStream;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -35,6 +36,7 @@ import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -58,6 +60,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final int SEARCH_TOP_K_MULTIPLIER = 2;
 
     private final List<OnDiskGraphIndex> sources;
+    // Optional non-fused compressed sidecar, parallel to `sources`. Null when sources carry their
+    // quantization inline (FUSED_PQ) or have none. When non-null, compact(Path, Path) retrains the
+    // compressor on merged vectors and writes a single merged CompressedVectors to compressedPath.
+    private final List<CompressedVectors> sourceCompressed;
     private final List<FixedBitSet> liveNodes;
     private final List<Integer> numLiveNodesPerSource;
     private final List<OrdinalMapper> remappers;
@@ -72,8 +78,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final VectorSimilarityFunction similarityFunction;
 
     /**
-     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
-     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
+     * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
      */
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
@@ -81,7 +87,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
-        checkBeforeCompact(sources, liveNodes, remappers);
+        this(sources, null, liveNodes, remappers, similarityFunction, executor);
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     *
+     * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
+     *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
+     *                         that ship alongside each graph. Pass {@code null} when sources carry
+     *                         quantization inline (FUSED_PQ) or have none. Must not be combined
+     *                         with sources that carry the FUSED_PQ feature.
+     */
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor) {
+        checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
         int threads = Runtime.getRuntime().availableProcessors();
         if (executor != null) {
@@ -93,6 +119,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.taskWindowSize = threads;
 
         this.sources = sources;
+        this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
         this.remappers = remappers;
         this.liveNodes = liveNodes;
         this.numLiveNodesPerSource = new ArrayList<>(this.sources.size());
@@ -120,12 +147,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void checkBeforeCompact(
             List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
             List<FixedBitSet> liveNodes,
             List<OrdinalMapper> remappers) {
         validateInputSizes(sources, liveNodes, remappers);
         validateLiveNodesBounds(sources, liveNodes);
         validateGraphConfiguration(sources);
         validateFeatures(sources);
+        validateCompressed(sources, sourceCompressed);
+    }
+
+    /**
+     * Validates that the optional non-fused compressed sidecar list is consistent with
+     * {@code sources}: same size, no nulls, identical compressor type across entries, and not
+     * combined with FUSED_PQ (which already carries codes inline).
+     */
+    private void validateCompressed(List<OnDiskGraphIndex> sources, List<CompressedVectors> sourceCompressed) {
+        if (sourceCompressed == null || sourceCompressed.isEmpty()) {
+            return;
+        }
+        if (sourceCompressed.size() != sources.size()) {
+            throw new IllegalArgumentException("sourceCompressed must have the same size as sources");
+        }
+        // Inline (fused) and sidecar are mutually exclusive ways to carry quantization codes.
+        // Check for any fused feature rather than hard-coding FUSED_PQ so future fused types
+        // (e.g. FUSED_ASH) are rejected here without further edits.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature.isFused()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed cannot be combined with a fused feature ("
+                                + feature.id() + "); choose one");
+            }
+        }
+        Class<?> compressorClass = null;
+        for (int s = 0; s < sourceCompressed.size(); s++) {
+            CompressedVectors cv = Objects.requireNonNull(sourceCompressed.get(s),
+                    "sourceCompressed[" + s + "] is null");
+            var compressor = Objects.requireNonNull(cv.getCompressor(),
+                    "sourceCompressed[" + s + "].getCompressor() is null");
+            if (compressorClass == null) {
+                compressorClass = compressor.getClass();
+            } else if (compressorClass != compressor.getClass()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed entries must all use the same compressor type; got "
+                                + compressorClass.getSimpleName() + " and "
+                                + compressor.getClass().getSimpleName());
+            }
+        }
     }
 
     /**
@@ -210,18 +278,98 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
     public void compact(Path outputPath) throws FileNotFoundException {
-        boolean fusedPQEnabled = hasFusedPQ();
-        boolean compressedPrecision = fusedPQEnabled;
-
-        ProductQuantization pq;
-        int pqLength;
-        if (fusedPQEnabled) {
-            pq = resolvePQFromSources(similarityFunction);
-            pqLength = pq.compressedVectorSize();
-        } else {
-            pq = null;
-            pqLength = -1;
+        try {
+            QuantizationCompactionStrategy strategy = detectInlineStrategy();
+            compactGraphImpl(outputPath, strategy);
+        } finally {
+            if (ownsExecutor) executor.shutdown();
         }
+    }
+
+    /**
+     * Compaction entry point for graphs that ship a non-fused compressed sidecar (e.g.
+     * {@link io.github.jbellis.jvector.quantization.PQVectors}). Writes the merged graph to
+     * {@code graphPath} and the merged compressed vectors to {@code compressedPath}.
+     * <p>
+     * The compressor is retrained on a balanced sample of merged source vectors, then every live
+     * node is re-encoded against the new codebook. Requires that {@code sourceCompressed} was
+     * supplied to the constructor.
+     */
+    public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        if (sourceCompressed == null) {
+            throw new IllegalStateException(
+                    "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
+        }
+        Objects.requireNonNull(compressedPath, "compressedPath");
+
+        try {
+            // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+            // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+            QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
+            QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
+            sidecarStrategy.retrain(similarityFunction);
+            compactGraphImpl(graphPath, inlineStrategy);
+            sidecarStrategy.writeSidecar(compressedPath);
+        } catch (IOException e) {
+            throw new RuntimeException("Sidecar compaction failed", e);
+        } finally {
+            if (ownsExecutor) executor.shutdown();
+        }
+    }
+
+    /**
+     * Pick the inline-codes strategy by asking the source's fused feature (if any) for its
+     * compaction strategy. Returns {@link QuantizationCompactionStrategy#NONE} when no fused feature is
+     * present. New fused quantization types extend the compactor purely by implementing
+     * {@link FusedFeature#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectInlineStrategy() {
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                return ((FusedFeature) feature).createCompactionStrategy(buildContext());
+            }
+        }
+        return QuantizationCompactionStrategy.NONE;
+    }
+
+    /**
+     * Pick the sidecar-codes strategy by delegating to the first {@link CompressedVectors}'
+     * own factory. Returns {@link QuantizationCompactionStrategy#NONE} when no sidecar input was supplied
+     * to the constructor. New sidecar quantization types extend the compactor purely by
+     * implementing {@link CompressedVectors#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectSidecarStrategy() {
+        if (sourceCompressed == null) {
+            return QuantizationCompactionStrategy.NONE;
+        }
+        return sourceCompressed.get(0).createCompactionStrategy(buildContext());
+    }
+
+    /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
+    private CompactionContext buildContext() {
+        return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
+                dimension, maxOrdinal, executor, taskWindowSize);
+    }
+
+    /**
+     * Internal graph-compaction body. Performs the full graph write but does <em>not</em> shut
+     * down {@link #executor}; the public {@code compact(...)} entry points own that lifecycle so
+     * follow-on passes (e.g. a sidecar write via {@link SidecarCompactionStrategy}) can keep using
+     * the executor.
+     * <p>
+     * Quantization-aware steps (codebook retrain, pre-encode caches, entry-node tail records,
+     * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
+     * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
+     */
+    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        strategy.retrain(similarityFunction);
+
+        boolean fusedPQEnabled = strategy.writesCodesInline();
+        ProductQuantization pq = strategy.compressorAsPQ();
+        boolean compressedPrecision = fusedPQEnabled;
+        int maxBaseDegree = java.util.Collections.max(maxDegrees);
+        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
+                strategy.outputFusedFeature(maxBaseDegree);
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
         int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
@@ -229,32 +377,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, pq, pqLength, fusedPQEnabled)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+            // Header has to be written first so the writer's position is past the header
+            // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
+            strategy.onAfterHeader(writer);
+
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
 
-            // When FusedPQ is enabled and there is no hierarchy (only L0), the reader expects
-            // to find the entry node's own PQ code written after the L0 block, just as
-            // AbstractGraphIndexWriter.writeSparseLevels does in its getMaxLevel == 0 branch.
-            // Without it, loadInMemoryFeatures reads garbage and hierarchyCachedFeatures is
-            // missing the entry node, causing "Node X is not in the hierarchy" on first search.
-            if (fusedPQEnabled && maxDegrees.size() == 1) {
-                try (var entryView = sources.get(entryNodeSource[0]).getView()) {
-                    var entryVec = vectorTypeSupport.createFloatVector(dimension);
-                    entryView.getVectorInto(entryNodeSource[1], entryVec, 0);
-                    var entryPqCode = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
-                    entryPqCode.zero();
-                    pq.encodeTo(entryVec, entryPqCode);
-                    writer.setEntryNodePqCode(entryPqCode);
-                }
-            }
+            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
             writer.writeFooter();
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         } finally {
-            if (ownsExecutor) executor.shutdown();
+            strategy.onAfterClose(outputPath);
         }
     }
 
@@ -822,22 +960,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Trains a new Product Quantization codebook using balanced sampling across all source
-     * indexes. This ensures the PQ is optimized for the combined dataset.
-     */
-    private ProductQuantization resolvePQFromSources(VectorSimilarityFunction similarityFunction) {
-        PQRetrainer retrainer = new PQRetrainer(sources, liveNodes, dimension);
-        return retrainer.retrain(similarityFunction);
-    }
-
-    /**
-     * Checks if the source indexes have FusedPQ feature enabled.
-     */
-    private boolean hasFusedPQ() {
-        return sources.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ);
-    }
-
-    /**
      * Creates a score provider for searching across different source indexes. Uses approximate
      * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
      */
@@ -968,11 +1090,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Each GraphSearcher has internal state - rough estimate
         scratchSize += (long) sources.size() * (OH + 10L * REF);
 
-        // pqCode ByteSequence (if PQ enabled)
-        if (hasFusedPQ()) {
-            FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-            int subspaceCount = fpq.getPQ().getSubspaceCount();
-            scratchSize += OH + subspaceCount; // ByteSequence
+        // Per-thread scratch ByteSequence holding one code's worth of bytes, for each fused
+        // feature carried by the graph. Generalized over fused types so new quantizations
+        // (e.g. FUSED_ASH) don't need an edit here.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                scratchSize += OH + ((FusedFeature) feature).codeSize();
+            }
         }
 
         return scratchSize;

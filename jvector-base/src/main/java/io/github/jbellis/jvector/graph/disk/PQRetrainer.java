@@ -71,10 +71,21 @@ public class PQRetrainer {
 
     /**
      * Trains a new Product Quantization codebook using balanced sampling across all source indexes.
+     * The base PQ parameters are taken from the FUSED_PQ feature on the first source.
      * All sampled vectors are read into memory up front, so ProductQuantization.compute() itself
      * performs no I/O.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction) {
+        FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
+        return retrain(similarityFunction, fpq.getPQ());
+    }
+
+    /**
+     * Trains a new Product Quantization codebook using balanced sampling across all source indexes
+     * and the supplied base PQ for subspace/cluster parameters. Used when the base PQ comes from a
+     * non-fused source (e.g. a sidecar {@code CompressedVectors}) rather than the FUSED_PQ feature.
+     */
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
         log.info("Training PQ using balanced sampling across sources");
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
@@ -92,9 +103,6 @@ public class PQRetrainer {
         // file and cause I/O that scales with dataset size rather than sample count.
         List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
         var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
-
-        FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-        ProductQuantization basePQ = fpq.getPQ();
 
         boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
 
