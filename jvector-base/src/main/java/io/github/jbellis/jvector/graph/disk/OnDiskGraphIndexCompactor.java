@@ -60,10 +60,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final int TARGET_BATCHES_PER_SOURCE = 40;
     private static final int TARGET_NODES_PER_BATCH = 128;
     private static final int MIN_SEARCH_TOP_K = 2;
-    private static final int SEARCH_TOP_K_MULTIPLIER = 2;
-    // On-disk analog of GraphIndexBuilder's neighborOverflow: scales the refinement candidate
-    // pool the diversity prune selects baseDegree from. Written degree stays baseDegree.
-    private static final float REFINE_NEIGHBOR_OVERFLOW = 2.0f;
+    private static final int SEARCH_TOP_K_MULTIPLIER = 4;
+
 
     // Non-final so releaseSourcesBeforeRefine() can drop the strong reference once compactGraphImpl
     // has consumed them, letting the source graphs' in-heap upper-layer adjacency + feature buffers
@@ -464,7 +462,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final int pqCodeSize = hasFusedPQ ? compressor.compressedVectorSize() : 0;
 
         final int searchTopK = Math.max(MIN_SEARCH_TOP_K,
-                Math.round(baseDegree * SEARCH_TOP_K_MULTIPLIER * REFINE_NEIGHBOR_OVERFLOW));
+                baseDegree * SEARCH_TOP_K_MULTIPLIER);
         final int beamWidth = Math.max(baseDegree, searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
         // Code cache may or may not be present; capture once so refineOneNode can take the fast path.
