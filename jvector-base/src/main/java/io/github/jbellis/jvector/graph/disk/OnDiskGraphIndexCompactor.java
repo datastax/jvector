@@ -231,8 +231,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void validateLiveNodesBounds(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes) {
         for (int s = 0; s < sources.size(); ++s) {
-            if (liveNodes.get(s).length() != sources.get(s).size(0)) {
-                throw new IllegalArgumentException("source " + s + " out of bounds");
+            if (liveNodes.get(s).length() != sources.get(s).getIdUpperBound()) {
+                throw new IllegalArgumentException("source " + s + " out of bounds: liveNodes length "
+                        + liveNodes.get(s).length() + " != idUpperBound " + sources.get(s).getIdUpperBound());
             }
         }
     }
