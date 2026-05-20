@@ -36,8 +36,8 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -105,14 +105,13 @@ public class LargerThanMemory {
             GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy);
             // In DiskIntro we created the writer after generating the complete graph and closing the builder,
             // but for incremental construction we will build and write in concert.
-            OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), graphPath)
+            GraphIndex.WriteBuilder writer = builder.getGraph().writer(graphPath)
                     .with(new InlineVectors(dim))
                     // Since we start with an empty graph, the writer will, by default,
                     // assume an ordinal mapping of size 0 (which is obviously incorrect).
                     // This is easy to rectify if you know the number of vectors beforehand,
                     // if not you may need to implement OrdinalMapper yourself.
-                    .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1))
-                    .build();
+                    .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1));
         ) {
             // Graph building is best done with threads = number of physical cores
             // PhysicalCoreExecutor assumes hyperthreading by default, i.e. cores = vCPUs / 2

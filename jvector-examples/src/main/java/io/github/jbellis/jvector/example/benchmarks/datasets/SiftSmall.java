@@ -33,8 +33,8 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
@@ -230,10 +230,9 @@ public class SiftSmall {
         // Builder creation looks mostly the same
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
-             OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
+             GraphIndex.WriteBuilder writer = builder.getGraph().writer(indexPath)
                      .with(new InlineVectors(ravv.dimension()))
-                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
-                     .build();
+                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1));
              // output for the compressed vectors
              IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
@@ -243,7 +242,7 @@ public class SiftSmall {
                 // compress the new vector and add it to the PQVectors
                 pqv.encodeAndSet(ordinal, v);
                 // write the full vector to disk
-                writer.writeInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
+                writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
                 // now add it to the graph -- the previous steps must be completed first since the PQVectors
                 // and InlineVectorValues are both used during the search that runs as part of addGraphNode construction
                 builder.addGraphNode(ordinal, v);
@@ -293,10 +292,9 @@ public class SiftSmall {
         // Builder creation looks mostly the same
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
              // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
-             OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
+             GraphIndex.WriteBuilder writer = builder.getGraph().writer(indexPath)
                      .with(new NVQ(nvq))
-                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
-                     .build();
+                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1));
              // output for the compressed vectors
              IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
@@ -306,7 +304,7 @@ public class SiftSmall {
                 // compress the new vector and add it to the PQVectors
                 pqv.encodeAndSet(ordinal, v);
                 // write the full vector to disk
-                writer.writeInline(ordinal, Feature.singleState(FeatureId.NVQ_VECTORS, new NVQ.State(nvq.encode(v))));
+                writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.NVQ_VECTORS, new NVQ.State(nvq.encode(v))));
                 // now add it to the graph -- the previous steps must be completed first since the PQVectors
                 // and InlineVectorValues are both used during the search that runs as part of addGraphNode construction
                 builder.addGraphNode(ordinal, v);

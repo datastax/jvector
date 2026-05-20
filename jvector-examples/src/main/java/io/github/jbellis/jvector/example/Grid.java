@@ -389,9 +389,9 @@ public class Grid {
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
+        Map<Set<FeatureId>, GraphIndex.WriteBuilder> writers = new HashMap<>();
         Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskGraphIndexWriter scoringWriter = null;
+        GraphIndex.WriteBuilder scoringWriter = null;
         int n = 0;
         for (var features : featureSets) {
             // if we are using index caching, use cache names instead of tmp names for index files....
@@ -402,7 +402,7 @@ public class Grid {
                 graphPath = outputDir.resolve("graph" + n++);
             }
             var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor(), constructionMetrics);
-            var writer = bws.builder.build();
+            var writer = bws.builder;
             writers.put(features, writer);
             suppliers.put(features, bws.suppliers);
             if (features.contains(FeatureId.INLINE_VECTORS) || features.contains(FeatureId.NVQ_VECTORS)) {
@@ -424,7 +424,7 @@ public class Grid {
                         suppliers.get(features).forEach((featureId, supplier) -> {
                             stateMap.put(featureId, supplier.apply(node));
                         });
-                        writer.writeInline(node, stateMap);
+                        writer.writeFeaturesInline(node, stateMap);
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
@@ -435,7 +435,7 @@ public class Grid {
         builder.cleanup();
 
         // write the edge lists and close the writers
-        // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
+        // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeFeaturesInline)
         writers.entrySet().stream().parallel().forEach(entry -> {
             var writer = entry.getValue();
             var features = entry.getKey();
@@ -480,7 +480,7 @@ public class Grid {
     }
 
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
-                                                             PersistableGraphIndex onHeapGraph,
+                                                             GraphIndex onHeapGraph,
                                                              Path outPath,
                                                              RandomAccessVectorValues floatVectors,
                                                              ProductQuantization pq,
@@ -488,7 +488,7 @@ public class Grid {
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
+        var builder = onHeapGraph.writer(outPath);
         builder.withMapper(identityMapper);
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
@@ -503,7 +503,7 @@ public class Grid {
                         System.out.println("Skipping Fused ADC feature due to null ProductQuantization");
                         continue;
                     }
-                    // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
+                    // no supplier as these will be used for writeFeaturesInline, when we don't have enough information to fuse neighbors
                     builder.with(new FusedPQ(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
@@ -540,10 +540,10 @@ public class Grid {
     }
 
     private static class BuilderWithSuppliers {
-        public final OnDiskGraphIndexWriter.Builder builder;
+        public final GraphIndex.WriteBuilder builder;
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
 
-        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+        public BuilderWithSuppliers(GraphIndex.WriteBuilder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
             this.builder = builder;
             this.suppliers = suppliers;
         }
@@ -595,7 +595,7 @@ public class Grid {
             }
             var graphPath = testDirectory.resolve("graph" + n++);
             var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null);
-            try (var writer = bws.builder.build()) {
+            try (var writer = bws.builder) {
                 start = System.nanoTime();
                 writer.write(bws.suppliers);
                 System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);

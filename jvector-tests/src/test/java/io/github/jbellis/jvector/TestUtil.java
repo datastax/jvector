@@ -27,8 +27,8 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.GraphIndexPersister;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -42,6 +42,7 @@ import org.apache.commons.lang3.NotImplementedException;
 
 import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
@@ -164,30 +165,30 @@ public class TestUtil {
     public static void writeFusedGraph(PersistableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
                                        FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
                                        Path outputPath) throws IOException {
-        var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+        GraphIndex.WriteBuilder writer = graph.writer(outputPath)
                 .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()));
 
         if (oldToNewOrdinals != null) {
-            builder = builder.withMap(oldToNewOrdinals);
+            writer = writer.withMap(oldToNewOrdinals);
         }
 
         var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
         suppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
 
         if (featureId == FeatureId.INLINE_VECTORS) {
-            builder.with(new InlineVectors(ravv.dimension()));
+            writer.with(new InlineVectors(ravv.dimension()));
             suppliers.put(featureId, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
         } else if (featureId == FeatureId.NVQ_VECTORS) {
             int nSubVectors = ravv.dimension() == 2 ? 1 : 2;
             var nvq = NVQuantization.compute(ravv, nSubVectors);
-            builder.with(new NVQ(nvq));
+            writer.with(new NVQ(nvq));
             suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(ravv.getVector(ordinal))));
         } else {
-            throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for reranking");
+            throw new IllegalArgumentException("Either INLINE_VECTORS or NVQ_VECTORS are needed for refining");
         }
 
-        try (var finalWriter = builder.build()) {
-            finalWriter.write(suppliers);
+        try (var w = writer) {
+            w.write(suppliers);
         }
     }
 
@@ -376,6 +377,11 @@ public class TestUtil {
         }
 
         @Override
+        public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+            return new GraphIndexPersister(this, path);
+        }
+
+        @Override
         public long ramBytesUsed() {
             throw new UnsupportedOperationException();
         }
@@ -517,6 +523,11 @@ public class TestUtil {
 
             @Override
             public void close() { }
+        }
+
+        @Override
+        public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+            return new GraphIndexPersister(this, path);
         }
 
         @Override
