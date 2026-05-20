@@ -152,12 +152,12 @@ public class NodeQueue {
     }
 
     /**
-     * Rerank results and return the worst approximate score that made it into the topK.
-     * The topK results will be placed into `reranked`, and the remainder into `unused`.
+     * Refine results and return the worst approximate score that made it into the topK.
+     * The topK results will be placed into `refined`, and the remainder into `unused`.
      * <p>
-     * Only the best result or results whose approximate score is at least `rerankFloor` will be reranked.
+     * Only the best result or results whose approximate score is at least `refineFloor` will be refined.
      */
-    public float rerank(int topK, ScoreFunction.ExactScoreFunction reranker, float rerankFloor, NodeQueue reranked, NodesUnsorted unused) {
+    public float refine(int topK, ScoreFunction.ExactScoreFunction refiner, float refineFloor, NodeQueue refined, NodesUnsorted unused) {
         // Rescore the nodes whose approximate score meets the floor.  Nodes that do not will be marked as -1
         int[] ids = new int[size()];
         float[] exactScores = new float[size()];
@@ -175,22 +175,22 @@ public class NodeQueue {
                 bestIndex = i;
             }
 
-            if (score >= rerankFloor) {
-                // rerank this one
+            if (score >= refineFloor) {
+                // refine this one
                 ids[i] = nodeId;
-                exactScores[i] = reranker.similarityTo(ids[i]);
+                exactScores[i] = refiner.similarityTo(ids[i]);
                 approximateScoresById.put(ids[i], Float.valueOf(score));
                 scoresAboveFloor++;
             } else {
-                // mark it unranked
+                // mark it unrefined
                 ids[i] = -1;
             }
         }
 
         if (scoresAboveFloor == 0 && bestIndex >= 0) {
-            // if nothing was above the floor, then rerank the best one found
+            // if nothing was above the floor, then refine the best one found
             ids[bestIndex] = decodeNodeId(heap.get(bestIndex + 1));
-            exactScores[bestIndex] = reranker.similarityTo(ids[bestIndex]);
+            exactScores[bestIndex] = refiner.similarityTo(ids[bestIndex]);
             approximateScoresById.put(ids[bestIndex], Float.valueOf(bestScore));
         }
 
@@ -201,15 +201,15 @@ public class NodeQueue {
                 continue;
             }
 
-            // if the reranked queue is full, then either this node, or the one it replaces on the heap, will be added
+            // if the refined queue is full, then either this node, or the one it replaces on the heap, will be added
             // to the unused pile, but push() can't tell us what node was evicted when the queue was already full, so
             // we examine that manually
-            if (reranked.size() < topK) {
-                reranked.push(ids[i], exactScores[i]);
-            } else if (exactScores[i] > reranked.topScore()) {
-                int evictedNode = reranked.topNode();
+            if (refined.size() < topK) {
+                refined.push(ids[i], exactScores[i]);
+            } else if (exactScores[i] > refined.topScore()) {
+                int evictedNode = refined.topNode();
                 unused.add(evictedNode, approximateScoresById.get(evictedNode));
-                reranked.push(ids[i], exactScores[i]);
+                refined.push(ids[i], exactScores[i]);
             } else {
                 unused.add(ids[i], decodeScore(heap.get(i + 1)));
             }
@@ -218,11 +218,11 @@ public class NodeQueue {
         // final pass to find the worst approximate score in the topK
         // (we can't do this as part of the earlier loops because we don't know which nodes will be in the final topK)
         float worstApproximateInTopK = Float.POSITIVE_INFINITY;
-        if (reranked.size() < topK) {
+        if (refined.size() < topK) {
             return worstApproximateInTopK;
         }
-        for (int i = 0; i < reranked.size(); i++) {
-            int nodeId = decodeNodeId(reranked.heap.get(i + 1));
+        for (int i = 0; i < refined.size(); i++) {
+            int nodeId = decodeNodeId(refined.heap.get(i + 1));
             worstApproximateInTopK = min(worstApproximateInTopK, approximateScoresById.get(nodeId));
         }
 
