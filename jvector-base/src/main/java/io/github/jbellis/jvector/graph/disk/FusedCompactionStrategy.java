@@ -55,7 +55,9 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     private static final Logger log = LoggerFactory.getLogger(FusedCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    private final CompactionContext ctx;
+    // Non-final: nulled by releaseSources() after compactGraphImpl so the source graphs reachable
+    // through ctx.sources can be GC'd before refinement. onAfterClose must not touch ctx.
+    private CompactionContext ctx;
     private final FusedFeature sourceFusedFeature;
     private final VectorCompressorRetrainer retrainer;
 
@@ -89,8 +91,26 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
+    public MappedByteBuffer getCodeCache() {
+        return codeCache;
+    }
+
+    @Override
+    public int getCacheCodeSize() {
+        return cacheCodeSize;
+    }
+
+    @Override
     public boolean writesCodesInline() {
         return true;
+    }
+
+    @Override
+    public void releaseSources() {
+        // ctx is only needed during onAfterHeader/onAfterLevels (pre-encode + entry-node code),
+        // which run inside compactGraphImpl. onAfterClose uses only cacheTruncateAt/codeCache.
+        // Safe to drop here so ctx.sources' in-heap layers/features are reclaimable before refine.
+        ctx = null;
     }
 
     /**

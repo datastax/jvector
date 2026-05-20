@@ -491,7 +491,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             throw new UnsupportedOperationException(); // need to copy reader
         }
 
-        private long offsetFor(int node, FeatureId featureId) {
+        // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
+        long offsetFor(int node, FeatureId featureId) {
             Feature feature = features.get(featureId);
 
             // Separated features are just global offset + node offset
@@ -506,7 +507,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             return baseNodeOffsetFor(node) + skipInNode;
         }
 
-        private long neighborsOffsetFor(int level, int node) {
+        // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
+        long neighborsOffsetFor(int level, int node) {
             assert level == 0; // higher layers are in memory
 
             // skip node ID + inline features
