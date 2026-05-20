@@ -25,7 +25,7 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -43,10 +43,10 @@ import java.io.IOException;
 
 /**
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
- * search algorithm, see {@link ImmutableGraphIndex}.
+ * search algorithm, see {@link GraphIndex}.
  */
 public class GraphSearcher implements Closeable {
-    private ImmutableGraphIndex.View view;
+    private GraphIndex.View view;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
@@ -71,14 +71,14 @@ public class GraphSearcher implements Closeable {
     /**
      * Creates a new graph searcher from the given GraphIndex
      */
-    public GraphSearcher(ImmutableGraphIndex graph) {
+    public GraphSearcher(GraphIndex graph) {
         this(graph.getView());
     }
 
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
-    protected GraphSearcher(ImmutableGraphIndex.View view) {
+    protected GraphSearcher(GraphIndex.View view) {
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
@@ -112,7 +112,7 @@ public class GraphSearcher implements Closeable {
         cachingReranker = new CachingReranker(scoreProvider);
     }
 
-    public ImmutableGraphIndex.View getView() {
+    public GraphIndex.View getView() {
         return view;
     }
 
@@ -129,7 +129,7 @@ public class GraphSearcher implements Closeable {
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
@@ -142,7 +142,7 @@ public class GraphSearcher implements Closeable {
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
@@ -160,7 +160,7 @@ public class GraphSearcher implements Closeable {
      *
      * @param view the new view
      */
-    public void setView(ImmutableGraphIndex.View view) {
+    public void setView(GraphIndex.View view) {
         this.view = view;
     }
 
@@ -169,9 +169,9 @@ public class GraphSearcher implements Closeable {
      */
     @Deprecated
     public static class Builder {
-        private final ImmutableGraphIndex.View view;
+        private final GraphIndex.View view;
 
-        public Builder(ImmutableGraphIndex.View view) {
+        public Builder(GraphIndex.View view) {
             this.view = view;
         }
 
@@ -422,7 +422,7 @@ public class GraphSearcher implements Closeable {
 
                 // score the neighbors of the top candidate and add them to the queue
                 var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                GraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
                     scoreTracker.track(score);
                     candidates.push(node2, score);
                     visitedCount++;

@@ -40,6 +40,7 @@ import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -53,7 +54,7 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * An {@link PersistableGraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
@@ -296,6 +297,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public void close() {
         // No resources to close.
     }
+
 
     @Override
     public View getView() {

@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
@@ -193,7 +193,7 @@ public final class OnDiskGraphIndexCache {
      * <p>If the file exists but cannot be loaded (corrupt/partial), this returns empty.
      * (Callers typically rebuild in that case.)</p>
      */
-    public Optional<ImmutableGraphIndex> tryLoad(CacheKey key) throws IOException {
+    public Optional<PersistableGraphIndex> tryLoad(CacheKey key) throws IOException {
         if (!enabled) return Optional.empty();
         Entry e = resolve(key);
         if (!Files.exists(e.finalPath)) return Optional.empty();

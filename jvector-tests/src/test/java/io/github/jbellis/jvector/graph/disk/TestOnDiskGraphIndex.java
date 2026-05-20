@@ -47,6 +47,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.IntFunction;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static io.github.jbellis.jvector.TestUtil.getNeighborNodes;
@@ -508,7 +509,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             }
             // write graph structure, fused ADC
             writer.write(Feature.singleStateFactory(FeatureId.FUSED_PQ, i -> new FusedPQ.State(graph.getView(), pqv, i)));
-            writer.write(Map.of(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal)));
+            writer.write(Map.of(FeatureId.FUSED_PQ, (IntFunction<Feature.State>) ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal)));
         }
 
         // graph and vectors should be identical

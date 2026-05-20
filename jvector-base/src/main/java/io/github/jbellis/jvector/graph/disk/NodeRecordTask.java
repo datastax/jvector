@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ByteBufferIndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -34,7 +34,7 @@ import java.util.function.IntFunction;
  * A task that writes L0 records for a range of nodes directly to disk using synchronous position-based writes.
  * <p>
  * This task is designed to be executed in a thread pool, with each worker thread
- * owning its own ImmutableGraphIndex.View for thread-safe neighbor iteration.
+ * owning its own PersistableGraphIndex.View for thread-safe neighbor iteration.
  * Each task processes a contiguous range of ordinals to reduce task creation overhead.
  * <p>
  * This writes directly to the AsynchronousFileChannel using position-based writes with writeFully
@@ -45,8 +45,8 @@ class NodeRecordTask implements Callable<Void> {
     private final int startOrdinal;  // Inclusive
     private final int endOrdinal;    // Exclusive
     private final OrdinalMapper ordinalMapper;
-    private final ImmutableGraphIndex graph;
-    private final ImmutableGraphIndex.View view;
+    private final PersistableGraphIndex graph;
+    private final PersistableGraphIndex.View view;
     private final List<Feature> inlineFeatures;
     private final Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers;
     private final int recordSize;
@@ -57,8 +57,8 @@ class NodeRecordTask implements Callable<Void> {
     NodeRecordTask(int startOrdinal,
                    int endOrdinal,
                    OrdinalMapper ordinalMapper,
-                   ImmutableGraphIndex graph,
-                   ImmutableGraphIndex.View view,
+                   PersistableGraphIndex graph,
+                   PersistableGraphIndex.View view,
                    List<Feature> inlineFeatures,
                    Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
                    int recordSize,
