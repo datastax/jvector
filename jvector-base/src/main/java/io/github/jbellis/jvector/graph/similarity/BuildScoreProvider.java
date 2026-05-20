@@ -52,7 +52,7 @@ public interface BuildScoreProvider {
      * Create a search score provider to use *internally* during construction.
      * <p>
      * "Internally" means that this may differ from a typical SSP in that it may use
-     * approximate scores *without* reranking.  (In this case, reranking will be done
+     * approximate scores *without* refining.  (In this case, refining will be done
      * separately by the ConcurrentNeighborSet diversity code.)
      * <p>
      * @param vector the query vector to provide similarity scores against
@@ -63,7 +63,7 @@ public interface BuildScoreProvider {
      * Create a search score provider to use *internally* during construction.
      * <p>
      * "Internally" means that this may differ from a typical SSP in that it may use
-     * approximate scores *without* reranking.  (In this case, reranking will be done
+     * approximate scores *without* refining.  (In this case, refining will be done
      * separately by the ConcurrentNeighborSet diversity code.)
      * <p>
      * @param node1 the graph node to provide similarity scores against
@@ -154,7 +154,7 @@ public interface BuildScoreProvider {
             public ScoreFunction diversityScoreFunctionFor(int node1) {
                 var v = vectors.get().getVector(node1);
                 var vc = vectorsCopy.get();
-                // don't use ESF.reranker, we need thread safety here
+                // don't use ESF.refiner, we need thread safety here
                 return (ScoreFunction.ExactScoreFunction) node2 -> similarityFunction.compare(v, vc.getVector(node2));
             }
         };
@@ -162,7 +162,7 @@ public interface BuildScoreProvider {
 
     /**
      * Returns a BSP that performs approximate score comparisons using the given PQVectors,
-     * with reranking performed using RandomAccessVectorValues (which is intended to be
+     * with refining performed using RandomAccessVectorValues (which is intended to be
      * InlineVectorValues for building incrementally, but should technically
      * work with any RAVV implementation).
      * This class is not thread safe, we should never publish its results to another thread.
@@ -179,7 +179,7 @@ public interface BuildScoreProvider {
 
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
-                // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
+                // like searchProviderFor, this skips refining; unlike sPF, it uses pqv.scoreFunctionFor
                 // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
                 // during diversity computation, this is cheaper than precomputing a lookup table
                 return pqv.diversityFunctionFor(node1, vsf); // not precomputed!
@@ -200,7 +200,7 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
-                // deliberately skips reranking even though we are using an approximate score function
+                // deliberately skips refining even though we are using an approximate score function
                 return new DefaultSearchScoreProvider(pqv.precomputedScoreFunctionFor(vector, vsf));
             }
 

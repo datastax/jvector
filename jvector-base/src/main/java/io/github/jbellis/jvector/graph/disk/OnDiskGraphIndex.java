@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.disk.GraphIndexPersister;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
@@ -704,6 +705,16 @@ public class OnDiskGraphIndex implements PersistableGraphIndex, AutoCloseable, A
         }
     }
 
+
+    @Override
+    public GraphIndex.WriteBuilder writer(Path path) throws FileNotFoundException {
+        return new GraphIndexPersister(this, path);
+    }
+
+    @Override
+    public GraphIndex.WriteBuilder writer(IndexWriter out) {
+        return new GraphIndexPersister(this, out);
+    }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
     public static void write(PersistableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {

@@ -61,7 +61,7 @@ class CachingVectorValues implements RandomAccessVectorValues {
 
     @Override
     public void getVectorInto(int nodeId, VectorFloat<?> result, int offset) {
-        // getVectorInto is only called by reranking, not diversity code
+        // getVectorInto is only called by refining, not diversity code
         throw new UnsupportedOperationException();
     }
 
