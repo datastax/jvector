@@ -103,3 +103,9 @@ nytimes-256-angular:
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB
+openai-3072-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+openai-1536-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
