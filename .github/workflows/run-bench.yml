@@ -90,6 +90,9 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
@@ -241,6 +244,9 @@ jobs:
     needs: test-avx512
     runs-on: ubuntu-latest
     steps:
+      - name: Install Meson and Ninja
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - name: Checkout repository
         uses: actions/checkout@v4
 
