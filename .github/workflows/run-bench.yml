@@ -129,6 +129,9 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
+      - name: Initialize Git Submodules
+        run: git submodule update --init
+
       # ==========================================
       # Decode and write the protected dataset catalog
       #
@@ -249,6 +252,9 @@ jobs:
           sudo apt update && sudo apt install -y meson ninja-build
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Initialize Git Submodules
+        run: git submodule update --init
 
       - name: Download all benchmark results
         uses: actions/download-artifact@v4

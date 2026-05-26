@@ -40,7 +40,12 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - uses: actions/checkout@v4
+      - name: Initialize Git Submodules
+        run: git submodule update --init --recursive
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
         with:
@@ -102,6 +107,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Initialize Git Submodules
+        run: git submodule update --init --recursive
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
@@ -112,6 +119,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'
