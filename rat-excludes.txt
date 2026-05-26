@@ -9,6 +9,7 @@ package.json
 .github/workflows/run-bench.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
+.gitmodules
 README.md
 UPGRADING.md
 CHANGELOG.md
