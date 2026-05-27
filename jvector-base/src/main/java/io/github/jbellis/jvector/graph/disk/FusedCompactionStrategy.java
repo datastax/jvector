@@ -25,8 +25,10 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import sun.misc.Unsafe;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
@@ -54,6 +56,18 @@ import java.util.concurrent.Future;
 public final class FusedCompactionStrategy extends QuantizationCompactionStrategy {
     private static final Logger log = LoggerFactory.getLogger(FusedCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    private static final Unsafe UNSAFE = getUnsafe();
+
+    private static Unsafe getUnsafe() {
+        try {
+            Field f = Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            return (Unsafe) f.get(null);
+        } catch (Exception e) {
+            log.warn("FusedCompactionStrategy can't acquire needed Unsafe access; code-cache will not be explicitly unmapped");
+            return null;
+        }
+    }
 
     // Non-final: nulled by releaseSources() after compactGraphImpl so the source graphs reachable
     // through ctx.sources can be GC'd before refinement. onAfterClose must not touch ctx.
@@ -163,14 +177,20 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     @Override
     public void onAfterClose(Path graphPath) {
         if (cacheTruncateAt > 0) {
+            if (codeCache != null && UNSAFE != null) {
+                try {
+                    UNSAFE.invokeCleaner(codeCache);
+                } catch (IllegalArgumentException ignored) {
+                    // duplicated/indirect buffer; not cleanable
+                }
+            }
             codeCache = null;
             try (FileChannel fc = FileChannel.open(graphPath, StandardOpenOption.WRITE)) {
                 if (fc.size() > cacheTruncateAt) {
                     fc.truncate(cacheTruncateAt);
                 }
             } catch (IOException e) {
-                log.warn("Failed to truncate code-cache section from output file {}: {}",
-                        graphPath, e.getMessage());
+                throw new RuntimeException("Failed to truncate code-cache section from output file " + graphPath, e);
             }
             cacheTruncateAt = 0;
         }
