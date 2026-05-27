@@ -32,4 +32,6 @@ docs/**/*.md
 yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**
+jvector-native/src/main/c/build/**
+jvector-native/src/main/c/third_party/**
 
