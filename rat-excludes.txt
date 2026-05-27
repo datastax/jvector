@@ -34,4 +34,6 @@ local_datasets/**
 **/datasets/**
 jvector-native/src/main/c/build/**
 jvector-native/src/main/c/third_party/**
+src/main/c/build/**
+src/main/c/third_party/**
 
