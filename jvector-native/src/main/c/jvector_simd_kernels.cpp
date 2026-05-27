@@ -142,12 +142,16 @@
 // --- Horizontal-reduction shuffles (used in calculate_partial_sums_f32) ---
 //
 // Shuffle2301(vec)
-//   Permutes pairs of adjacent lanes: [0,1,2,3] → [2,3,0,1].
-//   Adding a vector with its Shuffle2301 partner sums adjacent pairs.
+//   Swaps adjacent 32-bit lane pairs within each 64-bit group: [0,1,2,3] → [1,0,3,2].
+//   (Name "2301" encodes source indices from lane 3 down to lane 0 per _MM_SHUFFLE
+//   convention: lane3←2, lane2←3, lane1←0, lane0←1.)
+//   Adding a vector with its Shuffle2301 partner sums adjacent lane pairs:
+//   result[0]=result[1]=(0+1) and result[2]=result[3]=(2+3).
 //
 // Shuffle1032(vec)
-//   Permutes 32-bit elements within each 128-bit lane: [0,1,2,3] → [1,0,3,2].
-//   Used as a second reduction step to sum the results of Shuffle2301.
+//   Swaps the two 64-bit halves within each 128-bit block: [0,1,2,3] → [2,3,0,1].
+//   Used as the second reduction step: adding those pairwise sums together
+//   yields the full 4-lane horizontal sum in every lane.
 //
 // SwapAdjacentBlocks(vec)
 //   Swaps the two 128-bit halves of each 256-bit block.
