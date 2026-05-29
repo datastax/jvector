@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.LinkedHashMap;
 
 /**
  * Automated benchmark runner for GitHub Actions workflow.
@@ -116,6 +117,7 @@ public class AutoBenchYAML {
 
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
+        List<BenchResult> compactionResults = new ArrayList<>();
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
@@ -170,6 +172,16 @@ public class AutoBenchYAML {
                     logger.info("Benchmark completed for dataset: {}", datasetName);
                     // Mark dataset as completed and update checkpoint, passing results
                     checkpointManager.markDatasetCompleted(datasetName, datasetResults);
+
+                    // Compaction regression — failures are non-fatal and don't block checkpointing
+                    try {
+                        logger.info("Running compaction benchmark for dataset: {}", datasetName);
+                        BenchResult compactionResult = CompactionBench.run(ds);
+                        compactionResults.add(compactionResult);
+                        logger.info("Compaction benchmark completed for dataset: {}", datasetName);
+                    } catch (Exception e) {
+                        logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
+                    }
                 } catch (Exception e) {
                     logger.error("Exception while processing dataset {}", datasetName, e);
                 }
@@ -220,6 +232,36 @@ public class AutoBenchYAML {
             }
         } catch (Exception e) {
             logger.error("Exception during final processing", e);
+        }
+
+        // Write compaction results to a separate CSV
+        if (!compactionResults.isEmpty()) {
+            try {
+                File compactionFile = new File(outputPath + "-compaction.csv");
+                try (FileWriter writer = new FileWriter(compactionFile)) {
+                    writer.write("dataset,numPartitions,distribution,graphDegree,beamWidth,compactionTimeMs,recall@10,numVectors\n");
+                    for (BenchResult r : compactionResults) {
+                        Map<String, Object> p = r.parameters != null ? r.parameters : new LinkedHashMap<>();
+                        Map<String, Object> m = r.metrics != null ? r.metrics : new LinkedHashMap<>();
+                        writer.write(r.dataset + ",");
+                        writer.write(p.getOrDefault("numPartitions", "") + ",");
+                        writer.write(p.getOrDefault("distribution", "") + ",");
+                        writer.write(p.getOrDefault("graphDegree", "") + ",");
+                        writer.write(p.getOrDefault("beamWidth", "") + ",");
+                        writer.write(m.getOrDefault("compactionTimeMs", "") + ",");
+                        writer.write(m.getOrDefault("recall@10", "") + ",");
+                        writer.write(m.getOrDefault("numVectors", "") + "\n");
+                    }
+                }
+                logger.info("Compaction results written to {}", compactionFile.getAbsolutePath());
+
+                // Also write full compaction JSON for post-processing
+                File compactionJsonFile = new File(outputPath + "-compaction.json");
+                new ObjectMapper().writerWithDefaultPrettyPrinter().writeValue(compactionJsonFile, compactionResults);
+                logger.info("Compaction JSON written to {}", compactionJsonFile.getAbsolutePath());
+            } catch (Exception e) {
+                logger.error("Exception writing compaction results", e);
+            }
         }
     }
 
