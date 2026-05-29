@@ -94,7 +94,7 @@ public class BenchmarkSummarizer {
      */
     public static SummaryStats summarize(List<BenchResult> results) {
         if (results == null || results.isEmpty()) {
-            return new SummaryStats(0, 0, 0, 0, 0, 0, 0);
+            return new SummaryStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
         double totalRecall = 0;
