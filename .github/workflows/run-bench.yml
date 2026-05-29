@@ -289,7 +289,7 @@ jobs:
           OUTPUT_DIR="benchmark_reports"
 
           # Run the visualization script with all files, default threshold (5.0)
-          python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
+          python jvector-examples/src/resources/visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
 
       - name: Upload visualization artifacts
         uses: actions/upload-artifact@v4
