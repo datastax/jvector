@@ -39,6 +39,12 @@ public class BenchmarkDiagnostics implements AutoCloseable {
     private final List<DiskUsageMonitor.MultiDirectorySnapshot> diskSnapshots;
     private final List<PerformanceAnalyzer.TimingAnalysis> timingAnalyses;
     private boolean diskMonitorStarted = false;
+    
+    // Peak memory tracking for build and query phases
+    private SystemMonitor.PeakMemoryStats buildPeakMemory = null;
+    private SystemMonitor.PeakMemoryStats queryPeakMemory = null;
+    private boolean trackingBuildMemory = false;
+    private boolean trackingQueryMemory = false;
 
     public BenchmarkDiagnostics(DiagnosticLevel level) {
         this.level = level;
@@ -99,6 +105,74 @@ public class BenchmarkDiagnostics implements AutoCloseable {
         } else {
             diskUsageMonitor.addDirectory(label, directory);
         }
+    }
+    
+    /**
+     * Starts tracking peak memory usage for the build phase.
+     * Call this before starting index construction.
+     */
+    public void startBuildMemoryTracking() {
+        if (!trackingBuildMemory) {
+            systemMonitor.startPeakMemoryTracking();
+            trackingBuildMemory = true;
+        }
+    }
+    
+    /**
+     * Stops tracking peak memory usage for the build phase and captures the peak values.
+     * Call this after index construction completes.
+     */
+    public void stopBuildMemoryTracking() {
+        if (trackingBuildMemory) {
+            buildPeakMemory = systemMonitor.stopPeakMemoryTracking();
+            trackingBuildMemory = false;
+            
+            if (level != DiagnosticLevel.NONE) {
+                System.out.printf("[Build] Peak Memory: %s%n", buildPeakMemory);
+            }
+        }
+    }
+    
+    /**
+     * Starts tracking peak memory usage for the query phase.
+     * Call this before starting query execution.
+     */
+    public void startQueryMemoryTracking() {
+        if (!trackingQueryMemory) {
+            systemMonitor.startPeakMemoryTracking();
+            trackingQueryMemory = true;
+        }
+    }
+    
+    /**
+     * Stops tracking peak memory usage for the query phase and captures the peak values.
+     * Call this after query execution completes.
+     */
+    public void stopQueryMemoryTracking() {
+        if (trackingQueryMemory) {
+            queryPeakMemory = systemMonitor.stopPeakMemoryTracking();
+            trackingQueryMemory = false;
+            
+            if (level != DiagnosticLevel.NONE) {
+                System.out.printf("[Query] Peak Memory: %s%n", queryPeakMemory);
+            }
+        }
+    }
+    
+    /**
+     * Gets the peak memory statistics captured during the build phase.
+     * Returns null if build memory tracking was not performed.
+     */
+    public SystemMonitor.PeakMemoryStats getBuildPeakMemory() {
+        return buildPeakMemory;
+    }
+    
+    /**
+     * Gets the peak memory statistics captured during the query phase.
+     * Returns null if query memory tracking was not performed.
+     */
+    public SystemMonitor.PeakMemoryStats getQueryPeakMemory() {
+        return queryPeakMemory;
     }
 
     /**
