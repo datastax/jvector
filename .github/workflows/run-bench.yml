@@ -72,6 +72,9 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.isa }}
+    permissions:
+      id-token: write   # required for OIDC token request
+      contents: read
     steps:
       - name: verify-avx512
         run: |
@@ -147,6 +150,12 @@ jobs:
       # Build the branch
       - name: Build branch
         run: mvn -B -Punix-amd64-profile package --file pom.xml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
