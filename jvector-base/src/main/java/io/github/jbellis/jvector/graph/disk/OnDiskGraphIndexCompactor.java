@@ -621,7 +621,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Pull search results from approximateResults. When fused-PQ is on the scores there are
         // approximate; rescore exact for correct diversity comparison against existing edges.
         final boolean rescore = hasFusedPQ;
-        gs.approximateResults.foreach((nb, approxScore) -> {
+        gs.approximateResults().foreach((nb, approxScore) -> {
             if (nb == node) return;
             for (int k = 0; k < scratch.candSize; k++) {
                 if (scratch.candNode[k] == nb) return; // de-dupe against existing edges
@@ -1242,7 +1242,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             int prev_candSize = candSize;
             candSize = appendApproximateResults(
-                    scratch.gs[sourceIdx].approximateResults,
+                    scratch.gs[sourceIdx].approximateResults(),
                     sourceIdx,
                     scratch,
                     candSize
@@ -1310,7 +1310,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 inFlight++;
             }
             if (completed % 10 == 0) {
-                log.info("Compaction I/O progress: {}/{} batches written to disk", completed, total);
+                log.debug("Compaction I/O progress: {}/{} batches written to disk", completed, total);
             }
         }
     }
@@ -1406,22 +1406,26 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         //                ownsExecutor(boolean), executor, taskWindowSize(int), similarityFunction
         long size = OH + 8L * REF + Integer.BYTES * 4 + 1;
 
-        // liveNodes: FixedBitSet per source
-        for (var entry : liveNodes) {
-            size += entry.ramBytesUsed();
+        // liveNodes: FixedBitSet per source. May be null after releaseSourcesBeforeRefine().
+        if (liveNodes != null) {
+            for (var entry : liveNodes) {
+                size += entry.ramBytesUsed();
+            }
         }
 
         // numLiveNodesPerSource: ArrayList of Integers
         size += OH + REF + (long) numLiveNodesPerSource.size() * (OH + Integer.BYTES);
 
-        // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap
-        // Estimate based on the number of mappings
-        for (var mapper : remappers) {
-            // Object overhead + two maps with int key/value pairs
-            // HashMap entry: ~32 bytes each; Int2IntHashMap: ~16 bytes per entry
-            if (mapper instanceof OrdinalMapper.MapMapper) {
-                // rough estimate: the mapper stores two maps over all mapped ordinals
-                size += OH + (long) (maxOrdinal + 1) * 48;
+        // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap.
+        // May be null after releaseSourcesBeforeRefine().
+        if (remappers != null) {
+            for (var mapper : remappers) {
+                // Object overhead + two maps with int key/value pairs
+                // HashMap entry: ~32 bytes each; Int2IntHashMap: ~16 bytes per entry
+                if (mapper instanceof OrdinalMapper.MapMapper) {
+                    // rough estimate: the mapper stores two maps over all mapped ordinals
+                    size += OH + (long) (maxOrdinal + 1) * 48;
+                }
             }
         }
 

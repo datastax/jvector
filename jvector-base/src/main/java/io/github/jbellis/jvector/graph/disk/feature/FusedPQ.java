@@ -21,12 +21,16 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.FusedCompactionStrategy;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.PQRetrainer;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.FusedPQDecoder;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -72,13 +76,13 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     /** For compaction use. See {@link FusedFeature#getCompressor}. */
     @Override
     @SuppressWarnings("unchecked")
-    public io.github.jbellis.jvector.quantization.VectorCompressor<io.github.jbellis.jvector.vector.types.ByteSequence<?>> getCompressor() {
-        return (io.github.jbellis.jvector.quantization.VectorCompressor<io.github.jbellis.jvector.vector.types.ByteSequence<?>>) (io.github.jbellis.jvector.quantization.VectorCompressor<?>) pq;
+    public VectorCompressor<ByteSequence<?>> getCompressor() {
+        return (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) pq;
     }
 
     /** For compaction use. See {@link FusedFeature#withCompressor}. */
     @Override
-    public FusedFeature withCompressor(io.github.jbellis.jvector.quantization.VectorCompressor<io.github.jbellis.jvector.vector.types.ByteSequence<?>> newCompressor, int maxDegree) {
+    public FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree) {
         if (!(newCompressor instanceof ProductQuantization)) {
             throw new IllegalArgumentException(
                     "FusedPQ requires ProductQuantization; got " + newCompressor.getClass().getSimpleName());
@@ -125,10 +129,10 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
         ProductQuantization basePQ = this.pq;
-        io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
-                vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+        VectorCompressorRetrainer retrainer =
+                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
                         .retrain(vsf, basePQ);
-        return new io.github.jbellis.jvector.graph.disk.FusedCompactionStrategy(ctx, this, retrainer);
+        return new FusedCompactionStrategy(ctx, this, retrainer);
     }
 
     @Override

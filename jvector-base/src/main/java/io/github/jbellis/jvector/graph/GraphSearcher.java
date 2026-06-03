@@ -51,7 +51,7 @@ public class GraphSearcher implements Closeable {
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
     private final NodeQueue candidates;
-    public final NodeQueue approximateResults;
+    final NodeQueue approximateResults;
     private final NodeQueue rerankedResults;
     private final IntHashSet visited;
     private final NodesUnsorted evictedResults;
@@ -114,6 +114,15 @@ public class GraphSearcher implements Closeable {
 
     public ImmutableGraphIndex.View getView() {
         return view;
+    }
+
+    /**
+     * Exposes the internal approximate-results queue populated by the most recent
+     * {@link #searchOneLayer} call. Intended for cross-package internal use (e.g. graph
+     * compaction); not part of the stable public API.
+     */
+    public NodeQueue approximateResults() {
+        return approximateResults;
     }
 
     /**
@@ -307,6 +316,7 @@ public class GraphSearcher implements Closeable {
         return search(scoreProvider, topK, 0.0f, acceptOrds);
     }
 
+    @Experimental
     public void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
@@ -316,6 +326,7 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
+    @Experimental
     public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
@@ -384,6 +395,7 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
+    @Experimental
     public void searchOneLayer(SearchScoreProvider scoreProvider,
                         int rerankK,
                         float threshold,
