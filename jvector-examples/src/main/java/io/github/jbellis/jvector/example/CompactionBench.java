@@ -35,6 +35,8 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -170,7 +172,10 @@ public final class CompactionBench {
     private static void buildPartition(List<VectorFloat<?>> vectors, int dimension,
                                        VectorSimilarityFunction vsf, Path outputPath) throws IOException {
         var ravv = new ListRandomAccessVectorValues(vectors, dimension);
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
+        boolean centerData = vsf == VectorSimilarityFunction.EUCLIDEAN;
+        ProductQuantization pq = ProductQuantization.compute(ravv, dimension / 8, 256, centerData);
+        PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(vsf, pqVectors);
         var builder = new GraphIndexBuilder(bsp, dimension, GRAPH_DEGREE, BEAM_WIDTH, 1.2f, 1.2f, true);
         var graph = builder.build(ravv);
 
