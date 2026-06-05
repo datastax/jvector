@@ -162,7 +162,12 @@ public class MemorySegmentReader implements RandomAccessReader {
                             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
                     int result = (int) madvise.invokeExact(memory, memory.byteSize(), MADV_RANDOM);
                     if (result != 0) {
-                        throw new IOException("posix_madvise failed with error code: " + result);
+                        // posix_madvise is advisory: a non-zero return means the hint was ignored,
+                        // not that the mapping itself failed. Log and continue rather than aborting,
+                        // which would cause ReaderSupplierFactory to silently fall back to
+                        // MappedChunkReader on environments where the hint is unavailable
+                        // (certain cgroup configurations, large-hugepage mappings, some containers).
+                        logger.warn("posix_madvise returned error code {}; MADV_RANDOM hint not applied, mapping is still valid", result);
                     }
                 } else {
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");

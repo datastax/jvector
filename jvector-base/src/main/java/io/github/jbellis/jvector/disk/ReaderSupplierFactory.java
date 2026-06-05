@@ -37,6 +37,25 @@ public class ReaderSupplierFactory {
     }
 
     /**
+     * Opens a ReaderSupplier for the given path, wrapped in an {@link InstrumentedReaderSupplier}
+     * that accumulates I/O counters across all readers it vends.  Use this during benchmarking
+     * to get code-path-level I/O attribution alongside OS-level {@code iostat} data.
+     *
+     * <pre>{@code
+     * var instrumented = ReaderSupplierFactory.openInstrumented(indexPath);
+     * // run benchmark ...
+     * System.out.println(instrumented.getMetrics());
+     * }</pre>
+     *
+     * @param path the path to open
+     * @return an InstrumentedReaderSupplier for the path
+     * @throws IOException if an I/O error occurs
+     */
+    public static InstrumentedReaderSupplier openInstrumented(Path path) throws IOException {
+        return new InstrumentedReaderSupplier(open(path));
+    }
+
+    /**
      * Opens a ReaderSupplier for the given path.
      * @param path the path to open
      * @return a ReaderSupplier for the path
