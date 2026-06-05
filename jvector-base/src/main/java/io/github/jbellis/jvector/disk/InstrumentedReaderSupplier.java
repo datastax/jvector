@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.LongAdder;
  * lightweight atomic accounting to every call but is not designed for production
  * throughput measurement where the overhead would distort the results being measured.
  *
- * <h3>Usage</h3>
+ * <p><strong>Usage:</strong>
  * <pre>{@code
  * var instrumented = new InstrumentedReaderSupplier(ReaderSupplierFactory.open(path));
  * // ... run benchmark against instrumented ...
@@ -35,11 +35,11 @@ import java.util.concurrent.atomic.LongAdder;
  * }</pre>
  *
  * <p>All per-thread {@link RandomAccessReader} instances vended by this supplier share
- * the same {@link IOMetrics} counters, so the metrics represent the aggregate across all
- * threads that used this supplier.
+ * the same {@link InstrumentedReaderSupplier.IOMetrics} counters, so the metrics represent
+ * the aggregate across all threads that used this supplier.
  *
- * <p>Call {@link IOMetrics#reset()} between test phases to isolate build-time I/O from
- * search-time I/O.
+ * <p>Call {@link InstrumentedReaderSupplier.IOMetrics#reset()} between test phases to
+ * isolate build-time I/O from search-time I/O.
  */
 public class InstrumentedReaderSupplier implements ReaderSupplier {
 
@@ -70,13 +70,13 @@ public class InstrumentedReaderSupplier implements ReaderSupplier {
     /**
      * Accumulated I/O counters for a single {@link InstrumentedReaderSupplier}.
      *
-     * <p>Counters use {@link LongAdder} for low-contention concurrent updates from
+     * <p>Counters use {@code LongAdder} for low-contention concurrent updates from
      * multiple reader threads.
      *
-     * <p>The <em>seek:read ratio</em> ({@code seekCount / readCount}) is the most
-     * diagnostic single number for storage analysis: a ratio near 1.0 means every read
-     * is preceded by a seek (maximally random I/O); a lower ratio means reads are
-     * being issued sequentially after fewer seeks (more sequential, more OS-friendly).
+     * <p>The seek:read ratio ({@code seekCount / readCount}) is the most diagnostic
+     * single number for storage analysis: a ratio near 1.0 means every read is preceded
+     * by a seek (maximally random I/O); a lower ratio means reads are being issued
+     * sequentially after fewer seeks (more sequential, more OS-friendly).
      */
     public static class IOMetrics {
 
