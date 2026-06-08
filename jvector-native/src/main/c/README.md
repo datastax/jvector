@@ -71,6 +71,16 @@ The script:
 4. Optionally re-generates the Java FFM bindings via `jextract` (only needed
    when `jvector_simd.h` changes — see [Updating the Java bindings](#updating-the-java-bindings)).
 
+To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
+
+```bash
+bash jextract_vector_simd.sh --auto-install-deps
+```
+
+This is the easiest way to get started on a fresh Ubuntu machine. For other
+distributions the script will print an error indicating which install commands
+need to be added.
+
 To build without regenerating bindings (e.g. when `jextract` is not installed):
 
 ```bash
