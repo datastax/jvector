@@ -17,8 +17,8 @@ set -e
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if [ "$1" == "--auto-install-gcc" ] || [ "$1" == "--auto-install-g++" ] ; then AUTO_INSTALL_GCC=true ; shift ; fi
-printf "AUTO_INSTALL_GCC=%s\n" "${AUTO_INSTALL_GCC}"
+if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
+printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
 
 mkdir -p ../resources
 # compile jvector_simd_check.cpp as x86-64
@@ -39,20 +39,28 @@ fi
 # Desired minimum GCC version
 MIN_GCC_VERSION=11
 
-if ! command -v g++ &> /dev/null; then
-  if [ "$AUTO_INSTALL_GCC" == "true" ]
-  then
+# Ensures $1 (a command) is available. If not and AUTO_INSTALL_DEPS=true, runs
+# the Ubuntu apt/pip install given in $2; otherwise prints $2 as a hint and exits.
+# Usage: require_cmd <cmd> <ubuntu-install-cmd>
+require_cmd() {
+  local cmd="$1" ubuntu_install="$2"
+  if command -v "${cmd}" &> /dev/null; then return; fi
+  if [ "${AUTO_INSTALL_DEPS}" == "true" ]; then
     LSB_RELEASE=$(lsb_release --id --short)
     printf "LSB_RELEASE=%s\n" "${LSB_RELEASE}"
-    if [ "${LSB_RELEASE}" == "Ubuntu" ]
-    then sudo apt update && sudo apt install -y g++
-    else printf "distribution %s needs a g++ install command in %s\n" "${LSB_RELEASE}" "${0}" ; exit 2
+    if [ "${LSB_RELEASE}" == "Ubuntu" ]; then
+      eval "sudo apt-get update && ${ubuntu_install}"
+    else
+      printf "distribution %s needs a '%s' install command in %s\n" "${LSB_RELEASE}" "${cmd}" "${0}" ; exit 2
     fi
   else
-    echo "g++ is not installed. Please install g++ 11+ to build supporting native libraries."
-    exit 2
+    printf "'%s' is not installed. To install it, run: %s\n" "${cmd}" "${ubuntu_install}" ; exit 2
   fi
-fi
+}
+
+require_cmd g++    "sudo apt-get install -y g++"
+require_cmd meson  "sudo apt-get install -y meson"
+require_cmd ninja  "sudo apt-get install -y ninja-build"
 
 # Check g++ version
 CURRENT_GPP_VERSION=$(g++ -dumpversion)
@@ -61,16 +69,6 @@ CURRENT_GPP_VERSION=$(g++ -dumpversion)
 if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head -n1)" != "$MIN_GCC_VERSION" ]; then
     echo "WARNING: g++ version $CURRENT_GPP_VERSION is too old. Please upgrade to g++ $MIN_GCC_VERSION or newer."
     exit 1
-fi
-
-# Check meson and ninja are available
-if ! command -v meson &> /dev/null; then
-    echo "meson is not installed. Please install it: pip install meson  or  sudo apt install meson"
-    exit 2
-fi
-if ! command -v ninja &> /dev/null; then
-    echo "ninja is not installed. Please install it: sudo apt install ninja-build"
-    exit 2
 fi
 
 BUILD_DIR="build"
