@@ -20,7 +20,7 @@
 // static-init time; each public call is a single indirect branch.
 #include "jvector_simd.h"
 #include "jvector_simd_kernels.h" // AVX3::, AVX2::, SSE42:: kernel declarations
-#include "jvector_cpuFeatures.h"  // populate_cpu_features(), CpuFeature enum
+#include "jvector_cpu_features.h"  // populate_cpu_features(), CpuFeature enum
 
 #include <array>
 #include <cstdlib> // std::getenv

@@ -20,7 +20,7 @@
 #include <cstring>
 #include "jvector_simd.h"
 #include "hwy/highway.h"
-#include "assertHwyTargets.h"
+#include "assert_hwy_targets.h"
 
 // =============================================================================
 // Highway macro usage in this file
