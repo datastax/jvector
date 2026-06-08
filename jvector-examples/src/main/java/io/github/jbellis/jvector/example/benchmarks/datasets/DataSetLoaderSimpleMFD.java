@@ -19,7 +19,7 @@ import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
-import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
@@ -188,6 +188,16 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         String s = value.toString();
         if (s.isEmpty()) return s;
 
+        // Find the last delimiter to identify where the leaf filename begins.
+        // The leaf is never redacted regardless of its content.
+        int lastDelim = -1;
+        for (int k = s.length() - 1; k >= 0; k--) {
+            if (s.charAt(k) == '/' || s.charAt(k) == '\\') {
+                lastDelim = k;
+                break;
+            }
+        }
+
         var sb = new StringBuilder(s.length());
         int i = 0;
         while (i < s.length()) {
@@ -197,7 +207,8 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 i++;
             }
             String segment = s.substring(segStart, i);
-            sb.append(looksLikeSecret(segment) ? "[[redacted]]" : segment);
+            boolean isLeaf = segStart > lastDelim;
+            sb.append(!isLeaf && looksLikeSecret(segment) ? "[[redacted]]" : segment);
 
             // append the delimiter(s)
             while (i < s.length() && (s.charAt(i) == '/' || s.charAt(i) == '\\')) {
@@ -891,7 +902,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private static S3AsyncClient s3AsyncClient() {
         return S3AsyncClient.crtBuilder()
                 .region(Region.US_EAST_1)
-                .credentialsProvider(AnonymousCredentialsProvider.create())
+                .credentialsProvider(DefaultCredentialsProvider.create())
                 .targetThroughputInGbps(10.0)
                 .minimumPartSizeInBytes(8L * 1024 * 1024)
                 .build();

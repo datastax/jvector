@@ -26,7 +26,7 @@ Public datasets work out of the box. `public-catalog.yaml` uses
 
 ```sh
 # see what's available
-curl -L https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml
+https://vector-datasets-20260601.s3.us-east-1.amazonaws.com/public/datasets-clean/catalog_entries.yaml
 ```
 
 Downloaded files are cached locally in `dataset_cache/public/` by default.
