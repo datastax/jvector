@@ -35,8 +35,8 @@ jvector_simd.h              — Public C ABI (symbols exported to Java via FFM)
 jvector_simd.cpp            — Runtime ISA dispatcher; thin wrappers over the vtable
 jvector_simd_kernels.h      — Internal C++ declarations for all ISA namespaces
 jvector_simd_kernels.cpp    — Actual SIMD kernels (compiled three times, see below)
-jvector_cpuFeatures.h       — CPUID/XGETBV-based CPU feature detection
-assertHwyTargets.h          — Compile-time assertions that the expected HWY target is active
+jvector_cpu_features.h       — CPUID/XGETBV-based CPU feature detection
+assert_hwy_targets.h          — Compile-time assertions that the expected HWY target is active
 meson.build                 — Build description
 jextract_vector_simd.sh     — Build + jextract script (the usual entry point)
 third_party/highway/        — Google Highway header-only library (git submodule)
