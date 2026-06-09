@@ -72,6 +72,9 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.isa }}
+    permissions:
+      id-token: write   # required for OIDC token request
+      contents: read
     steps:
       - name: verify-avx512
         run: |
@@ -139,6 +142,12 @@ jobs:
         run: |
           mkdir -p jvector-examples/yaml-configs/dataset-catalogs
           echo "${{ secrets.PROTECTED_CATALOG_YAML }}" | base64 -d > jvector-examples/yaml-configs/dataset-catalogs/protected-catalog.yaml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
       # Create a directory to store benchmark results
       - name: Create results directory
@@ -289,7 +298,7 @@ jobs:
           OUTPUT_DIR="benchmark_reports"
 
           # Run the visualization script with all files, default threshold (5.0)
-          python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
+          python jvector-examples/src/main/resources/visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
 
       - name: Upload visualization artifacts
         uses: actions/upload-artifact@v4
