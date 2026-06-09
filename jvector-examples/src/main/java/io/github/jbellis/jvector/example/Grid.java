@@ -574,12 +574,13 @@ public class Grid {
                                                           FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
         var onHeapGraph = builder.build(floatVectors);
+        double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",
                           M,
                           neighborOverflow,
                           efConstruction,
-                          (System.nanoTime() - start) / 1_000_000_000.0);
+                          buildTimeS);
         for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
             System.out.format("  L%d: %d nodes, %.2f avg degree%n",
                               i,
@@ -603,6 +604,7 @@ public class Grid {
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
         }
+        indexBuildTimes.put(ds.getName(), buildTimeS);
         return indexes;
     }
 
