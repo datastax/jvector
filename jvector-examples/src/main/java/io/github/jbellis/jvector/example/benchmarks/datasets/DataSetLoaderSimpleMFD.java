@@ -188,15 +188,15 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         String s = value.toString();
         if (s.isEmpty()) return s;
 
-        // Find the last delimiter to identify where the leaf filename begins.
-        // The leaf is never redacted regardless of its content.
-        int lastDelim = -1;
-        for (int k = s.length() - 1; k >= 0; k--) {
-            if (s.charAt(k) == '/' || s.charAt(k) == '\\') {
-                lastDelim = k;
-                break;
-            }
-        }
+        // Unescape URL-encoded path separators (%2F, %5C) before locating
+        // the leaf filename, so S3 keys with encoded slashes are handled correctly.
+        s = s.replace("%2F", "/").replace("%2f", "/")
+             .replace("%5C", "\\").replace("%5c", "\\");
+
+        // Find the last path delimiter using lastIndexOf.
+        // Both '/' and '\\' must be checked explicitly: path strings arrive from S3 URLs,
+        // Linux paths, and Windows paths, so the OS-local '\\' is not enough.
+        int lastDelim = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
 
         var sb = new StringBuilder(s.length());
         int i = 0;
