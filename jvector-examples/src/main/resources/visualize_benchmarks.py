@@ -36,10 +36,21 @@ LOWER_IS_BETTER = ["Mean Latency", "Index Build Time", "Average Nodes Visited",
                    "Build Heap Used (MB)", "Build Off-Heap (MB)",
                    "Search Heap Used (MB)", "Search Off-Heap (MB)"]
 
-# Paths resolved relative to this script's location (i.e. the repo root)
+# Walk up from this script's location to find the repo root (contains .github/)
+def _find_repo_root(start: str) -> str:
+    d = start
+    while True:
+        if os.path.isdir(os.path.join(d, '.github')):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return start  # fallback: couldn't find repo root
+        d = parent
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_YAML_CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'jvector-examples', 'yaml-configs', 'index-parameters')
-_WORKFLOW_PATH = os.path.join(_SCRIPT_DIR, '.github', 'workflows', 'run-bench.yml')
+_REPO_ROOT = _find_repo_root(_SCRIPT_DIR)
+_YAML_CONFIG_DIR = os.path.join(_REPO_ROOT, 'jvector-examples', 'yaml-configs', 'index-parameters')
+_WORKFLOW_PATH = os.path.join(_REPO_ROOT, '.github', 'workflows', 'run-bench.yml')
 
 
 # ---------------------------------------------------------------------------
