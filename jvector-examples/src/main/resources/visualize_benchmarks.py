@@ -122,8 +122,12 @@ def get_jdk_version() -> Tuple[str, int]:
 
 def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
     """
-    Parse the non-pull-request Java invocation in run-bench.yml (lines 218–221)
-    and return the flags that apply for *jdk_major*.
+    Parse the non-pull-request Java invocation inside the 'Run benchmark' step
+    of run-bench.yml and return the flags that apply for *jdk_major*.
+
+    Locates the step by name so the function is resilient to line-number changes.
+    Within that step, it finds the java invocation that is NOT under a
+    pull_request conditional and collects its continuation lines.
 
     Handles GitHub Actions conditional expressions of the form:
         ${{ matrix.jdk >= N && 'flag1 flag2' || '' }}
@@ -135,8 +139,51 @@ def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
         with open(workflow_path, 'r') as fh:
             lines = fh.readlines()
 
-        # Lines 218–221 are 1-indexed; Python slicing is 0-indexed → [217:221]
-        for line in lines[217:221]:
+        # Find the start of the 'Run benchmark' step
+        step_start = None
+        for i, line in enumerate(lines):
+            if re.search(r'^\s*-\s*name:\s*Run benchmark\s*$', line, re.IGNORECASE):
+                step_start = i
+                break
+        if step_start is None:
+            return 'standard JVM defaults'
+
+        # Find the end of the step (next top-level list item at the same indent)
+        step_indent = len(lines[step_start]) - len(lines[step_start].lstrip())
+        step_end = len(lines)
+        for i in range(step_start + 1, len(lines)):
+            stripped = lines[i].lstrip()
+            if stripped.startswith('- ') and (len(lines[i]) - len(stripped)) <= step_indent:
+                step_end = i
+                break
+
+        step_lines = lines[step_start:step_end]
+
+        # Find the non-pull-request java invocation: skip the if/pull_request block,
+        # then locate the first 'java ' line after the else.
+        in_pr_block = False
+        java_start = None
+        for i, line in enumerate(step_lines):
+            if re.search(r'github\.event_name.*pull_request', line):
+                in_pr_block = True
+            if in_pr_block and re.search(r'^\s*else\b', line):
+                in_pr_block = False
+                continue
+            if not in_pr_block and re.match(r'\s+java\s', line):
+                java_start = i
+                break
+
+        if java_start is None:
+            return 'standard JVM defaults'
+
+        # Collect the java command and its continuation lines (ending with \)
+        java_lines = []
+        for line in step_lines[java_start:]:
+            java_lines.append(line)
+            if not line.rstrip().endswith('\\'):
+                break
+
+        for line in java_lines:
             # Evaluate conditional flag blocks
             for m in re.finditer(
                 r'\$\{\{[^}]*matrix\.jdk\s*>=\s*(\d+)\s*&&\s*\'([^\']+)\'', line
@@ -148,7 +195,7 @@ def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
             clean = re.sub(r'\$\{\{[^}]*\}\}', '', line)
             clean = re.sub(r'\$\{[^}]+\}', '', clean)
 
-            # Extract static JVM flags (patterns: -XX:, -D, -X followed by non-whitespace)
+            # Extract static JVM flags (-XX:, -D, -X prefixes)
             for flag in re.findall(r'(?<![/\w])(-(?:XX:[+\-]?|D|X[a-z]+)[^\s\\]+)', clean):
                 if flag not in flags:
                     flags.append(flag)
