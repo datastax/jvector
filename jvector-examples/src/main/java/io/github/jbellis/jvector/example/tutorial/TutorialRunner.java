@@ -38,6 +38,9 @@ public class TutorialRunner {
             case "ltm":
                 LargerThanMemory.main(forwardArgs);
                 break;
+            case "nvq":
+                NvqExample.main(forwardArgs);
+                break;
             default:
                 throw new IllegalArgumentException("Unknown example" + args[0]);
         }
