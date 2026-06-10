@@ -4,7 +4,7 @@
 # curl -L https://vector-datasets-20260601.s3.us-east-1.amazonaws.com/public/datasets-clean/catalog_entries.yaml
 
 _include:
-  url: s3://vector-datasets-20260601/public/datasets-clean/catalog_entries.yaml
+  url: https://vector-datasets-20260601.s3.us-east-1.amazonaws.com/public/datasets-clean/catalog_entries.yaml
 
 # This sets the local cache directory for the datasets.
 # If it is not set, the dataset will be cached under dataset_cache/
