@@ -343,6 +343,9 @@ public class CompactorBenchmark {
     @AuxCounters(AuxCounters.Type.EVENTS)
     public static class RecallResult {
         public double recall;
+        public double compactionTimeMs;
+        public double avgSearchLatencyMs;
+        public double p99SearchLatencyMs;
     }
 
     private String jfrParamSuffix() {
@@ -705,7 +708,9 @@ public class CompactorBenchmark {
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        long compactionTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        log.info("Compacted {} partitions into {} in {} ms", numPartitions, compactOutputPath.toAbsolutePath(), compactionTimeMs);
+        return compactionTimeMs;
     }
 
     private long buildFromScratch(List<VectorFloat<?>> baseVectors) throws Exception {
@@ -813,9 +818,10 @@ public class CompactorBenchmark {
     public void run(Blackhole blackhole, RecallResult recallResult) throws Exception {
         long durationMs = 0;
         double recall = -1;
+        SearchStats searchStats = null;
 
         try {
-            if (jfrCompacting) {
+            if (jfrCompacting && workloadMode != WorkloadMode.PARTITION) {
                 try {
                     jfrCompactingRecorder.start(JFR_DIR, "workload-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
                 } catch (Exception e) {
@@ -831,21 +837,24 @@ public class CompactorBenchmark {
                 case COMPACT:
                     durationMs = compactPartitions();
                     if (measureRecall) {
-                        recall = runRecall(compactOutputPath);
+                        searchStats = runRecall(compactOutputPath);
+                        recall = searchStats.recall;
                     }
                     break;
 
                 case BUILD:
                     durationMs = buildFromScratch(baseVectors);
                     if (measureRecall) {
-                        recall = runRecall(scratchOutputPath);
+                        searchStats = runRecall(scratchOutputPath);
+                        recall = searchStats.recall;
                     }
                     break;
 
                 case PARTITION_AND_COMPACT:
                     durationMs = compactPartitions();
                     if (measureRecall) {
-                        recall = runRecall(compactOutputPath);
+                        searchStats = runRecall(compactOutputPath);
+                        recall = searchStats.recall;
                     }
                     break;
 
@@ -854,7 +863,12 @@ public class CompactorBenchmark {
             }
 
             recallResult.recall = recall;
-            persistResult(recall, durationMs);
+            recallResult.compactionTimeMs = durationMs;
+            if (searchStats != null) {
+                recallResult.avgSearchLatencyMs = searchStats.avgSearchLatencyMs;
+                recallResult.p99SearchLatencyMs = searchStats.p99SearchLatencyMs;
+            }
+            persistResult(recall, durationMs, searchStats);
             blackhole.consume(durationMs);
 
         } catch (Exception e) {
@@ -868,7 +882,7 @@ public class CompactorBenchmark {
         }
     }
 
-    private double runRecall(Path indexPath) throws Exception {
+    private SearchStats runRecall(Path indexPath) throws Exception {
 
         log.info("Loading and searching index at {}", indexPath.toAbsolutePath());
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
@@ -877,25 +891,60 @@ public class CompactorBenchmark {
             var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
             searcher.usePruning(false);
             List<SearchResult> retrieved = new ArrayList<>(queryVectors.size());
+            long[] searchLatenciesNs = new long[queryVectors.size()];
             for (int n = 0; n < queryVectors.size(); ++n) {
                 SearchResult result;
                 if(indexPrecision == IndexPrecision.FUSEDPQ) {
                     var asf = view.approximateScoreFunctionFor(queryVectors.get(n), similarityFunction);
                     var rerank = view.rerankerFor(queryVectors.get(n), similarityFunction);
                     SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf, rerank);
+                    long startNs = System.nanoTime();
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
+                    searchLatenciesNs[n] = System.nanoTime() - startNs;
                 }
                 else {
                     var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(n), similarityFunction, ravv);
+                    long startNs = System.nanoTime();
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
+                    searchLatenciesNs[n] = System.nanoTime() - startNs;
                 }
                 retrieved.add(result);
             }
 
             double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10);
-            log.info("Recall [dataset={}, workloadMode={}, numPartitions={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}",
-                    datasetNames, workloadMode, numPartitions, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall);
-            return recall;
+            SearchStats stats = SearchStats.from(recall, searchLatenciesNs);
+            log.info("Recall [dataset={}, workloadMode={}, numPartitions={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}, avgSearchLatencyMs={}, p99SearchLatencyMs={}",
+                    datasetNames, workloadMode, numPartitions, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall, stats.avgSearchLatencyMs, stats.p99SearchLatencyMs);
+            return stats;
+        }
+    }
+
+    private static final class SearchStats {
+        final double recall;
+        final double avgSearchLatencyMs;
+        final double p99SearchLatencyMs;
+
+        private SearchStats(double recall, double avgSearchLatencyMs, double p99SearchLatencyMs) {
+            this.recall = recall;
+            this.avgSearchLatencyMs = avgSearchLatencyMs;
+            this.p99SearchLatencyMs = p99SearchLatencyMs;
+        }
+
+        static SearchStats from(double recall, long[] latenciesNs) {
+            if (latenciesNs.length == 0) {
+                return new SearchStats(recall, Double.NaN, Double.NaN);
+            }
+            long[] sorted = latenciesNs.clone();
+            Arrays.sort(sorted);
+            long sumNs = 0;
+            for (long ns : sorted) {
+                sumNs += ns;
+            }
+            double avgMs = (sumNs / (double) sorted.length) / 1_000_000.0;
+            int p99Index = (int) Math.ceil(0.99 * sorted.length) - 1;
+            p99Index = Math.min(Math.max(p99Index, 0), sorted.length - 1);
+            double p99Ms = sorted[p99Index] / 1_000_000.0;
+            return new SearchStats(recall, avgMs, p99Ms);
         }
     }
 
@@ -943,7 +992,7 @@ public class CompactorBenchmark {
         log.info("Starting test {}/{}", completedTests.get() + 1, TOTAL_TESTS);
     }
 
-    private void persistResult(double recall, long durationMs) {
+    private void persistResult(double recall, long durationMs, SearchStats searchStats) {
         if (resultPersisted) return;
         resultPersisted = true;
 
@@ -956,6 +1005,11 @@ public class CompactorBenchmark {
 
         // Only meaningful for recall-enabled workloads; else NaN
         results.put("recall", recall);
+
+        if (searchStats != null) {
+            results.put("avgSearchLatencyMs", searchStats.avgSearchLatencyMs);
+            results.put("p99SearchLatencyMs", searchStats.p99SearchLatencyMs);
+        }
 
         if (vectorsPerSourceCount != null) {
             results.put("splitSizes", vectorsPerSourceCount.toString());
