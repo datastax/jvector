@@ -1217,7 +1217,7 @@ public class DataSetLoaderSimpleMFDTest {
 
     @Test
     public void redactPreservesNonHashPaths() {
-        String url = "s3://vector-datasets-20260601/public/datasets-clean/ada_002_100k_base_99287.fvecs";
+        String url = "s3://jvector-datasets-public/datasets-clean/ada_002_100k_base.fvecs";
         assertEquals(url, DataSetLoaderSimpleMFD.redact(url), "No hash segments — should be unchanged");
     }
 

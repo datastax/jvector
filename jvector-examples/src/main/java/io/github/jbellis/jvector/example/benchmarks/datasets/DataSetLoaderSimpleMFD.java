@@ -19,7 +19,7 @@ import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
-import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
@@ -188,16 +188,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         String s = value.toString();
         if (s.isEmpty()) return s;
 
-        // Unescape URL-encoded path separators (%2F, %5C) before locating
-        // the leaf filename, so S3 keys with encoded slashes are handled correctly.
-        s = s.replace("%2F", "/").replace("%2f", "/")
-             .replace("%5C", "\\").replace("%5c", "\\");
-
-        // Find the last path delimiter using lastIndexOf.
-        // Both '/' and '\\' must be checked explicitly: path strings arrive from S3 URLs,
-        // Linux paths, and Windows paths, so the OS-local '\\' is not enough.
-        int lastDelim = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-
         var sb = new StringBuilder(s.length());
         int i = 0;
         while (i < s.length()) {
@@ -207,8 +197,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 i++;
             }
             String segment = s.substring(segStart, i);
-            boolean isLeaf = segStart > lastDelim;
-            sb.append(!isLeaf && looksLikeSecret(segment) ? "[[redacted]]" : segment);
+            sb.append(looksLikeSecret(segment) ? "[[redacted]]" : segment);
 
             // append the delimiter(s)
             while (i < s.length() && (s.charAt(i) == '/' || s.charAt(i) == '\\')) {
@@ -902,7 +891,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     private static S3AsyncClient s3AsyncClient() {
         return S3AsyncClient.crtBuilder()
                 .region(Region.US_EAST_1)
-                .credentialsProvider(DefaultCredentialsProvider.create())
+                .credentialsProvider(AnonymousCredentialsProvider.create())
                 .targetThroughputInGbps(10.0)
                 .minimumPartSizeInBytes(8L * 1024 * 1024)
                 .build();
