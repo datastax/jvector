@@ -19,24 +19,18 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
-import io.github.jbellis.jvector.example.util.DataSetPartitioner;
+import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.quantization.PQVectors;
-import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -48,40 +42,63 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.IntFunction;
 
 /**
- * Runs a partition-and-compact regression pass against a single dataset and returns a BenchResult.
+ * Runs a partition-and-compact regression pass against a single dataset and returns one
+ * {@link BenchResult} per partition configuration.
  *
- * The pipeline mirrors the PARTITION_AND_COMPACT workload in CompactorBenchmark:
- *   1. Split base vectors into NUM_PARTITIONS equal segments.
- *   2. Build one on-disk graph per segment (full-precision, no PQ).
- *   3. Compact all segments into one graph via OnDiskGraphIndexCompactor.
- *   4. Search the compacted graph and compute recall@TOP_K against the dataset ground truth.
+ * The pipeline reuses pre-built partitions stored in S3 rather than rebuilding them each run:
+ *   1. For each configured layout, download its per-source partition graphs from
+ *      {@link CompactionPartitionSource} (cached locally across runs).
+ *   2. Compact all partitions into one graph via {@link OnDiskGraphIndexCompactor}.
+ *   3. Search the compacted graph and compute recall@TOP_K against the dataset ground truth.
  *
- * All temp files are written to a system temp directory and deleted on completion.
+ * Partitions are laid out in S3 as {@code <datasetName>/<numPartitions>-<distribution>-<precision>/per-source-graph-<i>}.
+ * The compacted graph is written to a system temp directory and deleted on completion.
  */
 public final class CompactionBench {
     private static final Logger logger = LoggerFactory.getLogger(CompactionBench.class);
 
-    static final int NUM_PARTITIONS = 4;
-    static final int GRAPH_DEGREE = 32;
-    static final int BEAM_WIDTH = 100;
     static final int TOP_K = 10;
-    static final Distribution DISTRIBUTION = Distribution.UNIFORM;
+
+    /** Pre-built partition configurations to compact for every dataset. */
+    static final List<PartitionConfig> CONFIGS = Arrays.asList(
+            new PartitionConfig(2, Distribution.TIERED_10_90, "FUSEDPQ"),
+            new PartitionConfig(2, Distribution.UNIFORM, "FUSEDPQ"),
+            new PartitionConfig(4, Distribution.UNIFORM, "FUSEDPQ")
+    );
+
+    /** A single pre-built partition layout, identified by its S3 directory name. */
+    static final class PartitionConfig {
+        final int numPartitions;
+        final Distribution distribution;
+        final String precision;
+
+        PartitionConfig(int numPartitions, Distribution distribution, String precision) {
+            this.numPartitions = numPartitions;
+            this.distribution = distribution;
+            this.precision = precision;
+        }
+
+        /** The S3 directory name for this config, e.g. {@code 4-UNIFORM-FUSEDPQ}. */
+        String dirName() {
+            return numPartitions + "-" + distribution.name() + "-" + precision;
+        }
+    }
 
     private CompactionBench() {}
 
     /**
-     * Runs the full compaction regression for {@code ds} and returns the result.
-     * Throws if the dataset has no query vectors or ground truth.
+     * Runs the compaction regression for {@code ds} across every {@link #CONFIGS} layout and returns
+     * one result per config. A config that fails (e.g. missing partitions) is logged and skipped so
+     * the remaining configs still run. Throws if the dataset has no query vectors or ground truth.
      */
-    public static BenchResult run(DataSet ds) throws Exception {
+    public static List<BenchResult> run(DataSet ds) throws Exception {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
         if (queryVectors == null || queryVectors.isEmpty()) {
@@ -91,100 +108,107 @@ public final class CompactionBench {
             throw new IllegalArgumentException("Dataset " + ds.getName() + " has no ground truth");
         }
 
+        List<BenchResult> results = new ArrayList<>(CONFIGS.size());
+        for (PartitionConfig cfg : CONFIGS) {
+            try {
+                results.add(runConfig(ds, cfg));
+            } catch (Exception e) {
+                logger.error("Compaction config {} failed for dataset {}", cfg.dirName(), ds.getName(), e);
+            }
+        }
+        return results;
+    }
+
+    private static BenchResult runConfig(DataSet ds, PartitionConfig cfg) throws Exception {
+        String datasetName = ds.getName();
+        logger.info("Compaction bench [{}] config {}: {} vectors",
+                datasetName, cfg.dirName(), ds.getBaseVectors().size());
+
+        // 1. Fetch pre-built partitions from S3 (cached locally).
+        List<Path> partitionPaths = CompactionPartitionSource.ensurePartitions(
+                datasetName, cfg.dirName(), cfg.numPartitions);
+
         Path tempDir = Files.createTempDirectory("autobench-compact");
         try {
-            return runInDir(ds, tempDir);
+            return compactAndMeasure(ds, cfg, partitionPaths, tempDir);
         } finally {
             deleteRecursively(tempDir);
         }
     }
 
-    private static BenchResult runInDir(DataSet ds, Path tempDir) throws Exception {
+    private static BenchResult compactAndMeasure(DataSet ds, PartitionConfig cfg,
+                                                 List<Path> partitionPaths, Path tempDir) throws Exception {
         List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
         int dimension = ds.getDimension();
         VectorSimilarityFunction vsf = ds.getSimilarityFunction();
         String datasetName = ds.getName();
+        int numPartitions = cfg.numPartitions;
 
-        logger.info("Compaction bench [{}]: {} vectors, {} partitions, degree={}, bw={}",
-                datasetName, baseVectors.size(), NUM_PARTITIONS, GRAPH_DEGREE, BEAM_WIDTH);
+        // Load graphs and set up ordinal mapping: partition i's local ordinals shift by the sum of
+        // all prior partition sizes, preserving the original base-vector ordering so global ordinal
+        // k maps back to baseVectors.get(k) by construction.
+        List<ReaderSupplier> rss = new ArrayList<>(numPartitions);
+        List<OnDiskGraphIndex> graphs = new ArrayList<>(numPartitions);
+        List<OrdinalMapper> remappers = new ArrayList<>(numPartitions);
+        List<FixedBitSet> liveNodes = new ArrayList<>(numPartitions);
+        try {
+            int globalOffset = 0;
+            for (int i = 0; i < numPartitions; i++) {
+                ReaderSupplier rs = ReaderSupplierFactory.open(partitionPaths.get(i));
+                rss.add(rs);
+                OnDiskGraphIndex g = OnDiskGraphIndex.load(rs);
+                graphs.add(g);
+                int size = g.size(0);
+                remappers.add(new OrdinalMapper.OffsetMapper(globalOffset, size));
+                FixedBitSet live = new FixedBitSet(size);
+                live.set(0, size);  // all nodes live
+                liveNodes.add(live);
+                globalOffset += size;
+            }
 
-        // 1. Partition
-        var partitioned = DataSetPartitioner.partition(baseVectors, NUM_PARTITIONS, DISTRIBUTION);
+            // Recover graphDegree and precision from the actual partition graphs.
+            int graphDegree = graphs.get(0).maxDegree();
+            String precision = graphs.get(0).getFeatures().containsKey(FeatureId.FUSED_PQ)
+                    ? "FUSEDPQ" : "FULLPRECISION";
 
-        // 2. Build one on-disk graph per partition
-        List<Path> partitionPaths = new ArrayList<>(NUM_PARTITIONS);
-        for (int i = 0; i < NUM_PARTITIONS; i++) {
-            Path partPath = tempDir.resolve("partition-" + i);
-            buildPartition(partitioned.vectors.get(i), dimension, vsf, partPath);
-            partitionPaths.add(partPath);
-            logger.info("Built partition {}/{}", i + 1, NUM_PARTITIONS);
-        }
+            // Compact
+            Path compactPath = tempDir.resolve("compacted");
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null);
+            long t0 = System.currentTimeMillis();
+            compactor.compact(compactPath);
+            long compactionMs = System.currentTimeMillis() - t0;
+            logger.info("Compaction [{} {}] finished in {} ms", datasetName, cfg.dirName(), compactionMs);
 
-        // 3. Load graphs and set up ordinal mapping: partition i's local ordinals shift by
-        //    the sum of all prior partition sizes, preserving the original base-vector ordering.
-        List<ReaderSupplier> rss = new ArrayList<>(NUM_PARTITIONS);
-        List<OnDiskGraphIndex> graphs = new ArrayList<>(NUM_PARTITIONS);
-        List<OrdinalMapper> remappers = new ArrayList<>(NUM_PARTITIONS);
-        List<FixedBitSet> liveNodes = new ArrayList<>(NUM_PARTITIONS);
-        int globalOffset = 0;
-        for (int i = 0; i < NUM_PARTITIONS; i++) {
-            ReaderSupplier rs = ReaderSupplierFactory.open(partitionPaths.get(i));
-            rss.add(rs);
-            OnDiskGraphIndex g = OnDiskGraphIndex.load(rs);
-            graphs.add(g);
-            int size = g.size(0);
-            remappers.add(new OrdinalMapper.OffsetMapper(globalOffset, size));
-            FixedBitSet live = new FixedBitSet(size);
-            live.set(0, size);  // all nodes live
-            liveNodes.add(live);
-            globalOffset += size;
-        }
+            for (var g : graphs) g.close();
+            for (var rs : rss) rs.close();
+            graphs.clear();
+            rss.clear();
 
-        // 4. Compact
-        Path compactPath = tempDir.resolve("compacted");
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null);
-        long t0 = System.currentTimeMillis();
-        compactor.compact(compactPath);
-        long compactionMs = System.currentTimeMillis() - t0;
-        logger.info("Compaction finished in {} ms", compactionMs);
+            // Measure recall — global ordinal k maps back to baseVectors.get(k) by construction
+            double recall = measureRecall(compactPath, ds, baseVectors, dimension, vsf);
+            logger.info("Compaction recall@{} for {} {}: {}", TOP_K, datasetName, cfg.dirName(), recall);
 
-        for (var g : graphs) g.close();
-        for (var rs : rss) rs.close();
+            // numPartitions and distribution come from the config iteration (the S3 dir name);
+            // graphDegree and precision are read back from the partition graphs.
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put("numPartitions", numPartitions);
+            params.put("distribution", cfg.distribution.name());
+            params.put("graphDegree", graphDegree);
+            params.put("precision", precision);
 
-        // 5. Measure recall — global ordinal k maps back to baseVectors.get(k) by construction
-        double recall = measureRecall(compactPath, ds, baseVectors, dimension, vsf);
-        logger.info("Compaction recall@{} for {}: {}", TOP_K, datasetName, recall);
+            Map<String, Object> metrics = new LinkedHashMap<>();
+            metrics.put("compactionTimeMs", compactionMs);
+            metrics.put("recall@" + TOP_K, recall);
+            metrics.put("numVectors", baseVectors.size());
 
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("numPartitions", NUM_PARTITIONS);
-        params.put("distribution", DISTRIBUTION.name());
-        params.put("graphDegree", GRAPH_DEGREE);
-        params.put("beamWidth", BEAM_WIDTH);
-
-        Map<String, Object> metrics = new LinkedHashMap<>();
-        metrics.put("compactionTimeMs", compactionMs);
-        metrics.put("recall@" + TOP_K, recall);
-        metrics.put("numVectors", baseVectors.size());
-
-        return new BenchResult(datasetName + " (compaction)", params, metrics);
-    }
-
-    private static void buildPartition(List<VectorFloat<?>> vectors, int dimension,
-                                       VectorSimilarityFunction vsf, Path outputPath) throws IOException {
-        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
-        boolean centerData = vsf == VectorSimilarityFunction.EUCLIDEAN;
-        ProductQuantization pq = ProductQuantization.compute(ravv, dimension / 8, 256, centerData);
-        PQVectors pqVectors = (PQVectors) pq.encodeAll(ravv);
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(vsf, pqVectors);
-        var builder = new GraphIndexBuilder(bsp, dimension, GRAPH_DEGREE, BEAM_WIDTH, 1.2f, 1.2f, true);
-        var graph = builder.build(ravv);
-
-        var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
-        writerBuilder.with(new InlineVectors(dimension));
-        try (var writer = writerBuilder.build()) {
-            Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
-            suppliers.put(FeatureId.INLINE_VECTORS, ord -> new InlineVectors.State(ravv.getVector(ord)));
-            writer.write(suppliers);
+            return new BenchResult(datasetName + " (compaction " + cfg.dirName() + ")", params, metrics);
+        } finally {
+            for (var g : graphs) {
+                try { g.close(); } catch (Exception ignored) {}
+            }
+            for (var rs : rss) {
+                try { rs.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -216,5 +240,40 @@ public final class CompactionBench {
                  .sorted(Comparator.reverseOrder())
                  .forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
         } catch (IOException ignored) {}
+    }
+
+    /**
+     * Standalone entry point for the compaction regression only (skips the full-index benchmark).
+     * Usage: {@code CompactionBench <datasetName> [<datasetName> ...]}. For each dataset it loads the
+     * vectors + ground truth, runs every {@link #CONFIGS} layout against the pre-built partitions,
+     * and prints one CSV row per config.
+     */
+    public static void main(String[] args) throws Exception {
+        if (args.length == 0) {
+            System.err.println("Usage: CompactionBench <datasetName> [<datasetName> ...]");
+            System.exit(1);
+        }
+
+        System.out.println("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,numVectors");
+        for (String datasetName : args) {
+            logger.info("Loading dataset: {}", datasetName);
+            DataSet ds = DataSets.loadDataSet(datasetName)
+                    .orElseThrow(() -> new RuntimeException("Dataset " + datasetName + " not found"))
+                    .getDataSet();
+
+            for (BenchResult r : run(ds)) {
+                Map<String, Object> p = r.parameters;
+                Map<String, Object> m = r.metrics;
+                System.out.printf("%s,%s,%s,%s,%s,%s,%s,%s%n",
+                        r.dataset,
+                        p.getOrDefault("numPartitions", ""),
+                        p.getOrDefault("distribution", ""),
+                        p.getOrDefault("graphDegree", ""),
+                        p.getOrDefault("precision", ""),
+                        m.getOrDefault("compactionTimeMs", ""),
+                        m.getOrDefault("recall@" + TOP_K, ""),
+                        m.getOrDefault("numVectors", ""));
+            }
+        }
     }
 }

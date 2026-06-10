@@ -176,9 +176,10 @@ public class AutoBenchYAML {
                     // Compaction regression — failures are non-fatal and don't block checkpointing
                     try {
                         logger.info("Running compaction benchmark for dataset: {}", datasetName);
-                        BenchResult compactionResult = CompactionBench.run(ds);
-                        compactionResults.add(compactionResult);
-                        logger.info("Compaction benchmark completed for dataset: {}", datasetName);
+                        List<BenchResult> datasetCompactionResults = CompactionBench.run(ds);
+                        compactionResults.addAll(datasetCompactionResults);
+                        logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
+                                datasetName, datasetCompactionResults.size());
                     } catch (Exception e) {
                         logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
                     }
@@ -239,7 +240,7 @@ public class AutoBenchYAML {
             try {
                 File compactionFile = new File(outputPath + "-compaction.csv");
                 try (FileWriter writer = new FileWriter(compactionFile)) {
-                    writer.write("dataset,numPartitions,distribution,graphDegree,beamWidth,compactionTimeMs,recall@10,numVectors\n");
+                    writer.write("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,numVectors\n");
                     for (BenchResult r : compactionResults) {
                         Map<String, Object> p = r.parameters != null ? r.parameters : new LinkedHashMap<>();
                         Map<String, Object> m = r.metrics != null ? r.metrics : new LinkedHashMap<>();
@@ -247,7 +248,7 @@ public class AutoBenchYAML {
                         writer.write(p.getOrDefault("numPartitions", "") + ",");
                         writer.write(p.getOrDefault("distribution", "") + ",");
                         writer.write(p.getOrDefault("graphDegree", "") + ",");
-                        writer.write(p.getOrDefault("beamWidth", "") + ",");
+                        writer.write(p.getOrDefault("precision", "") + ",");
                         writer.write(m.getOrDefault("compactionTimeMs", "") + ",");
                         writer.write(m.getOrDefault("recall@10", "") + ",");
                         writer.write(m.getOrDefault("numVectors", "") + "\n");
