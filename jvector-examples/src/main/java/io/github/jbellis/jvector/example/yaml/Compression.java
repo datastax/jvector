@@ -83,9 +83,6 @@ public class Compression {
                         case "ITQ":
                             optimizer = AsymmetricHashing.ITQ;
                             break;
-                        case "LANDING":
-                            optimizer = AsymmetricHashing.LANDING;
-                            break;
                         default:
                             optimizer = Integer.parseInt(optStr);
                     }
