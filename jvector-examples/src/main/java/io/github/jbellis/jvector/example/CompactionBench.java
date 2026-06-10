@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
@@ -184,9 +183,20 @@ public final class CompactionBench {
             graphs.clear();
             rss.clear();
 
-            // Measure recall — global ordinal k maps back to baseVectors.get(k) by construction
-            double recall = measureRecall(compactPath, ds, baseVectors, dimension, vsf);
-            logger.info("Compaction recall@{} for {} {}: {}", TOP_K, datasetName, cfg.dirName(), recall);
+            // Search the compacted graph: measure recall and search latency in one pass.
+            // Global ordinal k maps back to baseVectors.get(k) by construction.
+            SearchStats search = searchCompacted(compactPath, ds, baseVectors, dimension, vsf);
+            logger.info(String.format(
+                    "%n" +
+                    "  ┌─ Compaction result: %s [%s]%n" +
+                    "  │  compaction time : %,d ms%n" +
+                    "  │  recall@%-2d       : %.4f%n" +
+                    "  │  mean latency    : %.3f ms%n" +
+                    "  │  p99 latency     : %.3f ms%n" +
+                    "  │  throughput      : %,.1f qps%n" +
+                    "  └─",
+                    datasetName, cfg.dirName(), compactionMs,
+                    TOP_K, search.recall, search.meanLatencyMs, search.p99LatencyMs, search.qps));
 
             // numPartitions and distribution come from the config iteration (the S3 dir name);
             // graphDegree and precision are read back from the partition graphs.
@@ -198,7 +208,9 @@ public final class CompactionBench {
 
             Map<String, Object> metrics = new LinkedHashMap<>();
             metrics.put("compactionTimeMs", compactionMs);
-            metrics.put("recall@" + TOP_K, recall);
+            metrics.put("recall@" + TOP_K, search.recall);
+            metrics.put("meanLatencyMs", search.meanLatencyMs);
+            metrics.put("qps", search.qps);
             metrics.put("numVectors", baseVectors.size());
 
             return new BenchResult(datasetName + " (compaction " + cfg.dirName() + ")", params, metrics);
@@ -212,9 +224,28 @@ public final class CompactionBench {
         }
     }
 
-    private static double measureRecall(Path indexPath, DataSet ds,
-                                        List<VectorFloat<?>> baseVectors,
-                                        int dimension, VectorSimilarityFunction vsf) throws Exception {
+    /** Recall and search-latency stats from searching the compacted graph. */
+    static final class SearchStats {
+        final double recall;
+        final double meanLatencyMs;
+        final double p99LatencyMs;
+        final double qps;
+
+        SearchStats(double recall, double meanLatencyMs, double p99LatencyMs, double qps) {
+            this.recall = recall;
+            this.meanLatencyMs = meanLatencyMs;
+            this.p99LatencyMs = p99LatencyMs;
+            this.qps = qps;
+        }
+    }
+
+    /**
+     * Searches every query against the compacted graph, timing each search, and returns recall plus
+     * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
+     */
+    private static SearchStats searchCompacted(Path indexPath, DataSet ds,
+                                               List<VectorFloat<?>> baseVectors,
+                                               int dimension, VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
         var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
@@ -223,12 +254,30 @@ public final class CompactionBench {
             var graph = OnDiskGraphIndex.load(rs);
             try (var searcher = new GraphSearcher(graph)) {
                 searcher.usePruning(false);
-                List<SearchResult> results = new ArrayList<>(queryVectors.size());
-                for (var q : queryVectors) {
-                    var ssp = DefaultSearchScoreProvider.exact(q, vsf, ravv);
-                    results.add(searcher.search(ssp, TOP_K, TOP_K, 0f, 0f, Bits.ALL));
+                int n = queryVectors.size();
+                List<SearchResult> results = new ArrayList<>(n);
+                long[] latenciesNanos = new long[n];
+                long totalNanos = 0;
+                for (int i = 0; i < n; i++) {
+                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(i), vsf, ravv);
+                    long t0 = System.nanoTime();
+                    SearchResult result = searcher.search(ssp, TOP_K, TOP_K, 0f, 0f, Bits.ALL);
+                    long elapsed = System.nanoTime() - t0;
+                    latenciesNanos[i] = elapsed;
+                    totalNanos += elapsed;
+                    results.add(result);
                 }
-                return AccuracyMetrics.recallFromSearchResults(groundTruth, results, TOP_K, TOP_K);
+                double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, TOP_K, TOP_K);
+                double meanLatencyMs = (totalNanos / (double) n) / 1_000_000.0;
+                double qps = totalNanos > 0 ? n / (totalNanos / 1_000_000_000.0) : 0.0;
+
+                Arrays.sort(latenciesNanos);
+                // nearest-rank p99: index of the smallest value with at least 99% of samples at or below it
+                int p99Index = (int) Math.ceil(0.99 * n) - 1;
+                p99Index = Math.min(Math.max(p99Index, 0), n - 1);
+                double p99LatencyMs = latenciesNanos[p99Index] / 1_000_000.0;
+
+                return new SearchStats(recall, meanLatencyMs, p99LatencyMs, qps);
             }
         }
     }
@@ -240,40 +289,5 @@ public final class CompactionBench {
                  .sorted(Comparator.reverseOrder())
                  .forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
         } catch (IOException ignored) {}
-    }
-
-    /**
-     * Standalone entry point for the compaction regression only (skips the full-index benchmark).
-     * Usage: {@code CompactionBench <datasetName> [<datasetName> ...]}. For each dataset it loads the
-     * vectors + ground truth, runs every {@link #CONFIGS} layout against the pre-built partitions,
-     * and prints one CSV row per config.
-     */
-    public static void main(String[] args) throws Exception {
-        if (args.length == 0) {
-            System.err.println("Usage: CompactionBench <datasetName> [<datasetName> ...]");
-            System.exit(1);
-        }
-
-        System.out.println("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,numVectors");
-        for (String datasetName : args) {
-            logger.info("Loading dataset: {}", datasetName);
-            DataSet ds = DataSets.loadDataSet(datasetName)
-                    .orElseThrow(() -> new RuntimeException("Dataset " + datasetName + " not found"))
-                    .getDataSet();
-
-            for (BenchResult r : run(ds)) {
-                Map<String, Object> p = r.parameters;
-                Map<String, Object> m = r.metrics;
-                System.out.printf("%s,%s,%s,%s,%s,%s,%s,%s%n",
-                        r.dataset,
-                        p.getOrDefault("numPartitions", ""),
-                        p.getOrDefault("distribution", ""),
-                        p.getOrDefault("graphDegree", ""),
-                        p.getOrDefault("precision", ""),
-                        m.getOrDefault("compactionTimeMs", ""),
-                        m.getOrDefault("recall@" + TOP_K, ""),
-                        m.getOrDefault("numVectors", ""));
-            }
-        }
     }
 }

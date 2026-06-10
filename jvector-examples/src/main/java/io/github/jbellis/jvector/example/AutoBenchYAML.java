@@ -240,7 +240,7 @@ public class AutoBenchYAML {
             try {
                 File compactionFile = new File(outputPath + "-compaction.csv");
                 try (FileWriter writer = new FileWriter(compactionFile)) {
-                    writer.write("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,numVectors\n");
+                    writer.write("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,meanLatencyMs,p99LatencyMs,qps,numVectors\n");
                     for (BenchResult r : compactionResults) {
                         Map<String, Object> p = r.parameters != null ? r.parameters : new LinkedHashMap<>();
                         Map<String, Object> m = r.metrics != null ? r.metrics : new LinkedHashMap<>();
@@ -251,6 +251,9 @@ public class AutoBenchYAML {
                         writer.write(p.getOrDefault("precision", "") + ",");
                         writer.write(m.getOrDefault("compactionTimeMs", "") + ",");
                         writer.write(m.getOrDefault("recall@10", "") + ",");
+                        writer.write(m.getOrDefault("meanLatencyMs", "") + ",");
+                        writer.write(m.getOrDefault("p99LatencyMs", "") + ",");
+                        writer.write(m.getOrDefault("qps", "") + ",");
                         writer.write(m.getOrDefault("numVectors", "") + "\n");
                     }
                 }
