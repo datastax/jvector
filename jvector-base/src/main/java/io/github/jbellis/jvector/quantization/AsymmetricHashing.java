@@ -60,8 +60,8 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * orthonormal projection and sign thresholding.
  */
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
-    public static final int ITQ = 1, LANDING = 2, RANDOM = 3;
-    private static final int MAGIC = 0x75EC4012;  // TODO update the magic number?
+    public static final int ITQ = 1, RANDOM = 2;
+    private static final int MAGIC = 0x75EC4013;
 
     // ---------------------------------------------------------------------
     // Training configuration (reference defaults; TODO tune later)
@@ -71,14 +71,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * training_size = min(N, D * training_factor).
      */
     private static final int ITQ_TRAINING_FACTOR = 100;
-
-    /**
-     * Training sample size for LANDING. Reduce if LANDING becomes too expensive at larger D/d.
-     */
-    private static final int LANDING_N_TRAIN = 100_000;
-
-    /** Tune for tradeoff between convergence rate and processing speed. */
-    private static final int LANDING_BATCH_SIZE = 256;
 
     /** Final setting TBD. */
     private static final int TRAINING_ITERS = 25;
@@ -97,7 +89,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // NOTE: residualNorm (= ||x − μ||) is still computed during encoding for Eq. 6,
     // but it is not stored explicitly once scale is stored.
     public static final int HEADER_BITS =
-            (Float.BYTES + Float.BYTES + Byte.BYTES) * 8; // 72 bits currently
+            (Short.BYTES + Short.BYTES + Byte.BYTES) * 8; // 40 bits currently
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -156,7 +148,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     private final BinaryQuantizer randomQuantizer = new RandomBinaryQuantizer();
     private final BinaryQuantizer itqQuantizer = new ItqBinaryQuantizer();
-    private final BinaryQuantizer landingQuantizer = new LandingBinaryQuantizer();
 
     private BinaryQuantizer quantizer() {
         switch (optimizer) {
@@ -164,8 +155,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 return randomQuantizer;
             case ITQ:
                 return itqQuantizer;
-            case LANDING:
-                return landingQuantizer;
             default:
                 throw new IllegalStateException("Unknown optimizer " + optimizer);
         }
@@ -344,21 +333,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         StiefelTransform stiefelTransform;
         if (optimizer == RANDOM) {
             stiefelTransform = runWithoutTraining(originalDim, quantizedDim, rng);
-        } else if (optimizer == ITQ || optimizer == LANDING) {
+        } else if (optimizer == ITQ) {
             // Build training inputs from a random sample of points.
-            TrainingData td = prepareTrainingData(points, landmarks, optimizer, originalDim, rng);
+            TrainingData td = prepareTrainingData(points, landmarks, originalDim, rng);
 
-            if (optimizer == ITQ) {
-                stiefelTransform = runItqTrainer(
-                        td.xTrainNorm,
-                        quantizedDim,
-                        DEFAULT_BITS_PER_DIMENSION,
-                        rng,
-                        TRAINING_ITERS
-                );
-            } else {
-                stiefelTransform = runLandingTrainer(td.xTrainNorm, quantizedDim, rng, TRAINING_ITERS);
-            }
+            stiefelTransform = runItqTrainer(
+                    td.xTrainNorm,
+                    quantizedDim,
+                    DEFAULT_BITS_PER_DIMENSION,
+                    rng,
+                    TRAINING_ITERS
+            );
         } else {
             throw new IllegalArgumentException("Unknown optimizer " + optimizer);
         }
@@ -546,7 +531,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             landmarks[c] = vectorTypeSupport.readFloatVector(in, dim);
         }
 
-        // Load StiefelTransform (required for ALL optimizers, including ITQ/LANDING)
+        // Load StiefelTransform.
         StiefelTransform stiefelTransform = readStiefelTransform(in, quantizedDim, originalDimension);
 
         LandmarkProjections lp =
@@ -743,21 +728,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
     }
 
-    public static final class LandingBinaryQuantizer implements BinaryQuantizer {
-        // Same binarization math for all optimizers; only the learned transform differs.
-        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
-
-        @Override
-        public void quantizeBody(VectorFloat<?> vector,
-                                 VectorFloat<?> mu,
-                                 float residualNorm,
-                                 int quantizedDim,
-                                 StiefelTransform stiefel,
-                                 long[] outWords) {
-            delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, stiefel, outWords);
-        }
-    }
-
     // ---------------------------------------------------------------------
     // Quantized vector (per-vector data)
     // ---------------------------------------------------------------------
@@ -792,7 +762,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         public static int serializedSizeBytes(int quantizedDim) {
-            return Float.BYTES + Float.BYTES + Byte.BYTES
+            return Short.BYTES + Short.BYTES + Byte.BYTES
                     + wordsForDims(quantizedDim) * Long.BYTES;
         }
 
@@ -839,8 +809,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         public void write(IndexWriter out, int quantizedDim) throws IOException {
-            out.writeFloat(scale);
-            out.writeFloat(offset);
+            writeFloat16(out, scale);
+            writeFloat16(out, offset);
             out.writeByte(landmark);
 
             int words = wordsForDims(quantizedDim);
@@ -851,8 +821,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         public static QuantizedVector load(RandomAccessReader in,
                                            int quantizedDim) throws IOException {
-            float scale = in.readFloat();
-            float offset = in.readFloat();
+            float scale = readFloat16(in);
+            float offset = readFloat16(in);
+
             byte landmark;
             if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
                 landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
@@ -872,8 +843,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         public static void loadInto(RandomAccessReader in,
                                     QuantizedVector dest,
                                     int quantizedDim) throws IOException {
-            dest.scale = in.readFloat();
-            dest.offset = in.readFloat();
+            dest.scale = readFloat16(in);
+            dest.offset = readFloat16(in);
+
             if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
                 dest.landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
             } else {
@@ -1210,8 +1182,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final float offset = dotXMu - landmarkNormSq[landmark];
 
         // Write the new header fields into dest (requires QuantizedVector fields renamed, see below)
-        dest.scale = scale;
-        dest.offset = offset;
+        dest.scale = roundToFloat16(scale);
+        dest.offset = roundToFloat16(offset);
         dest.landmark = landmark;
 
         // Binary body: sign(A · (x − μ)) with Eq. 6 normalization inside quantizer
@@ -1219,7 +1191,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     // ---------------------------------------------------------------------
-    // Training of projection matrix (ITQ + LANDING algorithms)
+    // Training of projection matrix
     // ---------------------------------------------------------------------
 
     /**
@@ -1249,21 +1221,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static TrainingData prepareTrainingData(
             VectorFloat<?>[] points,
             VectorFloat<?>[] landmarks,
-            int optimizer,
             int originalDim,
             Random rng
     ) {
         final int N = points.length;
 
-        final int cap;
-        if (optimizer == LANDING) {
-            cap = LANDING_N_TRAIN;
-        } else {
-            long learnedCap = Math.max(1L, (long) originalDim * ITQ_TRAINING_FACTOR);
-            cap = (int) Math.min((long) N, learnedCap);
-        }
-
-        final int nTrain = Math.min(N, cap);
+        long learnedCap = Math.max(1L, (long) originalDim * ITQ_TRAINING_FACTOR);
+        final int nTrain = (int) Math.min((long) N, learnedCap);
 
         final int[] sample = reservoirSampleOrdinals(N, nTrain, rng);
         Arrays.sort(sample); // deterministic order for reproducibility
@@ -1420,144 +1384,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wCol, D, d), false);
         return new StiefelTransform(W);
-    }
-
-    /**
-     *
-     * LANDING trainer TODO incomplete
-     *
-     * NOTE: This is a DRAFT (not hardened) implementation using RealMatrix operations.
-     * We can SIMD/block-optimize the hot math once correctness is validated.
-     *
-     * Row-oriented implementation of the paper's stochastic updates:
-     *   - A is stored as the decoder matrix [D x d]  (paper's A)
-     *   - W is stored as the encoder-transpose [D x d], so Xb * W gives
-     *     row-wise projections equivalent to W^T x in the paper
-     *
-     * The update equations implemented are the row-oriented forms of
-     * Equations (22)-(25) from the paper.
-     */
-    private static StiefelTransform runLandingTrainer(
-            double[][] xHdNorm,   // [N][D] normalized residuals
-            int quantizedDim,     // d
-            Random rng,
-            int nTrainingIterations
-    ) {
-        logProgress("\t[stage] Starting runLandingTrainer...");
-
-        final int N = xHdNorm.length;
-        final int D = xHdNorm[0].length;
-        final int d = quantizedDim;
-
-        final double invD = 1.0 / d;
-        final double invSqrtD = 1.0 / Math.sqrt(d);
-        final double lambda = 1.0;
-
-        // ------------------------------------------------------------------
-        // ITQ-style initialization from PCA basis P and random orthogonal R.
-        //
-        // xHdNorm is row-stacked [N x D]. The top right singular vectors of X
-        // are the top left singular vectors of X^T used in the paper.
-        // ------------------------------------------------------------------
-        double[] xCol = serializeColumnMajor(xHdNorm);
-
-        logProgress("\t[stage] Starting Native SVD for LANDING PCA...");
-        double[] vtCol = computeNativeVt(xCol, N, D);     // [D x D], column-major
-        logProgress("\t[stage] Completed Native SVD for LANDING PCA...");
-
-        double[] pCol = extractPcaBasis(vtCol, D, d);     // [D x d], column-major
-        double[] rCol = orthogonalize(gaussianMatrix(d, d, rng), d, d); // [d x d]
-
-        // Stored row-oriented decoder A and encoder-transpose W both start from PR,
-        // matching the ITQ-style initialization used elsewhere in this class.
-        double[] initCol = nativeMultiply(pCol, D, d, rCol, d); // [D x d]
-        RealMatrix A = new Array2DRowRealMatrix(deserializeColumnMajor(initCol, D, d), false);
-        RealMatrix W = A.copy();
-
-        // I_d for the Stiefel penalty A^T A - I_d
-        double[][] eye = new double[d][d];
-        for (int i = 0; i < d; i++) {
-            eye[i][i] = 1.0;
-        }
-        final RealMatrix I_d = new Array2DRowRealMatrix(eye, false);
-
-        int[] idx = new int[N];
-        for (int i = 0; i < N; i++) {
-            idx[i] = i;
-        }
-
-        logProgress("\t[stage] LANDING training iterations started...");
-        for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
-            // Fisher-Yates shuffle
-            for (int i = idx.length - 1; i > 0; i--) {
-                int j = rng.nextInt(i + 1);
-                int tmp = idx[i];
-                idx[i] = idx[j];
-                idx[j] = tmp;
-            }
-
-            final double lr = 0.1 * Math.pow(0.98, epoch);
-
-            for (int off = 0; off < N; off += LANDING_BATCH_SIZE) {
-                final int end = Math.min(N, off + LANDING_BATCH_SIZE);
-                final int B = end - off;
-
-                // Build batch matrix Xb [B x D] without copying row contents.
-                double[][] xb = new double[B][];
-                for (int bi = 0; bi < B; bi++) {
-                    xb[bi] = xHdNorm[idx[off + bi]];
-                }
-                RealMatrix Xb = new Array2DRowRealMatrix(xb, false);
-
-                // Z = sign(Xb * W) in {+1, -1}^{B x d}, unscaled.
-                RealMatrix Xproj = Xb.multiply(W); // [B x d]
-                double[][] projData = (Xproj instanceof Array2DRowRealMatrix)
-                        ? ((Array2DRowRealMatrix) Xproj).getDataRef()
-                        : Xproj.getData();
-
-                double[][] zData = new double[B][d];
-                for (int i = 0; i < B; i++) {
-                    double[] src = projData[i];
-                    double[] dst = zData[i];
-                    for (int j = 0; j < d; j++) {
-                        dst[j] = (src[j] > 0.0) ? 1.0 : -1.0;
-                    }
-                }
-                RealMatrix Z = new Array2DRowRealMatrix(zData, false); // [B x d]
-
-                // Batch statistics
-                RealMatrix ZtZ = Z.transpose().multiply(Z);    // [d x d]
-                RealMatrix XtZ = Xb.transpose().multiply(Z);   // [D x d]
-                RealMatrix XtX = Xb.transpose().multiply(Xb);  // [D x D]
-                RealMatrix AtA = A.transpose().multiply(A);    // [d x d]
-
-                // Row-oriented gradA = d^-1 * A * (Z^T Z) - d^-1/2 * X^T Z
-                RealMatrix gradA = A.multiply(ZtZ).scalarMultiply(invD)
-                        .subtract(XtZ.scalarMultiply(invSqrtD));
-
-                // Row-oriented for stored W = (paper W)^T:
-                // gradW = (X^T X) * ( d^-1 * W * (A^T A) - d^-1/2 * A )
-                RealMatrix gradW = XtX.multiply(
-                        W.multiply(AtA).scalarMultiply(invD)
-                                .subtract(A.scalarMultiply(invSqrtD))
-                );
-
-                // Λ(A) = skew(gradA * A^T) * A + λ * A * (A^T A - I)
-                RealMatrix skewBase = gradA.multiply(A.transpose()); // [D x D]
-                RealMatrix skew = skewBase.subtract(skewBase.transpose()).scalarMultiply(0.5);
-                RealMatrix ortho = AtA.subtract(I_d); // [d x d]
-                RealMatrix landing = skew.multiply(A)
-                        .add(A.multiply(ortho).scalarMultiply(lambda));
-
-                A = A.subtract(landing.scalarMultiply(lr));
-                W = W.subtract(gradW.scalarMultiply(lr));
-            }
-        }
-
-        logProgress("\t[stage] LANDING training completed.");
-
-        // StiefelTransform expects the decoder matrix [D x d].
-        return new StiefelTransform(A);
     }
 
     private static final class ProjectionTrainingLoss {
@@ -1791,33 +1617,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             int dst = r;
             for (int c = 0; c < cols; c++, dst += rows) {
                 data[dst] = row[c];
-            }
-        }
-        return data;
-    }
-
-    /** Converts a RealMatrix to a flat column-major array for BLAS/LAPACK. */
-    private static double[] serializeColumnMajor(RealMatrix m) {
-        int rows = m.getRowDimension();
-        int cols = m.getColumnDimension();
-        double[] data = new double[rows * cols];
-
-        if (m instanceof Array2DRowRealMatrix) {
-            double[][] raw = ((Array2DRowRealMatrix) m).getDataRef();
-            for (int r = 0; r < rows; r++) {
-                double[] row = raw[r];
-                int dst = r;
-                for (int c = 0; c < cols; c++, dst += rows) {
-                    data[dst] = row[c];
-                }
-            }
-            return data;
-        }
-
-        for (int r = 0; r < rows; r++) {
-            int dst = r;
-            for (int c = 0; c < cols; c++, dst += rows) {
-                data[dst] = m.getEntry(r, c);
             }
         }
         return data;
@@ -2083,17 +1882,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * Thin wrapper retained so the LANDING stub continues to compile
-     * without changing callers or method names.
-     */
-    private static RealMatrix orthogonalize(RealMatrix m) {
-        int rows = m.getRowDimension();
-        int cols = m.getColumnDimension();
-        double[] qCol = orthogonalize(serializeColumnMajor(m), rows, cols);
-        return new Array2DRowRealMatrix(deserializeColumnMajor(qCol, rows, cols), false);
-    }
-
-    /**
      * Encodes projected training directions.
      *
      * Input and output are [rows x dims] column-major.
@@ -2232,13 +2020,137 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return size;
     }
 
+    private static float roundToFloat16(float value) {
+        return halfBitsToFloat(floatToHalfBits(value));
+    }
+
+    private static void writeFloat16(IndexWriter out, float value) throws IOException {
+        int bits = floatToHalfBits(value);
+
+        // Explicit big-endian byte order, matching Java DataOutput-style primitives.
+        out.writeByte((byte) ((bits >>> 8) & 0xFF));
+        out.writeByte((byte) (bits & 0xFF));
+    }
+
+    private static float readFloat16(RandomAccessReader in) throws IOException {
+        int hi = readUnsignedByte(in);
+        int lo = readUnsignedByte(in);
+        return halfBitsToFloat((hi << 8) | lo);
+    }
+
+    private static int readUnsignedByte(RandomAccessReader in) throws IOException {
+        if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
+            return ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte() & 0xFF;
+        }
+
+        byte[] one = ONE_BYTE.get();
+        in.readFully(one);
+        return one[0] & 0xFF;
+    }
+
+    private static final ThreadLocal<byte[]> ONE_BYTE =
+            ThreadLocal.withInitial(() -> new byte[1]);
+
+    /**
+     * IEEE-754 binary16 round-to-nearest-even conversion.
+     */
+    private static int floatToHalfBits(float value) {
+        int bits = Float.floatToRawIntBits(value);
+        int sign = (bits >>> 16) & 0x8000;
+        int abs = bits & 0x7FFF_FFFF;
+
+        // NaN / infinity
+        if (abs >= 0x7F80_0000) {
+            if ((abs & 0x007F_FFFF) == 0) {
+                return sign | 0x7C00;
+            }
+            return sign | 0x7E00; // canonical quiet NaN
+        }
+
+        int exp = ((abs >>> 23) & 0xFF) - 127 + 15;
+        int mant = abs & 0x007F_FFFF;
+
+        // Overflow to infinity.
+        if (exp >= 31) {
+            return sign | 0x7C00;
+        }
+
+        // Subnormal / underflow.
+        if (exp <= 0) {
+            if (exp < -10) {
+                return sign;
+            }
+
+            mant |= 0x0080_0000;
+            int shift = 14 - exp;
+            int halfMant = mant >>> shift;
+
+            int roundBit = 1 << (shift - 1);
+            int remainder = mant & (roundBit - 1);
+
+            if ((mant & roundBit) != 0 && (remainder != 0 || (halfMant & 1) != 0)) {
+                halfMant++;
+            }
+
+            return sign | halfMant;
+        }
+
+        // Normalized.
+        int halfMant = mant >>> 13;
+        int roundBit = 0x0000_1000;
+        int remainder = mant & (roundBit - 1);
+
+        if ((mant & roundBit) != 0 && (remainder != 0 || (halfMant & 1) != 0)) {
+            halfMant++;
+
+            if (halfMant == 0x0400) {
+                halfMant = 0;
+                exp++;
+
+                if (exp >= 31) {
+                    return sign | 0x7C00;
+                }
+            }
+        }
+
+        return sign | (exp << 10) | halfMant;
+    }
+
+    private static float halfBitsToFloat(int half) {
+        int h = half & 0xFFFF;
+        int sign = (h & 0x8000) << 16;
+        int exp = (h >>> 10) & 0x1F;
+        int mant = h & 0x03FF;
+
+        if (exp == 0) {
+            if (mant == 0) {
+                return Float.intBitsToFloat(sign);
+            }
+
+            // Normalize half subnormal.
+            while ((mant & 0x0400) == 0) {
+                mant <<= 1;
+                exp--;
+            }
+
+            exp++;
+            mant &= 0x03FF;
+        } else if (exp == 31) {
+            return Float.intBitsToFloat(sign | 0x7F80_0000 | (mant << 13));
+        }
+
+        int floatExp = exp + (127 - 15);
+        int bits = sign | (floatExp << 23) | (mant << 13);
+        return Float.intBitsToFloat(bits);
+    }
+
     @Override
     public int compressedVectorSize() {
         int words = QuantizedVector.wordsForDims(quantizedDim);
-        return Float.BYTES           // scale
-                + Float.BYTES           // offset
-                + Byte.BYTES           // landmark
-                + words * Long.BYTES;   // binary payload
+        return Short.BYTES          // scale, fp16
+                + Short.BYTES       // offset, fp16
+                + Byte.BYTES        // landmark
+                + words * Long.BYTES;
     }
 
     @Override
@@ -2458,9 +2370,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 break;
             case ITQ:
                 optimizerName = "ITQ";
-                break;
-            case LANDING:
-                optimizerName = "LANDING";
                 break;
             default:
                 optimizerName = "UNKNOWN(" + optimizer + ")";
