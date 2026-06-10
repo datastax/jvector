@@ -66,17 +66,15 @@ public class DistancesASH {
 
         if ("random".equals(opt)) return AsymmetricHashing.RANDOM;
         if ("itq".equals(opt)) return AsymmetricHashing.ITQ;
-        if ("landing".equals(opt)) return AsymmetricHashing.LANDING;
 
         throw new IllegalArgumentException(
-                "Unknown jvector.ash.optimizer=" + opt + " (expected random|itq|landing)"
+                "Unknown jvector.ash.optimizer=" + opt + " (expected random|itq)"
         );
     }
 
     private static String optimizerName(int optimizer) {
         if (optimizer == AsymmetricHashing.RANDOM) return "RANDOM";
         if (optimizer == AsymmetricHashing.ITQ) return "ITQ";
-        if (optimizer == AsymmetricHashing.LANDING) return "LANDING";
         return "UNKNOWN(" + optimizer + ")";
     }
 
@@ -103,13 +101,13 @@ public class DistancesASH {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // ASH header bits
-        final int HEADER_BITS = 72;
+        final int HEADER_BITS = 40;
 
         // Block sizes to benchmark
         final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
 
         // How many ASH landmarks to use, C = [1, 64]
-        final int landmarkCount = 1;
+        final int landmarkCount = 32;
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -126,7 +124,7 @@ public class DistancesASH {
         // - No other normalization steps are applied.
 
         int dimension = vectors.get(0).length();
-        int encodedBits = 328; // (dimension / 4) + HEADER_BITS;
+        int encodedBits = 1064; // (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
 //        if ((payloadBits & 63) != 0) {
@@ -155,7 +153,7 @@ public class DistancesASH {
         var ravv = new ListRandomAccessVectorValues(vectors, dimension);
 
         // Choose optimizer at runtime:
-        //   -Djvector.ash.optimizer=random|itq|landing
+        //   -Djvector.ash.optimizer=random|itq
         final int optimizer = parseOptimizerFromProperty();
 
         logProgress("\tASH optimizer = " + optimizerName(optimizer));
@@ -606,9 +604,9 @@ public class DistancesASH {
     public static void runCohere100k() throws IOException {
         System.out.println("Running Cohere-100k");
 
-        var baseVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec";
-        var queryVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec";
-        var gtVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_indices_b100000_q10000_k100.ivec";
+        var baseVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_base_99685.fvecs";
+        var queryVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_query_10000.fvecs";
+        var gtVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_gt_ip_100.ivecs";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
@@ -679,12 +677,12 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-//        runCohere100k();
+        runCohere100k();
 //        runADA();
 //        runADANoZeros();
 //        runOpenai1536();
 //        runOpenai3072();
 //        runCap6m();
-        runCohere10m();
+//        runCohere10m();
     }
 }
