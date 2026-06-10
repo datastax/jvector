@@ -132,9 +132,11 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
-### Measuring peak heap during compaction
+### Measuring the heap memory footprint
 
-To measure how little RAM compaction actually needs — without the dataset occupying heap — run the two steps separately.
+To measure compaction's true heap footprint — without the dataset occupying heap — run the two steps separately.
+
+> **Note:** `measureRecall` defaults to `true`. With the default, even `COMPACT` mode loads the dataset's query vectors and ground truth and runs a search after compacting, which adds heap usage. Set `-p measureRecall=false` so the heap reflects only the compactor itself.
 
 **Step 1: build partitions** (dataset in memory, large heap required)
 
@@ -150,7 +152,7 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
-**Step 2: compact only** (dataset not loaded; use a small heap to prove low-memory operation)
+**Step 2: compact only** (dataset not loaded; use a small heap to measure the compactor's footprint)
 
 ```bash
 java -Xmx5g --add-modules jdk.incubator.vector \
@@ -165,7 +167,7 @@ java -Xmx5g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
-`COMPACT` with `measureRecall=false` skips dataset loading entirely, so `-Xmx5g` is sufficient even for large datasets. This lets you confirm that the compactor itself — not the dataset — is the memory bottleneck.
+`COMPACT` with `measureRecall=false` skips dataset loading entirely, so `-Xmx5g` is sufficient even for large datasets. This confirms that the compactor itself — not the dataset — drives heap usage.
 
 Key `workloadMode` values:
 
@@ -176,9 +178,7 @@ Key `workloadMode` values:
 | `COMPACT` | Compact existing partitions |
 | `BUILD` | Build one index over the full dataset |
 
-Set `-p measureRecall=false` to skip recall measurement (and dataset loading for `COMPACT` mode).
-
-Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-results.jsonl`. The `durationMs` field records only the target function time (not dataset loading or JVM startup).
+Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-results.jsonl`. The `durationMs` field records only the compaction time (not dataset loading or JVM startup). When `measureRecall=true`, each result also includes `recall`, `avgSearchLatencyMs`, and `p99SearchLatencyMs` from searching the compacted graph.
 
 ## Recall 
 
@@ -201,7 +201,7 @@ Recall comparison (results averaged over three runs):
 | ada002-100k          | 1536 |              0.751 |      0.769 | +0.018 |
 | cohere-english-v3-1M | 1024 |              0.593 |      0.612 | +0.019 |
 
-# Memory footprint
+# Heap memory footprint
 
-All datasets above can be compacted under `COMPACT` with `measureRecall=false` and `-Xmx5g`. In addition, compaction successfully scales to a dataset with 2560 dimensions and 10M vectors under the same memory constraint.
+All datasets above can be compacted under `COMPACT` with `measureRecall=false` and `-Xmx5g`. In addition, compaction successfully scales to a dataset with 2560 dimensions and 10M vectors under the same heap constraint.
 
