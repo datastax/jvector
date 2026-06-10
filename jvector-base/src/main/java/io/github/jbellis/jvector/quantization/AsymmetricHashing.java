@@ -68,9 +68,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // ---------------------------------------------------------------------
 
     /**
-     * Training sample size for ITQ. Default mirrors a practical upper bound for large datasets.
+     * training_size = min(N, D * training_factor).
      */
-    private static final int ITQ_N_TRAIN = 100_000;
+    private static final int ITQ_TRAINING_FACTOR = 100;
 
     /**
      * Training sample size for LANDING. Reduce if LANDING becomes too expensive at larger D/d.
@@ -82,6 +82,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /** Final setting TBD. */
     private static final int TRAINING_ITERS = 25;
+
+    /**
+     * Temporary until ASH stores bits-per-projected-dimension explicitly.
+     * Current Java ASH is 1-bit-per-dimension, so this preserves existing encode behavior.
+     */
+    private static final int DEFAULT_BITS_PER_DIMENSION = 1;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: float (32 bits), where scale = ||x − μ|| / sqrt(d)
@@ -343,7 +349,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             TrainingData td = prepareTrainingData(points, landmarks, optimizer, originalDim, rng);
 
             if (optimizer == ITQ) {
-                stiefelTransform = runItqTrainer(td.xTrainNorm, quantizedDim, rng, TRAINING_ITERS);
+                stiefelTransform = runItqTrainer(
+                        td.xTrainNorm,
+                        quantizedDim,
+                        DEFAULT_BITS_PER_DIMENSION,
+                        rng,
+                        TRAINING_ITERS
+                );
             } else {
                 stiefelTransform = runLandingTrainer(td.xTrainNorm, quantizedDim, rng, TRAINING_ITERS);
             }
@@ -1242,7 +1254,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             Random rng
     ) {
         final int N = points.length;
-        final int cap = (optimizer == LANDING) ? LANDING_N_TRAIN : ITQ_N_TRAIN;
+
+        final int cap;
+        if (optimizer == LANDING) {
+            cap = LANDING_N_TRAIN;
+        } else {
+            long learnedCap = Math.max(1L, (long) originalDim * ITQ_TRAINING_FACTOR);
+            cap = (int) Math.min((long) N, learnedCap);
+        }
+
         final int nTrain = Math.min(N, cap);
 
         final int[] sample = reservoirSampleOrdinals(N, nTrain, rng);
@@ -1284,8 +1304,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 ss += v * v;
             }
 
-            // Normalize residuals.  NOTE: Does not handle zero vectors!
-            double inv = 1.0 / Math.sqrt(ss);
+            // Normalize residuals while guarding against zero residuals.
+            double inv = 1.0 / Math.max(Math.sqrt(ss), 1e-20);
             for (int d = 0; d < originalDim; d++) {
                 out[d] *= inv;
             }
@@ -1314,83 +1334,89 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * ITQ trainer:
-     *  - PCA basis from SVD(X_train_norm)
-     *  - iterative orthogonal Procrustes updates on temp_mat
-     *  - returns W = M_pca @ R
+     * ITQ / learned projection trainer.
+     *
+     * Mirrors the current C++ learned_projection path:
+     *  - PCA basis P from eig(X^T X), using BLAS + LAPACK
+     *  - Xld = X @ P
+     *  - iterative Procrustes:
+     *      R = polar(M)
+     *      Xtr = Xld @ R
+     *      Xenc = encodeTrainingDirections(Xtr, bitsPerDimension)
+     *      M = Xld^T @ Xenc
+     *  - W = P @ R
+     *
+     * For bitsPerDimension == 1, Xenc is normalized sign coding: +/- 1/sqrt(d).
+     * This is equivalent to the old ITQ update up to a positive global scale, so
+     * the learned rotation remains compatible with the current 1-bit encoder.
      */
     private static StiefelTransform runItqTrainer(
-            double[][] xHdNorm,   // [N][D] normalized residuals
-            int quantizedDim,     // d
+            double[][] xHdNorm,       // [N][D] normalized residuals
+            int latentDim,            // projected dimensions, d
+            int bitsPerDimension,     // current Java path passes 1
             Random rng,
             int nTrainingIterations
     ) {
         logProgress("\t[stage] Starting runITQTrainer...");
 
+        if (bitsPerDimension < 1 || bitsPerDimension > 9) {
+            throw new IllegalArgumentException("bitsPerDimension must be in [1,9], got " + bitsPerDimension);
+        }
+
         final int N = xHdNorm.length;
         final int D = xHdNorm[0].length;
-        final int d = quantizedDim;
+        final int d = latentDim;
 
-        // Convert training data once to flat column-major for BLAS/LAPACK.
+        if (d <= 0 || d > D) {
+            throw new IllegalArgumentException("Invalid latentDim=" + d + " for D=" + D);
+        }
+
+        // X is [N x D], flat column-major for BLAS/LAPACK.
         double[] xCol = serializeColumnMajor(xHdNorm);
 
-        // PCA basis M = V[:, :d] where X = U S V^T
+        // PCA basis P = V[:, :d] from SVD(X), matching the Python reference.
         logProgress("\t[stage] Starting Native SVD for PCA...");
         double[] vtCol = computeNativeVt(xCol, N, D);    // [D x D], column-major
-        logProgress("\t[stage] Completed Native SVD...");
-        double[] mCol = extractPcaBasis(vtCol, D, d);    // [D x d], column-major
+        double[] pCol = extractPcaBasis(vtCol, D, d);    // [D x d], column-major
+        logProgress("\t[stage] Completed Native SVD for PCA...");
 
-        // Early stopping based on stabilized binary codes (subject to max iterations)
-        double[] prevXbinCol = null;
-        int stable = 0;
-        final double STOP_FRAC = 4e-3;
-        final int STOP_PATIENCE = 3;
+        // Xld = X @ P, shape [N x d].
+        double[] xldCol = nativeMultiply(xCol, N, D, pCol, d);
 
-        // X_norm = X_hd_norm @ M  => [N x d], column-major
-        double[] xnormCol = nativeMultiply(xCol, N, D, mCol, d);
+        // Initial random update matrix M, shape [d x d].
+        double[] mCol = gaussianMatrix(d, d, rng);
 
-        // Initial random rotation seed
-        double[] tempCol = gaussianMatrix(d, d, rng);
-
-        // Loop: epoch 0..iters inclusive; last epoch computes R but does not update temp_mat.
         double[] rCol = null;
+        double[] xtrCol = new double[N * d];
+        double[] xencCol = new double[N * d];
+
         logProgress("\t[stage] ITQ training iterations started...");
-        var startTime = System.nanoTime();
-        for (int epoch = 0; epoch <= nTrainingIterations; epoch++) {
-            rCol = orthogonalize(tempCol, d, d); // R = U @ V^T, [d x d]
+        long startTime = System.nanoTime();
 
-            if (epoch < nTrainingIterations) {
-                // Xtr = Xnorm @ R, then binarize in-place to become Xbin.
-                double[] xbinCol = nativeMultiply(xnormCol, N, d, rCol, d);
+        for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
+            rCol = orthogonalize(mCol, d, d);
 
-                long changed = sign01InPlace(xbinCol, prevXbinCol);
+            multiplyInto(xldCol, N, d, rCol, d, xtrCol);
+            encodeTrainingDirections(xtrCol, N, d, bitsPerDimension, xencCol);
 
-                if (prevXbinCol != null) {
-                    long total = (long) N * (long) d;
-                    double frac = (double) changed / (double) total;
+            // ITQ update: M = Xld^T @ Xenc.
+            mCol = nativeMultiplyTransposedA(xldCol, N, d, xencCol, d);
 
-                    logProgress(String.format(java.util.Locale.ROOT,
-                            "\titeration %d/%d - fracBitsChanged=%.6g (stable=%d/%d)",
-                            epoch, nTrainingIterations, frac, stable, STOP_PATIENCE));
-
-                    if (frac < STOP_FRAC) {
-                        if (++stable >= STOP_PATIENCE) {
-                            break;
-                        }
-                    } else {
-                        stable = 0;
-                    }
-                }
-
-                prevXbinCol = xbinCol;
-                tempCol = nativeMultiplyTransposedA(xnormCol, N, d, xbinCol, d);
-            }
+            // C++-style cheap loss: trace(R^T M) / N.
+            ProjectionTrainingLoss loss = computeTrainingLossFromUpdateMatrix(rCol, mCol, N);
+            printTrainingLoss(epoch, loss);
         }
-        var loopTime = (System.nanoTime() - startTime) / 1e9;
+
+        // Final polar step after the last update.
+        // We do not print a final no-update loss here because exact C++ final-loss
+        // logging would require another Xld @ R and encode pass.
+        rCol = orthogonalize(mCol, d, d);
+
+        double loopTime = (System.nanoTime() - startTime) / 1e9;
         logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
 
-        // W = M @ R  => [D x d], column-major
-        double[] wCol = nativeMultiply(mCol, D, d, rCol, d);
+        // W = P @ R, shape [D x d].
+        double[] wCol = nativeMultiply(pCol, D, d, rCol, d);
 
         RealMatrix W = new Array2DRowRealMatrix(deserializeColumnMajor(wCol, D, d), false);
         return new StiefelTransform(W);
@@ -1532,6 +1558,210 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         // StiefelTransform expects the decoder matrix [D x d].
         return new StiefelTransform(A);
+    }
+
+    private static final class ProjectionTrainingLoss {
+        final double ip;
+        final double loss;
+
+        ProjectionTrainingLoss(double ip, double loss) {
+            this.ip = ip;
+            this.loss = loss;
+        }
+    }
+
+    /**
+     * Java equivalent of C++ compute_training_loss_from_update_matrix(R, M).
+     *
+     * R and M are [d x d] column-major.
+     */
+    private static ProjectionTrainingLoss computeTrainingLossFromUpdateMatrix(
+            double[] rCol,
+            double[] mCol,
+            int rows
+    ) {
+        double ipSum = 0.0;
+        for (int i = 0; i < rCol.length; i++) {
+            ipSum += rCol[i] * mCol[i];
+        }
+
+        double ip = ipSum / rows;
+        return new ProjectionTrainingLoss(ip, Math.max(0.0, 1.0 - ip));
+    }
+
+    private static void printTrainingLoss(int epoch, ProjectionTrainingLoss loss) {
+        logProgress(String.format(java.util.Locale.ROOT,
+                "projection_train epoch=%2d ip_loss=%.5f loss=%.5f",
+                epoch, loss.ip, loss.loss));
+    }
+
+    private static final float[] K_TIGHT_START = {
+            0.0f,
+            0.15f,
+            0.20f,
+            0.52f,
+            0.59f,
+            0.71f,
+            0.75f,
+            0.77f,
+            0.81f
+    };
+
+    private static final double K_EPS = 1e-5;
+
+    private static final ThreadLocal<ScalingWorkspace> SCALING_WORKSPACE =
+            ThreadLocal.withInitial(ScalingWorkspace::new);
+
+    private static final class ScalingWorkspace {
+        float[] invOAbs = new float[0];
+        int[] curOBar = new int[0];
+        long[] events = new long[0];
+
+        void ensureCapacity(int d, int maxEvents) {
+            if (invOAbs.length < d) {
+                invOAbs = new float[d];
+            }
+            if (curOBar.length < d) {
+                curOBar = new int[d];
+            }
+            if (events.length < maxEvents) {
+                events = new long[maxEvents];
+            }
+        }
+    }
+
+    /**
+     * Java port of ash::compute_optimal_scaling_factor.
+     *
+     * The input array is double because the Java trainer stores training matrices
+     * as double, but this method intentionally performs the search in float
+     * precision to match the C++ implementation.
+     */
+    private static double computeOptimalScalingFactor(
+            double[] oAbs,
+            int d,
+            int bitsPerDimension
+    ) {
+        final int exBits = bitsPerDimension - 1;
+        if (exBits < 1 || exBits > 8) {
+            throw new IllegalArgumentException("exBits must be in [1,8], got " + exBits);
+        }
+        if (d <= 0 || d > oAbs.length) {
+            throw new IllegalArgumentException("Invalid d=" + d + " for oAbs.length=" + oAbs.length);
+        }
+
+        final int kNEnum = 10;
+        final int maxCode = (1 << exBits) - 1;
+
+        float maxO = 0.0f;
+        for (int i = 0; i < d; i++) {
+            float v = (float) oAbs[i];
+            if (v > maxO) {
+                maxO = v;
+            }
+        }
+
+        if (!(maxO > 0.0f)) {
+            return 0.0;
+        }
+
+        final float tEnd = (float) (maxCode + kNEnum) / maxO;
+        final float tStart = tEnd * K_TIGHT_START[exBits];
+
+        final int maxEvents = Math.multiplyExact(d, maxCode + 1);
+        ScalingWorkspace ws = SCALING_WORKSPACE.get();
+        ws.ensureCapacity(d, maxEvents);
+
+        float sqrDenominator = (float) d * 0.25f;
+        float numerator = 0.0f;
+
+        for (int i = 0; i < d; i++) {
+            float oi = (float) oAbs[i];
+
+            ws.invOAbs[i] = 1.0f / oi;
+
+            int cur = (int) ((double) (tStart * oi) + K_EPS);
+            ws.curOBar[i] = cur;
+
+            sqrDenominator += (float) (cur * cur + cur);
+            numerator += (cur + 0.5f) * oi;
+        }
+
+        float invSqrtDenom = 1.0f / (float) Math.sqrt(sqrDenominator);
+
+        int eventCount = 0;
+        for (int i = 0; i < d; i++) {
+            final float invO = ws.invOAbs[i];
+            final int first = ws.curOBar[i] + 1;
+
+            // Match C++: always consider the first event, then only generate
+            // follow-on events while k <= maxCode.
+            float tn = (float) first * invO;
+            if (tn >= tEnd) {
+                continue;
+            }
+
+            ws.events[eventCount++] = packScalingEvent(tn, i);
+
+            for (int k = first + 1; k <= maxCode; k++) {
+                tn = (float) k * invO;
+                if (tn >= tEnd) {
+                    break;
+                }
+
+                ws.events[eventCount++] = packScalingEvent(tn, i);
+            }
+        }
+
+        Arrays.sort(ws.events, 0, eventCount);
+
+        float maxIp = 0.0f;
+        float t = 0.0f;
+
+        for (int e = 0; e < eventCount; e++) {
+            long event = ws.events[e];
+            int id = scalingEventId(event);
+
+            ws.curOBar[id]++;
+            int update = ws.curOBar[id];
+
+            float delta = 2.0f * update;
+            sqrDenominator += delta;
+            numerator += (float) oAbs[id];
+
+            float oldDenom = sqrDenominator - delta;
+            invSqrtDenom *=
+                    (1.0f - 0.5f * delta / (oldDenom + delta * 0.5f));
+
+            float curIp = numerator * invSqrtDenom;
+            if (curIp > maxIp) {
+                maxIp = curIp;
+                t = scalingEventT(event);
+            }
+        }
+
+        return t;
+    }
+
+    /**
+     * Packs event sort key as:
+     *   high 32 bits: positive float t bits
+     *   low  32 bits: dimension id
+     *
+     * For positive finite t, raw float bits sort in the same order as numeric t.
+     * The low bits reproduce the C++ tie-breaker by id.
+     */
+    private static long packScalingEvent(float t, int id) {
+        return ((long) Float.floatToRawIntBits(t) << 32)
+                | (id & 0xFFFF_FFFFL);
+    }
+
+    private static float scalingEventT(long event) {
+        return Float.intBitsToFloat((int) (event >>> 32));
+    }
+
+    private static int scalingEventId(long event) {
+        return (int) event;
     }
 
     /**
@@ -1697,6 +1927,109 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
+     * PCA basis from eig(X^T X).
+     *
+     * Input X is [rows x cols] in column-major layout.
+     * Returns P = top right singular vectors of X, shape [cols x latentDim],
+     * also column-major.
+     */
+    private static double[] pcaProjectionFromCovariance(
+            double[] xCol,
+            int rows,
+            int cols,
+            int latentDim
+    ) {
+        double[] covCol = new double[cols * cols];
+
+        // cov = X^T @ X, shape [cols x cols].
+        BLAS.getInstance().dgemm(
+                "T", "N",
+                cols, cols, rows,
+                1.0,
+                xCol, rows,
+                xCol, rows,
+                0.0,
+                covCol, cols
+        );
+
+        symmetricEigenvectorsInPlace(covCol, cols);
+
+        // LAPACK dsyev returns eigenvalues ascending and eigenvectors by columns.
+        // Select the largest latentDim eigenvectors.
+        double[] pCol = new double[cols * latentDim];
+        for (int col = 0; col < latentDim; col++) {
+            int eigCol = cols - 1 - col;
+            System.arraycopy(covCol, eigCol * cols, pCol, col * cols, cols);
+        }
+
+        return pCol;
+    }
+
+    /**
+     * Overwrites a symmetric column-major matrix with eigenvectors by column.
+     */
+    private static void symmetricEigenvectorsInPlace(double[] aCol, int dim) {
+        double[] evals = new double[dim];
+        intW info = new intW(0);
+
+        double[] workQuery = new double[1];
+        LAPACK.getInstance().dsyev(
+                "V", "U",
+                dim,
+                aCol, dim,
+                evals,
+                workQuery, -1,
+                info
+        );
+
+        if (info.val != 0) {
+            throw new RuntimeException("LAPACK dsyev workspace query failed with info=" + info.val);
+        }
+
+        int lwork = Math.max(1, (int) workQuery[0]);
+        double[] work = new double[lwork];
+
+        LAPACK.getInstance().dsyev(
+                "V", "U",
+                dim,
+                aCol, dim,
+                evals,
+                work, lwork,
+                info
+        );
+
+        if (info.val != 0) {
+            throw new RuntimeException("LAPACK dsyev failed with info=" + info.val);
+        }
+    }
+
+    /**
+     * Native DGEMM into caller-provided output: C = A @ B.
+     */
+    private static void multiplyInto(
+            double[] aCol,
+            int m,
+            int k,
+            double[] bCol,
+            int n,
+            double[] cCol
+    ) {
+        if (cCol.length < m * n) {
+            throw new IllegalArgumentException("Output matrix too small");
+        }
+
+        BLAS.getInstance().dgemm(
+                "N", "N",
+                m, n, k,
+                1.0,
+                aCol, m,
+                bCol, k,
+                0.0,
+                cCol, m
+        );
+    }
+
+    /**
      * Orthogonalizes a flat column-major matrix using thin SVD and returns U @ VT
      * in flat column-major layout.
      */
@@ -1761,28 +2094,73 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * Binarizes values in-place to +/-1 and, if prevBinCol is non-null, counts
-     * how many entries changed relative to the previous binarized matrix.
+     * Encodes projected training directions.
+     *
+     * Input and output are [rows x dims] column-major.
+     *
+     * bitsPerDimension == 1:
+     *   y_j = sign(x_j) / sqrt(d)
+     *
+     * bitsPerDimension > 1:
+     *   y_j uses signed multibit magnitudes and is normalized to unit length.
      */
-    private static long sign01InPlace(double[] valuesCol, double[] prevBinCol) {
-        long changed = 0L;
-
-        if (prevBinCol == null) {
-            for (int i = 0; i < valuesCol.length; i++) {
-                valuesCol[i] = (valuesCol[i] > 0.0) ? 1.0 : -1.0;
-            }
-            return 0L;
+    private static void encodeTrainingDirections(
+            double[] xCol,
+            int rows,
+            int dims,
+            int bitsPerDimension,
+            double[] outCol
+    ) {
+        if (outCol.length < rows * dims) {
+            throw new IllegalArgumentException("Output matrix too small");
         }
 
-        for (int i = 0; i < valuesCol.length; i++) {
-            double bin = (valuesCol[i] > 0.0) ? 1.0 : -1.0;
-            if (bin != prevBinCol[i]) {
-                changed++;
+        if (bitsPerDimension <= 1) {
+            final double invSqrtD = 1.0 / Math.sqrt(dims);
+            final int size = rows * dims;
+
+            for (int i = 0; i < size; i++) {
+                outCol[i] = xCol[i] >= 0.0 ? invSqrtD : -invSqrtD;
             }
-            valuesCol[i] = bin;
+            return;
         }
 
-        return changed;
+        final int excessBits = bitsPerDimension - 1;
+        final int maxCode = (1 << excessBits) - 1;
+
+        double[] absNorm = new double[dims];
+        double[] mag = new double[dims];
+
+        for (int r = 0; r < rows; r++) {
+            double norm2 = 0.0;
+            for (int j = 0; j < dims; j++) {
+                double v = xCol[r + j * rows];
+                norm2 += v * v;
+            }
+
+            double invNorm = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
+
+            for (int j = 0; j < dims; j++) {
+                absNorm[j] = Math.abs(xCol[r + j * rows]) * invNorm;
+            }
+
+            double t = computeOptimalScalingFactor(absNorm, dims, bitsPerDimension);
+
+            double encodedNorm2 = 0.0;
+            for (int j = 0; j < dims; j++) {
+                int q = Math.min((int) (t * absNorm[j] + 1e-5), maxCode);
+                double m = q + 0.5;
+                mag[j] = m;
+                encodedNorm2 += m * m;
+            }
+
+            double encodedInvNorm = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
+
+            for (int j = 0; j < dims; j++) {
+                double signed = xCol[r + j * rows] < 0.0 ? -mag[j] : mag[j];
+                outCol[r + j * rows] = signed * encodedInvNorm;
+            }
+        }
     }
 
     private static void writeStiefelTransform(IndexWriter out, StiefelTransform st) throws IOException {
