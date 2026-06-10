@@ -120,6 +120,19 @@ def get_jdk_version() -> Tuple[str, int]:
         return 'Unknown', 0
 
 
+def _half_mem_gb() -> int:
+    """
+    Replicate the workflow's HALF_MEM_GB calculation:
+        TOTAL_MEM_GB=$(free -g | awk '/^Mem:/ {print $2}')   # floor to integer GiB
+        HALF_MEM_GB=$((TOTAL_MEM_GB / 2))                    # integer division
+        if [[ "$HALF_MEM_GB" -lt 1 ]]; then HALF_MEM_GB=1   # minimum 1
+    """
+    total_gib = int(psutil.virtual_memory().total / (1024 ** 3))
+    if total_gib <= 0:
+        total_gib = 16  # matches the workflow's fallback default
+    return max(1, total_gib // 2)
+
+
 def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
     """
     Parse the non-pull-request Java invocation inside the 'Run benchmark' step
@@ -132,7 +145,8 @@ def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
     Handles GitHub Actions conditional expressions of the form:
         ${{ matrix.jdk >= N && 'flag1 flag2' || '' }}
     and also extracts unconditional JVM flags (-XX:, -D, -X prefixes).
-    Dynamic shell variables such as ${HALF_MEM_GB} are replaced with '<dynamic>'.
+    ${HALF_MEM_GB} is resolved to the actual value computed from system memory,
+    matching the workflow's calculation exactly.
     """
     flags: List[str] = []
     try:
@@ -191,8 +205,11 @@ def get_jvm_flags(jdk_major: int, workflow_path: str = _WORKFLOW_PATH) -> str:
                 if jdk_major >= int(m.group(1)):
                     flags.append(m.group(2).strip())
 
-            # Remove all GitHub Actions expressions, then shell variable refs
+            # Remove all GitHub Actions expressions, then shell variable refs.
+            # HALF_MEM_GB is resolved to the actual value before other variables
+            # are blanked so that -Xmx renders as e.g. -Xmx32g rather than -Xmxg.
             clean = re.sub(r'\$\{\{[^}]*\}\}', '', line)
+            clean = clean.replace('${HALF_MEM_GB}', str(_half_mem_gb()))
             clean = re.sub(r'\$\{[^}]+\}', '', clean)
 
             # Extract static JVM flags (-XX:, -D, -X prefixes)
