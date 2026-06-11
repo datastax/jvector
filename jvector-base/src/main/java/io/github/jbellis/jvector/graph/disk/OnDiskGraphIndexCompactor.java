@@ -26,6 +26,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.IntStream;
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -89,6 +90,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
      */
+    @Experimental
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
@@ -108,6 +110,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      *                         quantization inline (FUSED_PQ) or have none. Must not be combined
      *                         with sources that carry the FUSED_PQ feature.
      */
+    @Experimental
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
@@ -285,6 +288,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Main compaction entry point. Merges all source indexes into a single output index at the
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
+    @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try {
@@ -308,6 +312,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * node is re-encoded against the new codebook. Requires that {@code sourceCompressed} was
      * supplied to the constructor.
      */
+    @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
         if (sourceCompressed == null) {
             throw new IllegalStateException(
