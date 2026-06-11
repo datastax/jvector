@@ -99,12 +99,14 @@ public class Compression {
                         encodedBits = Integer.parseInt(parameters.get("encodedBits"));
                     } else {
                         int requestedCompressionRatio = Integer.parseInt(parameters.get("compressionRatio"));
-                        if (requestedCompressionRatio != 32
+                        if (requestedCompressionRatio != 8
+                                && requestedCompressionRatio != 16
+                                && requestedCompressionRatio != 32
                                 && requestedCompressionRatio != 64
                                 && requestedCompressionRatio != 128
                                 && requestedCompressionRatio != 256) {
                             throw new IllegalArgumentException(
-                                    "ASH compressionRatio must be one of 32, 64, 128, or 256");
+                                    "ASH compressionRatio must be one of 8, 16, 32, 64, 128, or 256");
                         }
 
                         int originalBits = ds.getDimension() * Float.SIZE;

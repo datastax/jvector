@@ -21,11 +21,28 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
- * Query-time scorer for ASH vectors.
+ * Query-time scalar scorer for ASH vectors.
  *
- * Multi-landmark scoring (C >= 1) following the paper’s Eq. 11 decomposition:
- * for each landmark c we form q̃_c = A (q - μ_c) = (Aq) - (Aμ_c) once per query,
- * then score each vector using its stored landmark id.
+ * <p>
+ * Multi-landmark scoring follows the same decomposition used by the 1-bit ASH path:
+ * for each landmark c we form q̃_c = A(q - μ_c) = Aq - Aμ_c once per query, then
+ * score each vector using its stored landmark id.
+ * </p>
+ *
+ * <p>
+ * For 1-bit ASH, the packed sign bits are interpreted as values in {-1,+1}. For
+ * multibit ASH, sign bits plus packed extra bits reconstruct the centered scalar
+ * code used by the encoder:
+ * </p>
+ *
+ * <pre>
+ *   code_j = ((sign_j &lt;&lt; exBits) + extra_j) - (2^exBits - 0.5)
+ * </pre>
+ *
+ * <p>
+ * This exactly matches the C++ scalar reconstruction formula and keeps SIMD/block
+ * paths optional correctness optimizations outside this reference scorer.
+ * </p>
  *
  * NOTE: Only DOT_PRODUCT is supported for now.
  */
@@ -54,7 +71,9 @@ public final class ASHScorer {
                 : "Stiefel rows must equal quantizedDim";
     }
 
-    public ASHScoreFunction scoreFunctionFor(VectorFloat<?> query, VectorSimilarityFunction similarityFunction) {
+    public ASHScoreFunction scoreFunctionFor(
+            VectorFloat<?> query,
+            VectorSimilarityFunction similarityFunction) {
         if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
             throw new UnsupportedOperationException(
                     "ASH scorer supports DOT_PRODUCT only (requested " + similarityFunction + ")"
@@ -67,6 +86,81 @@ public final class ASHScorer {
      * Scorer for dot product approximation.
      */
     private ASHScoreFunction dotProductScoreFunctionFor(VectorFloat<?> query) {
+        QueryPrecompute qp = precomputeQuery(query);
+
+        if (ash.bitsPerDimension == 1) {
+            return oneBitDotProductScoreFunction(qp);
+        }
+
+        return multibitDotProductScoreFunction(qp);
+    }
+
+    private ASHScoreFunction oneBitDotProductScoreFunction(QueryPrecompute qp) {
+        final int d = qp.d;
+        final int C = qp.C;
+        final int words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
+
+        return (AsymmetricHashing.QuantizedVector v) -> {
+            final int c = v.landmark & 0xFF; // unsigned [0,C)
+            assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
+
+            // maskedAdd = <q̃_c, b>, where b ∈ {0,1}^d is stored as packed longs.
+            float maskedAdd = 0f;
+
+            final int tildeBase = c * d;
+            final long[] bits = v.binaryVector;
+            int dimBase = 0;
+            for (int w = 0; w < words && dimBase < d; w++, dimBase += 64) {
+                long word = bits[w];
+                while (word != 0L) {
+                    int bit = Long.numberOfTrailingZeros(word);
+                    int idx = dimBase + bit;
+                    if (idx < d) {
+                        maskedAdd += qp.tildeQPool[tildeBase + idx];
+                    }
+                    word &= (word - 1);
+                }
+            }
+
+            // 1-bit ASH dot-product approximation:
+            //   scale * (2<q̃_c,b> - <q̃_c,1>) + <q,μ_c> + (<x,μ_c> - ||μ_c||²)
+            return v.scale * (2f * maskedAdd - qp.sumTildeQByLandmark[c])
+                    + qp.dotQMuByLandmark[c]
+                    + v.offset;
+        };
+    }
+
+    private ASHScoreFunction multibitDotProductScoreFunction(QueryPrecompute qp) {
+        final int d = qp.d;
+        final int C = qp.C;
+        final int exBits = ash.bitsPerDimension - 1;
+        final int signMagnitudeOffset = 1 << exBits;
+        final float centerBias = -(signMagnitudeOffset - 0.5f);
+
+        return (AsymmetricHashing.QuantizedVector v) -> {
+            final int c = v.landmark & 0xFF; // unsigned [0,C)
+            assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
+
+            final int tildeBase = c * d;
+            final long[] signBits = v.binaryVector;
+            final byte[] extraBits = v.extraBits;
+
+            float ip = 0f;
+            for (int j = 0; j < d; j++) {
+                int sign = AsymmetricHashing.QuantizedVector.getBit(signBits, j) ? 1 : 0;
+                int extra = AsymmetricHashing.QuantizedVector.readExtraCode(extraBits, j, exBits);
+
+                // Matches C++:
+                //   (sign << exBits) + extra - (2^exBits - 0.5)
+                float code = (float) ((sign << exBits) + extra) + centerBias;
+                ip += qp.tildeQPool[tildeBase + j] * code;
+            }
+
+            return v.scale * ip + qp.dotQMuByLandmark[c] + v.offset;
+        };
+    }
+
+    private QueryPrecompute precomputeQuery(VectorFloat<?> query) {
         final int d = ash.quantizedDim;
         final int D = ash.originalDimension;
         final int C = ash.landmarkCount;
@@ -78,9 +172,11 @@ public final class ASHScorer {
                         .getInstance()
                         .getVectorUtilSupport();
 
-        // Materialize query once (avoid VectorFloat.get in inner loops)
+        // Materialize query once to avoid VectorFloat.get in inner loops.
         final float[] qArr = new float[D];
-        for (int k = 0; k < D; k++) qArr[k] = query.get(k);
+        for (int k = 0; k < D; k++) {
+            qArr[k] = query.get(k);
+        }
 
         // Compute Aq once per query:
         //   qProj[j] = <A[j], q>
@@ -96,8 +192,6 @@ public final class ASHScorer {
         //   tildeQ_c   = Aq - Aμ_c
         //   sumTildeQc = sum(Aq) - sum(Aμ_c)
         //   dotQMu_c   = <q, μ_c>
-        // Pooled storage for q̃_c vectors:
-        // tildeQPool[c*d + j] == q̃_c[j]
         final float[] tildeQPool = new float[C * d];
         final float[] sumTildeQByLandmark = new float[C];
         final float[] dotQMuByLandmark = new float[C];
@@ -113,45 +207,28 @@ public final class ASHScorer {
             }
         }
 
-        return (AsymmetricHashing.QuantizedVector v) -> {
-            final int c = v.landmark & 0xFF; // unsigned [0,C)
-            assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
+        return new QueryPrecompute(d, C, tildeQPool, sumTildeQByLandmark, dotQMuByLandmark);
+    }
 
-            // scale = ||x − μ_c|| / √d  (precomputed at encode-time)
-            final float scale = v.scale;
+    private static final class QueryPrecompute {
+        final int d;
+        final int C;
+        final float[] tildeQPool;             // [C * d]
+        final float[] sumTildeQByLandmark;    // [C]
+        final float[] dotQMuByLandmark;       // [C]
 
-            // offset = <x, μ_c> − ||μ_c||²  (precomputed at encode-time)
-            final float offset = v.offset;
-
-            // maskedAdd = <q̃_c, b>
-            // b ∈ {0,1}^d stored as packed longs
-            float maskedAdd = 0f;
-
-            final int tildeBase = c * d;
-            final float sumTildeQ = sumTildeQByLandmark[c];
-            final float dotQMu = dotQMuByLandmark[c];
-
-            final long[] bits = v.binaryVector;
-            int dimBase = 0;
-            for (int w = 0; w < bits.length && dimBase < d; w++, dimBase += 64) {
-                long word = bits[w];
-                while (word != 0L) {
-                    int bit = Long.numberOfTrailingZeros(word);
-                    int idx = dimBase + bit;
-                    if (idx < d) {
-                        maskedAdd += tildeQPool[tildeBase + idx];
-                    }
-                    word &= (word - 1);
-                }
-            }
-
-            // ASH dot-product approximation (multi-landmark, {0,1} encoding):
-            //
-            //   scale * (2⟨q̃_c, b⟩ − ⟨q̃_c, 1⟩) + ⟨q, μ_c⟩ + (⟨x, μ_c⟩ − ||μ_c||²)
-            //
-            // where q̃_c = A(q − μ_c) is precomputed once per query and per landmark c.
-            return scale * (2f * maskedAdd - sumTildeQ) + dotQMu + offset;
-        };
+        QueryPrecompute(
+                int d,
+                int C,
+                float[] tildeQPool,
+                float[] sumTildeQByLandmark,
+                float[] dotQMuByLandmark) {
+            this.d = d;
+            this.C = C;
+            this.tildeQPool = tildeQPool;
+            this.sumTildeQByLandmark = sumTildeQByLandmark;
+            this.dotQMuByLandmark = dotQMuByLandmark;
+        }
     }
 
     @FunctionalInterface
@@ -159,3 +236,4 @@ public final class ASHScorer {
         float similarityTo(AsymmetricHashing.QuantizedVector vector2);
     }
 }
+
