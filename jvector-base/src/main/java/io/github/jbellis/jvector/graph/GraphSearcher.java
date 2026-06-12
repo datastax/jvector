@@ -62,6 +62,11 @@ public class GraphSearcher implements Closeable {
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
+
+    // Edge-expansion pruning is only allowed at L0 after hierarchical routing.
+    // Non-hierarchical L0 pruning is unsafe because L0 performs global routing.
+    private boolean allowL0EdgePruning;
+
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
     private int visitedCount;
@@ -256,6 +261,11 @@ public class GraphSearcher implements Closeable {
     {
         initializeInternal(scoreProvider, entry, acceptOrds);
 
+        // Only allow edge-expansion pruning at L0 when hierarchy already routed
+        // the search into the base layer. Do not prune upper layers, and do not
+        // prune non-hierarchical L0 search.
+        allowL0EdgePruning = pruneSearch && entry.level > 0;
+
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
             // Search this layer with minimal parameters since we just want the best candidate
@@ -394,8 +404,16 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            // track scores to predict when we are done with threshold queries
-            var scoreTracker = scoreTrackerFactory.getScoreTracker(pruneSearch, rerankK, threshold);
+            // Edge-expansion pruning is allowed only at L0 after hierarchical routing.
+            // Threshold-based stopping still uses ScoreTracker independently.
+            final boolean allowEdgePruningThisLayer = allowL0EdgePruning && level == 0;
+
+            // Track scores for threshold stopping and, when allowed, late L0 edge pruning.
+            var scoreTracker = scoreTrackerFactory.getScoreTracker(
+                    allowEdgePruningThisLayer,
+                    rerankK,
+                    threshold
+            );
 
             // the main search loop
             while (candidates.size() > 0) {
@@ -410,8 +428,13 @@ public class GraphSearcher implements Closeable {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
                 }
 
-                // skip edge loading if we've found a local maximum and we have enough results
-                if (scoreTracker.shouldStop() && candidates.size() >= rerankK - approximateResults.size()) {
+                // Skip edge loading only in late L0 search after hierarchy has routed us
+                // into the base layer. Require the approximate result set to be full and at
+                // least rerankK base-layer expansions before pruning any candidate expansion.
+                if (allowEdgePruningThisLayer
+                        && approximateResults.size() >= rerankK
+                        && expandedCountBaseLayer >= rerankK
+                        && scoreTracker.shouldStop()) {
                     continue;
                 }
 
