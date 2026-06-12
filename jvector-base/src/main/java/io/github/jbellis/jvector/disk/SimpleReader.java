@@ -47,6 +47,11 @@ public class SimpleReader implements RandomAccessReader {
     public long getPosition() throws IOException {
         return raf.getFilePointer();
     }
+    
+    @Override
+    public byte readByte() throws IOException {
+        return raf.readByte();
+    }
 
     @Override
     public int readInt() throws IOException {

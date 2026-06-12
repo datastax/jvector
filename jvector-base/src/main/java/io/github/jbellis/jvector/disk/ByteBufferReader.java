@@ -74,6 +74,11 @@ public class ByteBufferReader implements RandomAccessReader {
     }
 
     @Override
+    public byte readByte() {
+        return bb.get();
+    }
+
+    @Override
     public int readInt() {
         return bb.getInt();
     }

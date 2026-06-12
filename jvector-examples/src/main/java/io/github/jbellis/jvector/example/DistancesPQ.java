@@ -47,10 +47,16 @@ public class DistancesPQ {
      *
      * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
      */
-    public static void testPQEncodings(String filenameBase, String filenameQueries) throws IOException {
+    public static void testPQEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
+        final boolean RUN_RECALL_CHECK =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+
+        final int RECALL_K =
+                Integer.getInteger("jvector.bench.recall.k", 10);
+
         final boolean RUN_ACCURACY_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy-check", "false"));
         final boolean RUN_FLOAT_SCORING =
@@ -58,6 +64,36 @@ public class DistancesPQ {
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+
+        final List<List<Integer>> groundTruth;
+        if (RUN_RECALL_CHECK) {
+            if (filenameGT == null || filenameGT.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Recall is enabled but no ground-truth ivec file was provided"
+                );
+            }
+
+            groundTruth = SiftLoader.readIvecs(filenameGT);
+
+            if (groundTruth.size() < queries.size()) {
+                throw new IllegalArgumentException(
+                        "Ground truth contains " + groundTruth.size()
+                                + " rows but there are " + queries.size() + " queries"
+                );
+            }
+
+            for (int i = 0; i < queries.size(); i++) {
+                if (groundTruth.get(i).size() < RECALL_K) {
+                    throw new IllegalArgumentException(
+                            "Ground truth row " + i + " has only "
+                                    + groundTruth.get(i).size()
+                                    + " entries, but recall.k=" + RECALL_K
+                    );
+                }
+            }
+        } else {
+            groundTruth = java.util.Collections.emptyList();
+        }
 
         // ------------------------------------------------------------
         // Parallel executor (identical to DistancesASH)
@@ -68,32 +104,56 @@ public class DistancesPQ {
         int chunkSize = Math.max(1, (queries.size() + parallelism - 1) / parallelism);
 
         // ------------------------------------------------------------
-        // PQ parameters (EXACT bit-for-bit match with ASH)
+        // PQ parameters
         // ------------------------------------------------------------
-        // ASH total size = encodedBits (includes header + payload)
-        // PQ total size  = M * 8 bits (1 byte per subspace)
+        // M is derived from the input dimension:
         //
-        // We REQUIRE exact equality for fair benchmarking.
-        int HEADER_BITS = 72;
+        //   M = dimension / mFactor
+        //
+        // With K=256, each subspace code is one byte, so PQ stores M bytes
+        // per vector. Since the input is float32, the exact compression ratio is:
+        //
+        //   (dimension * 4 bytes) / M bytes = 4 * mFactor
+        //
+        // This requires dimension to be evenly divisible by mFactor.
         int dimension = vectors.get(0).length();
-        int encodedBitsASH = (dimension / 4) + HEADER_BITS; // HEADER_BITS = 72
-        if ((encodedBitsASH & 7) != 0) {
+
+        final int mFactor = Integer.getInteger("jvector.pq.mFactor", 8);
+        if (mFactor <= 0) {
             throw new IllegalArgumentException(
-                    "PQ requires encodedBits to be a multiple of 8 for exact bit matching; got " + encodedBitsASH
+                    "jvector.pq.mFactor must be positive; got " + mFactor
+            );
+        }
+        if (dimension % mFactor != 0) {
+            throw new IllegalArgumentException(
+                    "dimension must be evenly divisible by jvector.pq.mFactor: "
+                            + "dimension=" + dimension
+                            + ", mFactor=" + mFactor
             );
         }
 
-        final int M = encodedBitsASH / 8;
+        final int M = dimension / mFactor;
         final int K = 256;                 // 1 byte per subspace
         final boolean globallyCenter = false;
         final float anisotropicThreshold = 0.0f;
 
+        final int inputBytesPerVector = dimension * Float.BYTES;
+        final int compressedBytesPerVector = M;
+        final double compressionRatio =
+                (double) inputBytesPerVector / compressedBytesPerVector;
+
         System.out.println("\tPQ params:");
+        System.out.println("\t  dimension = " + dimension);
+        System.out.println("\t  mFactor = " + mFactor);
         System.out.println("\t  M = " + M + " subspaces");
         System.out.println("\t  K = " + K + " clusters");
-        System.out.println("\t  Compression = " + (M * 8) + " bits (" + M + " bytes)");
-        System.out.println("\tASH reference = " + encodedBitsASH + " bits (" + (encodedBitsASH / 8) + " bytes)");
-
+        System.out.println("\t  Input size = " + inputBytesPerVector + " bytes/vector");
+        System.out.println("\t  PQ size = " + compressedBytesPerVector + " bytes/vector");
+        System.out.println(
+                "\t  Compression ratio = "
+                        + String.format(java.util.Locale.ROOT, "%.3f", compressionRatio)
+                        + "x"
+        );
 
         // ------------------------------------------------------------
         // Train PQ + encode (timed)
@@ -174,6 +234,105 @@ public class DistancesPQ {
             }
 
             System.out.println("\tAverage absolute dot-product error = " + (totalError / totalCount));
+        }
+
+        // ============================================================
+        // [1b] Recall@K run (NOT timed)
+        // ============================================================
+        if (RUN_RECALL_CHECK) {
+            final int[] atValues = {10, 15, 20, 30, 40, 50};
+            final int maxAt = atValues[atValues.length - 1];
+
+            List<ForkJoinTask<double[]>> recallTasks = new ArrayList<>();
+
+            System.out.println("\t[stage] Computing " + RECALL_K + "-Recall@K...");
+            System.out.flush();
+
+            for (int start = 0; start < queries.size(); start += chunkSize) {
+                final int s = start;
+                final int e = Math.min(start + chunkSize, queries.size());
+
+                recallTasks.add(simdExecutor.submit(() -> {
+                    double[] localTotalRecall = new double[atValues.length];
+
+                    for (int i = s; i < e; i++) {
+                        ScoreFunction.ApproximateScoreFunction f =
+                                pqVecs.precomputedScoreFunctionFor(
+                                        queries.get(i),
+                                        VectorSimilarityFunction.DOT_PRODUCT
+                                );
+
+                        // Min-heap keeping the top maxAt approximate results.
+                        var topCandidates =
+                                new java.util.PriorityQueue<long[]>((a, b) ->
+                                        Float.compare(
+                                                Float.intBitsToFloat((int) a[0]),
+                                                Float.intBitsToFloat((int) b[0])
+                                        ));
+
+                        for (int j = 0; j < vectors.size(); j++) {
+                            float score = f.similarityTo(j);
+
+                            if (topCandidates.size() < maxAt) {
+                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
+                            } else if (score > Float.intBitsToFloat((int) topCandidates.peek()[0])) {
+                                topCandidates.poll();
+                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
+                            }
+                        }
+
+                        int[] topIndices = new int[topCandidates.size()];
+                        for (int rank = topCandidates.size() - 1; rank >= 0; rank--) {
+                            topIndices[rank] = (int) topCandidates.poll()[1];
+                        }
+
+                        int[] queryGT = groundTruth.get(i).stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray();
+
+                        for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                            int at = atValues[aIdx];
+
+                            java.util.Set<Integer> topAtSet = new java.util.HashSet<>();
+                            for (int r = 0; r < Math.min(at, topIndices.length); r++) {
+                                topAtSet.add(topIndices[r]);
+                            }
+
+                            int matches = 0;
+                            java.util.Set<Integer> gtSeen = new java.util.HashSet<>(RECALL_K * 2);
+
+                            // Avoid double-counting duplicate GT ids.
+                            for (int g = 0; g < RECALL_K; g++) {
+                                int gtId = queryGT[g];
+                                if (gtSeen.add(gtId) && topAtSet.contains(gtId)) {
+                                    matches++;
+                                }
+                            }
+
+                            localTotalRecall[aIdx] += (double) matches / RECALL_K;
+                        }
+                    }
+
+                    return localTotalRecall;
+                }));
+            }
+
+            double[] totalRecall = new double[atValues.length];
+            for (ForkJoinTask<double[]> t : recallTasks) {
+                double[] local = t.join();
+                for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                    totalRecall[aIdx] += local[aIdx];
+                }
+            }
+
+            for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                System.out.format(
+                        "\tPQ %d-recall@%d = %.4f%n",
+                        RECALL_K,
+                        atValues[aIdx],
+                        totalRecall[aIdx] / queries.size()
+                );
+            }
         }
 
         // ============================================================
@@ -270,43 +429,52 @@ public class DistancesPQ {
 
     public static void runCohere100k() throws IOException {
         System.out.println("Running Cohere-100k");
-        testPQEncodings(
-                "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec",
-                "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec"
-        );
+
+        var baseVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_base_vectors_100000.fvec";
+        var queryVectors = "./fvec/cohere-100k/cohere_embed-english-v3.0_1024_query_vectors_10000.fvec";
+        var gtVectors = ""; // Set this to the GT file for this exact base/query ordering before enabling recall.
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runADA() throws IOException {
         System.out.println("Running ada_002");
-        testPQEncodings(
-                "./fvec/ada-002/ada_002_100000_base_vectors.fvec",
-                "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec"
-        );
+
+        var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
+        var gtVectors = "./fvec/ada-002/ada_002_100000_indices_query_10000.ivec";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runADANoZeros() throws IOException {
         System.out.println("Running ada-002-no-zeros");
 
-        testPQEncodings(
-                "./fvec/ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec",
-                "./fvec/ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec"
-        );
+        var baseVectors = "./fvec/ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec";
+        var queryVectors = "./fvec/ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec";
+        var gtVectors = "./fvec/ada-002-no-zeros/ada-002_gt_no_zeros.ivec";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runOpenai1536() throws IOException {
         System.out.println("Running text-embedding-3-large_1536");
-        testPQEncodings(
-                "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_base_vectors.fvec",
-                "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec"
-        );
+
+        var baseVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_base_98716.fvecs";
+        var queryVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_query_10000.fvecs";
+        var gtVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_gt_ip_100.ivecs";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runOpenai3072() throws IOException {
         System.out.println("Running text-embedding-3-large_3072");
-        testPQEncodings(
-                "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec",
-                "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec"
-        );
+
+        var baseVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
+        var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec";
+        var gtVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_indices_query_10000.ivec";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runCap6m() throws IOException {
@@ -314,7 +482,9 @@ public class DistancesPQ {
 
         var baseVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs";
         var queryVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs";
-        testPQEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/cap-6m/cap_6m_gt_norm_shuffle_ip_k100.ivecs";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void runCohere10m() throws IOException {
@@ -322,16 +492,18 @@ public class DistancesPQ {
 
         var baseVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs";
         var queryVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs";
-        testPQEncodings(baseVectors, queryVectors);
+        var gtVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs";
+
+        testPQEncodings(baseVectors, queryVectors, gtVectors);
     }
 
     public static void main(String[] args) throws IOException {
 //        runCohere100k();
 //        runADA();
 //        runADANoZeros();
-//        runOpenai1536();
+        runOpenai1536();
 //        runOpenai3072();
 //        runCap6m();
-        runCohere10m();
+//        runCohere10m();
     }
 }

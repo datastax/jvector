@@ -236,9 +236,10 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
         }
 
-        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
-        // Since everything in level 1 is also contained in the higher levels, we only need to write the fused features for level 1.
-        if (version == 6) {
+        // For V6+, fused source features for the in-memory hierarchy are written
+        // after the upper-layer graph data. Level 1 contains all higher-level nodes,
+        // so writing level 1 is sufficient.
+        if (version >= 6) {
             // There should be only one fused feature per node. This is checked in the class constructor.
             // This is the only place where we explicitly need the fused feature. If there are more places in the
             // future, it may be worth having fusedFeature as class member.

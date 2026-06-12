@@ -1,6 +1,6 @@
 # This is here for loader testing purposes only, use other datasets for realistic test data
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
 dataset: glove-200-angular
 

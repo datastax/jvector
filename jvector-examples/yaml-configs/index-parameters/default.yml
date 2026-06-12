@@ -1,28 +1,30 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
 dataset: default
 
 construction:
-  outDegree: [32]
-  efConstruction: [100]
+  outDegree: [64]
+  efConstruction: [200]
   neighborOverflow: [1.2f]
-  addHierarchy: [No]
+  addHierarchy: [Yes]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
-  - type: ASH
-    parameters:
-      compressionRatio: 32
-      optimizer: ITQ
-      landmarkCount: 1
-#    - type: PQ
-#      parameters:
-#        # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-#        mFactor: 8
-#        # k: 256 # optional parameter. By default, k=256
-#        centerData: No
-#        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+    - type: None
+#  - type: ASH
+#    parameters:
+#      compressionRatio: 32
+#      optimizer: ITQ
+#      landmarkCount: 1
+#      bitsPerDimension: 2
+#  - type: PQ
+#    parameters:
+#      # m: 192 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
+#      mFactor: 8
+#      # k: 256 # optional parameter. By default, k=256
+#      centerData: No
+#      anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
     - NVQ
   useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
@@ -31,13 +33,15 @@ search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
     100: [1.0, 2.0]
-  useSearchPruning: [Yes]
+  useSearchPruning: [No]
   compression:
-    - type: ASH
-      parameters:
-        compressionRatio: 32
-        optimizer: ITQ
-        landmarkCount: 1
+    - type: None
+#    - type: ASH
+#      parameters:
+#        compressionRatio: 32
+#        optimizer: ITQ
+#        landmarkCount: 1
+#        bitsPerDimension: 2
 #    - type: PQ
 #      parameters:
 #        # m: 192

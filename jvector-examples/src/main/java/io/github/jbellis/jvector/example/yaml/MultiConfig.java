@@ -112,7 +112,7 @@ public class MultiConfig {
                 }
 
                 // Validate supported versions
-                if (cfg.getYamlSchemaVersion() != 1) {
+                if (cfg.getYamlSchemaVersion() != 2) {
                     throw new IllegalArgumentException("Unsupported yamlSchemaVersion="
                             + cfg.getYamlSchemaVersion() + " in " + configFile.getAbsolutePath());
                 }

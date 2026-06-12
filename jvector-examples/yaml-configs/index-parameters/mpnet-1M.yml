@@ -1,7 +1,7 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
-dataset: mpnet-100k
+dataset: mpnet-1M
 
 construction:
   outDegree: [64]
