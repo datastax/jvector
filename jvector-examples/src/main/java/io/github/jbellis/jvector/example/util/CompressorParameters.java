@@ -108,17 +108,28 @@ public abstract class CompressorParameters {
         private final int optimizer;
         private final int encodedBits;
         private final int landmarkCount;
+        private final int bitsPerDimension;
 
         public ASHParameters(int optimizer, int encodedBits, int landmarkCount) {
+            this(optimizer, encodedBits, landmarkCount, 1);
+        }
+
+        public ASHParameters(int optimizer, int encodedBits, int landmarkCount, int bitsPerDimension) {
             this.optimizer = optimizer;
             this.encodedBits = encodedBits;
             this.landmarkCount = landmarkCount;
+            this.bitsPerDimension = bitsPerDimension;
         }
 
         @Override
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             try {
-                return AsymmetricHashing.initialize(ds.getBaseRavv(), optimizer, encodedBits, landmarkCount);
+                return AsymmetricHashing.initialize(
+                        ds.getBaseRavv(),
+                        optimizer,
+                        encodedBits,
+                        landmarkCount,
+                        bitsPerDimension);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -126,13 +137,20 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("ASH_%s_opt%d_bits%d_C%d", ds.getName(), optimizer, encodedBits, landmarkCount);
+            return String.format(
+                    "ASH_%s_v%d_opt%d_bits%d_bpd%d_C%d",
+                    ds.getName(),
+                    io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION,
+                    optimizer,
+                    encodedBits,
+                    bitsPerDimension,
+                    landmarkCount
+            );
         }
 
-        // TODO set to true for production after debug is complete.
         @Override
         public boolean supportsCaching() {
-            return false;
+            return true;
         }
     }
 }

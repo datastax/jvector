@@ -33,7 +33,8 @@ public enum FeatureId {
     FUSED_PQ(FusedPQ::load),
     NVQ_VECTORS(NVQ::load),
     SEPARATED_VECTORS(SeparatedVectors::load),
-    SEPARATED_NVQ(SeparatedNVQ::load);
+    SEPARATED_NVQ(SeparatedNVQ::load),
+    FUSED_ASH(FusedASH::load);
 
     private final BiFunction<CommonHeader, RandomAccessReader, Feature> loader;
 

@@ -44,11 +44,11 @@ import org.netlib.util.intW;
  * Asymmetric Hashing (ASH) for float vectors.
  * Encodes each vector into a fixed-length code using a learned or random
  * orthonormal projection. The 1-bit case stores only sign bits; multibit ASH
- * stores sign bits plus packed extra magnitude bits per projected dimension.
+ * stores either generic sign/extra bits or the C++-style fast-scan projection code for 2/4-bit ASH.
  */
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
     public static final int ITQ = 1, RANDOM = 2;
-    private static final int MAGIC = 0x75EC4014;
+    private static final int MAGIC = 0x75EC4015;
 
     // ---------------------------------------------------------------------
     // Training configuration (reference defaults; TODO tune later)
@@ -647,6 +647,117 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         );
     }
 
+
+    // ---------------------------------------------------------------------
+    // Projection-code layout helpers
+    // ---------------------------------------------------------------------
+
+    /**
+     * Fast-scan projection codes use C++-compatible 4-bit projection groups.
+     * Core ASH supports bitsPerDimension in [1,9], but this layout is only
+     * defined for the nibble-friendly multibit cases used by FusedASH.
+     */
+    static boolean usesFastScanProjectionCode(int bitsPerDimension) {
+        return bitsPerDimension == 2 || bitsPerDimension == 4;
+    }
+
+    static boolean supportsFusedAshBits(int bitsPerDimension) {
+        return bitsPerDimension == 1 || bitsPerDimension == 2 || bitsPerDimension == 4;
+    }
+
+    static int projectionDimsPerNibble(int bitsPerDimension) {
+        if (bitsPerDimension != 1 && bitsPerDimension != 2 && bitsPerDimension != 4) {
+            throw new IllegalArgumentException(
+                    "projection fast-scan layout supports bitsPerDimension in {1,2,4}, got "
+                            + bitsPerDimension);
+        }
+        return 4 / bitsPerDimension;
+    }
+
+    static int projectionCodeGroups(int quantizedDim, int bitsPerDimension) {
+        int groupDims = projectionDimsPerNibble(bitsPerDimension);
+        return (quantizedDim + groupDims - 1) / groupDims;
+    }
+
+    static int projectionCodeBytesForDims(int quantizedDim, int bitsPerDimension) {
+        return (projectionCodeGroups(quantizedDim, bitsPerDimension) + 1) >>> 1;
+    }
+
+    static void setFlatNibble(byte[] code, int group, int value) {
+        int idx = group >>> 1;
+        int v = value & 0x0F;
+        if ((group & 1) == 0) {
+            code[idx] = (byte) ((code[idx] & 0xF0) | v);
+        } else {
+            code[idx] = (byte) ((code[idx] & 0x0F) | (v << 4));
+        }
+    }
+
+    static int flatNibble(byte[] code, int group) {
+        int v = code[group >>> 1] & 0xFF;
+        return ((group & 1) == 0) ? (v & 0x0F) : ((v >>> 4) & 0x0F);
+    }
+
+    static int projectionFieldForDimension(
+            byte[] projectionCode,
+            int dimension,
+            int bitsPerDimension
+    ) {
+        int groupDims = projectionDimsPerNibble(bitsPerDimension);
+        int group = dimension / groupDims;
+        int slot = dimension - group * groupDims;
+        int mask = (1 << bitsPerDimension) - 1;
+        return (flatNibble(projectionCode, group) >>> (slot * bitsPerDimension)) & mask;
+    }
+
+    static float decodeProjectionComponent(int field, int bitsPerDimension) {
+        if (bitsPerDimension == 1) {
+            return field != 0 ? 1.0f : -1.0f;
+        }
+
+        int exBits = bitsPerDimension - 1;
+        int magMask = (1 << exBits) - 1;
+        boolean positive = ((field >>> exBits) & 1) != 0;
+        float mag = (field & magMask) + 0.5f;
+        return positive ? mag : -mag;
+    }
+
+    static float projectionComponent(
+            byte[] projectionCode,
+            int dimension,
+            int bitsPerDimension
+    ) {
+        return decodeProjectionComponent(
+                projectionFieldForDimension(projectionCode, dimension, bitsPerDimension),
+                bitsPerDimension);
+    }
+
+    static float dotProjectionCode(
+            float[] projectedVector,
+            byte[] projectionCode,
+            int quantizedDim,
+            int bitsPerDimension
+    ) {
+        int groupDims = projectionDimsPerNibble(bitsPerDimension);
+        int groups = projectionCodeGroups(quantizedDim, bitsPerDimension);
+        float sum = 0.0f;
+
+        for (int group = 0; group < groups; group++) {
+            int nibble = flatNibble(projectionCode, group);
+            int baseDim = group * groupDims;
+            for (int slot = 0; slot < groupDims; slot++) {
+                int dim = baseDim + slot;
+                if (dim >= quantizedDim) {
+                    break;
+                }
+                int field = (nibble >>> (slot * bitsPerDimension)) & ((1 << bitsPerDimension) - 1);
+                sum += projectedVector[dim] * decodeProjectionComponent(field, bitsPerDimension);
+            }
+        }
+
+        return sum;
+    }
+
     // ---------------------------------------------------------------------
     // Quantization strategies
     // ---------------------------------------------------------------------
@@ -759,7 +870,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 float acc = vecUtil.ashDotRow(A[j], xhat);
                 proj[j] = acc;
                 projNorm2 += (double) acc * (double) acc;
-                if (acc >= 0.0f) {
+                if (!usesFastScanProjectionCode(bitsPerDimension) && acc >= 0.0f) {
                     QuantizedVector.setBit(outSignWords, j);
                 }
             }
@@ -771,6 +882,16 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
             final double t = computeOptimalScalingFactor(absNorm, quantizedDim, bitsPerDimension);
 
+            if (usesFastScanProjectionCode(bitsPerDimension)) {
+                return quantizeFastScanProjectionCode(
+                        proj,
+                        absNorm,
+                        t,
+                        quantizedDim,
+                        bitsPerDimension,
+                        outExtraBits);
+            }
+
             double codeNorm2 = 0.0;
             for (int j = 0; j < quantizedDim; j++) {
                 int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
@@ -779,6 +900,45 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
                 int extraCode = (proj[j] < 0.0f) ? ((~q) & maxCode) : q;
                 QuantizedVector.writeExtraCode(outExtraBits, j, exBits, extraCode);
+            }
+
+            return (float) Math.sqrt(Math.max(codeNorm2, 1e-20));
+        }
+
+        private static float quantizeFastScanProjectionCode(
+                float[] proj,
+                double[] absNorm,
+                double t,
+                int quantizedDim,
+                int bitsPerDimension,
+                byte[] outProjectionCode
+        ) {
+            final int groupDims = projectionDimsPerNibble(bitsPerDimension);
+            final int groups = projectionCodeGroups(quantizedDim, bitsPerDimension);
+            final int exBits = bitsPerDimension - 1;
+            final int maxCode = (1 << exBits) - 1;
+
+            double codeNorm2 = 0.0;
+            for (int group = 0; group < groups; group++) {
+                int nibble = 0;
+                int baseDim = group * groupDims;
+
+                for (int slot = 0; slot < groupDims; slot++) {
+                    int j = baseDim + slot;
+                    if (j >= quantizedDim) {
+                        break;
+                    }
+
+                    int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
+                    boolean positive = proj[j] >= 0.0f;
+                    int field = (positive ? (1 << exBits) : 0) | q;
+                    nibble |= field << (slot * bitsPerDimension);
+
+                    double mag = q + 0.5;
+                    codeNorm2 += mag * mag;
+                }
+
+                setFlatNibble(outProjectionCode, group, nibble);
             }
 
             return (float) Math.sqrt(Math.max(codeNorm2, 1e-20));
@@ -831,12 +991,23 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return (quantizedDim + 63) >>> 6;
         }
 
+        public static int signWordsForDims(int quantizedDim, int bitsPerDimension) {
+            return usesFastScanProjectionCode(bitsPerDimension) ? 0 : wordsForDims(quantizedDim);
+        }
+
         public static int extraBytesForDims(int quantizedDim, int bitsPerDimension) {
             int exBits = bitsPerDimension - 1;
             if (exBits <= 0) {
                 return 0;
             }
             return (quantizedDim * exBits + 7) >>> 3;
+        }
+
+        public static int bodyBytesForDims(int quantizedDim, int bitsPerDimension) {
+            if (usesFastScanProjectionCode(bitsPerDimension)) {
+                return projectionCodeBytesForDims(quantizedDim, bitsPerDimension);
+            }
+            return extraBytesForDims(quantizedDim, bitsPerDimension);
         }
 
         public static QuantizedVector createEmpty(int quantizedDim) {
@@ -848,8 +1019,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     Float.NaN,
                     Float.NaN,
                     (byte) 0,
-                    new long[wordsForDims(quantizedDim)],
-                    new byte[extraBytesForDims(quantizedDim, bitsPerDimension)]
+                    new long[signWordsForDims(quantizedDim, bitsPerDimension)],
+                    new byte[bodyBytesForDims(quantizedDim, bitsPerDimension)]
             );
         }
 
@@ -859,8 +1030,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         public static int serializedSizeBytes(int quantizedDim, int bitsPerDimension) {
             return Short.BYTES + Short.BYTES + Byte.BYTES
-                    + wordsForDims(quantizedDim) * Long.BYTES
-                    + extraBytesForDims(quantizedDim, bitsPerDimension);
+                    + signWordsForDims(quantizedDim, bitsPerDimension) * Long.BYTES
+                    + bodyBytesForDims(quantizedDim, bitsPerDimension);
         }
 
         /**
@@ -884,19 +1055,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
             assert Float.isFinite(dest.offset) : "offset is not finite";
 
-            int words = wordsForDims(quantizedDim);
-            if (dest.binaryVector.length < words) {
+            int words = signWordsForDims(quantizedDim, bitsPerDimension);
+            if (dest.binaryVector == null || dest.binaryVector.length < words) {
                 throw new IllegalArgumentException("binaryVector too short");
             }
 
-            int extraBytes = extraBytesForDims(quantizedDim, bitsPerDimension);
-            if (dest.extraBits == null || dest.extraBits.length < extraBytes) {
-                throw new IllegalArgumentException("extraBits too short");
+            int bodyBytes = bodyBytesForDims(quantizedDim, bitsPerDimension);
+            if (dest.extraBits == null || dest.extraBits.length < bodyBytes) {
+                throw new IllegalArgumentException("extraBits/projectionCode too short");
             }
 
-            Arrays.fill(dest.binaryVector, 0, words, 0L);
-            if (extraBytes > 0) {
-                Arrays.fill(dest.extraBits, 0, extraBytes, (byte) 0);
+            if (words > 0) {
+                Arrays.fill(dest.binaryVector, 0, words, 0L);
+            }
+            if (bodyBytes > 0) {
+                Arrays.fill(dest.extraBits, 0, bodyBytes, (byte) 0);
             }
 
             return quantizer.quantizeBody(
@@ -920,13 +1093,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             writeFloat16(out, offset);
             out.writeByte(landmark);
 
-            int words = wordsForDims(quantizedDim);
+            int words = signWordsForDims(quantizedDim, bitsPerDimension);
             for (int i = 0; i < words; i++) {
                 out.writeLong(binaryVector[i]);
             }
 
-            int extraBytes = extraBytesForDims(quantizedDim, bitsPerDimension);
-            for (int i = 0; i < extraBytes; i++) {
+            int bodyBytes = bodyBytesForDims(quantizedDim, bitsPerDimension);
+            for (int i = 0; i < bodyBytes; i++) {
                 out.writeByte(extraBits[i]);
             }
         }
@@ -949,19 +1122,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 throw new IOException("ASH requires ByteReadable reader for landmark");
             }
 
-            int words = wordsForDims(quantizedDim);
-            long[] body = new long[words];
+            int words = signWordsForDims(quantizedDim, bitsPerDimension);
+            long[] signWords = new long[words];
             for (int i = 0; i < words; i++) {
-                body[i] = in.readLong();
+                signWords[i] = in.readLong();
             }
 
-            int extraBytes = extraBytesForDims(quantizedDim, bitsPerDimension);
-            byte[] extra = new byte[extraBytes];
-            if (extraBytes > 0) {
-                in.readFully(extra);
+            int bodyBytes = bodyBytesForDims(quantizedDim, bitsPerDimension);
+            byte[] body = new byte[bodyBytes];
+            if (bodyBytes > 0) {
+                in.readFully(body);
             }
 
-            return new QuantizedVector(scale, offset, landmark, body, extra);
+            return new QuantizedVector(scale, offset, landmark, signWords, body);
         }
 
         public static void loadInto(RandomAccessReader in,
@@ -983,19 +1156,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 throw new IOException("ASH requires ByteReadable reader for landmark");
             }
 
-            int words = wordsForDims(quantizedDim);
-            if (dest.binaryVector == null || dest.binaryVector.length < words) {
+            int words = signWordsForDims(quantizedDim, bitsPerDimension);
+            if (dest.binaryVector == null || dest.binaryVector.length != words) {
                 dest.binaryVector = new long[words];
             }
             for (int i = 0; i < words; i++) {
                 dest.binaryVector[i] = in.readLong();
             }
 
-            int extraBytes = extraBytesForDims(quantizedDim, bitsPerDimension);
-            if (dest.extraBits == null || dest.extraBits.length != extraBytes) {
-                dest.extraBits = new byte[extraBytes];
+            int bodyBytes = bodyBytesForDims(quantizedDim, bitsPerDimension);
+            if (dest.extraBits == null || dest.extraBits.length != bodyBytes) {
+                dest.extraBits = new byte[bodyBytes];
             }
-            if (extraBytes > 0) {
+            if (bodyBytes > 0) {
                 in.readFully(dest.extraBits);
             }
         }
@@ -1276,28 +1449,44 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
-        final VectorFloat<?> mu = landmarks[landmark & 0xFF];
+        final int c = landmark & 0xFF;
+        final VectorFloat<?> mu = landmarks[c];
 
-        // Compute <x, μ>.
+        // Compute <x, μ> and ||x_i − μ_i*||_2.
         final float dotXMu = VectorUtil.dotProduct(vector, mu);
-
-        // Compute ||x_i − μ_i*||_2.
         final float sqDist = VectorUtil.squareL2Distance(vector, mu);
         final float residualNorm = (float) Math.sqrt(sqDist);
 
         assert quantizedDim > 0;
 
-        final float offset = dotXMu - landmarkNormSq[landmark];
+        final float rawOffset = dotXMu - landmarkNormSq[c];
 
-        // Header fields needed before quantization.
-        dest.offset = roundToFloat16(offset);
+        // Header fields needed before quantization. The final offset may be
+        // adjusted after quantization for C++-style fast-scan projection codes.
+        dest.offset = rawOffset;
         dest.landmark = landmark;
 
-        // Body: sign bits plus optional extra bits.  The returned code norm is
-        // sqrt(d) for 1-bit ASH and sqrt(sum_j (q_j + 0.5)^2) for multibit ASH.
+        // Body: sign bits, generic sign+extra bits, or fast-scan projection code.
+        // The returned code norm is sqrt(d) for 1-bit ASH and
+        // sqrt(sum_j (q_j + 0.5)^2) for multibit ASH.
         float codeNorm = quantizeVector(vector, residualNorm, landmark, dest);
         final float scale = codeNorm > 0f ? residualNorm / codeNorm : 0f;
+
+        float finalOffset = rawOffset;
+        if (usesFastScanProjectionCode(bitsPerDimension)) {
+            // C++ projection-mode optimization:
+            //   offset = <x, μ> - ||μ||² - scale * <Aμ, code>
+            // so query-time scoring can use Aq instead of A(q - μ).
+            float landmarkDot = dotProjectionCode(
+                    landmarkProj[c],
+                    dest.extraBits,
+                    quantizedDim,
+                    bitsPerDimension);
+            finalOffset -= scale * landmarkDot;
+        }
+
         dest.scale = roundToFloat16(scale);
+        dest.offset = roundToFloat16(finalOffset);
     }
 
     // ---------------------------------------------------------------------

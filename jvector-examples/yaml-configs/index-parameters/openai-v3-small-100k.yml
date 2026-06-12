@@ -1,5 +1,5 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
 dataset: cap-6M
 

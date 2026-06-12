@@ -1,7 +1,7 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
-dataset: dpr-1M
+dataset: dpr-gemma-1M
 
 construction:
   outDegree: [64]
@@ -41,7 +41,7 @@ construction:
 
 search:
   topKOverquery:
-    10: [1.00, 1.25, 1.56, 1.95, 2.44, 3.05, 3.81, 4.77, 5.96, 7.45, 9.31, 11.64]
+    10: [1.00]
 #    100: [1.0]
   useSearchPruning: [No]
   compression:

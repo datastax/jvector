@@ -1,7 +1,7 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
-dataset: cohere-1M
+dataset: personahub-1M
 
 construction:
   outDegree: [64]

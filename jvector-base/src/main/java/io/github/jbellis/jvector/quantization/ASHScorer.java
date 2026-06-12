@@ -24,24 +24,28 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * Query-time scalar scorer for ASH vectors.
  *
  * <p>
- * Multi-landmark scoring follows the same decomposition used by the 1-bit ASH path:
- * for each landmark c we form q̃_c = A(q - μ_c) = Aq - Aμ_c once per query, then
- * score each vector using its stored landmark id.
- * </p>
- *
- * <p>
- * For 1-bit ASH, the packed sign bits are interpreted as values in {-1,+1}. For
- * multibit ASH, sign bits plus packed extra bits reconstruct the centered scalar
- * code used by the encoder:
+ * The 1-bit path preserves the original ASH decomposition:
  * </p>
  *
  * <pre>
- *   code_j = ((sign_j &lt;&lt; exBits) + extra_j) - (2^exBits - 0.5)
+ *   score = scale * (2 * &lt;A(q - mu), b&gt; - &lt;A(q - mu), 1&gt;)
+ *         + &lt;q, mu&gt;
+ *         + offset
  * </pre>
  *
  * <p>
- * This exactly matches the C++ scalar reconstruction formula and keeps SIMD/block
- * paths optional correctness optimizations outside this reference scorer.
+ * Fast-scan projection codes, currently bitsPerDimension in {2,4}, use the
+ * C++ projection-mode decomposition.  During encoding, {@code offset} already
+ * includes {@code -scale * &lt;A(mu), code&gt;}, so scoring uses only {@code A(q)}:
+ * </p>
+ *
+ * <pre>
+ *   score = scale * &lt;A(q), code&gt; + &lt;q, mu&gt; + offset
+ * </pre>
+ *
+ * <p>
+ * Other multibit widths keep the generic sign+extra-bit reference scorer used
+ * for standalone ASH and future ASH reranking experiments.
  * </p>
  *
  * NOTE: Only DOT_PRODUCT is supported for now.
@@ -92,7 +96,11 @@ public final class ASHScorer {
             return oneBitDotProductScoreFunction(qp);
         }
 
-        return multibitDotProductScoreFunction(qp);
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
+            return fastScanProjectionDotProductScoreFunction(qp);
+        }
+
+        return genericMultibitDotProductScoreFunction(qp);
     }
 
     private ASHScoreFunction oneBitDotProductScoreFunction(QueryPrecompute qp) {
@@ -123,17 +131,40 @@ public final class ASHScorer {
             }
 
             // 1-bit ASH dot-product approximation:
-            //   scale * (2<q̃_c,b> - <q̃_c,1>) + <q,μ_c> + (<x,μ_c> - ||μ_c||²)
+            //   scale * (2<q̃_c,b> - <q̃_c,1>) + <q,μ_c> + offset
             return v.scale * (2f * maskedAdd - qp.sumTildeQByLandmark[c])
                     + qp.dotQMuByLandmark[c]
                     + v.offset;
         };
     }
 
-    private ASHScoreFunction multibitDotProductScoreFunction(QueryPrecompute qp) {
+    private ASHScoreFunction fastScanProjectionDotProductScoreFunction(QueryPrecompute qp) {
         final int d = qp.d;
         final int C = qp.C;
-        final int exBits = ash.bitsPerDimension - 1;
+        final int bitsPerDimension = ash.bitsPerDimension;
+
+        return (AsymmetricHashing.QuantizedVector v) -> {
+            final int c = v.landmark & 0xFF; // unsigned [0,C)
+            assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
+
+            // C++ projection-mode scoring:
+            //   score = scale * <Aq, code> + <q, μ_c> + stored_offset
+            // stored_offset already includes -scale * <Aμ_c, code>.
+            float ip = AsymmetricHashing.dotProjectionCode(
+                    qp.qProj,
+                    v.extraBits,
+                    d,
+                    bitsPerDimension);
+
+            return v.scale * ip + qp.dotQMuByLandmark[c] + v.offset;
+        };
+    }
+
+    private ASHScoreFunction genericMultibitDotProductScoreFunction(QueryPrecompute qp) {
+        final int d = qp.d;
+        final int C = qp.C;
+        final int bitsPerDimension = ash.bitsPerDimension;
+        final int exBits = bitsPerDimension - 1;
         final int signMagnitudeOffset = 1 << exBits;
         final float centerBias = -(signMagnitudeOffset - 0.5f);
 
@@ -150,7 +181,7 @@ public final class ASHScorer {
                 int sign = AsymmetricHashing.QuantizedVector.getBit(signBits, j) ? 1 : 0;
                 int extra = AsymmetricHashing.QuantizedVector.readExtraCode(extraBits, j, exBits);
 
-                // Matches C++:
+                // Matches the C++ generic scalar reconstruction formula:
                 //   (sign << exBits) + extra - (2^exBits - 0.5)
                 float code = (float) ((sign << exBits) + extra) + centerBias;
                 ip += qp.tildeQPool[tildeBase + j] * code;
@@ -189,9 +220,9 @@ public final class ASHScorer {
         }
 
         // For each landmark c:
-        //   tildeQ_c   = Aq - Aμ_c
+        //   tildeQ_c   = Aq - Aμ_c       (1-bit and generic multibit paths)
         //   sumTildeQc = sum(Aq) - sum(Aμ_c)
-        //   dotQMu_c   = <q, μ_c>
+        //   dotQMu_c   = <q, μ_c>        (all paths)
         final float[] tildeQPool = new float[C * d];
         final float[] sumTildeQByLandmark = new float[C];
         final float[] dotQMuByLandmark = new float[C];
@@ -207,24 +238,27 @@ public final class ASHScorer {
             }
         }
 
-        return new QueryPrecompute(d, C, tildeQPool, sumTildeQByLandmark, dotQMuByLandmark);
+        return new QueryPrecompute(d, C, qProj, tildeQPool, sumTildeQByLandmark, dotQMuByLandmark);
     }
 
     private static final class QueryPrecompute {
         final int d;
         final int C;
-        final float[] tildeQPool;             // [C * d]
-        final float[] sumTildeQByLandmark;    // [C]
-        final float[] dotQMuByLandmark;       // [C]
+        final float[] qProj;                   // [d], Aq
+        final float[] tildeQPool;              // [C * d], Aq - Aμ_c
+        final float[] sumTildeQByLandmark;     // [C]
+        final float[] dotQMuByLandmark;        // [C]
 
         QueryPrecompute(
                 int d,
                 int C,
+                float[] qProj,
                 float[] tildeQPool,
                 float[] sumTildeQByLandmark,
                 float[] dotQMuByLandmark) {
             this.d = d;
             this.C = C;
+            this.qProj = qProj;
             this.tildeQPool = tildeQPool;
             this.sumTildeQByLandmark = sumTildeQByLandmark;
             this.dotQMuByLandmark = dotQMuByLandmark;
@@ -236,4 +270,3 @@ public final class ASHScorer {
         float similarityTo(AsymmetricHashing.QuantizedVector vector2);
     }
 }
-

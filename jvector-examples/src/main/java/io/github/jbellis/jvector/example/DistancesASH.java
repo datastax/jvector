@@ -107,7 +107,7 @@ public class DistancesASH {
         final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
 
         // How many ASH landmarks to use, C = [1, 64]
-        final int landmarkCount = 32;
+        final int landmarkCount = 1;
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -124,7 +124,7 @@ public class DistancesASH {
         // - No other normalization steps are applied.
 
         int dimension = vectors.get(0).length();
-        int encodedBits = 1064; // (dimension / 4) + HEADER_BITS;
+        int encodedBits = 1536; // (dimension / 4) + HEADER_BITS;
         // Payload must be 64-bit aligned for SIMD
         int payloadBits = encodedBits - HEADER_BITS;
 //        if ((payloadBits & 63) != 0) {
@@ -640,9 +640,9 @@ public class DistancesASH {
     public static void runOpenai1536() throws IOException {
         System.out.println("Running text-embedding-3-large_1536");
 
-        var baseVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_query_vectors_10000.fvec";
-        var gtVectors = "./fvec/openai-v3-large-1536-100k/text-embedding-3-large_1536_100000_indices_query_10000.ivec";
+        var baseVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_base_98716.fvecs";
+        var queryVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_query_10000.fvecs";
+        var gtVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_gt_ip_100.ivecs";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
@@ -677,10 +677,10 @@ public class DistancesASH {
 //        runSIFT();
 //        runGIST();
 //        runColbert();
-        runCohere100k();
+//        runCohere100k();
 //        runADA();
 //        runADANoZeros();
-//        runOpenai1536();
+        runOpenai1536();
 //        runOpenai3072();
 //        runCap6m();
 //        runCohere10m();

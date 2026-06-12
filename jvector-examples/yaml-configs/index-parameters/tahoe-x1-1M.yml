@@ -1,7 +1,7 @@
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
 
-dataset: tahoe-x1-100k
+dataset: tahoe-x1-1M
 
 construction:
   outDegree: [32]

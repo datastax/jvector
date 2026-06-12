@@ -97,3 +97,15 @@ nytimes-256-angular:
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB
+dpr-gemma-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+mpnet-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+tahoe-x1-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+personahub-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB

@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
@@ -69,7 +70,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
 public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 6;
+    public static final int CURRENT_VERSION = 7;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -186,39 +187,41 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             CommonHeader.LayerInfo info = layerInfo.get(lvl);
             inMemorySize += Integer.BYTES * info.size * (1L + 1L + info.degree);
         }
+
         in.seek(neighborsOffset + L0size + inMemorySize);
 
-        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
-        if (version == 6) {
+        FusedFeature fusedFeature = null;
+        for (var feature : features.values()) {
+            if (feature.isFused()) {
+                fusedFeature = (FusedFeature) feature;
+                break;
+            }
+        }
+
+        if (fusedFeature == null) {
+            return hierarchyFeatures;
+        }
+
+        // V6+ layout: fused source features for the in-memory hierarchy are written
+        // after the upper-layer graph data. Level 1 contains all higher-level nodes,
+        // so reading level 1 is sufficient.
+        if (version >= 6) {
             if (layerInfo.size() >= 2) {
                 int level = 1;
                 CommonHeader.LayerInfo info = layerInfo.get(level);
+
                 for (int i = 0; i < info.size; i++) {
                     int nodeId = in.readInt();
-
-                    // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
-                    for (var feature : features.values()) {
-                        if (feature.isFused()) {
-                            var fusedFeature = (FusedFeature) feature;
-                            var inlineSource = fusedFeature.loadSourceFeature(in);
-                            hierarchyFeatures.put(nodeId, inlineSource);
-                        }
-                    }
+                    var inlineSource = fusedFeature.loadSourceFeature(in);
+                    hierarchyFeatures.put(nodeId, inlineSource);
                 }
             } else {
-                // read the entry node
                 int nodeId = in.readInt();
-
-                // There should be only one fused feature per node. This is checked in AbstractGraphIndexWriter.
-                for (var feature : features.values()) {
-                    if (feature.isFused()) {
-                        var fusedFeature = (FusedFeature) feature;
-                        var inlineSource = fusedFeature.loadSourceFeature(in);
-                        hierarchyFeatures.put(nodeId, inlineSource);
-                    }
-                }
+                var inlineSource = fusedFeature.loadSourceFeature(in);
+                hierarchyFeatures.put(nodeId, inlineSource);
             }
         }
+
         return hierarchyFeatures;
     }
 
@@ -695,6 +698,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.FUSED_PQ)) {
                 return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
+            } else if (features.containsKey(FeatureId.FUSED_ASH)) {
+                return ((FusedASH) features.get(FeatureId.FUSED_ASH)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else {
                 throw new UnsupportedOperationException("No approximate score function available for this graph");
             }
