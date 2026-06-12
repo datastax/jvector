@@ -1,0 +1,98 @@
+name: Generate Release Notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to generate notes for (e.g. 4.0.0-RC.9)'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous release version for the version-range header (e.g. 4.0.0-RC.8) — leave blank to omit'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  generate-release-notes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs and directory
+        run: |
+          NOTES_DIR="docs/release notes/${{ inputs.version }}"
+
+          if [ ! -d "${NOTES_DIR}" ]; then
+            echo "::error::Release notes directory '${NOTES_DIR}' does not exist."
+            exit 1
+          fi
+
+          # Count source files (exclude the output file if it already exists)
+          COUNT=$(find "${NOTES_DIR}" -maxdepth 1 -name "*.md" \
+                    -not -name "${{ inputs.version }}.md" | wc -l)
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "::error::No .md source files found in '${NOTES_DIR}'."
+            exit 1
+          fi
+
+          echo "Found ${COUNT} source file(s) in '${NOTES_DIR}'"
+
+      - name: Assemble release notes
+        run: |
+          VERSION="${{ inputs.version }}"
+          PREV="${{ inputs.previous_version }}"
+          NOTES_DIR="docs/release notes/${VERSION}"
+          OUTPUT="${NOTES_DIR}/${VERSION}.md"
+
+          # Build the version-range header line
+          if [ -n "${PREV}" ]; then
+            VERSION_LINE="## Version: ${PREV} - ${VERSION}"
+          else
+            VERSION_LINE="## Version: ${VERSION}"
+          fi
+
+          # Write the preamble
+          printf '# JVector Release Notes\n\n' > "${OUTPUT}"
+          printf '%s\n\n' "${VERSION_LINE}" >> "${OUTPUT}"
+          printf -- '---\n\n' >> "${OUTPUT}"
+          printf '## New Features and Enhancements\n\n' >> "${OUTPUT}"
+
+          # Append feature files in alphabetical order.
+          # BugFixes.md is excluded here and appended last because it carries
+          # its own ## section header.
+          while IFS= read -r -d '' f; do
+            cat "$f" >> "${OUTPUT}"
+            # Add a trailing separator if the file does not already end with one
+            if [ "$(tail -c 5 "$f" | tr -d '[:space:]')" != "---" ]; then
+              printf '\n\n---\n\n' >> "${OUTPUT}"
+            fi
+          done < <(find "${NOTES_DIR}" -maxdepth 1 -name "*.md" \
+                    -not -name "BugFixes.md" \
+                    -not -name "${VERSION}.md" \
+                    -print0 | sort -z)
+
+          # Append BugFixes.md last — it owns its ## section header
+          BUGFIXES="${NOTES_DIR}/BugFixes.md"
+          if [ -f "${BUGFIXES}" ]; then
+            printf '\n' >> "${OUTPUT}"
+            cat "${BUGFIXES}" >> "${OUTPUT}"
+          fi
+
+          echo "Generated ${OUTPUT}:"
+          cat "${OUTPUT}"
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "docs/release notes/${{ inputs.version }}/${{ inputs.version }}.md"
+          if git diff --cached --quiet; then
+            echo "Output file is unchanged — nothing to commit."
+          else
+            git commit -m "Generate release notes for ${{ inputs.version }}"
+            git push
+          fi
