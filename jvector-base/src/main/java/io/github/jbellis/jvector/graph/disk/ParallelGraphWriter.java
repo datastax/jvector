@@ -22,7 +22,6 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -66,11 +65,14 @@ class ParallelGraphWriter implements AutoCloseable {
     private final ImmutableGraphIndex graph;
     private final ExecutorService executor;
     private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
-    private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath;
     private final int taskMultiplier;
+    // Passed through to NodeRecordTask so each task allocates the right buffer type.
+    // FUTURE IMPROVEMENT: when the legacy path is removed, each task allocates exactly
+    // one range-sized buffer, making the direct/heap distinction more impactful and cleaner.
+    private final boolean useDirectBuffers;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
 
     /**
@@ -122,6 +124,7 @@ class ParallelGraphWriter implements AutoCloseable {
         this.graph = graph;
         this.filePath = Objects.requireNonNull(filePath);
         this.taskMultiplier = config.taskMultiplier;
+        this.useDirectBuffers = config.useDirectBuffers;
         this.executor = Executors.newFixedThreadPool(config.workerThreads,
             r -> {
                 Thread t = new Thread(r);
@@ -136,23 +139,17 @@ class ParallelGraphWriter implements AutoCloseable {
             + Integer.BYTES // neighbor count
             + graph.getDegree(0) * Integer.BYTES; // neighbors + padding
 
-        // Thread-local views for safe neighbor iteration
-        // CopyOnWriteArrayList handles concurrent additions safely
+        // Thread-local views for safe neighbor iteration.
+        // CopyOnWriteArrayList handles concurrent additions safely.
         this.viewPerThread = ThreadLocal.withInitial(() -> {
             var view = graph.getView();
             allViews.add(view);
             return view;
         });
-
-        // Thread-local buffers to avoid allocation overhead
-        // Use BIG_ENDIAN to match Java DataOutput specification
-        final int bufferSize = recordSize;
-        final boolean useDirect = config.useDirectBuffers;
-        this.bufferPerThread = ThreadLocal.withInitial(() -> {
-            ByteBuffer buffer = useDirect ? ByteBuffer.allocateDirect(bufferSize) : ByteBuffer.allocate(bufferSize);
-            buffer.order(java.nio.ByteOrder.BIG_ENDIAN);
-            return buffer;
-        });
+        // FUTURE IMPROVEMENT: the old per-thread scratch buffer (bufferPerThread) is removed.
+        // Each task now allocates its own range-sized buffer in the fast path, or per-region
+        // buffers in the legacy path.  The thread-local was sized to a single record and forced
+        // sub-record writes; the new approach eliminates that bottleneck entirely.
     }
 
     /**
@@ -212,23 +209,19 @@ class ParallelGraphWriter implements AutoCloseable {
                 final int end = endOrdinal;
 
                 Future<Void> future = executor.submit(() -> {
-                    var view = viewPerThread.get();
-                    var buffer = bufferPerThread.get();
-
                     var task = new NodeRecordTask(
-                            start,                    // Start of range (inclusive)
-                            end,                      // End of range (exclusive)
+                            start,              // range start (inclusive)
+                            end,                // range end (exclusive)
                             ordinalMapper,
                             graph,
-                            view,
+                            viewPerThread.get(),
                             inlineFeatures,
                             featureStateSuppliers,
                             recordSize,
-                            baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                            channel,                  // Async file channel for position-based writes
-                            buffer                    // Thread-local buffer
+                            baseOffset,
+                            channel,
+                            useDirectBuffers    // each task allocates its own buffer(s)
                     );
-
                     return task.call();
                 });
 
