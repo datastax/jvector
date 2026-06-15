@@ -81,7 +81,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
-    private boolean ownsExecutor = false;
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
@@ -120,14 +119,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             ForkJoinPool executor) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
-        int threads = Runtime.getRuntime().availableProcessors();
         if (executor != null) {
             this.executor = executor;
         } else {
-            this.executor = new ForkJoinPool(threads);
-            this.ownsExecutor = true;
+            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
+            // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
+            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
+            // process-wide and shared with index construction and quantization; the compactor
+            // never owns or shuts it down.
+            this.executor = PhysicalCoreExecutor.pool();
         }
-        this.taskWindowSize = threads;
+        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
+        // whether the executor is the shared default or a caller-injected pool.
+        this.taskWindowSize = this.executor.getParallelism();
 
         this.sources = sources;
         this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
@@ -299,7 +303,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
             // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
             strategy.onAfterClose(outputPath);
-            if (ownsExecutor) executor.shutdown();
         }
     }
 
@@ -333,7 +336,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
             inlineStrategy.onAfterClose(graphPath);
-            if (ownsExecutor) executor.shutdown();
         }
     }
 
@@ -1408,8 +1410,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Shallow size of this object (header + fields)
         // Current fields: sources, liveNodes, numLiveNodesPerSource, remappers, maxDegrees,
         //                dimension(int), maxOrdinal(int), numTotalNodes(int),
-        //                ownsExecutor(boolean), executor, taskWindowSize(int), similarityFunction
-        long size = OH + 8L * REF + Integer.BYTES * 4 + 1;
+        //                executor, taskWindowSize(int), similarityFunction
+        long size = OH + 8L * REF + Integer.BYTES * 4;
 
         // liveNodes: FixedBitSet per source. May be null after releaseSourcesBeforeRefine().
         if (liveNodes != null) {
@@ -1437,12 +1439,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
 
-        // executor: ForkJoinPool overhead (if owned)
-        // Estimate based on number of threads
-        int numThreads = ownsExecutor ? Runtime.getRuntime().availableProcessors() : taskWindowSize;
-        if (ownsExecutor) {
-            size += OH + REF;
-        }
+        // executor: a shared pool (default) or caller-injected — not owned by the compactor, so it
+        // contributes no pool allocation here. Scratch space still scales with its parallelism.
+        int numThreads = taskWindowSize;
 
         // Scratch space: ThreadLocal instances (one per active thread)
         // Each Scratch contains:
