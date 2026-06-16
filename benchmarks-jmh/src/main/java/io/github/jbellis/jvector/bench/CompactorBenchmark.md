@@ -16,49 +16,33 @@
 
 # CompactorBenchmark
 
-`CompactorBenchmark` evaluates the **performance, memory usage, and recall quality** of graph index compaction using `OnDiskGraphIndexCompactor`.
+`CompactorBenchmark` measures the **compaction time, search latency, recall, and heap
+memory footprint** of graph index compaction (`OnDiskGraphIndexCompactor`).
+
+A run does up to two things:
+
+1. **Compact** several partition indexes into one graph, timing only the compaction.
+2. **Search** the resulting graph against the dataset's queries to report recall and
+   per-query search latency (only when `measureRecall=true`).
 
 ---
 
-# 1. Workload Modes
+## Contents
 
-| Mode | Description |
-|------|-------------|
-| `PARTITION_AND_COMPACT` | **(default)** Build partitions, compact them |
-| `PARTITION` | Build N partition indexes and exit; no compaction |
-| `COMPACT` | Compact existing partitions |
-| `BUILD` | Build a single index over the full dataset |
-
-## measureRecall
-
-Set `-p measureRecall=false` to skip recall measurement. For `COMPACT` mode this also
-skips dataset loading entirely, since query vectors and ground truth are not needed.
-
-## Fair comparison guidelines
-
-**Recall**: use `PARTITION_AND_COMPACT` vs `BUILD`, both with `measureRecall=true` and
-the same dataset, `indexPrecision`, `graphDegree`, and `beamWidth`. Both modes search
-using FusedPQ with FP reranking. The `recall` field in the JSONL output is directly
-comparable.
-
-**Build performance**: use `COMPACT` vs `BUILD`, both with `measureRecall=false`.
-The `durationMs` field measures only the graph construction pipeline (PQ training +
-graph build + write for `BUILD`; PQ retraining + neighbor gathering + write for
-`COMPACT`). Dataset loading is excluded from `durationMs` in both modes.
-Run `PARTITION` first to create the partition files needed by `COMPACT`.
-
-**Memory footprint**: run `COMPACT` with `measureRecall=false` and a small `-Xmx`
-(e.g., 5g). Since `COMPACT` does not load the dataset into heap, the heap limit
-reflects only the compactor's own memory usage. `BUILD` always requires the full
-dataset in memory, so its heap requirement scales with dataset size.
+1. [Quick start](#1-quick-start)
+2. [Workload modes](#2-workload-modes)
+3. [measureRecall](#3-measurerecall)
+4. [Two-step workflow: partition, then compact](#4-two-step-workflow-partition-then-compact)
+5. [Parameters](#5-parameters)
+6. [Split distributions](#6-split-distributions)
+7. [Index precision](#7-index-precision)
+8. [Output](#8-output)
 
 ---
 
-# 2. Quick Start
+# 1. Quick start
 
-## Default: partition and compact in one run
-
-The default mode builds partitions and immediately compacts them. Use this when you want a single-command end-to-end result. Adjust `-Xmx` to fit the dataset in memory (e.g., 220g for large datasets).
+**End-to-end (build partitions, then compact, then measure recall):**
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
@@ -72,17 +56,69 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -wi 0 -i 1 -f 1
 ```
 
+Size `-Xmx` to fit the dataset in memory (e.g. `220g` for large datasets). The flags
+`-wi 0 -i 1 -f 1` mean zero warmup iterations, one measurement iteration, one fork.
+
 ---
 
-# 3. Measuring Peak Heap During Compaction
+# 2. Workload modes
 
-The two-step workflow (`PARTITION` → `COMPACT` with `measureRecall=false`) exists to isolate compaction's true memory footprint. In `PARTITION_AND_COMPACT` mode the dataset is still resident in heap during compaction, which inflates the apparent memory cost. `COMPACT` with `measureRecall=false` skips dataset loading entirely, so the heap limit applies only to the compactor itself.
+Set with `-p workloadMode=<MODE>`.
 
-This lets you prove that compaction can run on machines with very little RAM — e.g., `-Xmx5g` is sufficient even for large datasets.
+| Mode | What it does |
+|------|--------------|
+| `PARTITION_AND_COMPACT` *(default)* | Build N partitions, then compact them |
+| `PARTITION` | Build N partition indexes and exit; no compaction |
+| `COMPACT` | Compact already-built partitions from disk |
+| `BUILD` | Build a single index over the full dataset (baseline) |
 
-## Step 1: Build partitions
+`COMPACT` requires partition files on disk — run `PARTITION` first (or use
+`PARTITION_AND_COMPACT`, which does both in one process).
 
-Run with a large heap since the full dataset must be loaded into memory.
+---
+
+# 3. `measureRecall`
+
+**`measureRecall` defaults to `true`.** After compacting (or building), the benchmark
+loads the dataset's query vectors and ground truth, searches the resulting graph, and
+reports `recall` plus `avgSearchLatencyMs` / `p99SearchLatencyMs`.
+
+This matters for memory experiments: even though `COMPACT` mode never loads the base
+vectors into heap, with the default `measureRecall=true` it **still loads query vectors +
+ground truth and runs a search**, which adds heap usage and extra work.
+
+**To see the true heap memory footprint of compaction, set `measureRecall=false` together
+with `COMPACT` mode.** That skips dataset loading entirely, so the heap reflects only the
+compactor itself:
+
+```bash
+-p workloadMode=COMPACT -p measureRecall=false
+```
+
+When comparing across modes, keep `datasetNames`, `indexPrecision`, `graphDegree`, and
+`beamWidth` identical so the numbers are directly comparable.
+
+---
+
+# 4. Two-step workflow: partition, then compact
+
+Splitting the run in two means you **partition once and compact many times**: step 1
+writes the partition files to disk, and any number of subsequent `COMPACT` runs (different
+heaps, `numPartitions`, repeated measurements, etc.) reuse them without re-partitioning.
+
+Use `-p storageDirectories=<dir>[,<dir2>...]` to control where partition files are
+written. By default they go to a JVM temp directory, which may be cleaned up between runs;
+point `storageDirectories` at a persistent path so step 1's output survives for reuse in
+step 2. The same value must be passed to both steps. Multiple comma-separated directories
+distribute partitions round-robin (e.g. across disks).
+
+The two-step workflow could also isolate compaction's real heap cost. In
+`PARTITION_AND_COMPACT` the dataset is still resident in heap during compaction, which
+inflates the apparent cost. Running `COMPACT` with `measureRecall=false` loads nothing but
+the partitions being merged — proving compaction runs with a small heap (e.g. `-Xmx5g`,
+even for large datasets).
+
+**Step 1 — build the partitions** (needs a large heap to hold the dataset):
 
 ```bash
 java -Xmx220g --add-modules jdk.incubator.vector \
@@ -93,14 +129,35 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
   -p indexPrecision=FUSEDPQ \
+  -p storageDirectories=/path/to/partitions \
   -wi 0 -i 1 -f 1
 ```
 
-The partition files are written to disk and reused in the next step.
+Partition files are written to `storageDirectories` and reused in step 2.
 
-## Step 2: Compact only (low-memory run)
+**Step 2 — compact the partitions.** Choose one of the two options below.
 
-The dataset is **not** loaded in this mode. Use a small `-Xmx` to measure and prove the compactor's true peak heap.
+*Option A — recall and search latency* (`measureRecall=true`, the default): after
+compacting, the benchmark searches the compacted graph and reports `recall`,
+`avgSearchLatencyMs`, and `p99SearchLatencyMs`. This loads query vectors + ground truth, so
+size `-Xmx` accordingly.
+
+```bash
+java -Xmx220g --add-modules jdk.incubator.vector \
+  -cp benchmarks-jmh/target/compactor-benchmark.jar \
+  io.github.jbellis.jvector.bench.CompactorBenchmark \
+  -p workloadMode=COMPACT \
+  -p measureRecall=true \
+  -p datasetNames=ada002-100k \
+  -p numPartitions=4 \
+  -p splitDistribution=FIBONACCI \
+  -p indexPrecision=FUSEDPQ \
+  -p storageDirectories=/path/to/partitions \
+  -wi 0 -i 1 -f 1
+```
+
+*Option B — heap memory footprint* (`measureRecall=false`): the dataset is *not* loaded,
+so a small heap proves the compactor's true footprint.
 
 ```bash
 java -Xmx5g --add-modules jdk.incubator.vector \
@@ -112,44 +169,50 @@ java -Xmx5g --add-modules jdk.incubator.vector \
   -p numPartitions=4 \
   -p splitDistribution=FIBONACCI \
   -p indexPrecision=FUSEDPQ \
+  -p storageDirectories=/path/to/partitions \
   -wi 0 -i 1 -f 1
 ```
 
-`durationMs` in the output records only the `compact()` call — not JVM startup or I/O setup.
+All datasets in the recall table (see `docs/compaction.md`) run under Option B with
+`-Xmx5g`. Compaction also scales to 2560 dimensions × 10M vectors under the same limit.
 
 ---
 
-# 4. Key Parameters
+# 5. Parameters
+
+Set any parameter with `-p <name>=<value>`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `workloadMode` | `PARTITION_AND_COMPACT` | Which phase(s) to run — see §2 |
+| `measureRecall` | `true` | Search the result for recall + latency — see §3 |
 | `datasetNames` | `ada002-100k` | Dataset name |
-| `workloadMode` | `PARTITION_AND_COMPACT` | Which phase(s) to run (`PARTITION`, `COMPACT`, `BUILD`, `PARTITION_AND_COMPACT`) |
-| `measureRecall` | `true` | Whether to run recall measurement after building/compacting |
 | `numPartitions` | `4` | Number of source partition indexes |
-| `splitDistribution` | — | Data partitioning strategy (see below) |
-| `indexPrecision` | — | `FULLPRECISION` (inline vectors only) or `FUSEDPQ` (inline + FusedPQ) |
-| `storageDirectories` | *(temp dir)* | Comma-separated list of directories where partition files are written; partitions are distributed round-robin across them. Defaults to a JVM temp directory if unset. |
+| `splitDistribution` | `FIBONACCI` | How vectors are divided across partitions — see §6 |
+| `indexPrecision` | `FUSEDPQ` | `FULLPRECISION` or `FUSEDPQ` — see §7 |
+| `graphDegree` | `32` | Max neighbors per node |
+| `beamWidth` | `100` | Beam width during graph construction |
+| `storageDirectories` | *(temp dir)* | Comma-separated dirs for partition files; distributed round-robin. Defaults to a JVM temp dir. |
 
 ---
 
-# 5. Split Distributions
+# 6. Split distributions
 
 `splitDistribution` controls how vectors are divided across partitions.
 
-| Distribution | Weights (example: 4 partitions) | Description |
+| Distribution | Weights (4 partitions) | Description |
 |---|---|---|
 | `UNIFORM` | [1, 1, 1, 1] (25% each) | Equal-sized partitions |
-| `FIBONACCI` | [1, 2, 3, 5] (9%, 18%, 27%, 45%) | Fibonacci-weighted; larger partitions grow progressively |
-| `LOG2N` | [1, 2, 4, 8] (7%, 13%, 27%, 53%) | Power-of-two weighted |
-| `TIERED_10_90` | [1, 9] (10%, 90%) | Small + large; simulates compacting a new segment into a large index |
-| `TIERED_1_99` | [1, 99] (1%, 99%) | Very small + very large; extreme tiered compaction scenario |
+| `FIBONACCI` | [1, 2, 3, 5] (9/18/27/45%) | Fibonacci-weighted; partitions grow progressively |
+| `LOG2N` | [1, 2, 4, 8] (7/13/27/53%) | Power-of-two weighted |
+| `TIERED_10_90` | [1, 9] (10/90%) | Small + large; new segment compacted into a large index |
+| `TIERED_1_99` | [1, 99] (1/99%) | Extreme tiered compaction scenario |
 
-`TIERED_10_90` and `TIERED_1_99` are designed for 2-partition benchmarks (`-p numPartitions=2`).
+`TIERED_10_90` and `TIERED_1_99` are meant for 2-partition runs (`-p numPartitions=2`).
 
 ---
 
-# 6. Index Precision
+# 7. Index precision
 
 `indexPrecision` controls what features are written into each partition index.
 
@@ -160,24 +223,31 @@ java -Xmx5g --add-modules jdk.incubator.vector \
 
 ---
 
-# 7. Results
+# 8. Output
 
-Results are written as JSONL to:
+## JMH summary table
+
+Printed to the console when the run finishes, as secondary metrics on the `run` benchmark:
+
+| Metric | Meaning |
+|--------|---------|
+| `run:compactionTimeMs` | Time inside `compact()` only |
+| `run:avgSearchLatencyMs` | Mean per-query `search()` latency on the result graph |
+| `run:p99SearchLatencyMs` | 99th-percentile per-query `search()` latency |
+| `run:recall` | Recall@10 |
+
+The latency and recall metrics are only present when `measureRecall=true`.
+
+## Results JSONL
+
+Full results are also written to:
 
 ```
 target/benchmark-results/compactor-<timestamp>/compactor-results.jsonl
 ```
 
-Key fields:
-
 | Field | Description |
 |-------|-------------|
-| `durationMs` | Time spent in the measured phase only |
+| `durationMs` | Time in the measured phase only (`compact()` for `COMPACT`); excludes JVM startup and I/O setup |
 | `recall` | Recall@10 (present when `measureRecall=true`) |
-| `peakHeapMb` | Peak JVM heap observed during the run |
-
----
-
-# 8. Memory Footprint
-
-All datasets in the recall table (see `docs/compaction.md`) can be run under `COMPACT` with `measureRecall=false` and `-Xmx5g`. Compaction also successfully scales to a dataset with 2560 dimensions and 10M vectors under the same constraint.
+| `avgSearchLatencyMs` / `p99SearchLatencyMs` | Per-query `search()` latency (present when `measureRecall=true`) |

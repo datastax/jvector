@@ -250,6 +250,7 @@ final class CompactWriter implements AutoCloseable {
         final var endOfGraphPosition = writer.position();
         writer.seek(endOfGraphPosition);
         writer.flush();
+        writer.close();
     }
 
     public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode) throws IOException

@@ -26,6 +26,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.IntStream;
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -80,7 +81,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
-    private boolean ownsExecutor = false;
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
@@ -89,6 +89,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
      */
+    @Experimental
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<FixedBitSet> liveNodes,
@@ -108,6 +109,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      *                         quantization inline (FUSED_PQ) or have none. Must not be combined
      *                         with sources that carry the FUSED_PQ feature.
      */
+    @Experimental
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
@@ -117,14 +119,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             ForkJoinPool executor) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
-        int threads = Runtime.getRuntime().availableProcessors();
         if (executor != null) {
             this.executor = executor;
         } else {
-            this.executor = new ForkJoinPool(threads);
-            this.ownsExecutor = true;
+            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
+            // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
+            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
+            // process-wide and shared with index construction and quantization; the compactor
+            // never owns or shuts it down.
+            this.executor = PhysicalCoreExecutor.pool();
         }
-        this.taskWindowSize = threads;
+        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
+        // whether the executor is the shared default or a caller-injected pool.
+        this.taskWindowSize = this.executor.getParallelism();
 
         this.sources = sources;
         this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
@@ -285,6 +292,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Main compaction entry point. Merges all source indexes into a single output index at the
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
+    @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try {
@@ -295,7 +303,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
             // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
             strategy.onAfterClose(outputPath);
-            if (ownsExecutor) executor.shutdown();
         }
     }
 
@@ -308,6 +315,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * node is re-encoded against the new codebook. Requires that {@code sourceCompressed} was
      * supplied to the constructor.
      */
+    @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
         if (sourceCompressed == null) {
             throw new IllegalStateException(
@@ -328,7 +336,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
             inlineStrategy.onAfterClose(graphPath);
-            if (ownsExecutor) executor.shutdown();
         }
     }
 
@@ -621,7 +628,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Pull search results from approximateResults. When fused-PQ is on the scores there are
         // approximate; rescore exact for correct diversity comparison against existing edges.
         final boolean rescore = hasFusedPQ;
-        gs.approximateResults.foreach((nb, approxScore) -> {
+        gs.approximateResults().foreach((nb, approxScore) -> {
             if (nb == node) return;
             for (int k = 0; k < scratch.candSize; k++) {
                 if (scratch.candNode[k] == nb) return; // de-dupe against existing edges
@@ -1242,7 +1249,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             int prev_candSize = candSize;
             candSize = appendApproximateResults(
-                    scratch.gs[sourceIdx].approximateResults,
+                    scratch.gs[sourceIdx].approximateResults(),
                     sourceIdx,
                     scratch,
                     candSize
@@ -1310,7 +1317,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 inFlight++;
             }
             if (completed % 10 == 0) {
-                log.info("Compaction I/O progress: {}/{} batches written to disk", completed, total);
+                log.debug("Compaction I/O progress: {}/{} batches written to disk", completed, total);
             }
         }
     }
@@ -1403,37 +1410,38 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Shallow size of this object (header + fields)
         // Current fields: sources, liveNodes, numLiveNodesPerSource, remappers, maxDegrees,
         //                dimension(int), maxOrdinal(int), numTotalNodes(int),
-        //                ownsExecutor(boolean), executor, taskWindowSize(int), similarityFunction
-        long size = OH + 8L * REF + Integer.BYTES * 4 + 1;
+        //                executor, taskWindowSize(int), similarityFunction
+        long size = OH + 8L * REF + Integer.BYTES * 4;
 
-        // liveNodes: FixedBitSet per source
-        for (var entry : liveNodes) {
-            size += entry.ramBytesUsed();
+        // liveNodes: FixedBitSet per source. May be null after releaseSourcesBeforeRefine().
+        if (liveNodes != null) {
+            for (var entry : liveNodes) {
+                size += entry.ramBytesUsed();
+            }
         }
 
         // numLiveNodesPerSource: ArrayList of Integers
         size += OH + REF + (long) numLiveNodesPerSource.size() * (OH + Integer.BYTES);
 
-        // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap
-        // Estimate based on the number of mappings
-        for (var mapper : remappers) {
-            // Object overhead + two maps with int key/value pairs
-            // HashMap entry: ~32 bytes each; Int2IntHashMap: ~16 bytes per entry
-            if (mapper instanceof OrdinalMapper.MapMapper) {
-                // rough estimate: the mapper stores two maps over all mapped ordinals
-                size += OH + (long) (maxOrdinal + 1) * 48;
+        // remappers: each MapMapper holds an oldToNew HashMap and newToOld Int2IntHashMap.
+        // May be null after releaseSourcesBeforeRefine().
+        if (remappers != null) {
+            for (var mapper : remappers) {
+                // Object overhead + two maps with int key/value pairs
+                // HashMap entry: ~32 bytes each; Int2IntHashMap: ~16 bytes per entry
+                if (mapper instanceof OrdinalMapper.MapMapper) {
+                    // rough estimate: the mapper stores two maps over all mapped ordinals
+                    size += OH + (long) (maxOrdinal + 1) * 48;
+                }
             }
         }
 
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
 
-        // executor: ForkJoinPool overhead (if owned)
-        // Estimate based on number of threads
-        int numThreads = ownsExecutor ? Runtime.getRuntime().availableProcessors() : taskWindowSize;
-        if (ownsExecutor) {
-            size += OH + REF;
-        }
+        // executor: a shared pool (default) or caller-injected — not owned by the compactor, so it
+        // contributes no pool allocation here. Scratch space still scales with its parallelism.
+        int numThreads = taskWindowSize;
 
         // Scratch space: ThreadLocal instances (one per active thread)
         // Each Scratch contains:
