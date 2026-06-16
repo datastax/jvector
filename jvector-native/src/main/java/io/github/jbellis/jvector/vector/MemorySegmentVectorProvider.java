@@ -62,8 +62,8 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException
     {
-        for (int i = 0; i < vector.length(); i++)
-            out.writeFloat(vector.get(i));
+        float[] data = (float[]) ((MemorySegmentVectorFloat) vector).get().heapBase().get();
+        out.writeFloats(data, 0, vector.length());
     }
 
     @Override
@@ -98,7 +98,7 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
-        for (int i = 0; i < sequence.length(); i++)
-            out.writeByte(sequence.get(i));
+        byte[] data = (byte[]) ((MemorySegmentByteSequence) sequence).get().heapBase().get();
+        out.write(data, 0, sequence.length());
     }
 }
