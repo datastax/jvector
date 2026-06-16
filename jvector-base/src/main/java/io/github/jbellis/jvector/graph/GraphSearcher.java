@@ -63,9 +63,11 @@ public class GraphSearcher implements Closeable {
 
     private boolean pruneSearch;
 
-    // Edge-expansion pruning is only allowed at L0 after hierarchical routing.
-    // Non-hierarchical L0 pruning is unsafe because L0 performs global routing.
-    private boolean allowL0EdgePruning;
+    // Scratch state used only when adaptive termination is enabled for L0 search.
+    private final AdaptiveTermination adaptiveTermination;
+    private final NodeQueue terminationResults;
+    private final IntHashSet terminationResultMembers;
+    private int adaptiveIntroducedThisVisit;
 
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
@@ -91,7 +93,12 @@ public class GraphSearcher implements Closeable {
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
 
-        this.pruneSearch = true;
+        this.pruneSearch = false;
+        this.adaptiveTermination = new AdaptiveTermination();
+        this.terminationResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+        this.terminationResultMembers = new IntHashSet();
+        this.adaptiveIntroducedThisVisit = 0;
+
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
@@ -122,8 +129,8 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * When using pruning, we are using a heuristic to terminate the search earlier.
-     * In certain cases, it can lead to speedups. This is set to false by default.
+     * When using pruning, we use adaptive early termination to stop L0 search
+     * after result-set discovery has saturated. This is disabled by default.
      * @param usage a boolean that determines whether we do early termination or not.
      */
     public void usePruning(boolean usage) {
@@ -261,11 +268,6 @@ public class GraphSearcher implements Closeable {
     {
         initializeInternal(scoreProvider, entry, acceptOrds);
 
-        // Only allow edge-expansion pruning at L0 when hierarchy already routed
-        // the search into the base layer. Do not prune upper layers, and do not
-        // prune non-hierarchical L0 search.
-        allowL0EdgePruning = pruneSearch && entry.level > 0;
-
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
             // Search this layer with minimal parameters since we just want the best candidate
@@ -275,7 +277,7 @@ public class GraphSearcher implements Closeable {
         }
 
         // Now do the main search at layer 0
-        searchLayer0(topK, rerankK, threshold);;
+        searchLayer0(topK, rerankK, threshold);
     }
 
     /**
@@ -404,38 +406,57 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            // Edge-expansion pruning is allowed only at L0 after hierarchical routing.
-            // Threshold-based stopping still uses ScoreTracker independently.
-            final boolean allowEdgePruningThisLayer = allowL0EdgePruning && level == 0;
+            // Adaptive termination is used only for ordinary base-layer search.
+            // Threshold queries keep the existing threshold-specific tracker.
+            final boolean useAdaptiveTermination = pruneSearch && level == 0 && threshold == 0.0f && rerankK > 0;
+            if (useAdaptiveTermination) {
+                resetAdaptiveTermination(rerankK);
+            }
 
-            // Track scores for threshold stopping and, when allowed, late L0 edge pruning.
-            var scoreTracker = scoreTrackerFactory.getScoreTracker(
-                    allowEdgePruningThisLayer,
-                    rerankK,
-                    threshold
-            );
+            // ScoreTracker is retained for threshold queries. For threshold==0,
+            // adaptive termination replaces the old score-distribution pruning.
+            var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
+
+            var scoreFunction = scoreProvider.scoreFunction();
+            ImmutableGraphIndex.NeighborProcessor neighborProcessor;
+            if (useAdaptiveTermination) {
+                neighborProcessor = (node2, score) -> {
+                    if (acceptOrdsThisLayer.get(node2) && offerTerminationResult(node2, score, rerankK)) {
+                        adaptiveIntroducedThisVisit++;
+                    }
+
+                    candidates.push(node2, score);
+                    visitedCount++;
+                };
+            } else {
+                neighborProcessor = (node2, score) -> {
+                    scoreTracker.track(score);
+                    candidates.push(node2, score);
+                    visitedCount++;
+                };
+            }
 
             // the main search loop
             while (candidates.size() > 0) {
                 if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
                     break;
                 }
+                if (useAdaptiveTermination && adaptiveTermination.shouldTerminate()) {
+                    break;
+                }
+
+                adaptiveIntroducedThisVisit = 0;
 
                 // process the top candidate
                 float topCandidateScore = candidates.topScore();
                 int topCandidateNode = candidates.pop();
                 if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
-                }
 
-                // Skip edge loading only in late L0 search after hierarchy has routed us
-                // into the base layer. Require the approximate result set to be full and at
-                // least rerankK base-layer expansions before pruning any candidate expansion.
-                if (allowEdgePruningThisLayer
-                        && approximateResults.size() >= rerankK
-                        && expandedCountBaseLayer >= rerankK
-                        && scoreTracker.shouldStop()) {
-                    continue;
+                    if (useAdaptiveTermination
+                            && offerTerminationResult(topCandidateNode, topCandidateScore, rerankK)) {
+                        adaptiveIntroducedThisVisit++;
+                    }
                 }
 
                 if (level == 0) {
@@ -443,14 +464,17 @@ public class GraphSearcher implements Closeable {
                 }
                 expandedCount++;
 
-                // score the neighbors of the top candidate and add them to the queue
-                var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                    scoreTracker.track(score);
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
+                // Score the neighbors of the top candidate and add them to the queue.
+                // Adaptive termination observes completed visits after this expansion;
+                // it never skips expansion of a popped candidate.
                 view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
+
+                if (useAdaptiveTermination) {
+                    adaptiveTermination.observe(
+                            adaptiveIntroducedThisVisit,
+                            1,
+                            approximateResults.size() >= rerankK && terminationResults.size() >= rerankK);
+                }
             }
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
@@ -512,6 +536,41 @@ public class GraphSearcher implements Closeable {
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
+    }
+
+    private void resetAdaptiveTermination(int rerankK) {
+        adaptiveTermination.reset(rerankK);
+        terminationResults.clear();
+        terminationResults.setMaxSize(rerankK);
+        terminationResultMembers.clear();
+        adaptiveIntroducedThisVisit = 0;
+    }
+
+    /**
+     * Tracks whether a node enters the top-rerankK set used only for adaptive
+     * termination. This does not affect search ranking or returned results.
+     */
+    private boolean offerTerminationResult(int node, float score, int rerankK) {
+        if (terminationResultMembers.contains(node)) {
+            return false;
+        }
+
+        if (terminationResults.size() < rerankK) {
+            terminationResults.push(node, score);
+            terminationResultMembers.add(node);
+            return true;
+        }
+
+        if (score <= terminationResults.topScore()) {
+            return false;
+        }
+
+        int evicted = terminationResults.topNode();
+        terminationResults.push(node, score);
+
+        terminationResultMembers.remove(evicted);
+        terminationResultMembers.add(node);
+        return true;
     }
 
     @SuppressWarnings("StatementWithEmptyBody")
