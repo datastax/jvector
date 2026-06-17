@@ -62,12 +62,12 @@ public class GraphSearcher implements Closeable {
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
+    private float adaptiveTerminationGamma;
 
-    // Scratch state used only when adaptive termination is enabled for L0 search.
+    // Scratch state used only when distance-adaptive termination is enabled for L0 search.
     private final AdaptiveTermination adaptiveTermination;
-    private final NodeQueue terminationResults;
-    private final IntHashSet terminationResultMembers;
-    private int adaptiveIntroducedThisVisit;
+    private final NodeQueue adaptiveResults;
+    private final IntHashSet adaptiveResultMembers;
 
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
@@ -94,11 +94,10 @@ public class GraphSearcher implements Closeable {
         this.visited = new IntHashSet();
 
         this.pruneSearch = false;
+        this.adaptiveTerminationGamma = AdaptiveTermination.DEFAULT_GAMMA;
         this.adaptiveTermination = new AdaptiveTermination();
-        this.terminationResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
-        this.terminationResultMembers = new IntHashSet();
-        this.adaptiveIntroducedThisVisit = 0;
-
+        this.adaptiveResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+        this.adaptiveResultMembers = new IntHashSet();
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
@@ -129,11 +128,25 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * When using pruning, we use adaptive early termination to stop L0 search
-     * after result-set discovery has saturated. This is disabled by default.
-     * @param usage a boolean that determines whether we do early termination or not.
+     * When enabled, ordinary base-layer search uses distance-adaptive termination
+     * instead of fixed-width standard termination. Threshold queries keep the
+     * existing threshold-specific termination behavior.
+     *
+     * @param usage whether to enable distance-adaptive base-layer termination
      */
     public void usePruning(boolean usage) {
+        pruneSearch = usage;
+    }
+
+    /**
+     * Enables distance-adaptive base-layer termination with an explicit gamma.
+     *
+     * <p>Gamma controls recall/work tradeoff. {@code gamma = 0} is closest to the
+     * standard kth-result stopping boundary; larger values search longer.
+     */
+    public void usePruning(boolean usage, float gamma) {
+        AdaptiveTermination.validateGamma(gamma);
+        adaptiveTerminationGamma = gamma;
         pruneSearch = usage;
     }
 
@@ -349,17 +362,49 @@ public class GraphSearcher implements Closeable {
         expandedCountBaseLayer = 0;
     }
 
-    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
-        float topCandidateScore = localCandidates.topScore();
-        // we're done when we have K results and the best candidate is worse than the worst result so far
-        if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
+    private boolean stopSearch(NodeQueue localCandidates,
+                               ScoreTracker scoreTracker,
+                               int rerankK,
+                               float threshold,
+                               boolean useAdaptiveTermination)
+    {
+        if (useAdaptiveTermination) {
+            // GraphSearcher returns approximateResults, which is populated only when
+            // accepted candidates are popped. The adaptive heap tracks discovered nodes,
+            // so it is not sufficient by itself to satisfy the caller's requested result count.
+            if (approximateResults.size() < rerankK) {
+                return false;
+            }
+
+            var decision = adaptiveTermination.shouldTerminate(localCandidates.topScore(), adaptiveResults);
+
+            if (decision == AdaptiveTermination.Decision.FALL_BACK_TO_STANDARD) {
+                return stopStandardSearch(localCandidates, scoreTracker, rerankK, threshold);
+            }
+
+            // adaptiveResults is updated at discovery time. Do not terminate before
+            // a selected discovered result has had a chance to enter approximateResults.
+            if (adaptiveResultMembers.contains(localCandidates.topNode())) {
+                return false;
+            }
+
+            return decision == AdaptiveTermination.Decision.TERMINATE;
+        }
+
+        return stopStandardSearch(localCandidates, scoreTracker, rerankK, threshold);
+    }
+
+    private boolean stopStandardSearch(NodeQueue localCandidates,
+                                       ScoreTracker scoreTracker,
+                                       int rerankK,
+                                       float threshold)
+    {
+        if (approximateResults.size() >= rerankK
+                && localCandidates.topScore() < approximateResults.topScore()) {
             return true;
         }
-        // when querying by threshold, also stop when we are probabilistically unlikely to find more qualifying results
-        if (threshold > 0 && scoreTracker.shouldStop()) {
-            return true;
-        }
-        return false;
+
+        return threshold > 0 && scoreTracker.shouldStop();
     }
 
     /**
@@ -406,56 +451,47 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            // Adaptive termination is used only for ordinary base-layer search.
-            // Threshold queries keep the existing threshold-specific tracker.
-            final boolean useAdaptiveTermination = pruneSearch && level == 0 && threshold == 0.0f && rerankK > 0;
+            // Adaptive termination replaces standard fixed-width termination only
+            // for ordinary base-layer search. Threshold queries keep their existing
+            // threshold-specific tracker.
+            final boolean useAdaptiveTermination =
+                    pruneSearch && level == 0 && threshold == 0.0f && rerankK > 0;
+
             if (useAdaptiveTermination) {
-                resetAdaptiveTermination(rerankK);
+                resetAdaptiveTermination(rerankK, acceptOrdsThisLayer);
             }
 
-            // ScoreTracker is retained for threshold queries. For threshold==0,
-            // adaptive termination replaces the old score-distribution pruning.
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
-
             var scoreFunction = scoreProvider.scoreFunction();
-            ImmutableGraphIndex.NeighborProcessor neighborProcessor;
-            if (useAdaptiveTermination) {
-                neighborProcessor = (node2, score) -> {
-                    if (acceptOrdsThisLayer.get(node2) && offerTerminationResult(node2, score, rerankK)) {
-                        adaptiveIntroducedThisVisit++;
-                    }
 
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
-            } else {
-                neighborProcessor = (node2, score) -> {
+            ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                if (useAdaptiveTermination && acceptOrdsThisLayer.get(node2)) {
+                    offerAdaptiveResult(node2, score, rerankK);
+                }
+
+                if (!useAdaptiveTermination) {
                     scoreTracker.track(score);
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
-            }
+                }
+
+                candidates.push(node2, score);
+                visitedCount++;
+            };
 
             // the main search loop
             while (candidates.size() > 0) {
-                if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
+                if (stopSearch(candidates, scoreTracker, rerankK, threshold, useAdaptiveTermination)) {
                     break;
                 }
-                if (useAdaptiveTermination && adaptiveTermination.shouldTerminate()) {
-                    break;
-                }
-
-                adaptiveIntroducedThisVisit = 0;
 
                 // process the top candidate
                 float topCandidateScore = candidates.topScore();
                 int topCandidateNode = candidates.pop();
+
                 if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
 
-                    if (useAdaptiveTermination
-                            && offerTerminationResult(topCandidateNode, topCandidateScore, rerankK)) {
-                        adaptiveIntroducedThisVisit++;
+                    if (useAdaptiveTermination) {
+                        offerAdaptiveResult(topCandidateNode, topCandidateScore, rerankK);
                     }
                 }
 
@@ -465,16 +501,7 @@ public class GraphSearcher implements Closeable {
                 expandedCount++;
 
                 // Score the neighbors of the top candidate and add them to the queue.
-                // Adaptive termination observes completed visits after this expansion;
-                // it never skips expansion of a popped candidate.
                 view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
-
-                if (useAdaptiveTermination) {
-                    adaptiveTermination.observe(
-                            adaptiveIntroducedThisVisit,
-                            1,
-                            approximateResults.size() >= rerankK && terminationResults.size() >= rerankK);
-                }
             }
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
@@ -538,39 +565,46 @@ public class GraphSearcher implements Closeable {
         return reranking(topK, rerankK, rerankFloor);
     }
 
-    private void resetAdaptiveTermination(int rerankK) {
-        adaptiveTermination.reset(rerankK);
-        terminationResults.clear();
-        terminationResults.setMaxSize(rerankK);
-        terminationResultMembers.clear();
-        adaptiveIntroducedThisVisit = 0;
+    private void resetAdaptiveTermination(int rerankK, Bits acceptOrdsThisLayer) {
+        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma);
+        adaptiveResults.clear();
+        adaptiveResults.setMaxSize(rerankK);
+        adaptiveResultMembers.clear();
+
+        // Existing candidates are already discovered when L0 starts, so include
+        // acceptable ones in the adaptive discovered-result set.
+        candidates.foreach((node, score) -> {
+            if (acceptOrdsThisLayer.get(node)) {
+                offerAdaptiveResult(node, score, rerankK);
+            }
+        });
     }
 
     /**
-     * Tracks whether a node enters the top-rerankK set used only for adaptive
-     * termination. This does not affect search ranking or returned results.
+     * Tracks accepted discovered nodes for distance-adaptive termination.
+     * This is independent of approximateResults, which contains accepted expanded
+     * nodes used for returning/reranking.
      */
-    private boolean offerTerminationResult(int node, float score, int rerankK) {
-        if (terminationResultMembers.contains(node)) {
-            return false;
+    private void offerAdaptiveResult(int node, float score, int rerankK) {
+        if (adaptiveResultMembers.contains(node)) {
+            return;
         }
 
-        if (terminationResults.size() < rerankK) {
-            terminationResults.push(node, score);
-            terminationResultMembers.add(node);
-            return true;
+        if (adaptiveResults.size() < rerankK) {
+            adaptiveResults.push(node, score);
+            adaptiveResultMembers.add(node);
+            return;
         }
 
-        if (score <= terminationResults.topScore()) {
-            return false;
+        if (score <= adaptiveResults.topScore()) {
+            return;
         }
 
-        int evicted = terminationResults.topNode();
-        terminationResults.push(node, score);
+        int evicted = adaptiveResults.topNode();
+        adaptiveResults.push(node, score);
 
-        terminationResultMembers.remove(evicted);
-        terminationResultMembers.add(node);
-        return true;
+        adaptiveResultMembers.remove(evicted);
+        adaptiveResultMembers.add(node);
     }
 
     @SuppressWarnings("StatementWithEmptyBody")
