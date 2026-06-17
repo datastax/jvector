@@ -30,6 +30,8 @@ import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -50,8 +52,16 @@ import java.util.regex.Pattern;
  * </ol>
  * Neither the pool nor the probe is created until {@link #pool()}, {@link #instance()} or
  * {@link #getPhysicalCoreCount()} is first called.
+ *
+ * <p>On first resolution the chosen count and the method that produced it are logged at
+ * {@code INFO}. When no {@code jvector.physical_core_count} property is set and topology-aware
+ * sizing yields a different count than the legacy {@code availableProcessors() / 2} heuristic, a
+ * {@code WARNING} is also logged so the change in worker-thread count (and the throughput that
+ * tracks it) is visible to an operator who expected the old value.
  */
 public class PhysicalCoreExecutor implements Closeable {
+    private static final Logger LOG = Logger.getLogger(PhysicalCoreExecutor.class.getName());
+
     /** How long to wait on a best-effort OS probe subprocess before giving up.
      * An early exit (failed probe) won't take this long, but we keep a longer window to avoid spurrious
      * race conditions on systems which are potentially busy during start-up. */
@@ -135,6 +145,12 @@ public class PhysicalCoreExecutor implements Closeable {
     // ---------------------------------------------------------------------------------------------
 
     private static int resolvePhysicalCoreCount() {
+        final int logical = Runtime.getRuntime().availableProcessors();
+        // The pre-probe default (this class's historical sizing): assume 2-way hyper-threading.
+        // Serves both as the last-resort fallback and as the baseline we warn against when
+        // topology-aware sizing now selects a different number.
+        final int legacyHeuristic = Math.max(1, logical / 2);
+
         Integer override = Integer.getInteger("jvector.physical_core_count");
         if (override != null) {
             if (override < 1) {
@@ -142,18 +158,44 @@ public class PhysicalCoreExecutor implements Closeable {
                         "jvector.physical_core_count must be >= 1, got: " + override);
             }
             // Trust the operator: the property exists precisely to correct a wrong availableProcessors().
+            LOG.log(Level.INFO,
+                    "PhysicalCoreExecutor: using {0} worker threads, set explicitly via the "
+                            + "jvector.physical_core_count system property (availableProcessors={1}).",
+                    new Object[]{override, logical});
             return override;
         }
 
-        int logical = Runtime.getRuntime().availableProcessors();
         int detected = detectPhysicalCores();
+        final int selected;
+        final String method;
         if (detected >= 1) {
             // Physical cannot exceed logical; clamping also respects cgroup CPU limits, since
             // availableProcessors() reflects the quota while /proc/cpuinfo shows all host cores.
-            return Math.min(detected, logical);
+            selected = Math.min(detected, logical);
+            method = "OS topology probe on \"" + System.getProperty("os.name", "?")
+                    + "\" (detected " + detected + " physical cores, clamped to availableProcessors=" + logical + ")";
+        } else {
+            // Unknown topology: assume 2-way hyper-threading (the historical default).
+            selected = legacyHeuristic;
+            method = "fallback heuristic availableProcessors()/2 (availableProcessors=" + logical
+                    + "; OS topology probe unavailable)";
         }
-        // Unknown topology: assume 2-way hyper-threading (the historical default).
-        return Math.max(1, logical / 2);
+
+        LOG.log(Level.INFO,
+                "PhysicalCoreExecutor: using {0} worker threads, determined by {1}.",
+                new Object[]{selected, method});
+
+        // Auto-sizing now diverges from the pre-probe default; make that loud so an operator who
+        // expected the old thread count (and the throughput that came with it) can pin it deliberately.
+        if (selected != legacyHeuristic) {
+            LOG.log(Level.WARNING,
+                    "PhysicalCoreExecutor: previous auto-sized worker threads on this node would have been {0}, "
+                            + "but aligning to cores now sets them to {1}. "
+                            + "Set the jvector.physical_core_count system property to override.",
+                    new Object[]{legacyHeuristic, selected});
+        }
+
+        return selected;
     }
 
     /** Best-effort physical-core probe. Returns {@code -1} when the topology can't be determined. */
