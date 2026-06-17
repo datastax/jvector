@@ -31,7 +31,6 @@ jobs:
             exit 1
           fi
 
-          # Count source files (exclude the output file if it already exists)
           COUNT=$(find "${NOTES_DIR}" -maxdepth 1 -name "*.md" \
                     -not -name "${{ inputs.version }}.md" | wc -l)
           if [ "${COUNT}" -eq 0 ]; then
@@ -47,40 +46,126 @@ jobs:
           PREV="${{ inputs.previous_version }}"
           NOTES_DIR="docs/release notes/${VERSION}"
           OUTPUT="${NOTES_DIR}/${VERSION}.md"
+          GITHUB_REPO="datastax/jvector"
 
-          # Build the version-range header line
+          # -----------------------------------------------------------------------
+          # Section definitions — controls grouping and output order.
+          # Files named <PR#>.<tag>.md are automatically grouped under the matching
+          # header.  Add a new tag here to introduce a new section; reorder the
+          # TAG_ORDER array to change the order in which sections appear.
+          # Note: multiple tags may share a header (e.g. bugfix and fix both map to
+          # "Bug Fixes") — the first tag in TAG_ORDER that matches wins the header
+          # slot, and all aliases are collected into that same section.
+          # -----------------------------------------------------------------------
+          TAG_ORDER=("feature" "enhancement" "performance" "bugfix" "fix" "docs" "testing")
+          declare -A TAG_HEADERS
+          TAG_HEADERS["feature"]="## New Features"
+          TAG_HEADERS["enhancement"]="## Enhancements"
+          TAG_HEADERS["performance"]="## Performance Improvements"
+          TAG_HEADERS["bugfix"]="## Bug Fixes and Issue Resolutions"
+          TAG_HEADERS["fix"]="## Bug Fixes and Issue Resolutions"
+          TAG_HEADERS["docs"]="## Documentation and Tutorials"
+          TAG_HEADERS["testing"]="## Testing Enhancements"
+
+          # -----------------------------------------------------------------------
+          # Preamble
+          # -----------------------------------------------------------------------
           if [ -n "${PREV}" ]; then
             VERSION_LINE="## Version: ${PREV} - ${VERSION}"
           else
             VERSION_LINE="## Version: ${VERSION}"
           fi
+          printf '# JVector Release Notes\n\n%s\n\n---\n\n' "${VERSION_LINE}" > "${OUTPUT}"
 
-          # Write the preamble
-          printf '# JVector Release Notes\n\n' > "${OUTPUT}"
-          printf '%s\n\n' "${VERSION_LINE}" >> "${OUTPUT}"
-          printf -- '---\n\n' >> "${OUTPUT}"
-          printf '## New Features and Enhancements\n\n' >> "${OUTPUT}"
+          # -----------------------------------------------------------------------
+          # Bucket source files into new-style (<PR#>.<tag>.md) or legacy bins.
+          # Legacy files (e.g. BugFixes.md, old free-form names) are appended
+          # verbatim at the end; they are expected to carry their own ## headers.
+          # -----------------------------------------------------------------------
+          declare -A tag_to_files   # tag -> newline-separated list of absolute paths
+          legacy_files=()
 
-          # Append feature files in alphabetical order.
-          # BugFixes.md is excluded here and appended last because it carries
-          # its own ## section header.
           while IFS= read -r -d '' f; do
-            cat "$f" >> "${OUTPUT}"
-            # Add a trailing separator if the file does not already end with one
-            if [ "$(tail -c 5 "$f" | tr -d '[:space:]')" != "---" ]; then
-              printf '\n\n---\n\n' >> "${OUTPUT}"
+            fname=$(basename "$f")
+            [[ "$fname" == "${VERSION}.md" ]] && continue
+
+            if [[ "$fname" =~ ^([0-9]+)\.([a-z]+)\.md$ ]]; then
+              tag="${BASH_REMATCH[2]}"
+              tag_to_files["$tag"]+="${f}"$'\n'
+            else
+              legacy_files+=("$f")
             fi
           done < <(find "${NOTES_DIR}" -maxdepth 1 -name "*.md" \
-                    -not -name "BugFixes.md" \
-                    -not -name "${VERSION}.md" \
-                    -print0 | sort -z)
+                    -not -name "${VERSION}.md" -print0 | sort -z)
 
-          # Append BugFixes.md last — it owns its ## section header
-          BUGFIXES="${NOTES_DIR}/BugFixes.md"
-          if [ -f "${BUGFIXES}" ]; then
+          # -----------------------------------------------------------------------
+          # Write new-style sections in TAG_ORDER sequence.
+          # Each unique section header is written exactly once even when multiple
+          # tag aliases (e.g. bugfix + fix) share the same header.
+          # Entries within a section are sorted by PR number ascending.
+          # -----------------------------------------------------------------------
+          declare -A written_headers
+
+          for tag in "${TAG_ORDER[@]}"; do
+            [[ -z "${tag_to_files[$tag]}" ]] && continue
+
+            header="${TAG_HEADERS[$tag]}"
+
+            # Emit the header only the first time we encounter it
+            if [[ -z "${written_headers[$header]+x}" ]]; then
+              written_headers["$header"]=1
+              printf '%s\n\n' "${header}" >> "${OUTPUT}"
+            fi
+
+            # Collect all files whose tag aliases share this header
+            all_files_for_section=()
+            for alias_tag in "${TAG_ORDER[@]}"; do
+              [[ "${TAG_HEADERS[$alias_tag]}" != "$header" ]] && continue
+              [[ -z "${tag_to_files[$alias_tag]}" ]] && continue
+              while IFS= read -r file; do
+                [[ -n "$file" ]] && all_files_for_section+=("$file")
+              done <<< "${tag_to_files[$alias_tag]}"
+            done
+
+            # Sort entries by PR number (numeric prefix of the filename)
+            IFS=$'\n' sorted_section=($(
+              for f in "${all_files_for_section[@]}"; do
+                fname=$(basename "$f")
+                [[ "$fname" =~ ^([0-9]+)\. ]] && echo "${BASH_REMATCH[1]} $f"
+              done | sort -n | awk '{print $2}'
+            ))
+            unset IFS
+
+            for f in "${sorted_section[@]}"; do
+              fname=$(basename "$f")
+              [[ "$fname" =~ ^([0-9]+)\. ]] && pr_num="${BASH_REMATCH[1]}" || pr_num=""
+
+              # Copy the file line-by-line, inserting the PR link immediately after
+              # the opening ### heading so it appears directly under the entry title.
+              inserted_pr=false
+              while IFS= read -r line; do
+                printf '%s\n' "$line" >> "${OUTPUT}"
+                if ! $inserted_pr && [ -n "$pr_num" ] && [[ "$line" =~ ^### ]]; then
+                  printf '\n**PR:** [#%s](https://github.com/%s/pull/%s)\n' \
+                         "$pr_num" "$GITHUB_REPO" "$pr_num" >> "${OUTPUT}"
+                  inserted_pr=true
+                fi
+              done < "$f"
+
+              # Ensure a trailing separator between entries
+              if [ "$(tail -c 5 "$f" | tr -d '[:space:]')" != "---" ]; then
+                printf '\n\n---\n\n' >> "${OUTPUT}"
+              fi
+            done
+          done
+
+          # -----------------------------------------------------------------------
+          # Append legacy files verbatim (carry their own ## section headers).
+          # -----------------------------------------------------------------------
+          for f in "${legacy_files[@]}"; do
             printf '\n' >> "${OUTPUT}"
-            cat "${BUGFIXES}" >> "${OUTPUT}"
-          fi
+            cat "$f" >> "${OUTPUT}"
+          done
 
           echo "Generated ${OUTPUT}:"
           cat "${OUTPUT}"
