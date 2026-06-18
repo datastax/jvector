@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
@@ -138,7 +138,6 @@ public final class CompactionBench {
     private static BenchResult compactAndMeasure(DataSet ds, PartitionConfig cfg,
                                                  List<Path> partitionPaths, Path tempDir) throws Exception {
         List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
-        int dimension = ds.getDimension();
         VectorSimilarityFunction vsf = ds.getSimilarityFunction();
         String datasetName = ds.getName();
         int numPartitions = cfg.numPartitions;
@@ -184,8 +183,7 @@ public final class CompactionBench {
             rss.clear();
 
             // Search the compacted graph: measure recall and search latency in one pass.
-            // Global ordinal k maps back to baseVectors.get(k) by construction.
-            SearchStats search = searchCompacted(compactPath, ds, baseVectors, dimension, vsf);
+            SearchStats search = searchCompacted(compactPath, ds, vsf);
             logger.info(String.format(
                     "%n" +
                     "  ┌─ Compaction result: %s [%s]%n" +
@@ -242,24 +240,29 @@ public final class CompactionBench {
     /**
      * Searches every query against the compacted graph, timing each search, and returns recall plus
      * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
+     *
+     * Scoring uses the graph's inline FusedPQ codes for approximate traversal and reranks the top
+     * candidates with the full-precision vectors stored on the graph (FusedPQ + FP reranking).
      */
     private static SearchStats searchCompacted(Path indexPath, DataSet ds,
-                                               List<VectorFloat<?>> baseVectors,
-                                               int dimension, VectorSimilarityFunction vsf) throws Exception {
+                                               VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
-        var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
 
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
             try (var searcher = new GraphSearcher(graph)) {
                 searcher.usePruning(false);
+                var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
                 int n = queryVectors.size();
                 List<SearchResult> results = new ArrayList<>(n);
                 long[] latenciesNanos = new long[n];
                 long totalNanos = 0;
                 for (int i = 0; i < n; i++) {
-                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(i), vsf, ravv);
+                    var query = queryVectors.get(i);
+                    var asf = view.approximateScoreFunctionFor(query, vsf);
+                    var reranker = view.rerankerFor(query, vsf);
+                    var ssp = new DefaultSearchScoreProvider(asf, reranker);
                     long t0 = System.nanoTime();
                     SearchResult result = searcher.search(ssp, TOP_K, TOP_K, 0f, 0f, Bits.ALL);
                     long elapsed = System.nanoTime() - t0;
