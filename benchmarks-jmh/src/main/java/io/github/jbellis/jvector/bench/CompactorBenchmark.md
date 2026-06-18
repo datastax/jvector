@@ -188,8 +188,8 @@ Set any parameter with `-p <name>=<value>`.
 | `measureRecall` | `true` | Search the result for recall + latency — see §3 |
 | `datasetNames` | `ada002-100k` | Dataset name |
 | `numPartitions` | `4` | Number of source partition indexes |
-| `splitDistribution` | `FIBONACCI` | How vectors are divided across partitions — see §6 |
-| `indexPrecision` | `FUSEDPQ` | `FULLPRECISION` or `FUSEDPQ` — see §7 |
+| `splitDistribution` | `UNIFORM` | How vectors are divided across partitions — see §6 |
+| `indexPrecision` | `FULLPRECISION` | `FULLPRECISION` or `FUSEDPQ` — see §7 |
 | `graphDegree` | `32` | Max neighbors per node |
 | `beamWidth` | `100` | Beam width during graph construction |
 | `storageDirectories` | *(temp dir)* | Comma-separated dirs for partition files; distributed round-robin. Defaults to a JVM temp dir. |

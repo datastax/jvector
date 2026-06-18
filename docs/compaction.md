@@ -33,7 +33,7 @@ for (var src : sources) {
 var compactor = new OnDiskGraphIndexCompactor(
     sources, liveNodes, remappers,
     VectorSimilarityFunction.COSINE,
-    /* executor= */ null                  // null = create internal ForkJoinPool
+    /* executor= */ null                  // null = use by default shared threadpool in compactor
 );
 
 compactor.compact(Path.of("compacted.index"));
@@ -84,7 +84,7 @@ Run a graph search in every other source index starting from that source's entry
 - *Level L > 0*: the compactor first descends greedily from the source's entry node through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
 
 ```
-searchTopK  = max(2,  ceil(degree / numSources) * 2)
+searchTopK  = max(2,  ceil(degree / numSources) * 4)
 beamWidth   = max(degree, searchTopK) * 2
 ```
 
@@ -109,8 +109,8 @@ Processing is batched per source and run in parallel across sources using a `For
 ### Entry Node
 
 The entry node of the compacted graph is:
-1. The original entry node of `sources[0]`, if it is live.
-2. Otherwise, the first live node found by scanning all sources in order.
+1. The designated entry node of the first source that reaches the graph's max level, if it is live.
+2. Otherwise, the first live node found at the max level, scanning those sources in order.
 
 ## Benchmarking
 
@@ -127,7 +127,7 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -p workloadMode=PARTITION_AND_COMPACT \
   -p datasetNames=<dataset> \
   -p numPartitions=4 \
-  -p splitDistribution=FIBONACCI \
+  -p splitDistribution=UNIFORM \
   -p indexPrecision=FUSEDPQ \
   -wi 0 -i 1 -f 1
 ```
@@ -147,7 +147,7 @@ java -Xmx220g --add-modules jdk.incubator.vector \
   -p workloadMode=PARTITION \
   -p datasetNames=<dataset> \
   -p numPartitions=4 \
-  -p splitDistribution=FIBONACCI \
+  -p splitDistribution=UNIFORM \
   -p indexPrecision=FUSEDPQ \
   -wi 0 -i 1 -f 1
 ```
@@ -162,7 +162,7 @@ java -Xmx5g --add-modules jdk.incubator.vector \
   -p measureRecall=false \
   -p datasetNames=<dataset> \
   -p numPartitions=4 \
-  -p splitDistribution=FIBONACCI \
+  -p splitDistribution=UNIFORM \
   -p indexPrecision=FUSEDPQ \
   -wi 0 -i 1 -f 1
 ```
@@ -180,26 +180,23 @@ Key `workloadMode` values:
 
 Results are written as JSONL to `target/benchmark-results/compactor-*/compactor-results.jsonl`. The `durationMs` field records only the compaction time (not dataset loading or JVM startup). When `measureRecall=true`, each result also includes `recall`, `avgSearchLatencyMs`, and `p99SearchLatencyMs` from searching the compacted graph.
 
-## Recall 
+Comparison against build-from-scratch (results averaged over three runs).
 
+- Build from scratch: build with PQ, search using FusedPQ with FP reranking.
+- Compaction: build source partitions with PQ, compact using FusedPQ with FP rescoring, search using FusedPQ with FP reranking. Source partitions are based on a Fibonacci distribution with 4 partitions.
 
-Recall comparison (results averaged over three runs):
-
-- Build from scratch: build one index over the full dataset with PQ scoring; search using FusedPQ with FP reranking.
-- Compaction: partition the dataset into 4 source indexes (Fibonacci distribution), build each with PQ scoring, then compact into one index; search using FusedPQ with FP reranking.
-
-| Dataset              | Dim  | Build from Scratch | Compaction |  Delta |
-|----------------------|-----:|-------------------:|-----------:|-------:|
-| cap-6M               |  768 |              0.626 |      0.619 | -0.008 |
-| cap-1M               |  768 |              0.656 |      0.656 |  0.000 |
-| gecko-100k           |  768 |              0.690 |      0.701 | +0.011 |
-| e5-small-v2-100k     |  384 |              0.572 |      0.586 | +0.014 |
-| ada002-1M            | 1536 |              0.687 |      0.703 | +0.016 |
-| e5-base-v2-100k      |  768 |              0.676 |      0.692 | +0.016 |
-| cohere-english-v3-10M | 1024 |              0.544 |      0.561 | +0.017 |
-| e5-large-v2-100k     | 1024 |              0.686 |      0.703 | +0.017 |
-| ada002-100k          | 1536 |              0.751 |      0.769 | +0.018 |
-| cohere-english-v3-1M | 1024 |              0.593 |      0.612 | +0.019 |
+| Dataset               | Dim  | Build from Scratch | Compaction | Delta  |                                                                                
+  |-----------------------|-----:|-------------------:|-----------:|-------:|
+| cap-6M                |  768 |              0.626 |      0.619 | -0.008 |                                                                                
+| cap-1M                |  768 |              0.656 |      0.656 |  0.000 |                                                                                
+| gecko-100k            |  768 |              0.690 |      0.701 | +0.011 |                                                                                
+| e5-small-v2-100k      |  384 |              0.572 |      0.586 | +0.014 |                                                                                
+| ada002-1M             | 1536 |              0.687 |      0.703 | +0.016 |                                                                                
+| e5-base-v2-100k       |  768 |              0.676 |      0.692 | +0.016 |                                                                                
+| cohere-english-v3-10M | 1024 |              0.544 |      0.561 | +0.017 |                                                                                
+| e5-large-v2-100k      | 1024 |              0.686 |      0.703 | +0.017 |                                                                                
+| ada002-100k           | 1536 |              0.751 |      0.769 | +0.018 |                                                                                
+| cohere-english-v3-1M  | 1024 |              0.593 |      0.612 | +0.019 |    
 
 # Heap memory footprint
 
