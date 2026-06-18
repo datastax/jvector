@@ -19,6 +19,16 @@ ann-benchmarks:
   - glove-200-angular
   - nytimes-256-angular
   - sift-128-euclidean
+regression-tests:
+  - cap-1M
+  - cap-6M
+  - cohere-english-v3-1M
+  - cohere-english-v3-10M
+  - dpr-gemma-1m
+  - dpr-gemma-10m
+openai-unconfigured:
+  - openai-3072-1m
+  - openai-1536-1m
 #other-datasets:
 #  - dpr-1M
 #  - dpr-10M

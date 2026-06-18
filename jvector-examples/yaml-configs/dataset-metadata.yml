@@ -51,6 +51,12 @@ dpr-1M:
 dpr-10M:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
+dpr-gemma-1m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
+dpr-gemma-10m:
+  similarity_function: COSINE
+  load_behavior: NO_SCRUB
 e5-small-v2-100k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
@@ -96,4 +102,10 @@ nytimes-256-angular:
   load_behavior: NO_SCRUB
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB
+openai-3072-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+openai-1536-1m:
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB

@@ -37,8 +37,15 @@ public class BenchmarkSummarizer {
         private final int totalConfigurations;
         private final double qpsStdDev;
         private final double avgNodesVisited;
+        private final double avgBuildHeapMB;
+        private final double avgBuildOffHeapMB;
+        private final double avgSearchHeapMB;
+        private final double avgSearchOffHeapMB;
 
-        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction, int totalConfigurations, double qpsStdDev, double avgNodesVisited) {
+        public SummaryStats(double avgRecall, double avgQps, double avgLatency, double indexConstruction,
+                            int totalConfigurations, double qpsStdDev, double avgNodesVisited,
+                            double avgBuildHeapMB, double avgBuildOffHeapMB,
+                            double avgSearchHeapMB, double avgSearchOffHeapMB) {
             this.avgRecall = avgRecall;
             this.avgQps = avgQps;
             this.avgLatency = avgLatency;
@@ -46,29 +53,23 @@ public class BenchmarkSummarizer {
             this.totalConfigurations = totalConfigurations;
             this.qpsStdDev = qpsStdDev;
             this.avgNodesVisited = avgNodesVisited;
+            this.avgBuildHeapMB = avgBuildHeapMB;
+            this.avgBuildOffHeapMB = avgBuildOffHeapMB;
+            this.avgSearchHeapMB = avgSearchHeapMB;
+            this.avgSearchOffHeapMB = avgSearchOffHeapMB;
         }
 
-        public double getAvgRecall() {
-            return avgRecall;
-        }
-
-        public double getAvgQps() {
-            return avgQps;
-        }
-
-        public double getAvgLatency() {
-            return avgLatency;
-        }
-
+        public double getAvgRecall() { return avgRecall; }
+        public double getAvgQps() { return avgQps; }
+        public double getAvgLatency() { return avgLatency; }
         public double getIndexConstruction() { return indexConstruction; }
-
-        public int getTotalConfigurations() {
-            return totalConfigurations;
-        }
-
+        public int getTotalConfigurations() { return totalConfigurations; }
         public double getQpsStdDev() { return qpsStdDev; }
-
         public double getAvgNodesVisited() { return avgNodesVisited; }
+        public double getAvgBuildHeapMB() { return avgBuildHeapMB; }
+        public double getAvgBuildOffHeapMB() { return avgBuildOffHeapMB; }
+        public double getAvgSearchHeapMB() { return avgSearchHeapMB; }
+        public double getAvgSearchOffHeapMB() { return avgSearchOffHeapMB; }
 
         @Override
         public String toString() {
@@ -78,8 +79,11 @@ public class BenchmarkSummarizer {
                 "  Average QPS: %.2f (± %.2f)%n" +
                 "  Average Latency: %.2f ms%n" +
                 "  Index Construction Time: %.2f%n" +
-                "  Average Nodes Visited: %.2f",
-                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction, avgNodesVisited);
+                "  Average Nodes Visited: %.2f%n" +
+                "  Build Heap Used: %.1f MB  Build Off-Heap: %.1f MB%n" +
+                "  Search Heap Used: %.1f MB  Search Off-Heap: %.1f MB",
+                totalConfigurations, avgRecall, avgQps, qpsStdDev, avgLatency, indexConstruction,
+                avgNodesVisited, avgBuildHeapMB, avgBuildOffHeapMB, avgSearchHeapMB, avgSearchOffHeapMB);
         }
     }
     
@@ -90,7 +94,7 @@ public class BenchmarkSummarizer {
      */
     public static SummaryStats summarize(List<BenchResult> results) {
         if (results == null || results.isEmpty()) {
-            return new SummaryStats(0, 0, 0, 0, 0, 0, 0);
+            return new SummaryStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
         double totalRecall = 0;
@@ -99,23 +103,31 @@ public class BenchmarkSummarizer {
         double indexConstruction = 0;
         double totalQpsStdDev = 0;
         double totalNodesVisited = 0;
-        
+        double totalBuildHeapMB = 0;
+        double totalBuildOffHeapMB = 0;
+        double totalSearchHeapMB = 0;
+        double totalSearchOffHeapMB = 0;
+
         int recallCount = 0;
         int qpsCount = 0;
         int latencyCount = 0;
         int qpsStdDevCount = 0;
         int nodesVisitedCount = 0;
+        int buildHeapCount = 0;
+        int buildOffHeapCount = 0;
+        int searchHeapCount = 0;
+        int searchOffHeapCount = 0;
 
         for (BenchResult result : results) {
             if (result.metrics == null) continue;
-            
+
             // Extract recall metrics (format is "Recall@N" where N is the topK value)
             Double recall = extractRecallMetric(result.metrics);
             if (recall != null) {
                 totalRecall += recall;
                 recallCount++;
             }
-            
+
             // Extract QPS metric
             Double qps = extractQpsMetric(result.metrics);
             if (qps != null) {
@@ -129,7 +141,7 @@ public class BenchmarkSummarizer {
                 totalQpsStdDev += qpsStdDev;
                 qpsStdDevCount++;
             }
-            
+
             // Extract latency metric (format is "Mean Latency (ms)")
             Double latency = extractLatencyMetric(result.metrics);
             if (latency != null) {
@@ -145,6 +157,19 @@ public class BenchmarkSummarizer {
                 totalNodesVisited += nodesVisited;
                 nodesVisitedCount++;
             }
+
+            // Extract memory metrics
+            Double buildHeap = extractMetric(result.metrics, "Heap Memory Used (MB)");
+            if (buildHeap != null) { totalBuildHeapMB += buildHeap; buildHeapCount++; }
+
+            Double buildOffHeap = extractMetric(result.metrics, "Total Off-Heap (MB)");
+            if (buildOffHeap != null) { totalBuildOffHeapMB += buildOffHeap; buildOffHeapCount++; }
+
+            Double searchHeap = extractMetric(result.metrics, "Max heap usage (MB)");
+            if (searchHeap != null) { totalSearchHeapMB += searchHeap; searchHeapCount++; }
+
+            Double searchOffHeap = extractMetric(result.metrics, "Max offheap usage (MB)");
+            if (searchOffHeap != null) { totalSearchOffHeapMB += searchOffHeap; searchOffHeapCount++; }
         }
 
         // Calculate averages, handling cases where some metrics might not be present
@@ -153,11 +178,17 @@ public class BenchmarkSummarizer {
         double avgLatency = latencyCount > 0 ? totalLatency / latencyCount : 0;
         double avgQpsStdDev = qpsStdDevCount > 0 ? totalQpsStdDev / qpsStdDevCount : 0;
         double avgNodesVisited = nodesVisitedCount > 0 ? totalNodesVisited / nodesVisitedCount : 0;
-        
+        double avgBuildHeapMB = buildHeapCount > 0 ? totalBuildHeapMB / buildHeapCount : 0;
+        double avgBuildOffHeapMB = buildOffHeapCount > 0 ? totalBuildOffHeapMB / buildOffHeapCount : 0;
+        double avgSearchHeapMB = searchHeapCount > 0 ? totalSearchHeapMB / searchHeapCount : 0;
+        double avgSearchOffHeapMB = searchOffHeapCount > 0 ? totalSearchOffHeapMB / searchOffHeapCount : 0;
+
         // Count total valid configurations as the maximum count of any metric
         int totalConfigurations = Math.max(Math.max(recallCount, qpsCount), latencyCount);
 
-        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations, avgQpsStdDev, avgNodesVisited);
+        return new SummaryStats(avgRecall, avgQps, avgLatency, indexConstruction, totalConfigurations,
+                avgQpsStdDev, avgNodesVisited,
+                avgBuildHeapMB, avgBuildOffHeapMB, avgSearchHeapMB, avgSearchOffHeapMB);
     }
 
     private static Double extractIndexConstructionMetric(Map<String, Object> metrics) {

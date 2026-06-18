@@ -213,7 +213,7 @@ jobs:
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} dpr-1M
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} dpr-gemma-1m
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
@@ -289,7 +289,7 @@ jobs:
           OUTPUT_DIR="benchmark_reports"
 
           # Run the visualization script with all files, default threshold (5.0)
-          python visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
+          python jvector-examples/src/main/resources/visualize_benchmarks.py --output-dir "$OUTPUT_DIR" "${files[@]}"
 
       - name: Upload visualization artifacts
         uses: actions/upload-artifact@v4

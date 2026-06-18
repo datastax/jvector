@@ -35,7 +35,7 @@ public class NativeVectorizationProvider extends VectorizationProvider {
         if (!libraryLoaded) {
             throw new UnsupportedOperationException("Failed to load supporting native library.");
         }
-        if (!NativeSimdOps.check_compatibility()) {
+        if (!NativeSimdOps.check_avx512_compatibility()) {
             throw new UnsupportedOperationException("Native SIMD operations are not supported on this platform due to missing CPU support.");
         }
         this.vectorUtilSupport = new NativeVectorUtilSupport();

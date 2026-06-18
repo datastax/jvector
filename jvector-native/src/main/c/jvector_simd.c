@@ -26,7 +26,7 @@ __m512i maskEighthBit;
 
 __attribute__((constructor))
 void initialize_constants() {
-    if (check_compatibility()) {
+    if (check_avx512_compatibility()) {
         initialIndexRegister = _mm512_setr_epi32(-16, -15, -14, -13, -12, -11, -10, -9,
                                              -8, -7, -6, -5, -4, -3, -2, -1);
         indexIncrement = _mm512_set1_epi32(16);
