@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper.MutableOrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
@@ -137,25 +138,33 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
 
     /**
      * Computes sequential renumbering for graph ordinals.
+     * It is NOT safe to call this while the graph is being modified.
      * @param graph the graph index to renumber
      * @return a Map of old to new graph ordinals where the new ordinals are sequential starting at 0,
      * while preserving the original relative ordering in `graph`.  That is, for all node ids i and j,
      * if i &lt; j in `graph` then map[i] &lt; map[j] in the returned map.  "Holes" left by
      * deleted nodes are filled in by shifting down the new ordinals.
      */
-    public static Map<Integer, Integer> sequentialRenumbering(ImmutableGraphIndex graph) {
-        try (var view = graph.getView()) {
-            Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
-            int nextOrdinal = 0;
-            for (int i = 0; i < view.getIdUpperBound(); i++) {
-                if (graph.containsNode(i)) {
-                    oldToNewMap.put(i, nextOrdinal++);
-                }
-            }
-            return oldToNewMap;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    static OrdinalMapper sequentialRenumbering(ImmutableGraphIndex graph) {
+
+        var oldOrdinalUpperBound = graph.getIdUpperBound();
+        var newOrdinalUpperBound = graph.size(0);
+
+        MutableOrdinalMapper mapper;
+        // if the graph is sufficiently sparse, use a sparse mapper
+        if ((oldOrdinalUpperBound / 8) > newOrdinalUpperBound) {
+            mapper = new OrdinalMapper.SparseOrdinalMapper();
+        } else {
+            mapper = new OrdinalMapper.DenseOrdinalMapper(oldOrdinalUpperBound, newOrdinalUpperBound);
         }
+
+        int nextOrdinal = 0;
+        for (int i = 0; i < oldOrdinalUpperBound; i++) {
+            if (graph.containsNode(i)) {
+                mapper.set(i, nextOrdinal++);
+            }
+        }
+        return mapper;
     }
 
     /**
@@ -397,7 +406,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
 
             if (ordinalMapper == null) {
-                ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
+                ordinalMapper = sequentialRenumbering(graphIndex);
             }
             return reallyBuild(dimension);
         }
