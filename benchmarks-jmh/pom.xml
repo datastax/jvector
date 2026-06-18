@@ -15,6 +15,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>22</maven.compiler.release>
         <jmh.version>1.37</jmh.version>
+        <awssdk.version>2.21.10</awssdk.version>
+        <!-- Default benchmark arguments (empty) -->
+        <args></args>
     </properties>
 
     <dependencies>
@@ -53,6 +56,11 @@
             <artifactId>log4j-slf4j2-impl</artifactId>
             <version>2.24.3</version>
         </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ec2</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
 
     </dependencies>
 
@@ -85,12 +93,42 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <outputFile>${project.build.directory}/compactor-benchmark.jar</outputFile>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>org.openjdk.jmh.Main</mainClass>
                                 </transformer>
                             </transformers>
                         </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>compactor</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>false</skip>
+                            <executable>java</executable>
+                            <commandlineArgs>--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector -Djvector.experimental.enable_native_vectorization=true -cp %classpath io.github.jbellis.jvector.bench.CompactorBenchmark ${args}</commandlineArgs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>analyze</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>false</skip>
+                            <executable>java</executable>
+                            <commandlineArgs>-cp %classpath io.github.jbellis.jvector.bench.benchtools.EventLogAnalyzer ${args}</commandlineArgs>
+                          </configuration>
                     </execution>
                 </executions>
             </plugin>

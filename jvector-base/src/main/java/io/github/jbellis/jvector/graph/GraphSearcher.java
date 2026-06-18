@@ -117,6 +117,15 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
+     * Exposes the internal approximate-results queue populated by the most recent
+     * {@link #searchOneLayer} call. Intended for cross-package internal use (e.g. graph
+     * compaction); not part of the stable public API.
+     */
+    public NodeQueue approximateResults() {
+        return approximateResults;
+    }
+
+    /**
      * When using pruning, we are using a heuristic to terminate the search earlier.
      * In certain cases, it can lead to speedups. This is set to false by default.
      * @param usage a boolean that determines whether we do early termination or not.
@@ -307,7 +316,8 @@ public class GraphSearcher implements Closeable {
         return search(scoreProvider, topK, 0.0f, acceptOrds);
     }
 
-    void setEntryPointsFromPreviousLayer() {
+    @Experimental
+    public void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
         approximateResults.foreach(candidates::push);
@@ -316,7 +326,8 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
-    void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
+    @Experimental
+    public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
@@ -384,7 +395,8 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
+    @Experimental
+    public void searchOneLayer(SearchScoreProvider scoreProvider,
                         int rerankK,
                         float threshold,
                         int level,

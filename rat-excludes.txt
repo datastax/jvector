@@ -8,6 +8,7 @@ CONTRIBUTIONS.md
 package.json
 .github/workflows/tag-release.yml
 .github/workflows/run-bench.yml
+.github/workflows/run-compaction.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
 README.md
@@ -27,9 +28,9 @@ scripts/test_node_setup.sh
 scripts/jmh_results_formatter.py
 yaml-configs/**/*.yaml
 yaml-configs/**/*.yml
+yaml-configs/**/.catalog-cache/**
 src/main/resources/logback.xml
 docs/**/*.md
 yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**
-
