@@ -10,5 +10,6 @@ __Before you submit for review:__
 - [ ] Did you adhere to the code formatting guidelines (TBD)
 - [ ] Did you group your changes for easy review, providing meaningful descriptions for each commit?
 - [ ] Did you ensure that all files contain the correct copyright header?
+- [ ] Did you add documentation for this feature to the release notes directory?
 
 If you did not complete any of these, then please explain below.
