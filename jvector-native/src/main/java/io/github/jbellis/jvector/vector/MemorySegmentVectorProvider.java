@@ -98,7 +98,7 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
-        byte[] data = (byte[]) ((MemorySegmentByteSequence) sequence).get().heapBase().get();
-        out.write(data, 0, sequence.length());
+        java.nio.ByteBuffer bb = ((MemorySegmentByteSequence) sequence).get().asByteBuffer();
+        out.write(bb.array(), bb.arrayOffset(), bb.remaining());
     }
 }
