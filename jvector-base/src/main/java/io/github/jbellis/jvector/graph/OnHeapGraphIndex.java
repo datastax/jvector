@@ -288,6 +288,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
+    public void removeDeadEdges(int level, int node) {
+        var layer = layers.get(level);
+        layer.removeDeadEdges(node, neighbor -> !layer.contains(neighbor));
+    }
+
+    @Override
     public String toString() {
         return String.format("OnHeapGraphIndex(size=%d, entryPoint=%s)", size(0), entryPoint.get());
     }
