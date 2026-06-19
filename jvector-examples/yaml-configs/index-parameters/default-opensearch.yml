@@ -4,10 +4,10 @@ onDiskIndexVersion: 6
 dataset: default
 
 construction:
-  outDegree: [32]
+  outDegree: [16]
   efConstruction: [100]
   neighborOverflow: [1.2f]
-  addHierarchy: [Yes]
+  addHierarchy: [No]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
@@ -19,14 +19,14 @@ construction:
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
   reranking:
-    - NVQ
+    - None
   useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:
-    10: [1.0, 2.0, 5.0, 10.0]
-    100: [1.0, 2.0]
-  useSearchPruning: [Yes]
+    10: [1.0, 2.0]
+    100: [1.0]
+  useSearchPruning: [No]
   compression:
     - type: PQ
       parameters:
