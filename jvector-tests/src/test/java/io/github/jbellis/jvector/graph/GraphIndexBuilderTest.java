@@ -38,6 +38,7 @@ import java.util.function.Supplier;
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
@@ -154,6 +155,34 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         for (int i = 0; i < ravv.size(); i++) {
             assertTrue(builder.graph.containsNode(i));
         }
+        assertGraphEquals(graph, builder.graph);
+    }
+    
+    @Test
+    public void testSaveAndLoadEmptyGraph() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        var ravv = MockVectorValues.empty(dimension);
+
+        Supplier<GraphIndexBuilder> newBuilder = () ->
+            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true);
+
+        var indexDataPath = testDirectory.resolve("index_builder_empty.data");
+        var builder = newBuilder.get();
+
+        var graph = TestUtil.buildSequentially(builder, ravv);
+
+        try (var out = TestUtil.openDataOutputStream(indexDataPath)) {
+            ((OnHeapGraphIndex) graph).setAllMutationsCompleted();
+            ((OnHeapGraphIndex) graph).save(out);
+        }
+
+        builder = newBuilder.get();
+        try(var readerSupplier = new SimpleMappedReader.Supplier(indexDataPath)) {
+            builder.load(readerSupplier.get());
+        }
+
+        assertEquals(ravv.size(), builder.graph.size(0));
+        assertNull(builder.graph.entryNode());
         assertGraphEquals(graph, builder.graph);
     }
 

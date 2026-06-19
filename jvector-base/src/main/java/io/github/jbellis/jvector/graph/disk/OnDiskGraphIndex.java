@@ -50,7 +50,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,7 +94,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         this.version = header.common.version;
         this.layerInfo = header.common.layerInfo;
         this.dimension = header.common.dimension;
-        this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
+        if (header.common.entryNode == OMITTED) {
+            this.entryNode = null;
+        } else {
+            this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
+        }
         this.idUpperBound = header.common.idUpperBound;
         this.features = header.features;
         this.neighborsOffset = neighborsOffset;
@@ -128,6 +131,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     private List<Int2ObjectHashMap<int[]>> loadInMemoryLayers(RandomAccessReader in) throws IOException {
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
+        if (layerInfo.isEmpty()) {
+            return imn;
+        }
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
         long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
@@ -333,12 +339,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     @Override
     public int size(int level) {
-        return layerInfo.get(level).size;
+        return  layerInfo.isEmpty() ? 0 : layerInfo.get(level).size;
     }
 
     @Override
     public int getDegree(int level) {
-        return layerInfo.get(level).degree;
+        return layerInfo.isEmpty() ? 0 : layerInfo.get(level).degree;
     }
 
     @Override
@@ -435,7 +441,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     @Override
     public int getMaxLevel() {
-        return entryNode.level;
+        return entryNode == null ? 0 : entryNode.level;
     }
 
     @Override

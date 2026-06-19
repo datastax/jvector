@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
@@ -35,7 +36,6 @@ import java.util.Objects;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
@@ -48,6 +48,8 @@ import java.util.function.Function;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+    int OMITTED = OrdinalMapper.OMITTED; // same as OrdinalMapper, since OrdinalMapper::oldToNew may return it
+
     /** Returns the number of nodes in the graph */
     @Deprecated
     default int size() {

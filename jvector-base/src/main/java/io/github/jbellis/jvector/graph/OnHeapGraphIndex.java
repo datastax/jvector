@@ -49,7 +49,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -542,8 +541,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         var entryNode = entryPoint.get();
-        assert entryNode.level == getMaxLevel();
-        out.writeInt(entryNode.node);
+        if (entryNode != null) {
+            assert entryNode.level == getMaxLevel();
+            out.writeInt(entryNode.node);
+        } else {
+            out.writeInt(OMITTED);
+        }
 
         for (int level = 0; level < layers.size(); level++) {
             out.writeInt(size(level));
@@ -618,7 +621,9 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         graph.setDegrees(layerDegrees);
-        graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+        if (entryNode != OMITTED) {
+            graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+        }
 
         return graph;
     }
