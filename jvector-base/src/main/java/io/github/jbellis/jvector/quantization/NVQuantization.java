@@ -148,14 +148,16 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * @param nSubVectors number of subvectors
      */
     public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
-        var ravvCopy = ravv.threadLocalSupplier().get();
-        var dim = ravvCopy.getVector(0).length();
-        var globalMean = vectorTypeSupport.createFloatVector(dim);
-        for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+        try (var ravvSupplier = ravv.closeableThreadLocalSupplier()) {
+            var ravvCopy = ravvSupplier.get();
+            var dim = ravvCopy.getVector(0).length();
+            var globalMean = vectorTypeSupport.createFloatVector(dim);
+            for (int i = 0; i < ravvCopy.size(); i++) {
+                VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+            }
+            VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
+            return create(globalMean, nSubVectors);
         }
-        VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
-        return create(globalMean, nSubVectors);
     }
 
     /**
@@ -180,17 +182,19 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      */
     @Override
     public NVQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        var ravvCopy = ravv.threadLocalSupplier();
-        return new NVQVectors(this,
-                parallelExecutor.submit(() -> IntStream.range(0, ravv.size())
-                                .parallel()
-                                .mapToObj(i -> {
-                                    var localRavv = ravvCopy.get();
-                                    VectorFloat<?> v = localRavv.getVector(i);
-                                    return encode(v);
-                                })
-                                .toArray(QuantizedVector[]::new))
-                        .join());
+        final QuantizedVector[] vectors;
+        try (var ravvCopy = ravv.closeableThreadLocalSupplier()) {
+            vectors = parallelExecutor.submit(() -> IntStream.range(0, ravv.size())
+                            .parallel()
+                            .mapToObj(i -> {
+                                var localRavv = ravvCopy.get();
+                                VectorFloat<?> v = localRavv.getVector(i);
+                                return encode(v);
+                            })
+                            .toArray(QuantizedVector[]::new))
+                    .join();
+        }
+        return new NVQVectors(this, vectors);
     }
 
     /**

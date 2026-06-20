@@ -25,20 +25,18 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.util.CloseableSupplier;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.function.Supplier;
-import java.util.logging.Logger;
 
 /**
  * Provides random access to vectors by dense ordinal. This interface is used by graph-based
  * implementations of KNN search.
  */
 public interface RandomAccessVectorValues {
-    Logger LOG = Logger.getLogger(RandomAccessVectorValues.class.getName());
-
     /**
      * Return the number of vector values.
      * <p>
@@ -94,18 +92,24 @@ public interface RandomAccessVectorValues {
     RandomAccessVectorValues copy();
 
     /**
-     * Returns a supplier of thread-local copies of the RAVV.
+     * Returns a closeable supplier of thread-local copies of the RAVV.
      */
-    default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+    default CloseableSupplier<RandomAccessVectorValues> closeableThreadLocalSupplier() {
         if (!isValueShared()) {
-            return () -> this;
+            return CloseableSupplier.noOp(() -> this);
         }
 
-        if (this instanceof AutoCloseable) {
-            LOG.warning("RAVV is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
-        }
-        var tl = ExplicitThreadLocal.withInitial(this::copy);
-        return tl::get;
+        return ExplicitThreadLocal.withInitial(this::copy);
+    }
+
+    /**
+     * Returns a supplier of thread-local copies of the RAVV.
+     * <p>
+     * The returned supplier implements {@link AutoCloseable}; callers that own the supplier's lifetime
+     * should prefer {@link #closeableThreadLocalSupplier()} so thread-local copies can be cleaned up.
+     */
+    default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+        return closeableThreadLocalSupplier();
     }
 
     /**

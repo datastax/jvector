@@ -20,9 +20,10 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.Arrays;
 
-public class RemappedRandomAccessVectorValues implements RandomAccessVectorValues {
+public class RemappedRandomAccessVectorValues implements RandomAccessVectorValues, AutoCloseable {
     private final RandomAccessVectorValues ravv;
     private final int[] graphToRavvOrdMap;
+    private final boolean ownsRavv;
 
     /**
      * Remaps a RAVV to a different set of ordinals.  This is useful when the ordinals used by the graph
@@ -33,8 +34,13 @@ public class RemappedRandomAccessVectorValues implements RandomAccessVectorValue
      *                         graphToRavvOrdMap[i] is the RAVV ordinal corresponding to graph ordinal i.
      */
     public RemappedRandomAccessVectorValues(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
+        this(ravv, graphToRavvOrdMap, false);
+    }
+
+    private RemappedRandomAccessVectorValues(RandomAccessVectorValues ravv, int[] graphToRavvOrdMap, boolean ownsRavv) {
         this.ravv = ravv;
         this.graphToRavvOrdMap = graphToRavvOrdMap;
+        this.ownsRavv = ownsRavv;
     }
 
     @Override
@@ -59,11 +65,19 @@ public class RemappedRandomAccessVectorValues implements RandomAccessVectorValue
 
     @Override
     public RandomAccessVectorValues copy() {
-        return new RemappedRandomAccessVectorValues(ravv.copy(), Arrays.copyOf(graphToRavvOrdMap, graphToRavvOrdMap.length));
+        var ravvCopy = ravv.copy();
+        return new RemappedRandomAccessVectorValues(ravvCopy, Arrays.copyOf(graphToRavvOrdMap, graphToRavvOrdMap.length), ravvCopy != ravv);
     }
 
     @Override
     public void getVectorInto(int node, VectorFloat<?> result, int offset) {
         ravv.getVectorInto(graphToRavvOrdMap[node], result, offset);
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (ownsRavv && ravv instanceof AutoCloseable) {
+            ((AutoCloseable) ravv).close();
+        }
     }
 }

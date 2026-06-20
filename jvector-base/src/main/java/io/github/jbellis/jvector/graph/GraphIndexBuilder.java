@@ -434,14 +434,15 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
-        simdExecutor.submit(() -> {
-            IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
+        try (var vv = ravv.closeableThreadLocalSupplier()) {
+            simdExecutor.submit(() -> {
+                IntStream.range(0, size).parallel().forEach(node -> {
+                    addGraphNode(node, vv.get().getVector(node));
+                });
+            }).join();
+        }
 
         cleanup();
         return graph;
@@ -838,11 +839,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
     @Override
     public void close() throws IOException {
-        try {
-            searchers.close();
-        } catch (Exception e) {
-            ExceptionUtils.throwIoException(e);
-        }
+        ExceptionUtils.closeAll(searchers, scoreProvider, naturalScratch, concurrentScratch);
     }
 
     @Override
@@ -1064,12 +1061,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     parallelExecutor
             );
 
-            var vv = newVectors.threadLocalSupplier();
-
             // parallel graph construction from the merge documents Ids
-            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(ord));
-            })).join();
+            try (var vv = newVectors.closeableThreadLocalSupplier()) {
+                simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
+                    builder.addGraphNode(ord, vv.get().getVector(ord));
+                })).join();
+            }
 
             builder.cleanup();
             return builder.getGraph();

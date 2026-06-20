@@ -414,23 +414,24 @@ public class Grid {
 
         // build the graph incrementally
         long startTime = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
-        PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                        suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
-                        });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
+        try (var vv = floatVectors.closeableThreadLocalSupplier()) {
+            PhysicalCoreExecutor.pool().submit(() -> {
+                IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+                    writers.forEach((features, writer) -> {
+                        try {
+                            var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+                            suppliers.get(features).forEach((featureId, supplier) -> {
+                                stateMap.put(featureId, supplier.apply(node));
+                            });
+                            writer.writeInline(node, stateMap);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                    builder.addGraphNode(node, vv.get().getVector(node));
                 });
-                builder.addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
+            }).join();
+        }
         builder.cleanup();
 
         // write the edge lists and close the writers
