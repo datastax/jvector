@@ -235,4 +235,78 @@ public interface VectorUtilSupport {
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
 
+  /**
+   * Calculates the dotproduct for an array of codebooks, uses diversityFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param node1Chunk centroid vector for node1's subvectors
+   * @param node1Offset offset into ByteSequence of node1
+   * @param node2Chunk centroid vector for node2's subvectors
+   * @param node2Offset offset into ByteSequence of node2
+   * @param subspaceCount the number of PQ subspaces
+   * @return the dot product
+   */
+  float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount);
+
+  /**
+   * Calculates cosine for an array of codebooks, uses diversityFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param node1Chunk centroid vector for node1's subvectors
+   * @param node1Offset offset into ByteSequence of node1
+   * @param node2Chunk centroid vector for node2's subvectors
+   * @param node2Offset offset into ByteSequence of node2
+   * @param subspaceCount the number of PQ subspaces
+   * @return the cosine value
+   */
+  float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount);
+
+   /**
+   * Calculates the Euclidean distance for an array of codebooks, uses diversityFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param node1Chunk centroid vector for node1's subvectors
+   * @param node1Offset offset into ByteSequence of node1
+   * @param node2Chunk centroid vector for node2's subvectors
+   * @param node2Offset offset into ByteSequence of node2
+   * @param subspaceCount the number of PQ subspaces
+   * @return the Euclidean distance
+   */
+  float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount);
+
+   /**
+   * Overloaded function to calculate the dotproduct for an array of codebooks, uses scoreFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param encodedChunk centroid vector for encoded point
+   * @param encodedOffset offset into ByteSequence of encoded vector
+   * @param centeredQuery query
+   * @param subspaceCount the number of PQ subspaces
+   * @return the dotproduct
+   */
+  float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount);
+
+   /**
+   * Overloaded function to calculate cosine for an array of codebooks, uses scoreFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param encodedChunk centroid vector for encoded point
+   * @param encodedOffset offset into ByteSequence of encoded vector
+   * @param centeredQuery query
+   * @param subspaceCount the number of PQ subspaces
+   * @return the cosine value
+   */
+  float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery,int subspaceCount);
+
+   /**
+   * Overloaded function to calculate the Euclidean distance for an array of codebooks, uses scoreFunction.
+   * @param codebooks array of codebooks
+   * @param subvectorSizesAndOffsets contains dimensions and size of codebooks
+   * @param encodedChunk centroid vector for encoded point
+   * @param encodedOffset offset into ByteSequence of encoded vector
+   * @param centeredQuery query
+   * @param subspaceCount the number of PQ subspaces
+   * @return the Euclidean distance
+   */
+  float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount);
 }

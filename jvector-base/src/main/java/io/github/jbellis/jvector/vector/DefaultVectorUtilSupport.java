@@ -547,4 +547,90 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
     return squaredSum;
   }
 
+  @Override
+  public float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+   float dp = 0;
+   for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+      int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+      dp += dotProduct(codebooks[m], centroidIndex1 * centroidLength, codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+   }
+   return dp;
+}
+
+
+  @Override
+  public float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+    float sum = 0;
+    float aMagnitude = 0;
+    float bMagnitude = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+      int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+      sum += dotProduct(codebooks[m], centroidIndex1 * centroidLength, codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+      aMagnitude += dotProduct(codebooks[m], centroidIndex1 * centroidLength, codebooks[m], centroidIndex1 * centroidLength, centroidLength);
+      bMagnitude += dotProduct(codebooks[m], centroidIndex2 * centroidLength, codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+    }
+    return (float)(sum / Math.sqrt(aMagnitude * bMagnitude));
+  }
+
+   @Override
+  public float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> node1Chunk, int node1Offset, ByteSequence<?> node2Chunk, int node2Offset, int subspaceCount) {
+    float sum = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
+      int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+
+      sum += squareDistance(codebooks[m], centroidIndex1 * centroidLength, codebooks[m], centroidIndex2 * centroidLength, centroidLength);
+    }
+    return sum;
+
+  }
+
+  @Override
+  public float pqScoreDotProduct(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+    float dp = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+      int centroidOffset = subvectorSizesAndOffsets[m][1];
+      dp += dotProduct(codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
+    }
+    return dp;
+  }
+
+  @Override
+  public float pqScoreCosine(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+   float sum = 0;
+   float aMagnitude = 0;
+   float bMagnitude = 0;
+
+   for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+      int centroidOffset = subvectorSizesAndOffsets[m][1];
+      var codebookOffset = centroidIndex * centroidLength;
+      sum += dotProduct(codebooks[m], codebookOffset, centeredQuery, centroidOffset, centroidLength);
+      aMagnitude += dotProduct(codebooks[m], codebookOffset, codebooks[m], codebookOffset, centroidLength);
+      bMagnitude += dotProduct(centeredQuery, centroidOffset, centeredQuery, centroidOffset, centroidLength);
+   }
+   float cosine = sum / (float) Math.sqrt(aMagnitude * bMagnitude);
+   return cosine;
+  }
+
+  @Override
+  public float pqScoreEuclidean(VectorFloat<?>[] codebooks, int[][] subvectorSizesAndOffsets, ByteSequence<?> encodedChunk, int encodedOffset, VectorFloat<?> centeredQuery, int subspaceCount) {
+    float sum = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      int centroidIndex = Byte.toUnsignedInt(encodedChunk.get(m + encodedOffset));
+      int centroidLength = subvectorSizesAndOffsets[m][0];
+      int centroidOffset = subvectorSizesAndOffsets[m][1];
+      sum += squareDistance(codebooks[m], centroidIndex * centroidLength, centeredQuery, centroidOffset, centroidLength);
+    }
+    return sum;
+  }
+
 }
