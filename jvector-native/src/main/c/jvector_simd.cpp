@@ -52,86 +52,34 @@ static MaxIsa read_max_isa() noexcept
 // KernelVTable holds one function pointer per public kernel.  Storing them
 // together in a struct means a single pointer comparison during dispatch_kernels()
 // selects all kernels for the chosen ISA in one shot.
+// Auto-generated from jvector_simd_kernel_list.h
 struct KernelVTable {
-    /* Vector similarity */
-    float (*cosine_f32)(const float *, size_t, const float *, size_t, size_t);
-    float (*dot_product_f32)(const float *, size_t, const float *, size_t, size_t);
-    float (*euclidean_f32)(const float *, size_t, const float *, size_t, size_t);
-    /* Element-wise in-place arithmetic */
-    void  (*add_in_place_f32)(float *, const float *, size_t);
-    void  (*add_scalar_in_place_f32)(float *, float, size_t);
-    void  (*sub_in_place_f32)(float *, const float *, size_t);
-    void  (*sub_scalar_in_place_f32)(float *, float, size_t);
-    float (*max_f32)(const float *, size_t);
-    void  (*min_in_place_f32)(float *, const float *, size_t);
-    /* PQ kernels */
-    float (*assemble_and_sum_f32)(const float *, int,
-                                  const unsigned char *, int, size_t);
-    float (*assemble_and_sum_pq_f32)(const float *, size_t,
-                                     const unsigned char *, int,
-                                     const unsigned char *, int, int);
-    float (*pq_decoded_cosine_similarity_f32)(const unsigned char *, int,
-                                              size_t, int,
-                                              const float *, const float *,
-                                              float);
-    void  (*calculate_partial_sums_dot_f32)(const float *, int,
-                                            size_t, int,
-                                            const float *, int, float *);
-    void  (*calculate_partial_sums_euclidean_f32)(const float *, int,
-                                                  size_t, int,
-                                                  const float *, int, float *);
-    void  (*calculate_partial_sums_self_magnitude_f32)(const float *, int,
-                                                       size_t, int, float *);
-    /* NVQ kernels */
-    void    (*nvq_quantize_8bit)(const float *, size_t,
-                                 float, float, float, float,
-                                 unsigned char *);
-    float   (*nvq_loss)(const float *, size_t,
-                        float, float, float, float, int);
-    float   (*nvq_uniform_loss)(const float *, size_t, float, float, int);
-    float   (*nvq_square_l2_distance_8bit)(const float *,
-                                           const unsigned char *, size_t,
-                                           float, float, float, float);
-    float   (*nvq_dot_product_8bit)(const float *,
-                                    const unsigned char *, size_t,
-                                    float, float, float, float);
-    int64_t (*nvq_cosine_8bit_packed)(const float *,
-                                      const unsigned char *, size_t,
-                                      float, float, float, float,
-                                      const float *);
-    void    (*nvq_shuffle_query_in_place_8bit)(float *, size_t);
+#define KERNEL_ENTRY(ret_type, name, params, names) \
+    ret_type (*name) params;
+    JVECTOR_SIMD_KERNEL_LIST
+#undef KERNEL_ENTRY
 };
 
 // One pre-filled vtable per ISA.  These are constant data; no heap allocation.
-#define DEFINE_ISA_VTABLE(ISA)                                          \
-    static const KernelVTable ISA##_vtable = {                          \
-        ISA::cosine_f32,                                                 \
-        ISA::dot_product_f32,                                            \
-        ISA::euclidean_f32,                                              \
-        ISA::add_in_place_f32,                                           \
-        ISA::add_scalar_in_place_f32,                                    \
-        ISA::sub_in_place_f32,                                           \
-        ISA::sub_scalar_in_place_f32,                                    \
-        ISA::max_f32,                                                    \
-        ISA::min_in_place_f32,                                           \
-        ISA::assemble_and_sum_f32,                                       \
-        ISA::assemble_and_sum_pq_f32,                                    \
-        ISA::pq_decoded_cosine_similarity_f32,                           \
-        ISA::calculate_partial_sums_dot_f32,                             \
-        ISA::calculate_partial_sums_euclidean_f32,                       \
-        ISA::calculate_partial_sums_self_magnitude_f32,                  \
-        ISA::nvq_quantize_8bit,                                          \
-        ISA::nvq_loss,                                                   \
-        ISA::nvq_uniform_loss,                                           \
-        ISA::nvq_square_l2_distance_8bit,                                \
-        ISA::nvq_dot_product_8bit,                                       \
-        ISA::nvq_cosine_8bit_packed,                                     \
-        ISA::nvq_shuffle_query_in_place_8bit,                            \
-    }
+// Auto-generated from jvector_simd_kernel_list.h
 
-DEFINE_ISA_VTABLE(AVX3);
-DEFINE_ISA_VTABLE(AVX2);
-DEFINE_ISA_VTABLE(SSE42);
+#define KERNEL_ENTRY(ret_type, name, params, names) AVX3::name,
+static const KernelVTable AVX3_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
+
+#define KERNEL_ENTRY(ret_type, name, params, names) AVX2::name,
+static const KernelVTable AVX2_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
+
+#define KERNEL_ENTRY(ret_type, name, params, names) SSE42::name,
+static const KernelVTable SSE42_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
 
 // Selects and returns the best vtable for the current CPU and environment.
 // Called exactly once during static initialisation (before main()).
@@ -175,187 +123,16 @@ static const KernelVTable kernels = dispatch_kernels();
 // ---- Public API ------------------------------------------------------------
 // Each function is a thin wrapper that forwards to the pre-resolved function
 // pointer in `kernels`.
+// Auto-generated from jvector_simd_kernel_list.h
+//
+// NOTE: When adding a new kernel, just add it to jvector_simd_kernel_list.h
+// Everything else (vtable, namespace decls, public API, wrappers) is auto-generated!
 
-/* Vector similarity */
+#define KERNEL_ENTRY(ret_type, name, params, names) \
+    ret_type name params { \
+        return kernels.name names; \
+    }
 
-float cosine_f32(const float *a, size_t aoffset,
-                 const float *b, size_t boffset, size_t length)
-{
-    return kernels.cosine_f32(a, aoffset, b, boffset, length);
-}
+JVECTOR_SIMD_KERNEL_LIST
 
-float dot_product_f32(const float *a, size_t aoffset,
-                      const float *b, size_t boffset, size_t length)
-{
-    return kernels.dot_product_f32(a, aoffset, b, boffset, length);
-}
-
-float euclidean_f32(const float *a, size_t aoffset,
-                    const float *b, size_t boffset, size_t length)
-{
-    return kernels.euclidean_f32(a, aoffset, b, boffset, length);
-}
-
-/* Element-wise in-place arithmetic */
-
-void add_in_place_f32(float *v1, const float *v2, size_t length)
-{
-    kernels.add_in_place_f32(v1, v2, length);
-}
-
-void add_scalar_in_place_f32(float *v1, float value, size_t length)
-{
-    kernels.add_scalar_in_place_f32(v1, value, length);
-}
-
-void sub_in_place_f32(float *v1, const float *v2, size_t length)
-{
-    kernels.sub_in_place_f32(v1, v2, length);
-}
-
-void sub_scalar_in_place_f32(float *v1, float value, size_t length)
-{
-    kernels.sub_scalar_in_place_f32(v1, value, length);
-}
-
-float max_f32(const float *v, size_t length)
-{
-    return kernels.max_f32(v, length);
-}
-
-void min_in_place_f32(float *v1, const float *v2, size_t length)
-{
-    kernels.min_in_place_f32(v1, v2, length);
-}
-
-/* PQ kernels */
-
-float assemble_and_sum_f32(const float *data, int dataBase,
-                            const unsigned char *baseOffsets,
-                            int baseOffsetsOffset, size_t baseOffsetsLength)
-{
-    return kernels.assemble_and_sum_f32(
-            data, dataBase, baseOffsets, baseOffsetsOffset, baseOffsetsLength);
-}
-
-float assemble_and_sum_pq_f32(const float *data, size_t subspaceCount,
-                               const unsigned char *baseOffsets1,
-                               int baseOffsetsOffset1,
-                               const unsigned char *baseOffsets2,
-                               int baseOffsetsOffset2, int clusterCount)
-{
-    return kernels.assemble_and_sum_pq_f32(data, subspaceCount,
-                                           baseOffsets1, baseOffsetsOffset1,
-                                           baseOffsets2, baseOffsetsOffset2,
-                                           clusterCount);
-}
-
-float pq_decoded_cosine_similarity_f32(const unsigned char *baseOffsets,
-                                        int baseOffsetsOffset,
-                                        size_t baseOffsetsLength,
-                                        int clusterCount,
-                                        const float *partialSums,
-                                        const float *aMagnitude,
-                                        float bMagnitude)
-{
-    return kernels.pq_decoded_cosine_similarity_f32(baseOffsets,
-                                                    baseOffsetsOffset,
-                                                    baseOffsetsLength,
-                                                    clusterCount,
-                                                    partialSums,
-                                                    aMagnitude,
-                                                    bMagnitude);
-}
-
-void calculate_partial_sums_dot_f32(const float *codebook, int codebookIndex,
-                                     size_t size, int clusterCount,
-                                     const float *query, int queryOffset,
-                                     float *partialSums)
-{
-    kernels.calculate_partial_sums_dot_f32(codebook, codebookIndex,
-                                           size, clusterCount,
-                                           query, queryOffset, partialSums);
-}
-
-void calculate_partial_sums_euclidean_f32(const float *codebook,
-                                           int codebookIndex,
-                                           size_t size, int clusterCount,
-                                           const float *query, int queryOffset,
-                                           float *partialSums)
-{
-    kernels.calculate_partial_sums_euclidean_f32(codebook, codebookIndex,
-                                                 size, clusterCount,
-                                                 query, queryOffset,
-                                                 partialSums);
-}
-
-void calculate_partial_sums_self_magnitude_f32(const float *codebook,
-                                               int codebookIndex,
-                                               size_t size, int clusterCount,
-                                               float *partialSums)
-{
-    kernels.calculate_partial_sums_self_magnitude_f32(codebook, codebookIndex,
-                                                      size, clusterCount,
-                                                      partialSums);
-}
-
-/* NVQ kernels */
-
-void nvq_quantize_8bit(const float *vector, size_t length,
-                        float alpha, float x0,
-                        float minValue, float maxValue,
-                        unsigned char *destination)
-{
-    kernels.nvq_quantize_8bit(vector, length, alpha, x0,
-                              minValue, maxValue, destination);
-}
-
-float nvq_loss(const float *vector, size_t length,
-               float alpha, float x0,
-               float minValue, float maxValue, int nBits)
-{
-    return kernels.nvq_loss(vector, length, alpha, x0, minValue, maxValue, nBits);
-}
-
-float nvq_uniform_loss(const float *vector, size_t length,
-                        float minValue, float maxValue, int nBits)
-{
-    return kernels.nvq_uniform_loss(vector, length, minValue, maxValue, nBits);
-}
-
-float nvq_square_l2_distance_8bit(const float *vector,
-                                   const unsigned char *quantized,
-                                   size_t length,
-                                   float alpha, float x0,
-                                   float minValue, float maxValue)
-{
-    return kernels.nvq_square_l2_distance_8bit(vector, quantized, length,
-                                               alpha, x0, minValue, maxValue);
-}
-
-float nvq_dot_product_8bit(const float *vector,
-                            const unsigned char *quantized,
-                            size_t length,
-                            float alpha, float x0,
-                            float minValue, float maxValue)
-{
-    return kernels.nvq_dot_product_8bit(vector, quantized, length,
-                                        alpha, x0, minValue, maxValue);
-}
-
-int64_t nvq_cosine_8bit_packed(const float *vector,
-                                const unsigned char *quantized,
-                                size_t length,
-                                float alpha, float x0,
-                                float minValue, float maxValue,
-                                const float *centroid)
-{
-    return kernels.nvq_cosine_8bit_packed(vector, quantized, length,
-                                          alpha, x0, minValue, maxValue,
-                                          centroid);
-}
-
-void nvq_shuffle_query_in_place_8bit(float *vector, size_t length)
-{
-    kernels.nvq_shuffle_query_in_place_8bit(vector, length);
-}
+#undef KERNEL_ENTRY
