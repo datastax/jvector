@@ -350,7 +350,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public int getMaxLevel() {
         for (int lvl = 0; lvl < layers.size(); lvl++) {
             if (layers.get(lvl).size() == 0) {
-                return lvl - 1;
+                return (lvl > 0) ? lvl - 1 : 0;
             }
         }
         return layers.size() - 1;

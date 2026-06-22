@@ -81,10 +81,10 @@ public class CommonHeader {
             out.writeInt(OnDiskGraphIndex.MAGIC);
             out.writeInt(version);
         }
-        out.writeInt(layerInfo.isEmpty() ? 0 : layerInfo.get(0).size);
+        out.writeInt(layerInfo.get(0).size);
         out.writeInt(dimension);
         out.writeInt(entryNode);
-        out.writeInt(layerInfo.isEmpty() ? 0 : layerInfo.get(0).degree);
+        out.writeInt(layerInfo.get(0).degree);
         if (version >= 4) {
             out.writeInt(idUpperBound);
 
