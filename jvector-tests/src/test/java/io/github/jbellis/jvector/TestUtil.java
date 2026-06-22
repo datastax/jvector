@@ -543,4 +543,107 @@ public class TestUtil {
             throw new UnsupportedOperationException();
         }
     }
+
+    public static class EmptyGraphIndex implements ImmutableGraphIndex {
+            private final int dimension;
+            
+            public EmptyGraphIndex(int dimension, Random random) {
+                this.dimension = dimension;
+            }
+
+            @Override
+            public long ramBytesUsed() {
+                return 0;
+            }
+
+            @Override
+            public NodesIterator getNodes(int level) {
+                return NodesIterator.EMPTY_NODE_ITERATOR;
+            }
+
+            @Override
+            public View getView() {
+                return new View() {
+                    @Override
+                    public void close() throws IOException {
+                    }
+                    
+                    @Override
+                    public int size() {
+                        return 0;
+                    }
+                    
+                    @Override
+                    public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited,
+                            NeighborProcessor neighborProcessor) {
+                    }
+                    
+                    @Override
+                    public Bits liveNodes() {
+                        return Bits.NONE;
+                    }
+                    
+                    @Override
+                    public NodesIterator getNeighborsIterator(int level, int node) {
+                        return NodesIterator.EMPTY_NODE_ITERATOR;
+                    }
+                    
+                    @Override
+                    public NodeAtLevel entryNode() {
+                        return null;
+                    }
+                    
+                    @Override
+                    public boolean contains(int level, int node) {
+                        return false;
+                    }
+                };
+            }
+
+            @Override
+            public int maxDegree() {
+                return 0;
+            }
+
+            @Override
+            public List<Integer> maxDegrees() {
+                return List.of();
+            }
+
+            @Override
+            public int getDimension() {
+                return dimension;
+            }
+
+            @Override
+            public void close() throws IOException {
+                
+            }
+
+            @Override
+            public boolean isHierarchical() {
+                return false;
+            }
+
+            @Override
+            public int getMaxLevel() {
+                return 0;
+            }
+
+            @Override
+            public int getDegree(int level) {
+                return 0;
+            }
+
+            @Override
+            public double getAverageDegree(int level) {
+                return 0;
+            }
+
+            @Override
+            public int size(int level) {
+                return 0;
+            }
+            
+        };
 }
