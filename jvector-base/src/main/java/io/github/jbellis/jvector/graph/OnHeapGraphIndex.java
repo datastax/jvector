@@ -545,7 +545,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
             assert entryNode.level == getMaxLevel();
             out.writeInt(entryNode.node);
         } else {
-            out.writeInt(OMITTED);
+            out.writeInt(ENTRY_NODE_ABSENT);
         }
 
         for (int level = 0; level < layers.size(); level++) {
@@ -621,7 +621,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         graph.setDegrees(layerDegrees);
-        if (entryNode != OMITTED) {
+        if (entryNode != ENTRY_NODE_ABSENT) {
             graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
         }
 

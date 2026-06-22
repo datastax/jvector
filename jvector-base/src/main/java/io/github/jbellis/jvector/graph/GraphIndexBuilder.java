@@ -951,7 +951,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
 
         graph.setDegrees(layerDegrees);
-        if (entryNode != ImmutableGraphIndex.OMITTED) {
+        if (entryNode != ImmutableGraphIndex.ENTRY_NODE_ABSENT) {
             graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
         }
     }
@@ -986,7 +986,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             graph.markComplete(new NodeAtLevel(0, nodeId));
         }
 
-        if (entryNode != ImmutableGraphIndex.OMITTED) {
+        if (entryNode != ImmutableGraphIndex.ENTRY_NODE_ABSENT) {
             graph.updateEntryNode(new NodeAtLevel(0, entryNode));
         }
         graph.setDegrees(List.of(maxDegree));

@@ -94,7 +94,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         this.version = header.common.version;
         this.layerInfo = header.common.layerInfo;
         this.dimension = header.common.dimension;
-        if (header.common.entryNode == OMITTED) {
+        if (header.common.entryNode == ENTRY_NODE_ABSENT) {
             this.entryNode = null;
         } else {
             this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);

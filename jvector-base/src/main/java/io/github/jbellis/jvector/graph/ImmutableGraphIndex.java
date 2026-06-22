@@ -48,7 +48,7 @@ import java.io.IOException;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
-    int OMITTED = OrdinalMapper.OMITTED; // same as OrdinalMapper, since OrdinalMapper::oldToNew may return it
+    int ENTRY_NODE_ABSENT = -1;
 
     /** Returns the number of nodes in the graph */
     @Deprecated
