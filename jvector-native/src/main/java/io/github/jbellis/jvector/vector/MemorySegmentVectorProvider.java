@@ -23,10 +23,12 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.Buffer;
 
 /**
- * VectorTypeSupport using MemorySegments.
+ * VectorTypeSupport using off-heap (native) MemorySegments for improved performance
+ * and reduced GC pressure.
  */
 public class MemorySegmentVectorProvider implements VectorTypeSupport
 {
@@ -55,15 +57,26 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
 
     @Override
     public void readFloatVector(RandomAccessReader r, int count, VectorFloat<?> vector, int offset) throws IOException {
-        float[] dest = (float[]) ((MemorySegmentVectorFloat) vector).get().heapBase().get();
-        r.read(dest, offset, count);
+        // Read into temporary array then copy to native segment
+        float[] temp = new float[count];
+        r.read(temp, 0, count);
+        
+        // Copy from temp array to native segment
+        MemorySegment segment = ((MemorySegmentVectorFloat) vector).get();
+        MemorySegment.copy(MemorySegment.ofArray(temp), 0,
+                          segment, (long) offset * Float.BYTES,
+                          (long) count * Float.BYTES);
     }
 
     @Override
     public void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException
     {
-        float[] data = (float[]) ((MemorySegmentVectorFloat) vector).get().heapBase().get();
-        out.writeFloats(data, 0, vector.length());
+        // Copy from native segment to temporary array then write
+        int length = vector.length();
+        float[] temp = new float[length];
+        MemorySegment segment = ((MemorySegmentVectorFloat) vector).get();
+        MemorySegment.copy(segment, 0, MemorySegment.ofArray(temp), 0, (long) length * Float.BYTES);
+        out.writeFloats(temp, 0, length);
     }
 
     @Override
@@ -98,7 +111,11 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
-        byte[] data = (byte[]) ((MemorySegmentByteSequence) sequence).get().heapBase().get();
-        out.write(data, 0, sequence.length());
+        // Copy from native segment to temporary array then write
+        int length = sequence.length();
+        byte[] temp = new byte[length];
+        MemorySegment segment = ((MemorySegmentByteSequence) sequence).get();
+        MemorySegment.copy(segment, 0, MemorySegment.ofArray(temp), 0, length);
+        out.write(temp, 0, length);
     }
 }

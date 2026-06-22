@@ -21,18 +21,23 @@ import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.Buffer;
 
 /**
- * VectorFloat implementation backed by an on-heap MemorySegment.
+ * VectorFloat implementation backed by an off-heap (native) MemorySegment.
+ * Uses Arena.ofAuto() for automatic memory management with reduced GC pressure.
  */
 final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>
 {
     private final MemorySegment segment;
+    private final Arena arena;
 
     MemorySegmentVectorFloat(int length) {
-        segment = MemorySegment.ofArray(new float[length]);
+        this.arena = Arena.ofAuto();
+        this.segment = arena.allocate((long) length * Float.BYTES, Float.BYTES);
     }
 
     MemorySegmentVectorFloat(Buffer buffer) {
@@ -41,7 +46,10 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     }
 
     MemorySegmentVectorFloat(float[] data) {
-        this.segment = MemorySegment.ofArray(data);
+        this.arena = Arena.ofAuto();
+        this.segment = arena.allocate((long) data.length * Float.BYTES, Float.BYTES);
+        // Copy data from array to native segment
+        MemorySegment.copy(MemorySegment.ofArray(data), 0, segment, 0, (long) data.length * Float.BYTES);
     }
 
     @Override
@@ -61,15 +69,15 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public float get(int n)
     {
-        // this is (unfortunately) meaningfully better performing than getting at an offset in the memory segment
-        return ((float[])segment.heapBase().get())[n];
+        // Direct access to native memory segment
+        return segment.get(ValueLayout.JAVA_FLOAT, (long) n * Float.BYTES);
     }
 
     @Override
     public void set(int n, float value)
     {
-        // this is (unfortunately) meaningfully better performing than setting at an offset in the memory segment
-        ((float[])segment.heapBase().get())[n] = value;
+        // Direct access to native memory segment
+        segment.set(ValueLayout.JAVA_FLOAT, (long) n * Float.BYTES, value);
     }
 
     @Override

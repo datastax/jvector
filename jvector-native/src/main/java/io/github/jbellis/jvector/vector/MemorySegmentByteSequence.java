@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -26,17 +27,20 @@ import java.nio.Buffer;
 import java.nio.ByteOrder;
 
 /**
- * ByteSequence implementation backed by an on-heap MemorySegment.
+ * ByteSequence implementation backed by an off-heap (native) MemorySegment.
+ * Uses Arena.ofAuto() for automatic memory management with reduced GC pressure.
  */
 public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
     private final MemorySegment segment;
     private final int length;
+    private final Arena arena;
 
     private static final ValueLayout.OfShort LITTLE_ENDIAN_SHORT_LAYOUT_UNALIGNED = ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
     MemorySegmentByteSequence(int length) {
         this.length = length;
-        segment = MemorySegment.ofArray(new byte[length]);
+        this.arena = Arena.ofAuto();
+        this.segment = arena.allocate(length, Byte.BYTES);
     }
 
     MemorySegmentByteSequence(Buffer data) {
@@ -45,13 +49,17 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
     }
 
     MemorySegmentByteSequence(byte[] data) {
-        this.segment = MemorySegment.ofArray(data);
         this.length = data.length;
+        this.arena = Arena.ofAuto();
+        this.segment = arena.allocate(data.length, Byte.BYTES);
+        // Copy data from array to native segment
+        MemorySegment.copy(MemorySegment.ofArray(data), 0, segment, 0, data.length);
     }
 
     private MemorySegmentByteSequence(MemorySegment segment) {
         this.segment = segment;
         this.length = Math.toIntExact(segment.byteSize());
+        this.arena = null; // Segment is a slice, no arena ownership
     }
 
     @Override
