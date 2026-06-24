@@ -60,12 +60,17 @@ third_party/highway/        — Google Highway header-only library (git submodul
 Run the build script from this directory:
 
 ```bash
-bash jextract_vector_simd.sh
+bash jextract_vector_simd.sh [buildtype]
 ```
+
+The `buildtype` parameter is optional and defaults to `release`. Valid values are:
+- `release` (default) - Optimized build with no debug symbols
+- `debug` - Unoptimized build with debug symbols (`-g -O0`)
+- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
 
 The script:
 1. Verifies prerequisites (g++, meson, ninja, Highway submodule).
-2. Runs `meson setup build --wipe --buildtype=release` then `meson compile`.
+2. Runs `meson setup build --wipe --buildtype=<buildtype>` then `meson compile`.
 3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
    `LibraryLoader` expects it.
 4. Optionally re-generates the Java FFM bindings via `jextract` (only needed
@@ -86,6 +91,30 @@ To build without regenerating bindings (e.g. when `jextract` is not installed):
 ```bash
 bash jextract_vector_simd.sh   # jextract step is skipped with a warning if not found
 ```
+
+### Building with Maven
+
+From the project root, you can build the native module using Maven:
+
+**Release build (default):**
+```bash
+mvn clean install
+```
+
+**Debug build:**
+```bash
+mvn clean install -Dnative.debug
+```
+
+**Debug-optimized build:**
+```bash
+mvn clean install -Dnative.debugoptimized
+```
+
+The Maven build automatically invokes the `jextract_vector_simd.sh` script with the appropriate buildtype parameter. The available profiles are:
+- `release` (default) - Optimized build with no debug symbols
+- `debug` - Unoptimized build with debug symbols (`-g -O0`)
+- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
 
 ### Manual meson build
 

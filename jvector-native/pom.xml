@@ -11,6 +11,9 @@
     </parent>
     <artifactId>jvector-native</artifactId>
     <name>Native</name>
+    <properties>
+        <native.buildtype>release</native.buildtype>
+    </properties>
     <build>
         <plugins>
             <plugin>
@@ -53,6 +56,39 @@
     </build>
     <profiles>
         <profile>
+            <id>native.debug</id>
+            <activation>
+                <property>
+                    <name>native.debug</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>debug</native.buildtype>
+            </properties>
+        </profile>
+        <profile>
+            <id>native.debugoptimized</id>
+            <activation>
+                <property>
+                    <name>native.debugoptimized</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>debugoptimized</native.buildtype>
+            </properties>
+        </profile>
+        <profile>
+            <id>native.release</id>
+            <activation>
+                <property>
+                    <name>native.release</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>release</native.buildtype>
+            </properties>
+        </profile>
+        <profile>
             <id>unix-amd64-profile</id>
             <activation>
                 <os>
@@ -78,6 +114,11 @@
                                             <version>[20,)</version>
                                         </requireJavaVersion>
                                         <requireProfileIdsExist/>
+                                        <requireProperty>
+                                            <property>native.buildtype</property>
+                                            <regex>^(debug|debugoptimized|release)$</regex>
+                                            <regexMessage>native.buildtype must be one of: debug, debugoptimized, release. Use -Dnative.debug, -Dnative.debugoptimized, or -Dnative.release to set it.</regexMessage>
+                                        </requireProperty>
                                     </rules>
                                 </configuration>
                             </execution>
@@ -96,6 +137,9 @@
                                 </goals>
                                 <configuration>
                                     <executable>./jextract_vector_simd.sh</executable>
+                                    <arguments>
+                                        <argument>${native.buildtype}</argument>
+                                    </arguments>
                                     <skip>false</skip>
                                     <workingDirectory>${project.basedir}/src/main/native/</workingDirectory>
                                 </configuration>

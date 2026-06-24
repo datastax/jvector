@@ -20,6 +20,15 @@ set -e
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
 printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
 
+# Accept buildtype parameter (default: release)
+BUILDTYPE="${1:-release}"
+if [ "$BUILDTYPE" != "release" ] && [ "$BUILDTYPE" != "debug" ] && [ "$BUILDTYPE" != "debugoptimized" ]; then
+  echo "WARNING: Invalid buildtype '$BUILDTYPE'. Using 'release' instead."
+  echo "         Valid values: release, debug, debugoptimized"
+  BUILDTYPE="release"
+fi
+printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
+
 mkdir -p ../resources
 # compile jvector_simd_check.cpp as x86-64
 # compile jvector_simd.cpp as skylake-avx512
@@ -77,7 +86,7 @@ rm -rf ../resources/libjvector.so
 # Configure (--wipe resets any stale configuration) then compile
 meson setup "${BUILD_DIR}" \
     --wipe \
-    --buildtype=release
+    --buildtype="${BUILDTYPE}"
 
 meson compile -C "${BUILD_DIR}"
 
