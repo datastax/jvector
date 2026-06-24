@@ -49,6 +49,7 @@ public class TestPruningCompatibility extends LuceneTestCase {
     public void testScoreTrackerFactoryPolicy() {
         var factory = new ScoreTracker.ScoreTrackerFactory();
 
+        // `usePruning` parameter is deprecated and should have no effect.
         assertTrue(factory.getScoreTracker(false, RERANK_K, 0.0f) instanceof ScoreTracker.NoOpTracker);
         assertTrue(factory.getScoreTracker(true, RERANK_K, 0.0f) instanceof ScoreTracker.NoOpTracker);
 

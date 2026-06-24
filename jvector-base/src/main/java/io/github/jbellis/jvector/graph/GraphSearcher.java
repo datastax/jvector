@@ -131,7 +131,7 @@ public class GraphSearcher implements Closeable {
      * value. This method is retained for API compatibility and has no effect.
      *
      * Threshold searches, where {@code threshold > 0}, continue to use their
-     * legacy threshold early-termination behavior.
+     * legacy threshold early-termination behavior that disregards this setting.
      */
     @Deprecated
     public void usePruning(boolean usage) {
