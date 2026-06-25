@@ -71,7 +71,7 @@ if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head
     exit 1
 fi
 
-BUILD_DIR="build"
+BUILD_DIR="../../../target/meson-build"
 rm -rf ../resources/libjvector.so
 
 # Configure (--wipe resets any stale configuration) then compile
