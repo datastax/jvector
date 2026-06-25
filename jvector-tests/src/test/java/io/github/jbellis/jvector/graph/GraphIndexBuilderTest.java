@@ -157,7 +157,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         }
         assertGraphEquals(graph, builder.graph);
     }
-    
+
     @Test
     public void testSaveAndLoadEmptyGraph() throws IOException {
         int dimension = randomIntBetween(2, 32);

@@ -647,6 +647,5 @@ public class TestUtil {
             public int size(int level) {
                 return layerInfo.get(level).size;
             }
-            
         };
 }

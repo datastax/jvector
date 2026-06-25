@@ -48,6 +48,7 @@ import java.io.IOException;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+    /** Marks entry node as absent (fe, empty graph) */
     int ENTRY_NODE_ABSENT = -1;
 
     /** Returns the number of nodes in the graph */
