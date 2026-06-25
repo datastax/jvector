@@ -1,0 +1,144 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package io.github.jbellis.jvector.bench;
+
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.quantization.MutablePQVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Benchmark that compares the distance calculation of mutable Product Quantized vectors vs full precision vectors.
+ */
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@State(Scope.Thread)
+@Fork(value = 1, jvmArgsAppend = {"--add-modules=jdk.incubator.vector", "--enable-preview", "-Djvector.experimental.enable_native_vectorization=false"})
+@Warmup(iterations = 2)
+@Measurement(iterations = 3)
+@Threads(1)
+public class PQDistanceCalculationMutableVectorBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(PQDistanceCalculationMutableVectorBenchmark.class);
+    private static final VectorTypeSupport VECTOR_TYPE_SUPPORT = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    private List<VectorFloat<?>> vectors;
+    private PQVectors pqVectors;
+    private List<VectorFloat<?>> queryVectors;
+    private ProductQuantization pq;
+    private BuildScoreProvider buildScoreProvider;
+    
+    @Param({"1536"})
+    private int dimension;
+    
+    @Param({"10000"})
+    private int vectorCount;
+    
+    @Param({"100"})
+    private int queryCount;
+    
+    @Param({ "16","32", "64","96", "192"})
+    private int M; // Number of subspaces for PQ
+
+    @Param
+    private VectorSimilarityFunction vsf;
+
+    @Setup
+    public void setup() throws IOException {
+        log.info("Creating dataset with dimension: {}, vector count: {}, query count: {}", dimension, vectorCount, queryCount);
+        
+        // Create random vectors
+        vectors = new ArrayList<>(vectorCount);
+        for (int i = 0; i < vectorCount; i++) {
+            vectors.add(createRandomVector(dimension));
+        }
+        
+        // Create query vectors
+        queryVectors = new ArrayList<>(queryCount);
+        for (int i = 0; i < queryCount; i++) {
+            queryVectors.add(createRandomVector(dimension));
+        }
+        
+        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        // Create Mutable PQ vectors
+        pq = ProductQuantization.compute(ravv, M, 256, true);
+        pqVectors = new MutablePQVectors(pq);
+        // build the index vector-at-a-time (on disk)
+        for (int ordinal = 0; ordinal < vectors.size(); ordinal++)
+        {
+            VectorFloat<?> v = vectors.get(ordinal);
+            // compress the new vector and add it to the PQVectors
+            ((MutablePQVectors)pqVectors).encodeAndSet(ordinal, v);
+        }
+        buildScoreProvider = BuildScoreProvider.pqBuildScoreProvider(vsf, pqVectors);
+        log.info("Created dataset with dimension: {}, vector count: {}, query count: {}", dimension, vectorCount, queryCount);
+    }
+
+    @Benchmark
+    public void scoreCalculation(Blackhole blackhole) {
+        float totalSimilarity = 0;
+
+        for (VectorFloat<?> query : queryVectors) {
+
+            ScoreFunction.ApproximateScoreFunction asf = pqVectors.scoreFunctionFor(query, vsf);
+            for (int i = 0; i < vectorCount; i++) {
+                float similarity = asf.similarityTo(i);
+                totalSimilarity += similarity;
+            }
+        }
+
+        blackhole.consume(totalSimilarity);
+    }
+
+    @Benchmark
+    public void diversityCalculation(Blackhole blackhole) {
+        float totalSimilarity = 0;
+
+        for (int q = 0; q < queryCount; q++) {
+            for (int i = 0; i < vectorCount; i++) {
+                final ScoreFunction sf = buildScoreProvider.diversityProviderFor(i).scoreFunction();
+                float similarity = sf.similarityTo(q);
+                totalSimilarity += similarity;
+            }
+        }
+
+        blackhole.consume(totalSimilarity);
+    }
+
+    private VectorFloat<?> createRandomVector(int dimension) {
+        VectorFloat<?> vector = VECTOR_TYPE_SUPPORT.createFloatVector(dimension);
+        for (int i = 0; i < dimension; i++) {
+            vector.set(i, (float) Math.random());
+        }
+        return vector;
+    }
+}
