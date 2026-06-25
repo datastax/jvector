@@ -24,6 +24,7 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
+      - '.github/workflows/run-bench.yml'
 
 jobs:
   # Job to generate the matrix configuration
@@ -41,8 +42,8 @@ jobs:
 
           # Default branches based on event type
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "Pull request detected. Using main and PR branch: ${{ github.head_ref }}"
-            BRANCHES='["main", "${{ github.head_ref }}"]'
+            echo "Pull request detected. Using main and PR ref: ${{ github.ref }}"
+            BRANCHES='["main", "${{ github.ref }}"]'
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
             # Parse space-separated branches input into JSON array
             echo "Workflow dispatch with branches input detected"
@@ -213,7 +214,8 @@ jobs:
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
               -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/heap_dump/ -Xmx${HALF_MEM_GB}g \
-              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} dpr-gemma-1m
+              -cp jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar io.github.jbellis.jvector.example.AutoBenchYAML \
+              --match-all-datasets --output ${SAFE_BRANCH}-bench-results ${CONFIG_ARG} openai-1536-1m
           else
             java ${{ matrix.jdk >= 20 && '--enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector' || '' }} \
               ${{ matrix.jdk >= 22 && '-Djvector.experimental.enable_native_vectorization=true' || '' }} \
