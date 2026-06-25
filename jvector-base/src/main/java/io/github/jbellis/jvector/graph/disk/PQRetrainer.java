@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -29,10 +30,14 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.IntStream;
 
 /**
  * Handles Product Quantization retraining for graph index compaction.
@@ -47,6 +52,7 @@ public class PQRetrainer {
     // Keeping reads sequential within each chunk lets the OS read-ahead cover them,
     // avoiding the random I/O that would happen with per-node random sampling.
     private static final int SAMPLE_CHUNK_SIZE = 32;
+    private static final int MIN_PARALLEL_EXTRACT_CHUNK = 1024;
 
     private final List<OnDiskGraphIndex> sources;
     private final List<FixedBitSet> liveNodes;
@@ -90,18 +96,13 @@ public class PQRetrainer {
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
 
-        // Sort by (source, node) so extractVectorsSequential reads each source's file
-        // in ascending order, enabling OS read-ahead instead of random page faults.
+        // Sort by (source, node) so each extraction task reads its source's file in ascending
+        // order, enabling OS read-ahead instead of random page faults.
         samples.sort(Comparator.comparingInt((SampleRef r) -> r.source).thenComparingInt(r -> r.node));
 
         log.info("Collected {} training samples", samples.size());
 
-        // Extract vectors sequentially in sorted (source, node) order so disk reads are
-        // purely sequential and the OS read-ahead can cover them efficiently.  We do this
-        // here rather than letting ProductQuantization.compute() drive the reads via its
-        // parallel stream, which would scatter page faults across a potentially very large
-        // file and cause I/O that scales with dataset size rather than sample count.
-        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        List<VectorFloat<?>> trainingVectors = extractSampledVectors(samples);
         var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
 
         boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
@@ -207,22 +208,59 @@ public class PQRetrainer {
 
     /**
      * Reads sampled vectors in the order provided. The caller must pre-sort {@code samples}
-     * by (source, node) so reads within each source are ascending, letting the OS read-ahead
-     * cover them efficiently. Each source's view is opened once and reused for all its samples.
+     * by (source, node). The sorted list is split into contiguous ranges that are read
+     * concurrently across {@link PhysicalCoreExecutor#pool()}, so the scattered page faults
+     * that dominate single-threaded extraction are overlapped, while each range still reads a
+     * contiguous run so OS read-ahead applies within it. Each task uses its own per-source
+     * {@code View} (and reader) and closes them when done.
      */
-    private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples) {
-        OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
-        for (int s = 0; s < sources.size(); s++) {
-            views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
+    private List<VectorFloat<?>> extractSampledVectors(List<SampleRef> samples) {
+        int n = samples.size();
+        VectorFloat<?>[] out = new VectorFloat<?>[n];
+        if (n == 0) {
+            return Arrays.asList(out);
         }
 
-        List<VectorFloat<?>> vectors = new ArrayList<>(samples.size());
-        VectorFloat<?> tmp = vectorTypeSupport.createFloatVector(dimension);
-        for (SampleRef ref : samples) {
-            views[ref.source].getVectorInto(ref.node, tmp, 0);
-            vectors.add(tmp.copy());
-        }
-        return vectors;
+        int parallelism = Math.max(1, PhysicalCoreExecutor.getPhysicalCoreCount());
+        int numTasks = Math.max(1, Math.min(parallelism, n / MIN_PARALLEL_EXTRACT_CHUNK));
+        int chunk = (n + numTasks - 1) / numTasks;
+
+        ForkJoinPool pool = PhysicalCoreExecutor.pool();
+        final int taskCount = numTasks;
+        final int chunkSize = chunk;
+        pool.submit(() -> IntStream.range(0, taskCount).parallel().forEach(t -> {
+            int start = t * chunkSize;
+            if (start >= n) {
+                return;
+            }
+            int end = Math.min(n, start + chunkSize);
+            OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
+            VectorFloat<?> tmp = vectorTypeSupport.createFloatVector(dimension);
+            try {
+                for (int i = start; i < end; i++) {
+                    SampleRef ref = samples.get(i);
+                    OnDiskGraphIndex.View view = views[ref.source];
+                    if (view == null) {
+                        view = (OnDiskGraphIndex.View) sources.get(ref.source).getView();
+                        views[ref.source] = view;
+                    }
+                    view.getVectorInto(ref.node, tmp, 0);
+                    out[i] = tmp.copy();
+                }
+            } finally {
+                for (OnDiskGraphIndex.View view : views) {
+                    if (view != null) {
+                        try {
+                            view.close();
+                        } catch (IOException e) {
+                            log.warn("Failed to close source view during PQ sample extraction", e);
+                        }
+                    }
+                }
+            }
+        })).join();
+
+        return Arrays.asList(out);
     }
 
     /**
