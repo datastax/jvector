@@ -546,9 +546,11 @@ public class TestUtil {
 
     public static class EmptyGraphIndex implements ImmutableGraphIndex {
             private final int dimension;
+            private final List<CommonHeader.LayerInfo> layerInfo;
             
             public EmptyGraphIndex(int dimension, Random random) {
                 this.dimension = dimension;
+                this.layerInfo = List.of(new CommonHeader.LayerInfo(0, 0));
             }
 
             @Override
@@ -576,11 +578,12 @@ public class TestUtil {
                     @Override
                     public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited,
                             NeighborProcessor neighborProcessor) {
+                        throw new IllegalStateException("Should not be called, empty graph has no nodes");
                     }
                     
                     @Override
                     public Bits liveNodes() {
-                        return Bits.NONE;
+                        return Bits.ALL;
                     }
                     
                     @Override
@@ -602,12 +605,12 @@ public class TestUtil {
 
             @Override
             public int maxDegree() {
-                return 0;
+                return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
             }
 
             @Override
             public List<Integer> maxDegrees() {
-                return List.of();
+                throw new NotImplementedException();
             }
 
             @Override
@@ -627,22 +630,22 @@ public class TestUtil {
 
             @Override
             public int getMaxLevel() {
-                return 0;
+                return layerInfo.size() - 1;
             }
 
             @Override
             public int getDegree(int level) {
-                return 0;
+                return layerInfo.get(level).degree;
             }
 
             @Override
             public double getAverageDegree(int level) {
-                return 0;
+                throw new NotImplementedException();
             }
 
             @Override
             public int size(int level) {
-                return 0;
+                return layerInfo.get(level).size;
             }
             
         };
