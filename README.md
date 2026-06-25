@@ -62,7 +62,7 @@ Java 11 -> Java 19, certain build features will still be available.
 ### Cloning
 
 This repository uses a Git submodule for [Google Highway](https://github.com/google/highway), located at
-`jvector-native/src/main/c/third_party/highway`. After cloning, initialise it with:
+`jvector-native/src/main/native/third_party/highway`. After cloning, initialise it with:
 
 ```bash
 git submodule update --init
@@ -77,10 +77,10 @@ git clone --recurse-submodules <repo-url>
 ### Building native libraries
 
 The native SIMD library (`libjvector.so`) requires **g++ 11+** and is built by the script
-`jvector-native/src/main/c/jextract_vector_simd.sh`. To build and auto-install `g++` on Ubuntu:
+`jvector-native/src/main/native/jextract_vector_simd.sh`. To build and auto-install `g++` on Ubuntu:
 
 ```bash
-./jvector-native/src/main/c/jextract_vector_simd.sh --auto-install-g++
+./jvector-native/src/main/native/jextract_vector_simd.sh --auto-install-g++
 ```
 
 Base code is in [jvector-base](./jvector-base) and will be built for Java 11 releases, restricting language features and APIs

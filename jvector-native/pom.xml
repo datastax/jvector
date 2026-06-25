@@ -97,7 +97,7 @@
                                 <configuration>
                                     <executable>./jextract_vector_simd.sh</executable>
                                     <skip>false</skip>
-                                    <workingDirectory>${project.basedir}/src/main/c/</workingDirectory>
+                                    <workingDirectory>${project.basedir}/src/main/native/</workingDirectory>
                                 </configuration>
                             </execution>
                         </executions>

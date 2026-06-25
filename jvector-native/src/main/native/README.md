@@ -90,7 +90,7 @@ bash jextract_vector_simd.sh   # jextract step is skipped with a warning if not 
 ### Manual meson build
 
 ```bash
-cd jvector-native/src/main/c
+cd jvector-native/src/main/native
 meson setup build --wipe --buildtype=release
 meson compile -C build
 ```
