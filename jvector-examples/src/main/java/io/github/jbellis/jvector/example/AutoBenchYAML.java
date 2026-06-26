@@ -76,20 +76,17 @@ public class AutoBenchYAML {
         String finalOutputPath = outputPath;
         String configPath = null;
         int diagnostic_level = 0;
-        boolean matchAllDatasets = false;
-        for (int i = 0; i < args.length; i++) {
-            if (i < args.length - 1 && args[i].equals("--config")) configPath = args[i+1];
-            if (i < args.length - 1 && args[i].equals("--diag")) diagnostic_level = Integer.parseInt(args[i+1]);
-            if (args[i].equals("--match-all-datasets")) matchAllDatasets = true;
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals("--config")) configPath = args[i+1];
+            if (args[i].equals("--diag")) diagnostic_level = Integer.parseInt(args[i+1]);
         }
         if (diagnostic_level > 0) {
             Grid.setDiagnosticLevel(diagnostic_level);
         }
         String finalConfigPath = configPath;
         String[] filteredArgs = Arrays.stream(args)
-                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) &&
-                               !arg.equals("--config") && !arg.equals(finalConfigPath) &&
-                               !arg.equals("--match-all-datasets"))
+                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) && 
+                               !arg.equals("--config") && !arg.equals(finalConfigPath))
                 .toArray(String[]::new);
 
         // Log the filtered arguments for debugging
@@ -103,12 +100,7 @@ public class AutoBenchYAML {
         var pattern = Pattern.compile(regex);
 
         var datasetCollection = DatasetCollection.load();
-        var candidateDatasets = matchAllDatasets ? datasetCollection.getAll() : datasetCollection.getSection(REGRESSION_TEST_KEY);
-        var datasetNames = candidateDatasets.stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
-
-        if (datasetNames.size() == 0) {
-            throw new RuntimeException("No datasets matched the given patterns, nothing to do");
-        }
+        var datasetNames = datasetCollection.getSection(REGRESSION_TEST_KEY).stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
