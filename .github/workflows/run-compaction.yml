@@ -19,6 +19,7 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
+      - '.github/workflows/run-compaction.yml'
 
 jobs:
   # Job to generate the matrix configuration

@@ -102,6 +102,10 @@ public class AutoBenchYAML {
         var datasetCollection = DatasetCollection.load();
         var datasetNames = datasetCollection.getSection(REGRESSION_TEST_KEY).stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
+        if (datasetNames.size() == 0) {
+            throw new RuntimeException("No datasets matched the given patterns, nothing to do");
+        }
+
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
         List<BenchResult> compactionResults = new ArrayList<>();
