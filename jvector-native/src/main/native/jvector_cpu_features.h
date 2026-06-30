@@ -52,6 +52,13 @@ enum class CpuFeature : uint32_t {
     AVX512_FP16 = 15, // FP16 arithmetic (CPUID 7.0 EDX[23])
     AVX512_BF16 = 16, // BFloat16 arithmetic (CPUID 7.1 EAX[5])
     AVX_VNNI = 17, // VEX-encoded VNNI 256-bit (CPUID 7.1 EAX[4])
+    // ---- Composite ISA tier flags (set by populate_cpu_features) --------
+    // Numbered from 100 to leave room for future single-feature additions
+    // without renumbering the tier flags.
+    AVX3 = 100,     // AVX512F + BW + CD + DQ + VL (Skylake-AVX512 baseline)
+    AVX3_DL = 101,  // AVX3 + VNNI + VBMI + VBMI2 + IFMA + BITALG + VPOPCNTDQ
+                    //      + GFNI + VAES + VPCLMULQDQ (Ice Lake)
+    AVX3_SPR = 102, // AVX3_DL + AVX512_FP16 (Sapphire Rapids)
     COUNT
 };
 
@@ -166,6 +173,24 @@ populate_cpu_features(std::array<bool, static_cast<uint32_t>(CpuFeature::COUNT)>
         features[static_cast<uint32_t>(CpuFeature::AVX512_BF16)]
                 = zmm_enabled && ((eax >> 5) & 1u);
     }
+
+    // ---- Composite ISA tier flags ---------------------------------------
+    auto f = [&](CpuFeature x) noexcept {
+        return features[static_cast<uint32_t>(x)];
+    };
+    features[static_cast<uint32_t>(CpuFeature::AVX3)]
+            = f(CpuFeature::AVX512F) && f(CpuFeature::AVX512BW)
+           && f(CpuFeature::AVX512CD) && f(CpuFeature::AVX512DQ)
+           && f(CpuFeature::AVX512VL);
+    features[static_cast<uint32_t>(CpuFeature::AVX3_DL)]
+            = f(CpuFeature::AVX3)
+           && f(CpuFeature::AVX512_VNNI) && f(CpuFeature::AVX512_VBMI)
+           && f(CpuFeature::AVX512_VBMI2) && f(CpuFeature::AVX512_IFMA)
+           && f(CpuFeature::AVX512_BITALG) && f(CpuFeature::AVX512_VPOPCNTDQ)
+           && f(CpuFeature::GFNI) && f(CpuFeature::VAES)
+           && f(CpuFeature::VPCLMULQDQ);
+    features[static_cast<uint32_t>(CpuFeature::AVX3_SPR)]
+            = f(CpuFeature::AVX3_DL) && f(CpuFeature::AVX512_FP16);
 
 #endif // x86 / x86_64
 }
