@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-// Runtime SIMD dispatch: selects AVX3 (AVX-512), AVX2, or SSE42 at startup.
+// Runtime SIMD dispatch: selects the best available ISA tier at startup.
+// Tiers in descending capability order: AVX3_SPR, AVX3_DL, AVX3, AVX2, SSE42.
 // SSE42 is the baseline and is assumed always available without a CPUID check.
-// AVX2 and AVX3 are probed via CPUID.  Function pointers are resolved once at
-// static-init time; each public call is a single indirect branch.
+// Function pointers are resolved once at static-init time; each public call is
+// a single indirect branch.
 #include "jvector_simd.h"
-#include "jvector_simd_kernels.h" // AVX3::, AVX2::, SSE42:: kernel declarations
+#include "jvector_simd_kernels.h" // AVX3_SPR::, AVX3_DL::, AVX3::, AVX2::, SSE42:: kernel declarations
 #include "jvector_cpu_features.h"  // populate_cpu_features(), CpuFeature enum
 
 #include <array>
@@ -33,7 +34,13 @@ namespace {
 // Enumerates the ISA tiers in ascending capability order so that numeric
 // comparisons (e.g. max_isa != MaxIsa::AVX2) correctly gate higher tiers.
 // Unset (-1) means "no override; use best available CPU capability".
-enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2 };
+enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4 };
+static_assert(
+    (int)MaxIsa::SSE42    < (int)MaxIsa::AVX2
+    && (int)MaxIsa::AVX2  < (int)MaxIsa::AVX3
+    && (int)MaxIsa::AVX3  < (int)MaxIsa::AVX3_DL
+    && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR,
+    "MaxIsa values must be in strict ascending capability order");
 
 // Reads the JVECTOR_MAX_ISA environment variable and maps it to a MaxIsa
 // value.  This lets callers cap the ISA at runtime without recompiling —
@@ -43,6 +50,8 @@ static MaxIsa read_max_isa() noexcept
 {
     const char *val = std::getenv("JVECTOR_MAX_ISA");
     if (!val) return MaxIsa::Unset;
+    if (std::strcmp(val, "avx3_spr") == 0) return MaxIsa::AVX3_SPR;
+    if (std::strcmp(val, "avx3_dl")  == 0) return MaxIsa::AVX3_DL;
     if (std::strcmp(val, "avx3")  == 0) return MaxIsa::AVX3;
     if (std::strcmp(val, "avx2")  == 0) return MaxIsa::AVX2;
     if (std::strcmp(val, "sse42") == 0) return MaxIsa::SSE42;
@@ -68,6 +77,22 @@ static const KernelVTable AVX3_vtable = {
     JVECTOR_SIMD_KERNEL_LIST
 };
 #undef KERNEL_ENTRY
+
+// AVX3_DL (Ice Lake) inherits all slots from AVX3 unchanged for now.
+// To override a slot: t.kernel_name = AVX3_DL::kernel_name;
+// The implementation must exist in jvector_avx3_dl_kernels.cpp.
+static const KernelVTable AVX3_DL_vtable = []() {
+    KernelVTable t = AVX3_vtable;
+    return t;
+}();
+
+// AVX3_SPR (Sapphire Rapids) inherits all slots from AVX3_DL unchanged for now.
+// To override a slot: t.kernel_name = AVX3_SPR::kernel_name;
+// The implementation must exist in jvector_avx3_spr_kernels.cpp.
+static const KernelVTable AVX3_SPR_vtable = []() {
+    KernelVTable t = AVX3_DL_vtable;   // inherits DL overrides automatically
+    return t;
+}();
 
 #define KERNEL_ENTRY(ret_type, name, params, names) AVX2::name,
 static const KernelVTable AVX2_vtable = {
@@ -96,19 +121,17 @@ static KernelVTable dispatch_kernels() noexcept
         return features[static_cast<uint32_t>(f)];
     };
 
-    // AVX3 tier requires the full Skylake-AVX512 (SKX) baseline:
-    // AVX512F (foundation) + BW (byte/word) + CD (conflict detect)
-    // + DQ (dword/qword) + VL (vector length extensions).
-    if (max_isa != MaxIsa::SSE42 && max_isa != MaxIsa::AVX2
-        && has(CpuFeature::AVX512F) && has(CpuFeature::AVX512BW)
-        && has(CpuFeature::AVX512CD) && has(CpuFeature::AVX512DQ)
-        && has(CpuFeature::AVX512VL)) {
+    // Select the highest tier the CPU supports and the cap allows.
+    // max_isa > MaxIsa::X means "user has not capped at X or below".
+    // Adding a new tier above AVX3_SPR only requires one new if at the top.
+    if (max_isa > MaxIsa::AVX3_DL && has(CpuFeature::AVX3_SPR))
+        return AVX3_SPR_vtable;
+    if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
+        return AVX3_DL_vtable;
+    if (max_isa > MaxIsa::AVX2    && has(CpuFeature::AVX3))
         return AVX3_vtable;
-    }
-    // AVX2 tier: 256-bit integer/FP SIMD, available on Haswell and later.
-    if (max_isa != MaxIsa::SSE42 && has(CpuFeature::AVX2)) {
+    if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
         return AVX2_vtable;
-    }
     // SSE42 is the baseline — assumed always present, no CPUID check needed.
     return SSE42_vtable;
 }
