@@ -19,6 +19,7 @@ on:
       - '**/src/main/java/**'
       - 'pom.xml'
       - '**/pom.xml'
+      - '.github/workflows/run-compaction.yml'
 
 jobs:
   # Job to generate the matrix configuration
@@ -31,7 +32,7 @@ jobs:
         id: set-matrix
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BRANCHES='["main", "${{ github.head_ref }}"]'
+            BRANCHES='["main", "${{ github.ref }}"]'
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.branches }}" ]]; then
             BRANCHES_INPUT="${{ github.event.inputs.branches }}"
             BRANCHES="["
