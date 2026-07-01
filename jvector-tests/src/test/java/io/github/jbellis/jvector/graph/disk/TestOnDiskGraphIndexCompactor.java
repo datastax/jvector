@@ -52,6 +52,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -64,6 +65,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.fail;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
@@ -278,7 +280,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.of(g0, g1),
                 List.of(live0, live1),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path outPath = testDirectory.resolve("simple_compact_out");
         compactor.compact(outPath);
@@ -355,7 +357,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.of(g0, g1),
                 List.of(live0, live1),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path outPath = testDirectory.resolve("del_compact_out");
         compactor.compact(outPath);
@@ -433,7 +435,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.of(g0, g1),
                 List.of(live0, live1),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path outPath = testDirectory.resolve("remap_compact_out");
         compactor.compact(outPath);
@@ -490,7 +492,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             liveNodes.add(lives);
         }
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null, -1);
         int topK = 10;
 
         // Select query vectors from the dataset
@@ -596,10 +598,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /** Loads the fixture's source graphs with every node live and identity remapping. */
     private OnDiskGraphIndexCompactor newAllLiveCompactor(List<ReaderSupplier> rss) throws IOException {
-        return newAllLiveCompactor(rss, null);
+        return newAllLiveCompactor(rss, (Executor) null, -1);
     }
 
-    private OnDiskGraphIndexCompactor newAllLiveCompactor(List<ReaderSupplier> rss, ForkJoinPool executor) throws IOException {
+    private OnDiskGraphIndexCompactor newAllLiveCompactor(List<ReaderSupplier> rss, Executor executor, int taskWindowSize) throws IOException {
         List<OnDiskGraphIndex> graphs = new ArrayList<>();
         List<FixedBitSet> liveNodes = new ArrayList<>();
         List<OrdinalMapper> remappers = new ArrayList<>();
@@ -617,19 +619,76 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             lives.set(0, numVectorsPerGraph);
             liveNodes.add(lives);
         }
-        return new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, executor);
+        return new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, executor, taskWindowSize);
     }
 
     @Test
-    public void testGetTaskWindowSizeReflectsInjectedParallelism() throws Exception {
-        List<ReaderSupplier> rss = new ArrayList<>();
+    public void testTaskWindowSizeResolution() throws Exception {
+        List<ReaderSupplier> rss1 = new ArrayList<>();
+        try {
+            assertEquals("explicit window must be honored",
+                    5, newAllLiveCompactor(rss1, (Executor) Runnable::run, 5).getTaskWindowSize());
+        } finally { for (var rs : rss1) rs.close(); }
+
+        List<ReaderSupplier> rss2 = new ArrayList<>();
+        try {
+            assertEquals("non-FJP executor with window<=0 must default to 1 (serial)",
+                    1, newAllLiveCompactor(rss2, (Executor) Runnable::run, 0).getTaskWindowSize());
+        } finally { for (var rs : rss2) rs.close(); }
+
+        List<ReaderSupplier> rss3 = new ArrayList<>();
         ForkJoinPool pool = new ForkJoinPool(3);
         try {
-            var compactor = newAllLiveCompactor(rss, pool);
-            assertEquals("taskWindowSize should equal the injected pool's parallelism",
-                    3, compactor.getTaskWindowSize());
+            assertEquals("window<=0 with a ForkJoinPool must derive getParallelism()",
+                    3, newAllLiveCompactor(rss3, pool, -1).getTaskWindowSize());
+        } finally { pool.shutdown(); for (var rs : rss3) rs.close(); }
+    }
+
+    @Test
+    public void testCallerRunsProducesValidGraph() throws Exception {
+        // Caller-runs + serial must produce a correct, searchable graph of equivalent quality to
+        // the ForkJoinPool path. (Not asserted byte-identical: fused-PQ retraining uses parallel
+        // floating-point reduction, which is order-sensitive, so serialization can shift low bits.)
+        List<ReaderSupplier> rss = new ArrayList<>();
+        try {
+            var path = testDirectory.resolve("cr_caller");
+            newAllLiveCompactor(rss, (Executor) Runnable::run, 1).compact(path);
+
+            try (ReaderSupplier out = ReaderSupplierFactory.open(path)) {
+                var g = OnDiskGraphIndex.load(out);
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+
+                List<VectorFloat<?>> queries = new ArrayList<>();
+                for (int i = 0; i < numQueries; ++i) queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+                List<List<Integer>> gt = buildGT(queries, 10);
+                GraphSearcher searcher = new GraphSearcher(g);
+                List<SearchResult> results = new ArrayList<>();
+                for (VectorFloat<?> q : queries) {
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                    results.add(searcher.search(ssp, 10, Bits.ALL));
+                }
+                double recall = AccuracyMetrics.recallFromSearchResults(gt, results, 10, 10);
+                assertTrue("caller-runs graph recall should be reasonable, got " + recall, recall >= 0.2);
+                searcher.close();
+            }
         } finally {
-            pool.shutdown();
+            for (var rs : rss) rs.close();
+        }
+    }
+
+    @Test
+    public void testCallerRunsRunsOnCallingThreadOnly() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        Set<Thread> taskThreads = Collections.synchronizedSet(new HashSet<>());
+        Executor recordingCallerRuns = command -> {
+            taskThreads.add(Thread.currentThread());
+            command.run();
+        };
+        try {
+            newAllLiveCompactor(rss, recordingCallerRuns, 1).compact(testDirectory.resolve("cr_thread"));
+            assertEquals("all batch + pre-encode work must run on the calling thread only",
+                    Collections.singleton(Thread.currentThread()), taskThreads);
+        } finally {
             for (var rs : rss) rs.close();
         }
     }
@@ -735,6 +794,81 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for (var rs : rss) rs.close();
     }
 
+    @Test
+    public void testCompactToFileDestination() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+        var path = testDirectory.resolve("dest_tofile");
+
+        long bodyLength = compactor.compact(CompactionDestination.toFile(path));
+        assertEquals("returned body length must equal the standalone file size",
+                Files.size(path), bodyLength);
+        try (ReaderSupplier out = ReaderSupplierFactory.open(path)) {
+            assertEquals(numSources * numVectorsPerGraph, OnDiskGraphIndex.load(out).size(0));
+        }
+        for (var rs : rss) rs.close();
+    }
+
+    @Test
+    public void testCompactToContainerDestinationCommitsAndPreservesPrefix() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+        var container = testDirectory.resolve("dest_container");
+        byte[] prefix = new byte[32];
+        for (int i = 0; i < prefix.length; i++) prefix[i] = (byte) (0xC0 + (i % 16));
+        Files.write(container, prefix);
+        final long base = prefix.length;
+
+        final long[] committed = { -1 };
+        final boolean[] closed = { false };
+        CompactionDestination dest = () -> new CompactionDestination.Target() {
+            public Path file() { return container; }
+            public long startOffset() { return base; }
+            public void commit(long bodyLength) { committed[0] = bodyLength; }
+            public void close() { closed[0] = true; }
+        };
+
+        long returned = compactor.compact(dest);
+        assertTrue("commit must have been called", committed[0] >= 0);
+        assertEquals("commit bodyLength must equal the returned value", committed[0], returned);
+        assertTrue("target must be closed", closed[0]);
+        assertEquals("body length must be file size minus base", Files.size(container) - base, returned);
+
+        byte[] afterPrefix = Arrays.copyOf(Files.readAllBytes(container), prefix.length);
+        assertArrayEquals("the reserved prefix must be preserved", prefix, afterPrefix);
+        try (ReaderSupplier out = ReaderSupplierFactory.open(container)) {
+            assertEquals(numSources * numVectorsPerGraph, OnDiskGraphIndex.load(out, base).size(0));
+        }
+        for (var rs : rss) rs.close();
+    }
+
+    @Test
+    public void testCompactToDestinationAbortsWithoutCommitOnFailure() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+        // Parent directory does not exist, so the graph writer fails partway.
+        final var badFile = testDirectory.resolve("no_such_dir").resolve("graph");
+
+        final boolean[] committed = { false };
+        final boolean[] closed = { false };
+        CompactionDestination dest = () -> new CompactionDestination.Target() {
+            public Path file() { return badFile; }
+            public long startOffset() { return 0; }
+            public void commit(long bodyLength) { committed[0] = true; }
+            public void close() { closed[0] = true; }
+        };
+
+        try {
+            compactor.compact(dest);
+            fail("expected compaction to fail for an unwritable destination");
+        } catch (Exception expected) {
+            // ok
+        }
+        assertFalse("commit must NOT be called on failure", committed[0]);
+        assertTrue("close (abort) must run on failure", closed[0]);
+        for (var rs : rss) rs.close();
+    }
+
     /**
      * Tests compaction with deleted nodes.
      * Verifies that deleted nodes are properly excluded from the compacted graph.
@@ -778,7 +912,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             liveNodes.add(lives);
         }
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null, -1);
         var outputPath = testDirectory.resolve("test_compact_with_deletions");
 
         compactor.compact(outputPath);
@@ -845,7 +979,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             liveNodes.add(lives);
         }
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null, -1);
         var outputPath = testDirectory.resolve("test_compact_with_ordinal_mapping");
 
         compactor.compact(outputPath);
@@ -923,7 +1057,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             liveNodes.add(lives);
         }
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null, -1);
         var outputPath = testDirectory.resolve("test_compact_deletions_and_mapping");
 
         compactor.compact(outputPath);
@@ -1029,7 +1163,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
                 List.of(live0, live1),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path graphOut = testDirectory.resolve("sidecar_graph_out");
         Path compressedOut = testDirectory.resolve("sidecar_pq_out");
@@ -1112,7 +1246,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
                     List.of(live0, live1),
                     List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                    similarityFunction, null);
+                    similarityFunction, null, -1);
             org.junit.Assert.fail("expected IllegalArgumentException for FUSED_PQ + sourceCompressed");
         } catch (IllegalArgumentException expected) {
             assertTrue("error message mentions FUSED_PQ",
@@ -1155,7 +1289,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0),  // size 1 vs sources size 2
                     List.of(live, live),
                     List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                    vsf, null);
+                    vsf, null, -1);
             org.junit.Assert.fail("expected IllegalArgumentException for size mismatch");
         } catch (IllegalArgumentException expected) {
             assertTrue("error message mentions size",
@@ -1191,7 +1325,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.of(g0, g1),
                 List.of(live, live),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path graphOut = testDirectory.resolve("noarg_graph_out");
         Path compressedOut = testDirectory.resolve("noarg_pq_out");
@@ -1251,7 +1385,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
                 List.of(live0, live1),
                 List.of(new OrdinalMapper.MapMapper(map0), new OrdinalMapper.MapMapper(map1)),
-                vsf, null);
+                vsf, null, -1);
 
         Path graphOut = testDirectory.resolve("delsidecar_graph_out");
         Path compressedOut = testDirectory.resolve("delsidecar_pq_out");

@@ -84,7 +84,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
-    private final ForkJoinPool executor;
+    private final Executor executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
@@ -145,36 +145,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     public void setRefineAfterCompaction(boolean refineAfterCompaction) {
         this.refineAfterCompaction = refineAfterCompaction;
     }
-    /**
-     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
-     * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
-     */
-    @Experimental
-    public OnDiskGraphIndexCompactor(
-            List<OnDiskGraphIndex> sources,
-            List<FixedBitSet> liveNodes,
-            List<OrdinalMapper> remappers,
-            VectorSimilarityFunction similarityFunction,
-            ForkJoinPool executor) {
-        this(sources, null, liveNodes, remappers, similarityFunction, executor);
-    }
 
     /**
-     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
-     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     * Primary constructor: merges multiple graph indexes using any {@link Executor} with an
+     * explicit in-flight window.
      *
      * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
      *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
      *                         that ship alongside each graph. Pass {@code null} when sources carry
      *                         quantization inline (FUSED_PQ) or have none. Must not be combined
      *                         with sources that carry the FUSED_PQ feature.
-     * @param executor the pool that runs compaction batches. Its {@code getParallelism()} sets
-     *                 <b>both</b> CPU concurrency <b>and</b> the in-flight task/memory window
-     *                 ({@link #getTaskWindowSize()}), so one knob bounds two dimensions. Compaction
-     *                 is compute- and memory-bandwidth-bound; size this from <i>physical</i> cores —
-     *                 logical-core sizing oversubscribes hyperthreaded hosts and costs throughput.
-     *                 The compactor never owns or shuts down the pool. Pass {@code null} to use the
-     *                 shared {@link PhysicalCoreExecutor#pool()} default.
+     * @param executor runs compaction batches submitted via an internal
+     *                 {@link java.util.concurrent.ExecutorCompletionService} while the calling
+     *                 thread blocks for their completion. Safe to pass a {@link ForkJoinPool}
+     *                 (work-stealing + managed blocking make submit-and-block safe) or a
+     *                 <b>caller-runs / same-thread</b> executor (e.g. {@code Runnable::run}), which
+     *                 runs each batch synchronously on the calling thread — no worker threads, no
+     *                 separate pool. It is <b>not</b> safe to pass a bounded
+     *                 {@code ThreadPoolExecutor} that is <i>also</i> running the calling thread: the
+     *                 caller blocks in {@code take()} while its sub-tasks queue behind it, which can
+     *                 thread-starvation-deadlock (worst case a single-thread pool). Embedders that
+     *                 want their own bounded pool without a dedicated fan-out pool should pass a
+     *                 caller-runs executor and derive parallelism from the number of <i>concurrent</i>
+     *                 compactions instead. Pass {@code null} to use the shared
+     *                 {@link PhysicalCoreExecutor#pool()} default. The compactor never owns or shuts
+     *                 down the executor.
+     * @param taskWindowSize bounds the number of in-flight batches (both concurrency and peak
+     *                 write-side memory). {@code <= 0} derives it from a {@link ForkJoinPool}'s
+     *                 {@code getParallelism()}, else defaults to 1 (serial).
      */
     @Experimental
     public OnDiskGraphIndexCompactor(
@@ -183,22 +181,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<FixedBitSet> liveNodes,
             List<OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
-            ForkJoinPool executor) {
+            Executor executor,
+            int taskWindowSize) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
-        if (executor != null) {
-            this.executor = executor;
-        } else {
-            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
-            // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
-            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
-            // process-wide and shared with index construction and quantization; the compactor
-            // never owns or shuts it down.
-            this.executor = PhysicalCoreExecutor.pool();
-        }
-        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
-        // whether the executor is the shared default or a caller-injected pool.
-        this.taskWindowSize = this.executor.getParallelism();
+        // Default to the shared physical-core pool. Compaction (PQ encode + parallel record flush +
+        // refinement) is compute- and memory-bandwidth-bound, so sizing to logical cores
+        // oversubscribes hyperthreaded hosts. This pool is process-wide and shared with index
+        // construction and quantization; the compactor never owns or shuts it down.
+        this.executor = (executor != null) ? executor : PhysicalCoreExecutor.pool();
+        this.taskWindowSize = resolveWindow(this.executor, taskWindowSize);
 
         this.sources = sources;
         this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
@@ -220,6 +212,49 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxOrdinal = max(mapper.maxOrdinal(), maxOrdinal);
         }
         this.similarityFunction = similarityFunction;
+    }
+
+    /**
+     * Convenience {@link Executor} constructor without a non-fused compressed sidecar. Equivalent
+     * to the 7-arg form with {@code sourceCompressed = null}.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            Executor executor,
+            int taskWindowSize) {
+        this(sources, null, liveNodes, remappers, similarityFunction, executor, taskWindowSize);
+    }
+
+    private static int resolveWindow(Executor executor, int requested) {
+        if (requested > 0) return requested;
+        if (executor instanceof ForkJoinPool) return ((ForkJoinPool) executor).getParallelism();
+        return 1;   // arbitrary Executor with no declared parallelism → serial window
+    }
+
+    /**
+     * Adapts an arbitrary {@link Executor} to the {@link ExecutorService} the quantization
+     * strategies need for {@code invokeAll} during PQ pre-encode. A real {@code ExecutorService}
+     * (including a {@link ForkJoinPool}) is used directly; a plain {@code Executor} — notably a
+     * caller-runs {@code Runnable::run} — is wrapped so its tasks run on whatever thread the
+     * executor dispatches to (the calling thread, for caller-runs). No pool is created, and the
+     * lifecycle methods are inert since the compactor never owns the executor.
+     */
+    private static ExecutorService asExecutorService(Executor executor) {
+        if (executor instanceof ExecutorService) {
+            return (ExecutorService) executor;
+        }
+        return new AbstractExecutorService() {
+            @Override public void execute(Runnable command) { executor.execute(command); }
+            @Override public void shutdown() { }
+            @Override public List<Runnable> shutdownNow() { return Collections.emptyList(); }
+            @Override public boolean isShutdown() { return false; }
+            @Override public boolean isTerminated() { return false; }
+            @Override public boolean awaitTermination(long timeout, TimeUnit unit) { return false; }
+        };
     }
 
     /**
@@ -397,6 +432,28 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * No-copy compaction into an embedder-supplied {@link CompactionDestination}: writes the graph
+     * body into the destination's container at its reserved offset, then {@code commit}s the body
+     * length on success (so the embedder can finalize its footer/checksum), or — on any failure —
+     * closes the target without committing (so the embedder discards the partial output). The
+     * compactor writes into {@code target.file()} at {@code target.startOffset()} using its own
+     * random-access + memory-mapped IO; the destination expresses <i>where</i>, not <i>how</i>.
+     *
+     * @return the graph body length written, i.e. {@code size(file) - startOffset}
+     */
+    @Experimental
+    public long compact(CompactionDestination destination) throws IOException {
+        try (CompactionDestination.Target target = destination.open()) {
+            Path file = target.file();
+            long base = target.startOffset();
+            compact(file, base);
+            long bodyLength = java.nio.file.Files.size(file) - base;
+            target.commit(bodyLength);
+            return bodyLength;
+        }
+    }
+
+    /**
      * Compaction entry point for graphs that ship a non-fused compressed sidecar (e.g.
      * {@link io.github.jbellis.jvector.quantization.PQVectors}). Writes the merged graph to
      * {@code graphPath} and the merged compressed vectors to {@code compressedPath}.
@@ -480,7 +537,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize);
+                dimension, maxOrdinal, asExecutorService(executor), taskWindowSize);
     }
 
     /**
