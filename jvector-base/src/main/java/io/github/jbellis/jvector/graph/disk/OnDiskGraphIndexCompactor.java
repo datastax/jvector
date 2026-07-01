@@ -35,6 +35,9 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
+import io.github.jbellis.jvector.util.work.WorkStage;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -86,6 +89,51 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
 
+    // Embedder progress + work-admission control surface (see io.github.jbellis.jvector.util.work).
+    // Default UNLIMITED = no observation and no throttling → byte-identical output and equivalent
+    // timing to no SPI installed.
+    private volatile ProgressLimiter limiter = ProgressLimiter.UNLIMITED;
+
+    /**
+     * The stages a compaction reports progress and acquires work admission against. Names are
+     * stable so an embedder can distinguish them. The write side of {@code MERGE_LEVELS} carries the
+     * graph-body IO — there is no separate flush phase.
+     */
+    @Experimental
+    public enum Phase implements WorkStage {
+        /** Merging source graphs level-by-level and writing the compacted graph body. */
+        MERGE_LEVELS,
+        /** Second pass refining neighborhoods in the compacted graph. */
+        REFINE
+    }
+
+    /**
+     * Installs an embedder control surface for progress observation and work admission. Both facets
+     * are optional (see {@link ProgressLimiter}); passing {@code null} restores
+     * {@link ProgressLimiter#UNLIMITED}. Returns {@code this} for chaining.
+     *
+     * <p>Admission ({@code acquire}) is invoked only on the orchestrating thread — the caller of
+     * {@code compact} — never on a pool worker, so a blocking limiter back-pressures batch dispatch
+     * without a {@code ForkJoinPool.ManagedBlocker}. The unit of {@code acquire} for this consumer
+     * is bytes about to be written.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor setProgressLimiter(ProgressLimiter limiter) {
+        this.limiter = (limiter == null) ? ProgressLimiter.UNLIMITED : limiter;
+        return this;
+    }
+
+    /**
+     * The compactor's task window: the number of batches kept in flight, equal to the injected
+     * pool's {@code getParallelism()} (or the {@link PhysicalCoreExecutor#pool()} default's). It
+     * bounds both compaction concurrency and the in-flight memory window; embedders can log or
+     * assert it to confirm the parallelism they injected.
+     */
+    @Experimental
+    public int getTaskWindowSize() {
+        return taskWindowSize;
+    }
+
     /**
      * Whether to run the second-pass neighbor refinement after the merged graph is written
      * (default false). Refinement is a navigability pass: it has no measurable effect on
@@ -120,6 +168,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      *                         that ship alongside each graph. Pass {@code null} when sources carry
      *                         quantization inline (FUSED_PQ) or have none. Must not be combined
      *                         with sources that carry the FUSED_PQ feature.
+     * @param executor the pool that runs compaction batches. Its {@code getParallelism()} sets
+     *                 <b>both</b> CPU concurrency <b>and</b> the in-flight task/memory window
+     *                 ({@link #getTaskWindowSize()}), so one knob bounds two dimensions. Compaction
+     *                 is compute- and memory-bandwidth-bound; size this from <i>physical</i> cores —
+     *                 logical-core sizing oversubscribes hyperthreaded hosts and costs throughput.
+     *                 The compactor never owns or shuts down the pool. Pass {@code null} to use the
+     *                 shared {@link PhysicalCoreExecutor#pool()} default.
      */
     @Experimental
     public OnDiskGraphIndexCompactor(
@@ -306,12 +361,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
+        compact(outputPath, 0L);
+    }
+
+    /**
+     * No-copy compaction entry point: writes the compacted graph <b>into {@code outputPath} at
+     * {@code startOffset}</b>, leaving any bytes in {@code [0, startOffset)} untouched. An embedder
+     * that wraps the graph in its own container reserves its header by passing the header size as
+     * {@code startOffset}, so jvector's body lands directly inside the container — removing the
+     * temp-file-and-copy. jvector writes only {@code [startOffset, projectedSize)} and never reads
+     * or clobbers the reserved prefix. The file is opened read/write and <b>not</b> truncated, so a
+     * prefix the embedder pre-wrote survives. {@code compact(path, 0)} equals {@link #compact(Path)}.
+     *
+     * @param outputPath  the file to write into
+     * @param startOffset the byte offset at which jvector's output begins; {@code 0} for a
+     *                    standalone file
+     */
+    @Experimental
+    public void compact(Path outputPath, long startOffset) throws FileNotFoundException {
+        if (startOffset < 0) {
+            throw new IllegalArgumentException("startOffset must be >= 0, got " + startOffset);
+        }
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try {
-            compactGraphImpl(outputPath, strategy);
+            compactGraphImpl(outputPath, startOffset, strategy);
             releaseSourcesBeforeRefine(strategy);
             if (refineAfterCompaction) {
-                refineCompactedGraph(outputPath, strategy);
+                refineCompactedGraph(outputPath, startOffset, strategy);
             }
         } finally {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
@@ -343,9 +419,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
         try {
             sidecarStrategy.retrain(similarityFunction);
-            compactGraphImpl(graphPath, inlineStrategy);
+            compactGraphImpl(graphPath, 0L, inlineStrategy);
             if (refineAfterCompaction) {
-                refineCompactedGraph(graphPath, inlineStrategy);
+                refineCompactedGraph(graphPath, 0L, inlineStrategy);
             }
             sidecarStrategy.writeSidecar(compressedPath);
         } catch (IOException e) {
@@ -417,7 +493,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
-    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+    private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
         strategy.retrain(similarityFunction);
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
@@ -433,7 +509,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, startOffset, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
@@ -473,7 +549,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Only L0 records are written. Upper-layer neighbor lists live in an in-memory map after
      * load and have no addressable file offset, so they're left as written by compactLevels.
      */
-    private void refineCompactedGraph(Path outputPath, QuantizationCompactionStrategy strategy) {
+    private void refineCompactedGraph(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy) {
         log.info("Refining compacted graph: {}", outputPath);
         long t0 = System.nanoTime();
 
@@ -500,7 +576,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // useFooter=false because the file's logical EOF (where the v6 footer trailer sits) is
             // before the still-attached pre-encode cache section. loadFromFooter() would seek to
             // the actual file length and read garbage as the magic.
-            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, 0, false);
+            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, startOffset, false);
 
             // Pick the iteration set: when there's a hierarchy, refine only L1 nodes (each also
             // lives in L0, so their L0 record is what we rewrite). Mirrors GraphIndexBuilder's
@@ -536,33 +612,51 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             log.info("Refining {} live nodes at level {} (hierarchy maxLevel={}, fusedPQ={}, codeCache={})",
                     total, iterationLevel, mergedGraph.getMaxLevel(), fpq, cache != null);
 
-            int submitted = 0;
-            for (int start = 0; start < total; start += batchSize) {
-                final int s = start;
-                final int e = Math.min(start + batchSize, total);
-                ecs.submit(() -> {
-                    RefineScratch scratch = tls.get();
-                    for (int i = s; i < e; i++) {
-                        int node = ords[i];
-                        refineOneNode(node, scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
-                                graphRef, cache, cacheSz);
-                    }
-                    return e - s;
-                });
-                submitted++;
-            }
+            // Windowed submit/drain (mirrors runBatchesWithBackpressure) so a blocking WorkLimiter —
+            // a rate limiter, or a semaphore that releases permits on Grant.close() — is
+            // deadlock-free: admission is on the orchestrator before each submit, and exactly one
+            // grant is released per completed batch. This also bounds in-flight refine batches (and
+            // thus peak memory) to taskWindowSize, which the prior submit-all loop did not. Amount is
+            // an estimate of the per-node record bytes rewritten. UNLIMITED makes it all no-ops.
+            final long refinedRecordSize = (long) dimension * Float.BYTES
+                    + (long) baseDegree * Integer.BYTES + codeSize;
+            final int nBatches = (total + batchSize - 1) / batchSize;
+            java.util.ArrayDeque<WorkLimiter.Grant> grants = new java.util.ArrayDeque<>();
 
-            int completed = 0;
-            int nodesDone = 0;
+            int nextStart = 0, inFlight = 0, completed = 0, nodesDone = 0;
             int progressStep = Math.max(1, total / 10);
             int nextProgress = progressStep;
-            while (completed < submitted) {
-                nodesDone += ecs.take().get();
-                completed++;
-                if (nodesDone >= nextProgress) {
-                    log.info("Refinement progress: {}/{} nodes", nodesDone, total);
-                    nextProgress += progressStep;
+            try {
+                while (completed < nBatches) {
+                    while (inFlight < taskWindowSize && nextStart < total) {
+                        final int s = nextStart;
+                        final int e = Math.min(nextStart + batchSize, total);
+                        nextStart = e;
+                        grants.add(limiter.acquire((long) (e - s) * refinedRecordSize)); // may park the orchestrator
+                        ecs.submit(() -> {
+                            RefineScratch scratch = tls.get();
+                            for (int i = s; i < e; i++) {
+                                int node = ords[i];
+                                refineOneNode(node, scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
+                                        graphRef, cache, cacheSz);
+                            }
+                            return e - s;
+                        });
+                        inFlight++;
+                    }
+                    nodesDone += ecs.take().get();
+                    completed++;
+                    inFlight--;
+                    WorkLimiter.Grant g = grants.poll();
+                    if (g != null) g.close();
+                    limiter.onProgress(Phase.REFINE, nodesDone, total);
+                    if (nodesDone >= nextProgress) {
+                        log.info("Refinement progress: {}/{} nodes", nodesDone, total);
+                        nextProgress += progressStep;
+                    }
                 }
+            } finally {
+                for (WorkLimiter.Grant g : grants) g.close();
             }
 
             // Per-thread scratches live in worker-thread ThreadLocals; closing the supplier in
@@ -884,6 +978,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq)
         );
 
+        // MERGE_LEVELS progress denominator: base-layer live nodes. Level 0 (the bulk) runs first,
+        // so progress[0] climbs 0 -> numTotalNodes across it, then holds while the small upper tail
+        // runs (completed is clamped to the total). progress persists across all level calls.
+        long[] mergeProgress = { 0L, numTotalNodes };
+
         for (int level = 0; level < maxDegrees.size(); level++) {
             List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
@@ -924,7 +1023,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 } catch (IOException e) {
                                     throw new RuntimeException(e);
                                 }
-                            }
+                            },
+                            Phase.MERGE_LEVELS,
+                            (results) -> {                       // exact bytes: read before the write consumes the buffers
+                                long s = 0;
+                                for (WriteResult r : results) s += r.data.remaining();
+                                return s;
+                            },
+                            mergeProgress
                     );
                 }
 
@@ -961,7 +1067,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             } catch (IOException e) {
                                 throw new RuntimeException(e);
                             }
-                        }
+                        },
+                        Phase.MERGE_LEVELS,
+                        (results) -> {                           // estimate: neighbor ids + optional PQ code per node
+                            long s = 0;
+                            for (UpperLayerWriteResult r : results)
+                                s += (long) r.neighbors.length * Integer.BYTES + (r.pqCode == null ? 0 : r.pqCode.length());
+                            return s;
+                        },
+                        mergeProgress
                 );
             }
         }
@@ -1316,7 +1430,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<BatchSpec> batches,
             ExecutorCompletionService<List<T>> ecs,
             java.util.function.Consumer<BatchSpec> submitOne,
-            java.util.function.Consumer<List<T>> onComplete
+            java.util.function.Consumer<List<T>> onComplete,
+            WorkStage stage,
+            java.util.function.ToLongFunction<List<T>> batchBytes,
+            long[] progress
     ) throws InterruptedException, ExecutionException {
 
         final int total = batches.size();
@@ -1332,10 +1449,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int completed = 0;
         while (completed < total) {
             List<T> results = ecs.take().get();
-            onComplete.accept(results);
+
+            // Admission runs on this (orchestrating) thread, before the write. A blocking limiter
+            // back-pressures dispatch/consume while in-flight workers keep computing — no
+            // ManagedBlocker. The amount is the bytes this batch is about to write, read here before
+            // onComplete consumes the buffers. For the default UNLIMITED limiter both calls are no-ops.
+            long amount = batchBytes.applyAsLong(results);
+            try (WorkLimiter.Grant g = limiter.acquire(amount)) {
+                onComplete.accept(results);
+            }
 
             completed++;
             inFlight--;
+
+            progress[0] = Math.min(progress[0] + results.size(), progress[1]);
+            limiter.onProgress(stage, progress[0], progress[1]);
 
             if (nextToSubmit < total) {
                 submitOne.accept(batches.get(nextToSubmit++));
