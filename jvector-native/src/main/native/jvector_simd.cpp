@@ -24,6 +24,7 @@
 #include "jvector_cpu_features.h"  // populate_cpu_features(), CpuFeature enum
 
 #include <array>
+#include <climits> // INT_MAX
 #include <cstdlib> // std::getenv
 #include <cstring> // std::strcmp
 
@@ -32,15 +33,18 @@
 namespace {
 
 // Enumerates the ISA tiers in ascending capability order so that numeric
-// comparisons (e.g. max_isa != MaxIsa::AVX2) correctly gate higher tiers.
-// Unset (-1) means "no override; use best available CPU capability".
-enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4 };
+// comparisons (e.g. max_isa > MaxIsa::AVX2) correctly gate higher tiers.
+// Unset (INT_MAX) means "no override; use best available CPU capability"
+// and must be greater than every named tier so that all guards pass.
+enum class MaxIsa { SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4,
+                    Unset = INT_MAX };
 static_assert(
     (int)MaxIsa::SSE42    < (int)MaxIsa::AVX2
     && (int)MaxIsa::AVX2  < (int)MaxIsa::AVX3
     && (int)MaxIsa::AVX3  < (int)MaxIsa::AVX3_DL
-    && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR,
-    "MaxIsa values must be in strict ascending capability order");
+    && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR
+    && (int)MaxIsa::AVX3_SPR < (int)MaxIsa::Unset,
+    "MaxIsa values must be in strict ascending capability order with Unset at the top");
 
 // Reads the JVECTOR_MAX_ISA environment variable and maps it to a MaxIsa
 // value.  This lets callers cap the ISA at runtime without recompiling —
@@ -106,9 +110,16 @@ static const KernelVTable SSE42_vtable = {
 };
 #undef KERNEL_ENTRY
 
+// Bundles the chosen vtable and the tier that was selected together so that
+// both can be initialised atomically from a single dispatch call.
+struct DispatchResult {
+    KernelVTable vtable;
+    MaxIsa       tier;
+};
+
 // Selects and returns the best vtable for the current CPU and environment.
 // Called exactly once during static initialisation (before main()).
-static KernelVTable dispatch_kernels() noexcept
+static DispatchResult dispatch_kernels() noexcept
 {
     // Check whether the caller has capped the ISA via the environment variable.
     const MaxIsa max_isa = read_max_isa();
@@ -125,21 +136,23 @@ static KernelVTable dispatch_kernels() noexcept
     // max_isa > MaxIsa::X means "user has not capped at X or below".
     // Adding a new tier above AVX3_SPR only requires one new if at the top.
     if (max_isa > MaxIsa::AVX3_DL && has(CpuFeature::AVX3_SPR))
-        return AVX3_SPR_vtable;
+        return { AVX3_SPR_vtable, MaxIsa::AVX3_SPR };
     if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
-        return AVX3_DL_vtable;
+        return { AVX3_DL_vtable, MaxIsa::AVX3_DL };
     if (max_isa > MaxIsa::AVX2    && has(CpuFeature::AVX3))
-        return AVX3_vtable;
+        return { AVX3_vtable, MaxIsa::AVX3 };
     if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
-        return AVX2_vtable;
+        return { AVX2_vtable, MaxIsa::AVX2 };
     // SSE42 is the baseline — assumed always present, no CPUID check needed.
-    return SSE42_vtable;
+    return { SSE42_vtable, MaxIsa::SSE42 };
 }
 
-// 'kernels' is initialised once at static-init time to the vtable chosen by
-// dispatch_kernels().  After that every public API call goes through one
-// indirect branch to the right ISA implementation — no runtime comparisons.
-static const KernelVTable kernels = dispatch_kernels();
+// Both are initialised once at static-init time from a single dispatch call.
+// After that every public API call goes through one indirect branch to the
+// right ISA implementation — no runtime comparisons.
+static const DispatchResult dispatch = dispatch_kernels();
+static const KernelVTable  &kernels  = dispatch.vtable;
+static const MaxIsa          active_isa = dispatch.tier;
 
 } // namespace
 
