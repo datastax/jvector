@@ -57,6 +57,9 @@ jobs:
     steps:
       - name: Set up GCC
         run: sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
@@ -70,6 +73,9 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
+
+      - name: Initialize Git Submodules
+        run: git submodule update --init
 
       - name: Build branch
         run: mvn -B -Punix-amd64-profile package --file pom.xml
