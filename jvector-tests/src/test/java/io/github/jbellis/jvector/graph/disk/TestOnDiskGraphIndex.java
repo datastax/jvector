@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -60,11 +61,13 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     private TestUtil.FullyConnectedGraphIndex fullyConnectedGraph;
     private TestUtil.RandomlyConnectedGraphIndex randomlyConnectedGraph;
+    private ImmutableGraphIndex emptyGraph;
 
     @Before
     public void setup() throws IOException {
         fullyConnectedGraph = new TestUtil.FullyConnectedGraphIndex(0, 6);
         randomlyConnectedGraph = new TestUtil.RandomlyConnectedGraphIndex(10, 4, getRandom());
+        emptyGraph = new TestUtil.EmptyGraphIndex(10, getRandom());
         testDirectory = Files.createTempDirectory(this.getClass().getSimpleName());
     }
 
@@ -75,7 +78,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     @Test
     public void testSimpleGraphs() throws Exception {
-        for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph))
+        for (var graph : List.of(fullyConnectedGraph, randomlyConnectedGraph, emptyGraph))
         {
             var outputPath = testDirectory.resolve("test_graph_" + graph.getClass().getSimpleName());
             var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
