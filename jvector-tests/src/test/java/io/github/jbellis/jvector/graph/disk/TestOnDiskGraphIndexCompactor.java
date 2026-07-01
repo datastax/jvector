@@ -36,6 +36,9 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
+import io.github.jbellis.jvector.util.work.WorkStage;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -48,11 +51,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
@@ -534,6 +542,197 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                   compactRecall >= 0.2);
 
         searcher.close();
+    }
+
+    // ---- ProgressLimiter SPI (io.github.jbellis.jvector.util.work) ----
+
+    /** A ProgressLimiter that records observations and hands out no-op grants (rate-limiter style). */
+    private static final class RecordingLimiter implements ProgressLimiter {
+        final Set<String> stages = ConcurrentHashMap.newKeySet();
+        final Map<String, Long> lastCompleted = new ConcurrentHashMap<>();
+        final Map<String, Long> lastTotal = new ConcurrentHashMap<>();
+        final Map<String, Boolean> monotonic = new ConcurrentHashMap<>();
+        final AtomicInteger acquires = new AtomicInteger();
+        final AtomicInteger closes = new AtomicInteger();
+        final AtomicLong bytesAcquired = new AtomicLong();
+
+        @Override
+        public void onProgress(WorkStage stage, long completed, long total) {
+            String s = stage.name();
+            stages.add(s);
+            lastTotal.put(s, total);
+            Long prev = lastCompleted.put(s, completed);
+            if (prev != null && completed < prev) monotonic.put(s, false);
+            else monotonic.putIfAbsent(s, true);
+        }
+
+        @Override
+        public WorkLimiter.Grant acquire(long amount) {
+            acquires.incrementAndGet();
+            bytesAcquired.addAndGet(amount);
+            return () -> { closes.incrementAndGet(); };
+        }
+    }
+
+    /** A ProgressLimiter whose grants hold real semaphore permits, released on close. */
+    private static final class SemaphoreBytesLimiter implements ProgressLimiter {
+        final Semaphore permits;
+        final int cap;
+        final AtomicInteger open = new AtomicInteger();
+
+        SemaphoreBytesLimiter(int totalPermits) {
+            this.permits = new Semaphore(totalPermits);
+            this.cap = totalPermits;
+        }
+
+        @Override
+        public WorkLimiter.Grant acquire(long amount) throws InterruptedException {
+            final int n = (int) Math.max(1, Math.min(amount, cap)); // never exceed total -> no single-acquire deadlock
+            permits.acquire(n);
+            open.incrementAndGet();
+            return () -> { permits.release(n); open.decrementAndGet(); };
+        }
+    }
+
+    /** Loads the fixture's source graphs with every node live and identity remapping. */
+    private OnDiskGraphIndexCompactor newAllLiveCompactor(List<ReaderSupplier> rss) throws IOException {
+        return newAllLiveCompactor(rss, null);
+    }
+
+    private OnDiskGraphIndexCompactor newAllLiveCompactor(List<ReaderSupplier> rss, ForkJoinPool executor) throws IOException {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        for (int i = 0; i < numSources; ++i) {
+            var rs = ReaderSupplierFactory.open(testDirectory.resolve("test_graph_" + i).toAbsolutePath());
+            rss.add(rs);
+            graphs.add(OnDiskGraphIndex.load(rs));
+        }
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) map.put(i, globalOrdinal++);
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+        return new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, executor);
+    }
+
+    @Test
+    public void testGetTaskWindowSizeReflectsInjectedParallelism() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        ForkJoinPool pool = new ForkJoinPool(3);
+        try {
+            var compactor = newAllLiveCompactor(rss, pool);
+            assertEquals("taskWindowSize should equal the injected pool's parallelism",
+                    3, compactor.getTaskWindowSize());
+        } finally {
+            pool.shutdown();
+            for (var rs : rss) rs.close();
+        }
+    }
+
+    @Test
+    public void testProgressLimiterObservesAndPairsGrants() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+        var rec = new RecordingLimiter();
+        compactor.setProgressLimiter(rec);
+        // Refinement is opt-in (default off); this test asserts progress across both the
+        // MERGE_LEVELS and REFINE phases, so it must enable the refinement pass explicitly.
+        compactor.setRefineAfterCompaction(true);
+
+        var outputPath = testDirectory.resolve("test_compact_progress");
+        compactor.compact(outputPath);
+
+        // Both stages observed, progress monotonic and finishing at 100% of a known total.
+        assertTrue("MERGE_LEVELS progress not reported", rec.stages.contains("MERGE_LEVELS"));
+        assertTrue("REFINE progress not reported", rec.stages.contains("REFINE"));
+        assertTrue("MERGE_LEVELS progress not monotonic", rec.monotonic.getOrDefault("MERGE_LEVELS", true));
+        assertTrue("REFINE progress not monotonic", rec.monotonic.getOrDefault("REFINE", true));
+        assertEquals("MERGE_LEVELS did not reach total",
+                rec.lastTotal.get("MERGE_LEVELS"), rec.lastCompleted.get("MERGE_LEVELS"));
+        assertEquals("REFINE did not reach total",
+                rec.lastTotal.get("REFINE"), rec.lastCompleted.get("REFINE"));
+        assertEquals("MERGE_LEVELS total should be the live-node count",
+                (long) numSources * numVectorsPerGraph, (long) rec.lastTotal.get("MERGE_LEVELS"));
+
+        // Throttle invoked with real byte amounts, and every acquire paired with exactly one close.
+        assertTrue("acquire never called", rec.acquires.get() > 0);
+        assertTrue("acquire amounts were all zero", rec.bytesAcquired.get() > 0);
+        assertEquals("every grant must be closed exactly once", rec.acquires.get(), rec.closes.get());
+
+        // Output is a valid, complete graph.
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs);
+            assertEquals(numSources * numVectorsPerGraph, compactGraph.size(0));
+        }
+        for (var rs : rss) rs.close();
+    }
+
+    @Test
+    public void testSemaphoreLimiterReleasesAllGrantsWithoutDeadlock() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+        var sem = new SemaphoreBytesLimiter(64 * 1024 * 1024); // ample: exercises release-on-close, not undersized
+        compactor.setProgressLimiter(sem);
+
+        var outputPath = testDirectory.resolve("test_compact_semaphore");
+        final Throwable[] thrown = new Throwable[1];
+        Thread t = new Thread(() -> {
+            try { compactor.compact(outputPath); }
+            catch (Throwable e) { thrown[0] = e; }
+        }, "compact-semaphore");
+        t.start();
+        t.join(90_000);
+
+        assertFalse("compaction did not finish within 90s — possible throttle deadlock", t.isAlive());
+        if (thrown[0] != null) throw new AssertionError("compaction failed under semaphore limiter", thrown[0]);
+        assertEquals("all semaphore grants must be released (acquire/close paired)", 0, sem.open.get());
+
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs);
+            assertEquals(numSources * numVectorsPerGraph, compactGraph.size(0));
+        }
+        for (var rs : rss) rs.close();
+    }
+
+    @Test
+    public void testCompactAtNonZeroStartOffset() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        var compactor = newAllLiveCompactor(rss);
+
+        // Reserve a prefix (as an embedder would for its container header) and record its bytes.
+        var outputPath = testDirectory.resolve("test_compact_offset");
+        byte[] prefix = new byte[64];
+        for (int i = 0; i < prefix.length; i++) prefix[i] = (byte) (0xA0 + (i % 16));
+        Files.write(outputPath, prefix);
+        long startOffset = prefix.length;
+
+        compactor.compact(outputPath, startOffset);
+
+        // The reserved prefix must be untouched by the no-copy write.
+        byte[] afterPrefix = Arrays.copyOf(Files.readAllBytes(outputPath), prefix.length);
+        assertArrayEquals("compaction clobbered the reserved prefix", prefix, afterPrefix);
+
+        // The graph loads from startOffset and is complete + searchable (proves refine wrote valid
+        // records at the base-shifted offsets).
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs, startOffset);
+            assertEquals(numSources * numVectorsPerGraph, compactGraph.size(0));
+
+            GraphSearcher searcher = new GraphSearcher(compactGraph);
+            for (int i = 0; i < 5; i++) {
+                VectorFloat<?> q = allVecs.get(randomIntBetween(0, allVecs.size() - 1));
+                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                SearchResult r = searcher.search(ssp, 10, Bits.ALL);
+                assertTrue("search from offset-loaded graph returned nothing", r.getNodes().length > 0);
+            }
+            searcher.close();
+        }
+        for (var rs : rss) rs.close();
     }
 
     /**
