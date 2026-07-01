@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.util.FixedBitSet;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Bundle of inputs that {@link QuantizationCompactionStrategy} implementations need to do their work
@@ -38,7 +38,7 @@ public final class CompactionContext {
     public final List<OrdinalMapper> remappers;
     public final int dimension;
     public final int maxOrdinal;
-    public final ForkJoinPool executor;
+    public final ExecutorService executor;
     public final int taskWindowSize;
 
     public CompactionContext(
@@ -48,7 +48,7 @@ public final class CompactionContext {
             List<OrdinalMapper> remappers,
             int dimension,
             int maxOrdinal,
-            ForkJoinPool executor,
+            ExecutorService executor,
             int taskWindowSize) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
