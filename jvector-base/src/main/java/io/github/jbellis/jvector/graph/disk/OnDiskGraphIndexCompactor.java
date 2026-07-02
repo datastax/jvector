@@ -1354,11 +1354,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int count = 0;
             for (int s = 0; s < sources.size(); s++) {
                 if (level > sources.get(s).getMaxLevel()) continue;
-                NodesIterator it = sources.get(s).getNodes(level);
-                FixedBitSet alive = liveNodes.get(s);
-                while (it.hasNext()) {
-                    int node = it.next();
-                    if (alive.get(node)) count++;
+                if (level == 0) {
+                    // Every live node is present at level 0 (HNSW base layer invariant),
+                    // so count directly from the in-memory bitset instead of scanning node
+                    // records on disk (which touches gigabytes of source data on a cold cache).
+                    count += liveNodes.get(s).cardinality();
+                } else {
+                    NodesIterator it = sources.get(s).getNodes(level);
+                    FixedBitSet alive = liveNodes.get(s);
+                    while (it.hasNext()) {
+                        int node = it.next();
+                        if (alive.get(node)) count++;
+                    }
                 }
             }
             layerInfo.add(new CommonHeader.LayerInfo(count, maxDegrees.get(level)));

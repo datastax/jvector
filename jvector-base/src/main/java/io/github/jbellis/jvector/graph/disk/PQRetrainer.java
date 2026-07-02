@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -32,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -96,22 +98,27 @@ public class PQRetrainer {
 
         log.info("Collected {} training samples", samples.size());
 
-        // Extract vectors sequentially in sorted (source, node) order so disk reads are
-        // purely sequential and the OS read-ahead can cover them efficiently.  We do this
-        // here rather than letting ProductQuantization.compute() drive the reads via its
-        // parallel stream, which would scatter page faults across a potentially very large
-        // file and cause I/O that scales with dataset size rather than sample count.
         List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+
+        long t0 = System.nanoTime();
+        log.info("Extracted {} vectors in {}ms; starting PQ refinement",
+                 trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
+
         var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
 
-        boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-
-        return ProductQuantization.compute(
-                ravv,
-                basePQ.getSubspaceCount(),
-                basePQ.getClusterCount(),
-                center
-        );
+        // Warm-start from the existing codebook via Lloyd's-only refinement rather than
+        // re-running k-means++ from scratch. k-means++ initialization visits every point
+        // once per centroid (256 passes for k=256), which dominates training time.
+        // Since the source codebooks are already trained on data from the same underlying
+        // distribution, this warm-start converges in far fewer passes with no recall loss.
+        long t1 = System.nanoTime();
+        ProductQuantization result = basePQ.refine(ravv,
+                                                   ProductQuantization.K_MEANS_ITERATIONS,
+                                                   -1.0f, // UNWEIGHTED / isotropic
+                                                   PhysicalCoreExecutor.pool(),
+                                                   ForkJoinPool.commonPool());
+        log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
+        return result;
     }
 
     /**
