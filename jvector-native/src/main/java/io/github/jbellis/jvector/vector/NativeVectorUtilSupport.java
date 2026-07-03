@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteOrder;
 
 import io.github.jbellis.jvector.annotations.Experimental;
@@ -35,6 +36,30 @@ import jdk.incubator.vector.VectorSpecies;
 final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
     public NativeVectorUtilSupport() {}
+
+    /**
+     * Returns the ISA tier that was selected by the native dispatcher at library
+     * initialisation time.  Possible values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
+     */
+    public String getActiveIsa() {
+        return NativeSimdOps.jvector_simd_get_active_isa()
+                .reinterpret(Long.MAX_VALUE)
+                .getString(0);
+    }
+
+    /**
+     * Returns the value of {@code JVECTOR_MAX_ISA} that was in effect when the
+     * native library was loaded, or {@code null} if the variable was absent or
+     * contained an unrecognised value.
+     * Possible non-null return values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
+     */
+    public String getMaxIsaEnv() {
+        MemorySegment ptr = NativeSimdOps.jvector_simd_get_max_isa_env();
+        if (ptr.address() == 0L) return null;
+        return ptr.reinterpret(Long.MAX_VALUE).getString(0);
+    }
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {

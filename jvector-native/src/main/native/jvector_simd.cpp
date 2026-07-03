@@ -115,6 +115,8 @@ static const KernelVTable SSE42_vtable = {
 struct DispatchResult {
     KernelVTable vtable;
     MaxIsa       tier;
+    // The raw JVECTOR_MAX_ISA value at startup, or nullptr if unset/unrecognised.
+    const char  *max_isa_env;
 };
 
 // Selects and returns the best vtable for the current CPU and environment.
@@ -135,24 +137,34 @@ static DispatchResult dispatch_kernels() noexcept
     // Select the highest tier the CPU supports and the cap allows.
     // max_isa > MaxIsa::X means "user has not capped at X or below".
     // Adding a new tier above AVX3_SPR only requires one new if at the top.
+
+    // Capture the recognised env-var string (or nullptr) for later retrieval.
+    const char *env_str = nullptr;
+    if (max_isa == MaxIsa::AVX3_SPR) env_str = "avx3_spr";
+    else if (max_isa == MaxIsa::AVX3_DL)  env_str = "avx3_dl";
+    else if (max_isa == MaxIsa::AVX3)     env_str = "avx3";
+    else if (max_isa == MaxIsa::AVX2)     env_str = "avx2";
+    else if (max_isa == MaxIsa::SSE42)    env_str = "sse42";
+
     if (max_isa > MaxIsa::AVX3_DL && has(CpuFeature::AVX3_SPR))
-        return { AVX3_SPR_vtable, MaxIsa::AVX3_SPR };
+        return { AVX3_SPR_vtable, MaxIsa::AVX3_SPR, env_str };
     if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
-        return { AVX3_DL_vtable, MaxIsa::AVX3_DL };
+        return { AVX3_DL_vtable, MaxIsa::AVX3_DL, env_str };
     if (max_isa > MaxIsa::AVX2    && has(CpuFeature::AVX3))
-        return { AVX3_vtable, MaxIsa::AVX3 };
+        return { AVX3_vtable, MaxIsa::AVX3, env_str };
     if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
-        return { AVX2_vtable, MaxIsa::AVX2 };
+        return { AVX2_vtable, MaxIsa::AVX2, env_str };
     // SSE42 is the baseline — assumed always present, no CPUID check needed.
-    return { SSE42_vtable, MaxIsa::SSE42 };
+    return { SSE42_vtable, MaxIsa::SSE42, env_str };
 }
 
 // Both are initialised once at static-init time from a single dispatch call.
 // After that every public API call goes through one indirect branch to the
 // right ISA implementation — no runtime comparisons.
-static const DispatchResult dispatch = dispatch_kernels();
-static const KernelVTable  &kernels  = dispatch.vtable;
+static const DispatchResult dispatch    = dispatch_kernels();
+static const KernelVTable  &kernels     = dispatch.vtable;
 static const MaxIsa          active_isa = dispatch.tier;
+static const char           *max_isa_env = dispatch.max_isa_env;
 
 } // namespace
 
@@ -172,3 +184,25 @@ static const MaxIsa          active_isa = dispatch.tier;
 JVECTOR_SIMD_KERNEL_LIST
 
 #undef KERNEL_ENTRY
+
+// Returns a stable string identifying the ISA tier selected by dispatch_kernels().
+// The returned pointer is a string literal with static storage duration.
+const char *jvector_simd_get_active_isa()
+{
+    switch (active_isa) {
+        case MaxIsa::AVX3_SPR: return "avx3_spr";
+        case MaxIsa::AVX3_DL:  return "avx3_dl";
+        case MaxIsa::AVX3:     return "avx3";
+        case MaxIsa::AVX2:     return "avx2";
+        default:               return "sse42";
+    }
+}
+
+// Returns the value of JVECTOR_MAX_ISA that was in effect at library init time,
+// or nullptr if the variable was absent or unrecognised.
+// The returned pointer (when non-null) is a string literal with static storage
+// duration; callers must not free it.
+const char *jvector_simd_get_max_isa_env()
+{
+    return max_isa_env;
+}

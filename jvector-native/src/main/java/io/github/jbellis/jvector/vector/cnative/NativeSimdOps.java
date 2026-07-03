@@ -2505,6 +2505,118 @@ public class NativeSimdOps {
            throw new AssertionError("should not reach here", ex$);
         }
     }
+
+    private static class jvector_simd_get_active_isa {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_POINTER    );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("jvector_simd_get_active_isa");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_active_isa()
+     * }
+     */
+    public static FunctionDescriptor jvector_simd_get_active_isa$descriptor() {
+        return jvector_simd_get_active_isa.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_active_isa()
+     * }
+     */
+    public static MethodHandle jvector_simd_get_active_isa$handle() {
+        return jvector_simd_get_active_isa.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_active_isa()
+     * }
+     */
+    public static MemorySegment jvector_simd_get_active_isa$address() {
+        return jvector_simd_get_active_isa.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_active_isa()
+     * }
+     */
+    public static MemorySegment jvector_simd_get_active_isa() {
+        var mh$ = jvector_simd_get_active_isa.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jvector_simd_get_active_isa");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jvector_simd_get_max_isa_env {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_POINTER    );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("jvector_simd_get_max_isa_env");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_max_isa_env()
+     * }
+     */
+    public static FunctionDescriptor jvector_simd_get_max_isa_env$descriptor() {
+        return jvector_simd_get_max_isa_env.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_max_isa_env()
+     * }
+     */
+    public static MethodHandle jvector_simd_get_max_isa_env$handle() {
+        return jvector_simd_get_max_isa_env.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_max_isa_env()
+     * }
+     */
+    public static MemorySegment jvector_simd_get_max_isa_env$address() {
+        return jvector_simd_get_max_isa_env.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * const char *jvector_simd_get_max_isa_env()
+     * }
+     */
+    public static MemorySegment jvector_simd_get_max_isa_env() {
+        var mh$ = jvector_simd_get_max_isa_env.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jvector_simd_get_max_isa_env");
+            }
+            return (MemorySegment)mh$.invokeExact();
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
     private static final MemorySegment NULL = MemorySegment.ofAddress(0L);
     /**
      * {@snippet lang=c :

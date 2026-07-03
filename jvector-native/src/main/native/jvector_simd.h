@@ -40,6 +40,18 @@ JVECTOR_SIMD_KERNEL_LIST
 
 #undef KERNEL_ENTRY
 
+// Returns the name of the ISA tier that was selected at library init time by
+// dispatch_kernels().  Useful for diagnostics, tests, and logging.
+// Possible return values: "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// The returned pointer is a string literal; do not free it.
+JVECTOR_SIMD_API const char *jvector_simd_get_active_isa(void);
+
+// Returns the value of JVECTOR_MAX_ISA that was read at library init time, or
+// NULL if the variable was absent or contained an unrecognised value.
+// Possible non-null return values: "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// The returned pointer (when non-null) is a string literal; do not free it.
+JVECTOR_SIMD_API const char *jvector_simd_get_max_isa_env(void);
+
 #ifdef __cplusplus
 }
 #endif // extern "C"
