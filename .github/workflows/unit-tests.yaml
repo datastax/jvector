@@ -69,7 +69,7 @@ jobs:
       - name: Test full suite with Panama (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '20'
         run: >-
-          mvn -B -Pjdk20 test
+          mvn -B -Pjdk20 -pl jvector-tests -am test
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
       - name: Verify native-access vector support (JDK ${{ matrix.jdk }})
