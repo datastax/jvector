@@ -27,6 +27,8 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -49,7 +51,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -62,6 +63,7 @@ import java.util.stream.IntStream;
 public class OnHeapGraphIndex implements MutableGraphIndex {
     // Used for saving and loading OnHeapGraphIndex
     public static final int MAGIC = 0x75EC4012; // JVECTOR, with some imagination
+    public static final int SERIALIZE_VERSION = 4;
 
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
@@ -523,17 +525,43 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     /**
-     * Saves the graph to the given DataOutput for reloading into memory later
+     * <p>Saves the graph to the given DataOutput for reloading into memory later.
+     *
+     * <p>
+     * Does not alter existing ordinals even if the ordinals are not compact,
+     * which can happen if some nodes were deleted.
      */
     @Experimental
     @Deprecated
     public void save(DataOutput out) throws IOException {
+        save(out, new OrdinalMapper.IdentityMapper(getIdUpperBound() - 1));
+    }
+
+    /**
+     * <p>Saves the graph to the given DataOutput for reloading into memory later.
+     *
+     * <p>
+     * Ensures that ordinals holes (from deletions) are not present in the saved graph
+     * By creating a compact mapping which preserves the relative order of the existing nodes.
+     */
+    @Experimental
+    @Deprecated
+    public void saveWithCompactOrdinals(DataOutput out) throws IOException {
+        save(out, new OrdinalMapper.MapMapper(AbstractGraphIndexWriter.sequentialRenumbering(this)));
+    }
+
+    /**
+     * Saves the graph to the given DataOutput for reloading into memory later
+     */
+    @Experimental
+    @Deprecated
+    public void save(DataOutput out, OrdinalMapper mapper) throws IOException {
         if (!allMutationsCompleted()) {
             throw new IllegalStateException("Cannot save a graph with pending mutations. Call cleanup() first");
         }
 
         out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
-        out.writeInt(4); // The version
+        out.writeInt(SERIALIZE_VERSION); // The version
 
         // Write graph-level properties.
         out.writeInt(layers.size());
@@ -543,7 +571,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         var entryNode = entryPoint.get();
         assert entryNode.level == getMaxLevel();
-        out.writeInt(entryNode.node);
+        out.writeInt(mapper.oldToNew(entryNode.node));
 
         for (int level = 0; level < layers.size(); level++) {
             out.writeInt(size(level));
@@ -553,11 +581,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
             while (it.hasNext()) {
                 int nodeId = it.nextInt();
                 var neighbors = layers.get(level).get(nodeId);
-                out.writeInt(nodeId);
+                out.writeInt(mapper.oldToNew(nodeId));
                 out.writeInt(neighbors.size());
 
                 for (int n = 0; n < neighbors.size(); n++) {
-                    out.writeInt(neighbors.getNode(n));
+                    out.writeInt(mapper.oldToNew(neighbors.getNode(n)));
                     out.writeFloat(neighbors.getScore(n));
                 }
             }
@@ -565,7 +593,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     /**
-     * Saves the graph to the given DataOutput for reloading into memory later
+     * Loads the graph from the given RandomAccessReader
      */
     @Experimental
     @Deprecated
@@ -576,8 +604,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         int version = in.readInt(); // The version
-        if (version != 4) {
-            throw new IOException("Unsupported version: " + version);
+        if (version != SERIALIZE_VERSION) {
+            throw new IOException("Unsupported version: " + version + ", expected " + SERIALIZE_VERSION);
         }
 
         // Write graph-level properties.
