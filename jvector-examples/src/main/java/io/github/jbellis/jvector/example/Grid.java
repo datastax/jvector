@@ -100,6 +100,7 @@ public class Grid {
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
                        List<Float> neighborOverflowGrid,
+                       List<Double> mlGrid,
                        List<Boolean> addHierarchyGrid,
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
@@ -126,10 +127,12 @@ public class Grid {
                 for (var refineFinalGraph : refineFinalGraphGrid) {
                     for (int M : mGrid) {
                         for (float neighborOverflow : neighborOverflowGrid) {
-                            for (int efC : efConstructionGrid) {
-                                for (var bc : buildCompressors) {
-                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
-                                            bc, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
+                            for (double ml : (mlGrid != null ? mlGrid : List.of(0.0))) {
+                                for (int efC : efConstructionGrid) {
+                                    for (var bc : buildCompressors) {
+                                        runOneGraph(cache, featureSets, M, efC, neighborOverflow, ml, addHierarchy, refineFinalGraph,
+                                                bc, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
+                                    }
                                 }
                             }
                         }
@@ -177,6 +180,7 @@ public class Grid {
                 mGrid,
                 efConstructionGrid,
                 neighborOverflowGrid,
+                null, // mlGrid: use default 1/ln(M)
                 addHierarchyGrid,
                 refineFinalGraphGrid,
                 featureSets,
@@ -217,6 +221,7 @@ public class Grid {
                             int M,
                             int efConstruction,
                             float neighborOverflow,
+                            double ml,
                             boolean addHierarchy,
                             boolean refineFinalGraph,
                             Function<DataSet, CompressorParameters> buildCompressor,
@@ -254,7 +259,7 @@ public class Grid {
 
             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
             if (buildCompressorObj == null) {
-                indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
+                indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, ml, addHierarchy, refineFinalGraph, ds, workDirectory);
             } else {
                 // If cache is disabled, we use the (tmp) workDirectory as the output
                 Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : workDirectory;
@@ -287,7 +292,7 @@ public class Grid {
                 if (!missing.isEmpty()) {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
-                    var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                    var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, ml, addHierarchy, refineFinalGraph,
                             ds, outputDir, buildCompressorObj, handles, constructionMetrics);
                     indexes.putAll(newIndexes);
                 }
@@ -334,7 +339,7 @@ public class Grid {
                         }
 
                         try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                            testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
+                            testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, ml, addHierarchy, refineFinalGraph, featureSetForIndex,
                                     buildCompressorString, artifacts, constructionMetrics, workDirectory);
                         } catch (Exception e) {
                             throw new RuntimeException(e);
@@ -368,6 +373,7 @@ public class Grid {
                                                                         int M,
                                                                         int efConstruction,
                                                                         float neighborOverflow,
+                                                                        double ml,
                                                                         boolean addHierarchy,
                                                                         boolean refineFinalGraph,
                                                                         DataSet ds,
@@ -385,7 +391,7 @@ public class Grid {
                 ? constructionMetrics.index("PQ").timeEncode(() -> buildCompressor.encodeAll(floatVectors))
                 : buildCompressor.encodeAll(floatVectors));
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
+        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, ml);
 
         // use the inline vectors index as the score provider for graph construction
         Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
@@ -552,6 +558,7 @@ public class Grid {
                                                                           int M,
                                                                           int efConstruction,
                                                                           float neighborOverflow,
+                                                                          double ml,
                                                                           boolean addHierarchy,
                                                                           boolean refineFinalGraph,
                                                                           DataSet ds,
@@ -571,7 +578,8 @@ public class Grid {
                                                           addHierarchy,
                                                           refineFinalGraph,
                                                           PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
+                                                          FilteredForkJoinPool.createFilteredPool(),
+                                                          ml);
         start = System.nanoTime();
         var onHeapGraph = builder.build(floatVectors);
         double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
@@ -617,6 +625,7 @@ public class Grid {
                                           int M,
                                           int efConstruction,
                                           float neighborOverflow,
+                                          double ml,
                                           boolean addHierarchy,
                                           boolean refineFinalGraph,
                                           Set<FeatureId> featureSetForIndex,
@@ -657,6 +666,7 @@ public class Grid {
                         "M",                  M,
                         "efConstruction",     efConstruction,
                         "neighborOverflow",   neighborOverflow,
+                        "ml",                 ml,
                         "addHierarchy",       addHierarchy,
                         "refineFinalGraph",   refineFinalGraph
                     ),
@@ -696,6 +706,7 @@ public class Grid {
                             M,
                             efConstruction,
                             neighborOverflow,
+                            ml,
                             addHierarchy,
                             refineFinalGraph,
                             featureSetForIndex,
@@ -815,6 +826,7 @@ public class Grid {
             List<Integer> mGrid,
             List<Integer> efConstructionGrid,
             List<Float> neighborOverflowGrid,
+            List<Double> mlGrid,
             List<Boolean> addHierarchyGrid,
             List<Boolean> refineFinalGraphGrid,
             List<? extends Set<FeatureId>> featureSets,
@@ -833,8 +845,9 @@ public class Grid {
         for (int m : mGrid) {
             for (int ef : efConstructionGrid) {
                 for (float neighborOverflow : neighborOverflowGrid) {
-                    for (boolean addHierarchy : addHierarchyGrid) {
-                        for (boolean refineFinalGraph : refineFinalGraphGrid) {
+                    for (double ml : (mlGrid != null ? mlGrid : List.of(0.0))) {
+                        for (boolean addHierarchy : addHierarchyGrid) {
+                            for (boolean refineFinalGraph : refineFinalGraphGrid) {
                             for (Set<FeatureId> features : featureSets) {
                                 for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
                                     for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
@@ -903,7 +916,7 @@ public class Grid {
                                             if (!missing.isEmpty()) {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
-                                                var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
+                                                var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, ml, addHierarchy, refineFinalGraph,
                                                         ds, outputDir, compressor, handles, null);
                                                 indexes.putAll(newIndexes);
                                             }
@@ -937,6 +950,7 @@ public class Grid {
                                                             params.put("M", m);
                                                             params.put("efConstruction", ef);
                                                             params.put("neighborOverflow", neighborOverflow);
+                                                            params.put("ml", ml);
                                                             params.put("addHierarchy", addHierarchy);
                                                             params.put("refineFinalGraph", refineFinalGraph);
                                                             params.put("features", features.toString());
@@ -1000,6 +1014,7 @@ public class Grid {
                     }
                 }
             }
+        }
         }
         return results;
     }

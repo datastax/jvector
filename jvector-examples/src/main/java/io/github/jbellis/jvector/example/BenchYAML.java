@@ -129,6 +129,7 @@ public class BenchYAML {
                     config.construction.outDegree,
                     config.construction.efConstruction,
                     config.construction.neighborOverflow,
+                    config.construction.ml,
                     config.construction.addHierarchy,
                     config.construction.refineFinalGraph,
                     config.construction.getFeatureSets(),

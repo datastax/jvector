@@ -56,6 +56,7 @@ public final class ExperimentsSchemaV1 {
                 "M",
                 "efConstruction",
                 "neighborOverflow",
+                "ml",
                 "addHierarchy",
                 "refineFinalGraph",
                 "feature_set",
@@ -78,6 +79,7 @@ public final class ExperimentsSchemaV1 {
                                                   int M,
                                                   int efConstruction,
                                                   float neighborOverflow,
+                                                  double ml,
                                                   boolean addHierarchy,
                                                   boolean refineFinalGraph,
                                                   Set<FeatureId> featureSet,
@@ -97,6 +99,7 @@ public final class ExperimentsSchemaV1 {
         fixed.put("M", Integer.toString(M));
         fixed.put("efConstruction", Integer.toString(efConstruction));
         fixed.put("neighborOverflow", Float.toString(neighborOverflow));
+        fixed.put("ml", Double.toString(ml));
         fixed.put("addHierarchy", Boolean.toString(addHierarchy));
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());

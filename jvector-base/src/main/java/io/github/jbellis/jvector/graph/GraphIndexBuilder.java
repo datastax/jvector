@@ -66,6 +66,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final float alpha;
     private final boolean addHierarchy;
     private final boolean refineFinalGraph;
+    private final double mlOverride;
 
     @VisibleForTesting
     final MutableGraphIndex graph;
@@ -202,7 +203,21 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              boolean addHierarchy,
                              boolean refineFinalGraph)
     {
-        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool(), 0.0);
+    }
+
+    /** @param mlOverride see {@link #GraphIndexBuilder(BuildScoreProvider, int, List, int, float, float, boolean, boolean, ForkJoinPool, ForkJoinPool, double)} */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph,
+                             double mlOverride)
+    {
+        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool(), mlOverride);
     }
 
     /**
@@ -234,7 +249,23 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
-        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor);
+        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, 0.0);
+    }
+
+    /** @param mlOverride see {@link #GraphIndexBuilder(BuildScoreProvider, int, List, int, float, float, boolean, boolean, ForkJoinPool, ForkJoinPool, double)} */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph,
+                             ForkJoinPool simdExecutor,
+                             ForkJoinPool parallelExecutor,
+                             double mlOverride)
+    {
+        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, mlOverride);
     }
 
     /**
@@ -296,6 +327,25 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, 0.0);
+    }
+
+    /**
+     * @param mlOverride the level multiplier for HNSW hierarchy level assignment ({@code 1/ln(M)} by default).
+     *                   Pass {@code 0.0} to use the default derived from {@code M}.
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             List<Integer> maxDegrees,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph,
+                             ForkJoinPool simdExecutor,
+                             ForkJoinPool parallelExecutor,
+                             double mlOverride)
+    {
         if (maxDegrees.stream().anyMatch(i -> i <= 0)) {
             throw new IllegalArgumentException("layer degrees must be positive");
         }
@@ -321,6 +371,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
+        this.mlOverride = mlOverride;
 
         this.graph = new OnHeapGraphIndex(maxDegrees, dimension, neighborOverflow, new VamanaDiversityProvider(scoreProvider, alpha), addHierarchy);
 
@@ -371,6 +422,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
+        this.mlOverride = 0.0;
 
         this.graph = mutableGraphIndex;
 
@@ -398,7 +450,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 other.addHierarchy,
                 other.refineFinalGraph,
                 other.simdExecutor,
-                other.parallelExecutor);
+                other.parallelExecutor,
+                other.mlOverride);
 
         var otherView = other.graph.getView();
 
@@ -563,7 +616,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         double ml;
         double randDouble;
         if (addHierarchy) {
-            ml = graph.getDegree(0) == 1 ? 1 : 1 / log(1.0 * graph.getDegree(0));
+            ml = (mlOverride != 0.0) ? mlOverride : (graph.getDegree(0) == 1 ? 1 : 1.0 / log(1.0 * graph.getDegree(0)));
             do {
                 randDouble = this.rng.nextDouble();  // avoid 0 value, as log(0) is undefined
             } while (randDouble == 0.0);
