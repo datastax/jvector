@@ -150,6 +150,15 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 writer.enablePqCodeCache(codeCache, cacheCodeSize);
             }
         } catch (IOException e) {
+            // The fallback exists for environmental failures (mapping limits, transient IO) —
+            // per-write encoding produces the same output, just slower. Interruption is not
+            // environmental: it is the caller cancelling the compaction, and absorbing it here
+            // would make compact() run to completion after the one interrupt a host delivers.
+            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+                if (cause instanceof InterruptedException) {
+                    throw e;
+                }
+            }
             log.warn("Code pre-encode failed, falling back to per-write encoding: {}", e.getMessage());
         }
     }
