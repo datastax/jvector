@@ -76,12 +76,25 @@ git clone --recurse-submodules <repo-url>
 
 ### Building native libraries
 
-The native SIMD library (`libjvector.so`) requires **g++ 11+** and is built by the script
-`jvector-native/src/main/native/jextract_vector_simd.sh`. To build and auto-install `g++` on Ubuntu:
+The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)
+and requires **g++ 11+**. The entry-point script is
+`jvector-native/src/main/native/jextract_vector_simd.sh`. Run it from that directory:
 
 ```bash
-./jvector-native/src/main/native/jextract_vector_simd.sh --auto-install-g++
+cd jvector-native/src/main/native
+bash jextract_vector_simd.sh
 ```
+
+On a fresh Ubuntu machine you can install all required dependencies (g++, meson, ninja) and build in one step:
+
+```bash
+cd jvector-native/src/main/native
+bash jextract_vector_simd.sh --auto-install-deps
+```
+
+For other distributions the script will print the install commands needed. See
+[`jvector-native/src/main/native/README.md`](./jvector-native/src/main/native/README.md) for full build options,
+Maven integration, ISA dispatch details, and how to add new kernels.
 
 Base code is in [jvector-base](./jvector-base) and will be built for Java 11 releases, restricting language features and APIs
 appropriately. Code in [jvector-twenty](./jvector-twenty) will be compiled for Java 20 language features/APIs and included in the final
