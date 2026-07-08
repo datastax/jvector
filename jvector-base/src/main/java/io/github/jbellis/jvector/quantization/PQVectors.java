@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
@@ -91,8 +92,13 @@ public abstract class PQVectors implements CompressedVectors {
      * @param simdExecutor the ForkJoinPool to use for SIMD operations
      * @return the PQVectors instance
      */
-    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ParallelExecutor simdExecutor) {
         return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravv, simdExecutor);
+    }
+
+    /** {@link ForkJoinPool} overload of {@link #encodeAndBuild(ProductQuantization, int, RandomAccessVectorValues, ParallelExecutor)}. */
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAndBuild(pq, vectorCount, ravv, ParallelExecutor.forkJoin(simdExecutor));
     }
 
     /**
@@ -107,6 +113,15 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAndBuild(pq, vectorCount, ordinalsMapping, ravv, ParallelExecutor.forkJoin(simdExecutor));
+    }
+
+    /**
+     * As {@link #encodeAndBuild(ProductQuantization, int, IntUnaryOperator, RandomAccessVectorValues, ForkJoinPool)},
+     * but {@code simdExecutor} may be {@link ParallelExecutor#callerRuns()} to encode synchronously on
+     * the calling thread. Encoding is per-vector independent, so the output is identical across paths.
+     */
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ParallelExecutor simdExecutor) {
         // Verify that the mapped ordinals are packed, ie. the total range of ordinals does not exceed
         // the total vector count as they are mapped from 0 --> vector count - 1.
         // This assumes no duplicates are included.
@@ -134,19 +149,16 @@ public abstract class PQVectors implements CompressedVectors {
         // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
         // and then we are guaranteed safe publication because we join the thread after completion.
         var ravvCopy = ravv.threadLocalSupplier();
-        simdExecutor.submit(() -> IntStream.range(0, vectorCount)
-                        .parallel()
-                        .forEach(ordinal -> {
-                            // Retrieve the slice and mutate it.
-                            var localRavv = ravvCopy.get();
-                            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
-                            if (vector != null)
-                                pq.encodeTo(vector, slice);
-                            else
-                                slice.zero();
-                        }))
-                .join();
+        simdExecutor.forEachInt(vectorCount, ordinal -> {
+            // Retrieve the slice and mutate it.
+            var localRavv = ravvCopy.get();
+            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
+            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
+            if (vector != null)
+                pq.encodeTo(vector, slice);
+            else
+                slice.zero();
+        });
 
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
