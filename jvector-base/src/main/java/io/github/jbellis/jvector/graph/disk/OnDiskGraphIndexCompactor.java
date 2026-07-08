@@ -691,8 +691,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
+        // PQ retrain needs a concrete ForkJoinPool; hand it the compaction's own pool when we have
+        // one (so retrain stays pool-bounded), else the shared physical-core pool. The abstract
+        // executor is still wrapped for the strategies' drain-safe invokeAll.
+        ForkJoinPool computePool = (executor instanceof ForkJoinPool)
+                ? (ForkJoinPool) executor
+                : PhysicalCoreExecutor.pool();
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, asExecutorService(executor), taskWindowSize);
+                dimension, maxOrdinal, asExecutorService(executor), computePool, taskWindowSize);
     }
 
     /**

@@ -424,7 +424,7 @@ public abstract class PQVectors implements CompressedVectors {
         ProductQuantization basePQ = this.pq;
         io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
                 vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
-                        .retrain(vsf, basePQ);
+                        .retrain(vsf, basePQ, ctx.computePool, ctx.computePool);
         return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 

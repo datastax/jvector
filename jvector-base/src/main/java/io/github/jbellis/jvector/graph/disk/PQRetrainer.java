@@ -78,8 +78,18 @@ public class PQRetrainer {
      * performs no I/O.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction) {
+        return retrain(similarityFunction, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * As {@link #retrain(VectorSimilarityFunction)}, but runs the PQ refinement on the supplied
+     * pools instead of the default {@link PhysicalCoreExecutor#pool()} / {@code commonPool()} — so a
+     * compaction that supplies its own bounded pool keeps all retrain work on it rather than leaking
+     * to an all-core pool.
+     */
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-        return retrain(similarityFunction, fpq.getPQ());
+        return retrain(similarityFunction, fpq.getPQ(), simdExecutor, parallelExecutor);
     }
 
     /**
@@ -88,6 +98,15 @@ public class PQRetrainer {
      * non-fused source (e.g. a sidecar {@code CompressedVectors}) rather than the FUSED_PQ feature.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
+        return retrain(similarityFunction, basePQ, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * As {@link #retrain(VectorSimilarityFunction, ProductQuantization)}, but runs the PQ refinement
+     * on the supplied pools. This is the overload that keeps a pool-bounded compaction from leaking
+     * PQ-retrain work to {@link PhysicalCoreExecutor#pool()} / {@code commonPool()}.
+     */
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         log.info("Training PQ using balanced sampling across sources");
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
@@ -115,8 +134,8 @@ public class PQRetrainer {
         ProductQuantization result = basePQ.refine(ravv,
                                                    ProductQuantization.K_MEANS_ITERATIONS,
                                                    -1.0f, // UNWEIGHTED / isotropic
-                                                   PhysicalCoreExecutor.pool(),
-                                                   ForkJoinPool.commonPool());
+                                                   simdExecutor,
+                                                   parallelExecutor);
         log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
         return result;
     }

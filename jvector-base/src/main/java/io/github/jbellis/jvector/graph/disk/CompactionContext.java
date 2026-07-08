@@ -18,10 +18,12 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Bundle of inputs that {@link QuantizationCompactionStrategy} implementations need to do their work
@@ -39,8 +41,16 @@ public final class CompactionContext {
     public final int dimension;
     public final int maxOrdinal;
     public final ExecutorService executor;
+    /**
+     * A concrete {@link ForkJoinPool} for PQ operations (retrain/refine), which require one and
+     * cannot use the abstract {@link #executor}. Set to the compaction's own pool when it supplied
+     * a {@code ForkJoinPool}, so PQ retrain stays on that pool rather than leaking to an all-core
+     * default; otherwise the shared {@link PhysicalCoreExecutor#pool()}.
+     */
+    public final ForkJoinPool computePool;
     public final int taskWindowSize;
 
+    /** Back-compat: {@code computePool} defaults to the shared physical-core pool. */
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
@@ -50,6 +60,20 @@ public final class CompactionContext {
             int maxOrdinal,
             ExecutorService executor,
             int taskWindowSize) {
+        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal, executor,
+                PhysicalCoreExecutor.pool(), taskWindowSize);
+    }
+
+    public CompactionContext(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            int dimension,
+            int maxOrdinal,
+            ExecutorService executor,
+            ForkJoinPool computePool,
+            int taskWindowSize) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
@@ -57,6 +81,7 @@ public final class CompactionContext {
         this.dimension = dimension;
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
+        this.computePool = computePool;
         this.taskWindowSize = taskWindowSize;
     }
 }

@@ -131,7 +131,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         ProductQuantization basePQ = this.pq;
         VectorCompressorRetrainer retrainer =
                 vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
-                        .retrain(vsf, basePQ);
+                        .retrain(vsf, basePQ, ctx.computePool, ctx.computePool);
         return new FusedCompactionStrategy(ctx, this, retrainer);
     }
 
