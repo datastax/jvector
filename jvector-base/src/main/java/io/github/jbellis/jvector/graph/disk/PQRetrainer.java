@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -78,16 +79,17 @@ public class PQRetrainer {
      * performs no I/O.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction) {
-        return retrain(similarityFunction, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        return retrain(similarityFunction,
+                ParallelExecutor.forkJoin(PhysicalCoreExecutor.pool()), ParallelExecutor.forkJoin(ForkJoinPool.commonPool()));
     }
 
     /**
      * As {@link #retrain(VectorSimilarityFunction)}, but runs the PQ refinement on the supplied
-     * pools instead of the default {@link PhysicalCoreExecutor#pool()} / {@code commonPool()} — so a
-     * compaction that supplies its own bounded pool keeps all retrain work on it rather than leaking
-     * to an all-core pool.
+     * executors instead of the default {@link PhysicalCoreExecutor#pool()} / {@code commonPool()} — so
+     * a compaction that supplies its own bounded pool (or {@link ParallelExecutor#callerRuns()}) keeps
+     * all retrain work there rather than leaking to an all-core pool.
      */
-    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ParallelExecutor simdExecutor, ParallelExecutor parallelExecutor) {
         FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
         return retrain(similarityFunction, fpq.getPQ(), simdExecutor, parallelExecutor);
     }
@@ -98,15 +100,16 @@ public class PQRetrainer {
      * non-fused source (e.g. a sidecar {@code CompressedVectors}) rather than the FUSED_PQ feature.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
-        return retrain(similarityFunction, basePQ, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        return retrain(similarityFunction, basePQ,
+                ParallelExecutor.forkJoin(PhysicalCoreExecutor.pool()), ParallelExecutor.forkJoin(ForkJoinPool.commonPool()));
     }
 
     /**
      * As {@link #retrain(VectorSimilarityFunction, ProductQuantization)}, but runs the PQ refinement
-     * on the supplied pools. This is the overload that keeps a pool-bounded compaction from leaking
-     * PQ-retrain work to {@link PhysicalCoreExecutor#pool()} / {@code commonPool()}.
+     * on the supplied executors. This is the overload that keeps a pool-bounded (or caller-runs)
+     * compaction from leaking PQ-retrain work to {@link PhysicalCoreExecutor#pool()} / {@code commonPool()}.
      */
-    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ, ParallelExecutor simdExecutor, ParallelExecutor parallelExecutor) {
         log.info("Training PQ using balanced sampling across sources");
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);

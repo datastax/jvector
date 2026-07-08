@@ -129,6 +129,35 @@ public class EmbeddedExecutionContextTest extends RandomizedTest {
         assertTrue("no work actually ran on the supplied pool worker (observed=" + observed + ")", sawPoolWorker);
     }
 
+    /// A {@link EmbeddedExecutionContext#callerRuns()} context runs graph build and all PQ/NVQ work
+    /// synchronously on the calling thread — the memtable-flush mode. A recording view must observe
+    /// only the calling thread, never a worker or the common pool.
+    @Test
+    public void callerRunsExecutesEntirelyOnCallingThread() throws Exception {
+        List<VectorFloat<?>> vectors = TestUtil.createRandomVectors(SIZE, DIM);
+        Set<String> observed = ConcurrentHashMap.newKeySet();
+        RecordingRAVV ravv = new RecordingRAVV(new ListRandomAccessVectorValues(vectors, DIM), observed);
+        ListRandomAccessVectorValues plain = new ListRandomAccessVectorValues(vectors, DIM);
+        String mainName = Thread.currentThread().getName();
+
+        var ctx = EmbeddedExecutionContext.callerRuns();
+        try (var builder = ctx.newBuilder(BuildScoreProvider.randomAccessScoreProvider(ravv, VSF),
+                DIM, 16, 100, 1.2f, 1.2f, true, true)) {
+            builder.build(ravv);
+        }
+        ProductQuantization pq = ctx.trainPQ(ravv, 8, 256, true);
+        ctx.refinePQ(pq, ravv);
+        ctx.encodePQ(pq, ravv);
+        NVQuantization nvq = NVQuantization.compute(plain, 2);
+        ctx.encodeNVQ(nvq, ravv);
+
+        assertFalse("expected some vector reads", observed.isEmpty());
+        for (String name : observed) {
+            assertTrue("caller-runs context must execute only on the calling thread, but saw: " + name
+                    + " (observed=" + observed + ")", name.equals(mainName));
+        }
+    }
+
     /// End-to-end through the context: build two FusedPQ source graphs, then merge them with a
     /// context-created compactor (which retrains PQ internally on the context's pool). Asserts the
     /// merged graph is complete and searchable — exercising newBuilder, trainPQ, encodePQ,
