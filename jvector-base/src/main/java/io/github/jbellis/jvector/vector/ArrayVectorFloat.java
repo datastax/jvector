@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -26,7 +27,7 @@ import java.util.Arrays;
 /**
  * VectorFloat implementation backed by an on-heap float array.
  */
-final public class ArrayVectorFloat implements VectorFloat<float[]>
+final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
 {
     private final float[] data;
 
@@ -122,6 +123,11 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>
     public int hashCode()
     {
         return this.getHashCode();
+    }
+    
+    @Override
+    public float[] array() {
+        return get();
     }
 }
 
