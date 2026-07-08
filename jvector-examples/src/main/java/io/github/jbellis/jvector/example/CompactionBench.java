@@ -173,6 +173,12 @@ public final class CompactionBench {
             // Compact
             Path compactPath = tempDir.resolve("compacted");
             var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null);
+            // A/B switch for PQ-bucketed cross-source candidate acquisition (fused-PQ only):
+            // -Djvector.compaction.bucketed=true
+            if (Boolean.getBoolean("jvector.compaction.bucketed")) {
+                logger.info("Bucketed candidate acquisition ENABLED");
+                compactor.setBucketedCandidateAcquisition(true);
+            }
             long t0 = System.currentTimeMillis();
             compactor.compact(compactPath);
             long compactionMs = System.currentTimeMillis() - t0;

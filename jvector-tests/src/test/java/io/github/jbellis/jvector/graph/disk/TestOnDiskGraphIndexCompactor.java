@@ -455,6 +455,31 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
      */
     @Test
     public void testCompact() throws Exception {
+        runCompactAndCheckRecall(false, 0, 0.2);
+    }
+
+    /**
+     * Same as {@link #testCompact()} but with PQ-bucketed candidate acquisition. At this fixture
+     * size all live nodes fit in one bucket, so this exercises the SDC scan + heap + rescore
+     * integration with near-exhaustive cross-source coverage.
+     */
+    @Test
+    public void testCompactBucketed() throws Exception {
+        runCompactAndCheckRecall(true, 0, 0.2);
+    }
+
+    /**
+     * Bucketed acquisition with a small target bucket size, forcing the multi-bucket path:
+     * k-means centroid training, two-level top-2 assignment, and per-bucket scans. 64-node
+     * buckets over random (structureless) vectors are deliberately adversarial for bucketing,
+     * so this asserts structural correctness with a wider recall tolerance than the defaults.
+     */
+    @Test
+    public void testCompactBucketedMultiBucket() throws Exception {
+        runCompactAndCheckRecall(true, 64, 0.35);
+    }
+
+    private void runCompactAndCheckRecall(boolean bucketed, int bucketTargetSize, double recallTolerance) throws Exception {
         List<OnDiskGraphIndex> graphs = new ArrayList<>();
         List<ReaderSupplier> rss = new ArrayList<>();
         List<FixedBitSet> liveNodes = new ArrayList<>();
@@ -483,6 +508,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setBucketedCandidateAcquisition(bucketed);
+        if (bucketTargetSize > 0) {
+            compactor.setBucketTargetSizeForTesting(bucketTargetSize);
+        }
         int topK = 10;
 
         // Select query vectors from the dataset
@@ -525,7 +554,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         double recallDifference = Math.abs(goldenRecall - compactRecall);
         assertTrue(String.format("Compacted recall (%.4f) should be comparable to golden recall (%.4f), difference: %.4f",
                                 compactRecall, goldenRecall, recallDifference),
-                  recallDifference < 0.2); // Allow up to 20% difference for random vectors
+                  recallDifference < recallTolerance);
 
         // Verify both are reasonable (not completely broken)
         assertTrue(String.format("Golden recall should be at least 0.2, got %.4f", goldenRecall),
@@ -542,6 +571,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
      */
     @Test
     public void testCompactWithDeletions() throws Exception {
+        runCompactWithDeletions(false);
+    }
+
+    /** Deletions + bucketed acquisition: dead nodes must not appear in buckets or candidates. */
+    @Test
+    public void testCompactBucketedWithDeletions() throws Exception {
+        runCompactWithDeletions(true);
+    }
+
+    private void runCompactWithDeletions(boolean bucketed) throws Exception {
         List<OnDiskGraphIndex> graphs = new ArrayList<>();
         List<ReaderSupplier> rss = new ArrayList<>();
         List<FixedBitSet> liveNodes = new ArrayList<>();
@@ -580,6 +619,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setBucketedCandidateAcquisition(bucketed);
+        if (bucketed) {
+            compactor.setBucketTargetSizeForTesting(64); // force the multi-bucket path too
+        }
         var outputPath = testDirectory.resolve("test_compact_with_deletions");
 
         compactor.compact(outputPath);

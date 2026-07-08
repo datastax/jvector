@@ -85,6 +85,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
 
+    // Bucketed candidate acquisition (opt-in, fused-PQ only): replaces per-node cross-source
+    // beam searches at L0 with a PQ-bucketed pairwise scan. See BucketedCandidateAcquisition.
+    private boolean bucketedAcquisitionEnabled = false;
+    private int bucketTargetSize = BucketedCandidateAcquisition.DEFAULT_TARGET_BUCKET_SIZE;
+    // Non-null only during compactLevels of a run that built it; dropped before refinement so
+    // the candidate heaps are GC-eligible when the merged graph is loaded.
+    private BucketedCandidateAcquisition bucketedAcquisition;
+    private final java.util.concurrent.atomic.AtomicLong bucketedFallbacks = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Enables PQ-bucketed cross-source candidate acquisition for the base layer. Requires sources
+     * with a fused-PQ feature (the pre-encoded code cache is the scan's input); silently falls
+     * back to search-based acquisition otherwise. Candidate scores are exactly rescored before
+     * diversity selection, and nodes with too few bucketed candidates fall back to the search
+     * path, so quality risk is bounded; see the class javadoc of
+     * {@link BucketedCandidateAcquisition} for the trade-offs.
+     */
+    @Experimental
+    public void setBucketedCandidateAcquisition(boolean enabled) {
+        this.bucketedAcquisitionEnabled = enabled;
+    }
+
+    /** Test hook: shrink buckets so small fixtures exercise the multi-bucket clustering path. */
+    void setBucketTargetSizeForTesting(int targetSize) {
+        this.bucketTargetSize = targetSize;
+    }
+
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -423,7 +450,26 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             writer.writeHeader();
             strategy.onAfterHeader(writer);
 
+            if (bucketedAcquisitionEnabled) {
+                if (fusedPQEnabled && strategy.getCodeCache() != null && pq != null) {
+                    bucketedAcquisition = BucketedCandidateAcquisition.build(
+                            buildContext(), pq, strategy.getCodeCache(), strategy.getCacheCodeSize(),
+                            similarityFunction,
+                            BucketedCandidateAcquisition.candidatesPerNode(maxDegrees.get(0)),
+                            bucketTargetSize);
+                    bucketedFallbacks.set(0);
+                } else {
+                    log.info("Bucketed candidate acquisition requested but unavailable " +
+                            "(requires fused PQ with a pre-encoded code cache); using search-based acquisition");
+                }
+            }
+
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+            if (bucketedAcquisition != null) {
+                log.info("Bucketed acquisition: {} nodes fell back to search-based cross-source gathering",
+                        bucketedFallbacks.get());
+                bucketedAcquisition = null; // free candidate heaps before refinement loads the merged graph
+            }
 
             strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
@@ -860,6 +906,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        if (bucketedAcquisition != null) {
+            // Bucketed candidates are appended in addition to the (fallback) search budget.
+            baseMaxCandidateSize += BucketedCandidateAcquisition.candidatesPerNode(maxDegrees.get(0));
+        }
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
@@ -1160,6 +1210,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             VectorFloat<?> baseVec,
             CompactionParams params
     ) {
+        if (level == 0 && bucketedAcquisition != null) {
+            return gatherCandidatesBucketed(node, sourceIdx, scratch, baseVec, params);
+        }
+
         int candSize = 0;
 
         for (int ss = 0; ss < sources.size(); ss++) {
@@ -1175,6 +1229,56 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        return candSize;
+    }
+
+    /**
+     * L0 candidate gathering when bucketed acquisition is active: same-source neighbors as usual,
+     * then the node's precomputed cross-source candidates (exactly rescored — SDC scan scores are
+     * approximate and must be comparable with the exact same-source scores for diversity
+     * selection). Nodes that got too few candidates from the scan — bucket-boundary or skew
+     * casualties — fall back to the full search path, bounding the worst case at the old behavior.
+     */
+    private int gatherCandidatesBucketed(
+            int node,
+            int sourceIdx,
+            Scratch scratch,
+            VectorFloat<?> baseVec,
+            CompactionParams params
+    ) {
+        var sameView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        int candSize = gatherFromSameSource(node, 0, sourceIdx, sameView, liveNodes.get(sourceIdx),
+                                            baseVec, scratch, 0);
+
+        int newOrd = remappers.get(sourceIdx).oldToNew(node);
+        final int crossStart = candSize;
+        final int[] size = { candSize };
+        bucketedAcquisition.forEachCandidate(newOrd, (src, oldOrd, approxScore) -> {
+            // Rare duplicates come from a pair sharing both overlapping buckets.
+            for (int k = crossStart; k < size[0]; k++) {
+                if (scratch.candSrc[k] == src && scratch.candNode[k] == oldOrd) {
+                    return;
+                }
+            }
+            var view = (OnDiskGraphIndex.View) scratch.gs[src].getView();
+            view.getVectorInto(oldOrd, scratch.tmpVec, 0);
+            scratch.candSrc[size[0]] = src;
+            scratch.candNode[size[0]] = oldOrd;
+            scratch.candScore[size[0]] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            size[0]++;
+        });
+        candSize = size[0];
+
+        int minCross = Math.max(MIN_SEARCH_TOP_K, BucketedCandidateAcquisition.candidatesPerNode(maxDegrees.get(0)) / 4);
+        if (candSize - crossStart < minCross) {
+            bucketedFallbacks.incrementAndGet();
+            for (int ss = 0; ss < sources.size(); ss++) {
+                if (ss == sourceIdx) continue;
+                var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
+                candSize = gatherFromOtherSource(node, 0, ss, searchView, liveNodes.get(ss),
+                                                 baseVec, scratch, candSize, params);
+            }
+        }
         return candSize;
     }
 
@@ -1476,6 +1580,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        if (bucketedAcquisitionEnabled) {
+            baseMaxCandidateSize += BucketedCandidateAcquisition.candidatesPerNode(maxDegrees.get(0));
+        }
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
