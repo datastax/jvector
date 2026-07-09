@@ -146,13 +146,6 @@ class ParallelGraphWriter implements AutoCloseable {
         this.filePath = Objects.requireNonNull(filePath);
         this.taskMultiplier = config.taskMultiplier;
         this.useDirectBuffers = config.useDirectBuffers;
-        this.executor = Executors.newFixedThreadPool(config.workerThreads,
-            r -> {
-                Thread t = new Thread(r);
-                t.setName("ParallelGraphWriter-Worker-" + threadCounter.getAndIncrement());
-                t.setDaemon(false);
-                return t;
-            });
         if (externalExecutor != null) {
             this.executor = externalExecutor;
             this.ownsExecutor = false;
