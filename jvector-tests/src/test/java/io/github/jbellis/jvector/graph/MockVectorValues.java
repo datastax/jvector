@@ -39,6 +39,10 @@ public class MockVectorValues implements RandomAccessVectorValues {
         return new MockVectorValues(values[0].length(), values);
     }
 
+    public static MockVectorValues empty(int dimension) {
+        return new MockVectorValues(dimension, new VectorFloat<?>[0]);
+    }
+
     MockVectorValues(int dimension, VectorFloat<?>[] denseValues) {
         this.dimension = dimension;
         this.denseValues = denseValues;

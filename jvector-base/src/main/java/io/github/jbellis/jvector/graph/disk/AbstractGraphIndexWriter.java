@@ -175,7 +175,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
+                view.entryNode() == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ordinalMapper.oldToNew(view.entryNode().node),
                 layerInfo,
                 ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, featureMap);
@@ -198,7 +198,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 dimension,
-                ordinalMapper.oldToNew(view.entryNode().node),
+                view.entryNode() == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ordinalMapper.oldToNew(view.entryNode().node),
                 layerInfo,
                 ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, featureMap);
