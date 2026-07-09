@@ -64,6 +64,7 @@ class ParallelGraphWriter implements AutoCloseable {
     private final RandomAccessWriter writer;
     private final ImmutableGraphIndex graph;
     private final ExecutorService executor;
+    private final boolean ownsExecutor;
     private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
@@ -120,6 +121,26 @@ class ParallelGraphWriter implements AutoCloseable {
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath) {
+        this(writer, graph, inlineFeatures, config, filePath, null);
+    }
+
+    /**
+     * Creates a parallel writer that runs its record-building/write tasks on a caller-supplied
+     * executor instead of a dedicated pool.
+     *
+     * @param externalExecutor an externally-owned executor to run tasks on, or {@code null} to
+     *        create (and own) a dedicated fixed thread pool sized to {@code config.workerThreads}.
+     *        An external executor must outlive this writer and is the caller's to shut down;
+     *        {@link #close()} will not shut it down. Note these tasks block on file I/O, so an
+     *        executor sized for I/O concurrency (typically &gt;= logical cores) is appropriate; a
+     *        small compute-sized pool (e.g. a physical-core ForkJoinPool) will throttle writes.
+     */
+    public ParallelGraphWriter(RandomAccessWriter writer,
+                               ImmutableGraphIndex graph,
+                               List<Feature> inlineFeatures,
+                               Config config,
+                               Path filePath,
+                               ExecutorService externalExecutor) {
         this.writer = writer;
         this.graph = graph;
         this.filePath = Objects.requireNonNull(filePath);
@@ -132,6 +153,19 @@ class ParallelGraphWriter implements AutoCloseable {
                 t.setDaemon(false);
                 return t;
             });
+        if (externalExecutor != null) {
+            this.executor = externalExecutor;
+            this.ownsExecutor = false;
+        } else {
+            this.executor = Executors.newFixedThreadPool(config.workerThreads,
+                r -> {
+                    Thread t = new Thread(r);
+                    t.setName("ParallelGraphWriter-Worker-" + threadCounter.getAndIncrement());
+                    t.setDaemon(false);
+                    return t;
+                });
+            this.ownsExecutor = true;
+        }
 
         // Compute fixed record size for L0
         this.recordSize = Integer.BYTES // node ordinal
@@ -278,15 +312,17 @@ class ParallelGraphWriter implements AutoCloseable {
     @Override
     public void close() throws IOException {
         try {
-            // Shutdown executor
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+            // Shut down the executor only if we created it; an injected executor is the caller's.
+            if (ownsExecutor) {
+                executor.shutdown();
+                try {
+                    if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                        executor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
                     executor.shutdownNow();
+                    Thread.currentThread().interrupt();
                 }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
             }
 
             // Close all views (CopyOnWriteArrayList is safe for concurrent iteration)

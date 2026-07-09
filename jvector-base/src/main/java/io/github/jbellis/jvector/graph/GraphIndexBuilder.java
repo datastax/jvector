@@ -25,10 +25,7 @@ import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
-import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.ExceptionUtils;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
@@ -57,7 +54,7 @@ import static java.lang.Math.*;
  * Under most conditions this is not something you need to worry about, but it does mean
  * that spawning a new Thread per call is not advisable.  This includes virtual threads.
  */
-public class GraphIndexBuilder implements Closeable {
+public class GraphIndexBuilder implements Closeable, Accountable {
     private static final Logger logger = LoggerFactory.getLogger(GraphIndexBuilder.class);
 
     private final int beamWidth;
@@ -846,6 +843,29 @@ public class GraphIndexBuilder implements Closeable {
         } catch (Exception e) {
             ExceptionUtils.throwIoException(e);
         }
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
+        int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
+        // Shallow size of this object: header + all fields
+        // Primitive fields: beamWidth(int), dimension(int), neighborOverflow(float),
+        //                   alpha(float), addHierarchy(boolean), refineFinalGraph(boolean)
+        // Reference fields: naturalScratch, concurrentScratch, graph, insertionsInProgress,
+        //                   scoreProvider, simdExecutor, parallelExecutor, searchers, rng
+        long size = OH + 9L * REF + Integer.BYTES * 2 + Float.BYTES * 2 + 2;
+
+        // The graph is the dominant memory consumer
+        size += graph.ramBytesUsed();
+
+        // insertionsInProgress: ConcurrentSkipListSet — typically small during measurement,
+        // but account for object overhead plus per-entry cost
+        long inProgressEntrySize = OH + 2L * REF + Integer.BYTES + Integer.BYTES; // NodeAtLevel + skip list node
+        size += OH + REF + (long) insertionsInProgress.size() * inProgressEntrySize;
+
+        return size;
     }
 
     private static class ExcludingBits implements Bits {
