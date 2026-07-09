@@ -1,7 +1,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: dpr-gemma-1M
+dataset: dpr-gemma-1m
 
 construction:
   outDegree: [32]
@@ -21,6 +21,7 @@ construction:
   reranking:
     - NVQ
   useSavedIndexIfExists: No
+  parallelGraphConstruction: Yes
 
 search:
   topKOverquery:

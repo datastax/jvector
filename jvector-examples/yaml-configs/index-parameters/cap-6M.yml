@@ -1,7 +1,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: cap-10M
+dataset: cap-6M
 
 construction:
   outDegree: [32]

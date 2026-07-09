@@ -32,6 +32,11 @@ public class ConstructionParameters extends CommonParameters {
     public List<String> reranking;
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
+    public Boolean parallelGraphConstruction;
+
+    public boolean isParallelGraphConstruction() {
+        return Boolean.TRUE.equals(parallelGraphConstruction);
+    }
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
         List<EnumSet<FeatureId>> featureSets = null;
