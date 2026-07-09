@@ -1,9 +1,10 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: dpr-gemma-1M
+dataset: dpr-gemma-1m
 
 construction:
+  ml: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 1.0, 1.5, 2.0]
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -30,7 +31,7 @@ search:
     - type: PQ
       parameters:
         # m: 192
-        mFactor: 8
+        mFactor: 16
         # k: 256 # optional parameter. By default, k=256
         centerData: No
         anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)

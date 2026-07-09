@@ -36,6 +36,9 @@ public class MockVectorValues implements RandomAccessVectorValues {
     private final VectorFloat<?>[] denseValues;
 
     public static MockVectorValues fromValues(VectorFloat<?>[] values) {
+        if (values.length == 0) {
+            return new MockVectorValues(0, new VectorFloat<?>[0]);
+        }
         return new MockVectorValues(values[0].length(), values);
     }
 

@@ -4,6 +4,7 @@ onDiskIndexVersion: 6
 dataset: default
 
 construction:
+  ml: [0.5, 1.0]
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
