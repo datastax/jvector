@@ -141,4 +141,9 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     public int hashCode() {
         return this.getHashCode();
     }
+
+    @Override
+    public float[] toArray() {
+        return (float[])segment.heapBase().get();
+    }
 }

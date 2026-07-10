@@ -123,5 +123,10 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>
     {
         return this.getHashCode();
     }
+
+    @Override
+    public float[] toArray() {
+        return get();
+    }
 }
 
