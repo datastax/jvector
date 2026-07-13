@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.vector.types;
 /**
  * Return the {@code float[]} representation of the {@link VectorFloat} if its type supports
  * such conversions.
+ *
+ * @apiNote this is an experimental API and may change in the future releases.
  */
 public interface FloatArray {
     float[] array();
