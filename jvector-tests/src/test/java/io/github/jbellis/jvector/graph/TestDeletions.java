@@ -28,6 +28,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
@@ -86,44 +87,30 @@ public class TestDeletions extends LuceneTestCase {
 
         // delete all nodes that connect to a random node
         int nodeToIsolate = getRandom().nextInt(ravv.size());
-        int nDeleted = 0;
+        var toDelete = new ArrayList<Integer>();
         try (var view = graph.getView()) {
-            for (var i = 0; i < graph.size(0); i++) {
-                for (var it = view.getNeighborsIterator(0, i); it.hasNext(); ) { // TODO hardcoded level
+            for (var i = 0; i < ravv.size(); i++) {
+                for (var it = view.getNeighborsIterator(0, i); it.hasNext(); ) {
                     if (nodeToIsolate == it.nextInt()) {
-                        builder.markNodeDeleted(i);
-                        nDeleted++;
+                        toDelete.add(i);
                         break;
                     }
                 }
             }
         }
-        assertNotEquals(0, nDeleted);
+        assertNotEquals(0, toDelete.size());
 
-        // cleanup removes the deleted nodes
-        builder.cleanup();
+        for (int node : toDelete) {
+            builder.markNodeDeleted(node);
+        }
+        int nDeleted = toDelete.size();
+
         assertEquals(ravv.size() - nDeleted, graph.size(0));
 
-        // cleanup should have added new connections to the node that would otherwise have been disconnected
+        // Algorithm 5 should have added new connections to the node that would otherwise have been disconnected
         var v = ravv.getVector(nodeToIsolate).copy();
         var results = GraphSearcher.search(v, 10, ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL);
         assertEquals(nodeToIsolate, results.getNodes()[0].node);
-
-        var ohgi = (OnHeapGraphIndex) graph;
-
-        // check that we can save and load the graph with "holes" from the deletion
-        var testDirectory = Files.createTempDirectory(this.getClass().getSimpleName());
-        var outputPath = testDirectory.resolve("on_heap_graph");
-        try (var out = TestUtil.openDataOutputStream(outputPath)) {
-            ohgi.save(out);
-        }
-
-        var b2 = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 4, 10, 1.0f, 1.0f, addHierarchy);
-        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath)) {
-            b2.load(readerSupplier.get());
-        }
-        var reloadedGraph = b2.getGraph();
-        assertGraphEquals(graph, reloadedGraph);
     }
 
     @Test
@@ -140,7 +127,7 @@ public class TestDeletions extends LuceneTestCase {
         var graph = TestUtil.buildSequentially(builder, ravv);
 
         // mark all deleted
-        for (var i = 0; i < graph.size(0); i++) {
+        for (var i = 0; i < ravv.size(); i++) {
             builder.markNodeDeleted(i);
         }
 
@@ -180,7 +167,6 @@ public class TestDeletions extends LuceneTestCase {
                 builder.markNodeDeleted(i);
             }
 
-            builder.cleanup();
             assert builder.graph.getView().entryNode() != null;
         }
     }

@@ -39,6 +39,8 @@ import org.agrona.collections.IntHashSet;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Set;
 
 
 /**
@@ -100,6 +102,18 @@ public class GraphSearcher implements Closeable {
 
     protected int getExpandedCountBaseLayer() {
         return expandedCountBaseLayer;
+    }
+
+    /**
+     * Returns a read-only view of the nodes visited (scored) during the last search.
+     * Valid only until the next call to {@link #initializeInternal}.
+     * <p>
+     * Package-private: used by {@link GraphIndexBuilder} to find approximate in-neighbors
+     * of a deleted node during in-place repair (Algorithm 5, IP-DiskANN), avoiding an
+     * O(N) full-graph scan.
+     */
+    Set<Integer> visitedNodes() {
+        return Collections.unmodifiableSet(visited);
     }
 
     private void initializeScoreProvider(SearchScoreProvider scoreProvider) {
