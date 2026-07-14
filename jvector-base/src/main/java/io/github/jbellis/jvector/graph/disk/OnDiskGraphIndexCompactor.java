@@ -42,6 +42,8 @@ import io.github.jbellis.jvector.disk.SimpleReader;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -53,6 +55,7 @@ import static java.lang.Math.*;
 
 public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    private static final VectorUtilSupport vectorUtilSupport = VectorizationProvider.getInstance().getVectorUtilSupport();
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
 
     // Compaction constants
@@ -84,6 +87,49 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
+
+    // Topology-propagation candidate acquisition (fused-PQ sources): warm-starts L0
+    // cross-source searches from propagated entry points instead of descending each source's
+    // hierarchy from its global entry node. See TopologyPropagationAcquisition. Non-null only
+    // during compactLevels of a run that built it; dropped before refinement so the retained
+    // adjacency and reverse slots are GC-eligible when the merged graph is loaded. Sources
+    // without a fused-PQ code cache use the search-based path.
+    private TopologyPropagationAcquisition topologyAcquisition;
+
+    private final CompactionStats stats = new CompactionStats();
+
+    /**
+     * Per-phase timings and acquisition counters from the most recent {@code compact(...)} run.
+     * Populated as compaction proceeds; read after {@code compact(...)} returns. Intended for
+     * benchmarking and diagnostics (e.g. attributing wall-clock differences to a phase).
+     */
+    @Experimental
+    public static final class CompactionStats {
+        public long retrainMs;
+        /** Strategy header hook, which includes the fused-PQ pre-encode cache build. */
+        public long precomputeMs;
+        public long level0Ms;
+        public long upperLayersMs;
+        public long refineMs;
+        public boolean topologyEnabled;
+        public long topologySetupMs;
+        public long topologyWarmSearches;
+        public long topologyDescentSeeded;
+        public long topologyFallbackSearches;
+
+        void reset() {
+            retrainMs = precomputeMs = level0Ms = upperLayersMs = refineMs = 0;
+            topologyEnabled = false;
+            topologySetupMs = 0;
+            topologyWarmSearches = topologyDescentSeeded = topologyFallbackSearches = 0;
+        }
+    }
+
+    /** Stats of the most recent {@code compact(...)} run; see {@link CompactionStats}. */
+    @Experimental
+    public CompactionStats getStats() {
+        return stats;
+    }
 
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
@@ -402,7 +448,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
     private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        stats.reset();
+        long tRetrain = System.nanoTime();
         strategy.retrain(similarityFunction);
+        stats.retrainMs = (System.nanoTime() - tRetrain) / 1_000_000;
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
         ProductQuantization pq = strategy.compressorAsPQ();
@@ -421,9 +470,30 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
+            long tPrecompute = System.nanoTime();
             strategy.onAfterHeader(writer);
+            stats.precomputeMs = (System.nanoTime() - tPrecompute) / 1_000_000;
+
+            if (fusedPQEnabled && strategy.getCodeCache() != null && pq != null) {
+                long tTopo = System.nanoTime();
+                topologyAcquisition = TopologyPropagationAcquisition.create(
+                        buildContext(), pq, strategy.getCodeCache(), strategy.getCacheCodeSize(),
+                        similarityFunction, maxDegrees.get(0));
+                stats.topologySetupMs = (System.nanoTime() - tTopo) / 1_000_000;
+            } else {
+                log.info("No fused-PQ pre-encoded code cache available; " +
+                        "using search-based cross-source candidate acquisition");
+            }
 
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+            if (topologyAcquisition != null) {
+                log.info("Topology propagation: {}", topologyAcquisition.statsSummary());
+                stats.topologyEnabled = true;
+                stats.topologyWarmSearches = topologyAcquisition.warmSearches.get();
+                stats.topologyDescentSeeded = topologyAcquisition.descentSeeded.get();
+                stats.topologyFallbackSearches = topologyAcquisition.fallbackSearches.get();
+                topologyAcquisition = null; // free retained adjacency + reverse slots before refinement
+            }
 
             strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
@@ -556,7 +626,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             throw new RuntimeException("Refinement failed", e);
         }
 
-        log.info("Refinement complete in {} ms", (System.nanoTime() - t0) / 1_000_000);
+        stats.refineMs = (System.nanoTime() - t0) / 1_000_000;
+        log.info("Refinement complete in {} ms", stats.refineMs);
     }
 
     /**
@@ -869,6 +940,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         for (int level = 0; level < maxDegrees.size(); level++) {
+            long tLevel = System.nanoTime();
             List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
             int beamWidth = Math.max(maxDegrees.get(level), searchTopK) * BEAM_WIDTH_MULTIPLIER;
@@ -947,6 +1019,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             }
                         }
                 );
+            }
+
+            long levelMs = (System.nanoTime() - tLevel) / 1_000_000;
+            if (level == 0) {
+                stats.level0Ms = levelMs;
+            } else {
+                stats.upperLayersMs += levelMs;
             }
         }
 
@@ -1077,6 +1156,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
 
+        if (topologyAcquisition != null) {
+            // Publish this node's selected adjacency so not-yet-processed neighbors can pull it
+            // as entry points; content is final once diversity selection has run, so this need
+            // not wait for the physical write.
+            topologyAcquisition.recordDone(newOrdinal, selected.nodes, selected.size);
+        }
+
         return writer.writeInlineNodeRecord(
                 newOrdinal,
                 scratch.baseVec,
@@ -1160,6 +1246,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             VectorFloat<?> baseVec,
             CompactionParams params
     ) {
+        if (level == 0 && topologyAcquisition != null) {
+            return gatherCandidatesTopology(node, sourceIdx, scratch, baseVec, params);
+        }
+
         int candSize = 0;
 
         for (int ss = 0; ss < sources.size(); ss++) {
@@ -1175,6 +1265,80 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        return candSize;
+    }
+
+    /**
+     * L0 candidate gathering with topology propagation: same-source neighbors as usual, then for
+     * each other source a beam search warm-started at the base layer from propagated entry points
+     * (finished neighbors' merged adjacency, reverse candidates, results chained from
+     * already-searched sources, or a code-cache descent through the target's in-memory hierarchy).
+     * Warm results are exactly rescored — seed and search scores are approximate and must be
+     * comparable with the exact same-source scores for diversity selection. When no seeds exist,
+     * or a warm search returns too few results, or its best result lands below the node's worst
+     * same-source edge (a wrong-neighborhood signal), that source falls back to the full search
+     * path, bounding the worst case at the old behavior.
+     */
+    private int gatherCandidatesTopology(
+            int node,
+            int sourceIdx,
+            Scratch scratch,
+            VectorFloat<?> baseVec,
+            CompactionParams params
+    ) {
+        var sameView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        int candSize = gatherFromSameSource(node, 0, sourceIdx, sameView, liveNodes.get(sourceIdx),
+                                            baseVec, scratch, 0);
+        float worstSame = Float.POSITIVE_INFINITY;
+        for (int i = 0; i < candSize; i++) {
+            worstSame = Math.min(worstSame, scratch.candScore[i]);
+        }
+        boolean hasSame = candSize > 0;
+
+        int newOrd = remappers.get(sourceIdx).oldToNew(node);
+        var tctx = topologyAcquisition.beginNode(newOrd, sourceIdx, baseVec, scratch.candNode, candSize);
+
+        int minResults = Math.max(MIN_SEARCH_TOP_K, params.searchTopK / 4);
+        for (int t = 0; t < sources.size(); t++) {
+            if (t == sourceIdx) {
+                continue;
+            }
+            var searchView = (OnDiskGraphIndex.View) scratch.gs[t].getView();
+            var indexAlive = liveNodes.get(t);
+            int mark = candSize;
+            boolean warmOk = false;
+
+            int seedCount = topologyAcquisition.selectSeeds(tctx, t, searchView);
+            if (seedCount > 0) {
+                SearchScoreProvider ssp = buildCrossSourceScoreProvider(
+                        params.compressedPrecision, sources.get(t), searchView, baseVec,
+                        scratch.tmpVec, similarityFunction);
+                scratch.gs[t].initializeWithSeeds(ssp, indexAlive,
+                        tctx.seedNodes, tctx.seedScores, seedCount);
+                scratch.gs[t].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
+                candSize = appendApproximateResults(scratch.gs[t].approximateResults(), t, scratch, candSize);
+
+                float bestCross = Float.NEGATIVE_INFINITY;
+                for (int i = mark; i < candSize; i++) {
+                    // topology mode implies fused PQ: always exact-rescore
+                    scratch.candScore[i] = rescore(searchView, scratch.candNode[i], baseVec, scratch.tmpVec);
+                    bestCross = Math.max(bestCross, scratch.candScore[i]);
+                }
+
+                warmOk = candSize - mark >= Math.min(minResults, numLiveNodesPerSource.get(t))
+                        && (!hasSame || bestCross >= worstSame);
+                if (!warmOk) {
+                    candSize = mark;
+                }
+            }
+
+            if (!warmOk) {
+                topologyAcquisition.fallbackSearches.incrementAndGet();
+                candSize = gatherFromOtherSource(node, 0, t, searchView, indexAlive,
+                                                 baseVec, scratch, candSize, params);
+            }
+            topologyAcquisition.afterPartition(tctx, t, scratch.candNode, scratch.candScore, mark, candSize);
+        }
         return candSize;
     }
 

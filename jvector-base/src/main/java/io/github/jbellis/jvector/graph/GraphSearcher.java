@@ -326,6 +326,38 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
+    /**
+     * Initializes search state with multiple pre-scored entry points instead of the graph's
+     * entry node, for callers that already know where the search should start (e.g. graph
+     * compaction warm-starting cross-source searches from propagated candidates). Because the
+     * seeds are assumed to be near the target neighborhood already, no hierarchy descent is
+     * needed; follow with {@link #searchOneLayer} at the base layer. Seed scores must be
+     * oriented like {@link io.github.jbellis.jvector.vector.VectorSimilarityFunction#compare}
+     * (higher = closer); approximate scores are acceptable when the caller rescores results.
+     * Intended for cross-package internal use; not part of the stable public API.
+     */
+    @Experimental
+    public void initializeWithSeeds(SearchScoreProvider scoreProvider, Bits rawAcceptOrds,
+                                    int[] seedNodes, float[] seedScores, int seedCount) {
+        initializeScoreProvider(scoreProvider);
+        this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
+
+        approximateResults.clear();
+        evictedResults.clear();
+        candidates.clear();
+        visited.clear();
+
+        for (int i = 0; i < seedCount; i++) {
+            if (visited.add(seedNodes[i])) {
+                candidates.push(seedNodes[i], seedScores[i]);
+            }
+        }
+
+        visitedCount = 0;
+        expandedCount = 0;
+        expandedCountBaseLayer = 0;
+    }
+
     @Experimental
     public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume

@@ -261,6 +261,7 @@ public class CompactorBenchmark {
     private List<Path> storagePaths;
     private List<Integer> vectorsPerSourceCount;
     private String resolvedVectorizationProvider;
+    private OnDiskGraphIndexCompactor.CompactionStats lastCompactionStats;
 
     // Paths used during execution
     private Path partitionsBaseDir;       // where per-source partitions are placed (or found)
@@ -709,6 +710,7 @@ public class CompactorBenchmark {
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);
         long compactionTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        lastCompactionStats = compactor.getStats();
         log.info("Compacted {} partitions into {} in {} ms", numPartitions, compactOutputPath.toAbsolutePath(), compactionTimeMs);
         return compactionTimeMs;
     }
@@ -1013,6 +1015,27 @@ public class CompactorBenchmark {
 
         if (vectorsPerSourceCount != null) {
             results.put("splitSizes", vectorsPerSourceCount.toString());
+        }
+
+        // Per-phase compaction timings + acquisition counters, so slow iterations can be
+        // attributed to a specific phase from the JSONL alone.
+        if (lastCompactionStats != null) {
+            var phases = new LinkedHashMap<String, Object>();
+            phases.put("retrainMs", lastCompactionStats.retrainMs);
+            phases.put("precomputeMs", lastCompactionStats.precomputeMs);
+            phases.put("level0Ms", lastCompactionStats.level0Ms);
+            phases.put("upperLayersMs", lastCompactionStats.upperLayersMs);
+            phases.put("refineMs", lastCompactionStats.refineMs);
+            results.put("compactionPhases", phases);
+            results.put("topologyAcquisition", lastCompactionStats.topologyEnabled);
+            if (lastCompactionStats.topologyEnabled) {
+                var topo = new LinkedHashMap<String, Object>();
+                topo.put("setupMs", lastCompactionStats.topologySetupMs);
+                topo.put("warmSearches", lastCompactionStats.topologyWarmSearches);
+                topo.put("descentSeeded", lastCompactionStats.topologyDescentSeeded);
+                topo.put("fallbackSearches", lastCompactionStats.topologyFallbackSearches);
+                results.put("topologyStats", topo);
+            }
         }
         if (jfrPartitioningRecorder.getFileName() != null) {
             results.put("jfrPartitioningFile", jfrPartitioningRecorder.getFileName());
