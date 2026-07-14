@@ -95,6 +95,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // adjacency and reverse slots are GC-eligible when the merged graph is loaded. Sources
     // without a fused-PQ code cache use the search-based path.
     private TopologyPropagationAcquisition topologyAcquisition;
+    // Whether topology acquisition built the base layer of the current run; decides whether
+    // the refinement backstop is needed (see refineCompactedGraph).
+    private boolean topologyAcquisitionUsed;
 
     private final CompactionStats stats = new CompactionStats();
 
@@ -477,8 +480,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             strategy.onAfterHeader(writer);
             stats.precomputeMs = (System.nanoTime() - tPrecompute) / 1_000_000;
 
+            topologyAcquisitionUsed = false;
             if (fusedPQEnabled && strategy.getCodeCache() != null && pq != null) {
                 long tTopo = System.nanoTime();
+                topologyAcquisitionUsed = true;
                 topologyAcquisition = TopologyPropagationAcquisition.create(
                         buildContext(), pq, strategy.getCodeCache(), strategy.getCacheCodeSize(),
                         similarityFunction, maxDegrees.get(0));
@@ -595,6 +600,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * load and have no addressable file offset, so they're left as written by compactLevels.
      */
     private void refineCompactedGraph(Path outputPath, QuantizationCompactionStrategy strategy) {
+        if (topologyAcquisitionUsed) {
+            // Refinement exists to repair the under-stitched neighborhoods that search-based
+            // cross-source acquisition produces. Topology-propagation acquisition does not
+            // produce them: ablations at 10M UNIFORM, 10M TIERED_10_90, and 1M measured a
+            // recall contribution of ~0.000 for its ~20% of total compaction time, so it is
+            // skipped when topology acquisition built the graph. Sources without a fused-PQ
+            // code cache use search-based acquisition and keep this backstop.
+            log.info("Skipping refinement: topology-propagation acquisition built the graph");
+            return;
+        }
         log.info("Refining compacted graph: {}", outputPath);
         long t0 = System.nanoTime();
 
