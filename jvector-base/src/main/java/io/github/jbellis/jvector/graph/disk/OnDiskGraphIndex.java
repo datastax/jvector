@@ -443,6 +443,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
     }
 
+    /**
+     * Advises the OS to asynchronously populate the page cache for this index's backing
+     * storage; see {@link ReaderSupplier#prefetch()}. Best-effort no-op when unsupported.
+     */
+    public void prefetch() {
+        readerSupplier.prefetch();
+    }
+
     // re-declared to specify type
     @Override
     public View getView() {

@@ -105,6 +105,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public static final class CompactionStats {
+        public long pretouchMs;
         public long retrainMs;
         /** Strategy header hook, which includes the fused-PQ pre-encode cache build. */
         public long precomputeMs;
@@ -118,6 +119,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         public long topologyFallbackSearches;
 
         void reset() {
+            pretouchMs = 0;
             retrainMs = precomputeMs = level0Ms = upperLayersMs = refineMs = 0;
             topologyEnabled = false;
             topologySetupMs = 0;
@@ -449,6 +451,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
         stats.reset();
+        pretouchSources();
         long tRetrain = System.nanoTime();
         strategy.retrain(similarityFunction);
         stats.retrainMs = (System.nanoTime() - tRetrain) / 1_000_000;
@@ -504,6 +507,70 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         // strategy.onAfterClose is deferred to the public compact() entry points so refinement
         // can read from the still-mapped pre-encode cache section past the projected EOF.
+    }
+
+    /**
+     * Streams every source's backing storage into the page cache before compaction reads it
+     * with random access. The sources' mappings advise {@code MADV_RANDOM} (correct for
+     * search-time access), which disables kernel readahead and makes compaction's bulk phases
+     * fault one page at a time on cold caches. Measured on a disk-cold 10M-node compaction:
+     * retraining ~37s -> ~3s and code precompute ~42s -> ~8s for a ~17s streaming pass.
+     * Best-effort: when sources exceed available memory this degrades to a harmless read-through.
+     */
+    private void pretouchSources() {
+        long t0 = System.nanoTime();
+        long totalSourceBytes = 0;
+        try {
+            for (var source : sources) {
+                try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                    totalSourceBytes += view.reader.length();
+                }
+            }
+        } catch (IOException e) {
+            totalSourceBytes = -1; // unknown; proceed best-effort
+        }
+        long memAvailable = linuxMemAvailableBytes();
+        if (totalSourceBytes > 0 && memAvailable > 0 && totalSourceBytes > memAvailable) {
+            // Streaming the sources through a cache that cannot hold them costs the read time
+            // without the benefit; keep the lazy fault-on-demand behavior instead.
+            log.info("Skipping source prefetch: sources ({} MB) exceed available memory ({} MB)",
+                    totalSourceBytes / (1024 * 1024), memAvailable / (1024 * 1024));
+            return;
+        }
+        List<java.util.concurrent.Callable<Void>> tasks = new ArrayList<>();
+        for (var source : sources) {
+            final OnDiskGraphIndex g = source;
+            tasks.add(() -> {
+                g.prefetch();
+                return null;
+            });
+        }
+        try {
+            for (var f : executor.invokeAll(tasks)) {
+                f.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Source prefetch interrupted", e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException("Source prefetch failed", e.getCause());
+        }
+        stats.pretouchMs = (System.nanoTime() - t0) / 1_000_000;
+        log.info("Prefetched {} sources into page cache in {} ms", sources.size(), stats.pretouchMs);
+    }
+
+    /** MemAvailable from /proc/meminfo in bytes, or -1 when unavailable (non-Linux). */
+    private static long linuxMemAvailableBytes() {
+        try {
+            for (String line : java.nio.file.Files.readAllLines(Path.of("/proc/meminfo"))) {
+                if (line.startsWith("MemAvailable:")) {
+                    String[] parts = line.trim().split("\\s+");
+                    return Long.parseLong(parts[1]) * 1024L;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return -1;
     }
 
     /**

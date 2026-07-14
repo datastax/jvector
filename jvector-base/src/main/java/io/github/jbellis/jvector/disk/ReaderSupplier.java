@@ -30,6 +30,16 @@ public interface ReaderSupplier extends AutoCloseable {
      */
     RandomAccessReader get() throws IOException;
 
+    /**
+     * Advises the OS to begin populating the page cache for the underlying storage, if the
+     * implementation supports it (e.g. {@code posix_madvise(MADV_WILLNEED)} for memory-mapped
+     * readers). Asynchronous and best-effort; a no-op by default. Useful before bulk scans,
+     * e.g. graph compaction, whose readers otherwise advise {@code MADV_RANDOM} and forgo
+     * kernel readahead.
+     */
+    default void prefetch() {
+    }
+
     default void close() throws IOException {
     }
 }

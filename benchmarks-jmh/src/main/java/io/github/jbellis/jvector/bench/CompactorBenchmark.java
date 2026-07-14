@@ -1021,6 +1021,7 @@ public class CompactorBenchmark {
         // attributed to a specific phase from the JSONL alone.
         if (lastCompactionStats != null) {
             var phases = new LinkedHashMap<String, Object>();
+            phases.put("pretouchMs", lastCompactionStats.pretouchMs);
             phases.put("retrainMs", lastCompactionStats.retrainMs);
             phases.put("precomputeMs", lastCompactionStats.precomputeMs);
             phases.put("level0Ms", lastCompactionStats.level0Ms);
