@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -60,6 +61,20 @@ public interface BuildScoreProvider {
      * @param vector the query vector to provide similarity scores against
      */
     SearchScoreProvider searchProviderFor(VectorFloat<?> vector);
+
+    /**
+     * Create a search score provider to use *internally* during construction, for a byte (int8) query vector.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}; only
+     * {@link #byteVectorScoreProvider} overrides it.
+     *
+     * @param vector the int8 query vector to provide similarity scores against
+     */
+    default SearchScoreProvider searchProviderFor(ByteSequence<?> vector) {
+        throw new UnsupportedOperationException(
+                "This BuildScoreProvider does not support byte-vector queries; " +
+                "use byteVectorScoreProvider() to construct a byte-vector builder");
+    }
 
     /**
      * Create a search score provider to use *internally* during construction.
@@ -249,11 +264,16 @@ public interface BuildScoreProvider {
             }
 
             @Override
+            public SearchScoreProvider searchProviderFor(ByteSequence<?> vector) {
+                var vc = vectorsCopy.get();
+                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(vector, vc.getVector(node2));
+                return new DefaultSearchScoreProvider(sf);
+            }
+
+            @Override
             public SearchScoreProvider searchProviderFor(int node1) {
                 var v  = vectors.get().getVector(node1);
-                var vc = vectorsCopy.get();
-                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(v, vc.getVector(node2));
-                return new DefaultSearchScoreProvider(sf);
+                return searchProviderFor(v);
             }
 
             @Override
