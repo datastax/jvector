@@ -30,14 +30,15 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.function.Supplier;
-import java.util.logging.Logger;
 
 /**
- * Provides random access to vectors by dense ordinal. This interface is used by graph-based
+ * Provides random access to float32 vectors by dense ordinal. This interface is used by graph-based
  * implementations of KNN search.
+ * <p>
+ * For int8 vectors see {@link RandomAccessByteVectorValues}.
+ * Both extend the common super-interface {@link VectorValues}.
  */
-public interface RandomAccessVectorValues {
-    Logger LOG = Logger.getLogger(RandomAccessVectorValues.class.getName());
+public interface RandomAccessVectorValues extends VectorValues<VectorFloat<?>> {
 
     /**
      * Return the number of vector values.
@@ -46,22 +47,8 @@ public interface RandomAccessVectorValues {
      * (1) implementing a threadsafe, un-shared RAVV, where `copy` returns `this`, or
      * (2) implementing a fixed-size RAVV.
      */
+    @Override
     int size();
-
-    /** Return the dimension of the returned vector values */
-    int dimension();
-
-    /**
-     * Return the vector value indexed at the given ordinal.
-     *
-     * <p>For performance, implementations are free to re-use the same object across invocations.
-     * That is, you will get back the same VectorFloat&lt;?&gt;
-     * reference (for instance) for every requested ordinal. If you want to use those values across
-     * calls, you should make a copy.
-     *
-     * @param nodeId a valid ordinal, &ge; 0 and &lt; {@link #size()}.
-     */
-    VectorFloat<?> getVector(int nodeId);
 
     @Deprecated
     default VectorFloat<?> vectorValue(int targetOrd) {
@@ -79,34 +66,14 @@ public interface RandomAccessVectorValues {
     }
 
     /**
-     * @return true iff the vector returned by `getVector` is shared.  A shared vector will
-     * only be valid until the next call to getVector overwrites it.
-     */
-    boolean isValueShared();
-
-    /**
      * Creates a new copy of this {@link RandomAccessVectorValues}. This is helpful when you need to
      * access different values at once, to avoid overwriting the underlying float vector returned by
      * a shared {@link RandomAccessVectorValues#getVector}.
      * <p>
      * Un-shared implementations may simply return `this`.
      */
+    @Override
     RandomAccessVectorValues copy();
-
-    /**
-     * Returns a supplier of thread-local copies of the RAVV.
-     */
-    default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
-        if (!isValueShared()) {
-            return () -> this;
-        }
-
-        if (this instanceof AutoCloseable) {
-            LOG.warning("RAVV is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
-        }
-        var tl = ExplicitThreadLocal.withInitial(this::copy);
-        return tl::get;
-    }
 
     /**
      * Convenience method to create an ExactScoreFunction for reranking.  The resulting function is NOT thread-safe.
