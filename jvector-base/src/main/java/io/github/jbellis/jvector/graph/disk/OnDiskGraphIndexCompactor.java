@@ -84,7 +84,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
-
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -1223,8 +1222,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         if (level == 0) {
+            // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
+            // pruned by diversity selection, so the doubled approximate-phase cost buys almost
+            // no recall.
             SearchResult results = scratch.gs[sourceIdx].search(
-                    ssp, params.searchTopK, params.beamWidth, 0f, 0f, indexAlive
+                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
             );
 
             for (var r : results.getNodes()) {
