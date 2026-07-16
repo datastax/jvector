@@ -174,6 +174,21 @@ public final class VectorUtil {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
   }
 
+  /** Returns the dot product of two signed int8 byte vectors. */
+  public static float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+    return impl.dotProduct(a, b);
+  }
+
+  /** Returns the sum of squared differences of two signed int8 byte vectors. */
+  public static float squareL2Distance(ByteSequence<?> a, ByteSequence<?> b) {
+    return impl.squareDistance(a, b);
+  }
+
+  /** Returns the cosine similarity of two signed int8 byte vectors. */
+  public static float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+    return impl.cosine(a, b);
+  }
+
   public static int hammingDistance(long[] v1, long[] v2) {
     return impl.hammingDistance(v1, v2);
   }

@@ -985,6 +985,37 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
      * @return The Hamming distance
      */
     @Override
+    public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+        float sum = 0;
+        for (int i = 0; i < a.length(); i++) {
+            sum += (int) a.get(i) * (int) b.get(i);
+        }
+        return sum;
+    }
+
+    @Override
+    public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
+        float sum = 0;
+        for (int i = 0; i < a.length(); i++) {
+            float diff = a.get(i) - b.get(i);
+            sum += diff * diff;
+        }
+        return sum;
+    }
+
+    @Override
+    public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+        float dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < a.length(); i++) {
+            float ai = a.get(i), bi = b.get(i);
+            dot   += ai * bi;
+            normA += ai * ai;
+            normB += bi * bi;
+        }
+        return (float) (dot / Math.sqrt(normA * normB));
+    }
+
+    @Override
     public int hammingDistance(long[] a, long[] b) {
         var sum = LongVector.zero(LongVector.SPECIES_PREFERRED);
         int vectorizedLength = LongVector.SPECIES_PREFERRED.loopBound(a.length);
