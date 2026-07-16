@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import java.util.function.Supplier;
 
 /**
  * Encapsulates comparing node distances for GraphIndexBuilder.
@@ -106,8 +107,10 @@ public interface BuildScoreProvider {
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
-        var vectors = ravv.threadLocalSupplier();
-        var vectorsCopy = ravv.threadLocalSupplier();
+        var vectorsRaw = ravv.threadLocalSupplier();
+        var vectorsCopyRaw = ravv.threadLocalSupplier();
+        Supplier<RandomAccessVectorValues> vectors = () -> (RandomAccessVectorValues) vectorsRaw.get();
+        Supplier<RandomAccessVectorValues> vectorsCopy = () -> (RandomAccessVectorValues) vectorsCopyRaw.get();
 
         return new BuildScoreProvider() {
             @Override
