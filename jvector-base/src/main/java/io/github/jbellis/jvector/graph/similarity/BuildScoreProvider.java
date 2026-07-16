@@ -16,8 +16,10 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -207,6 +209,63 @@ public interface BuildScoreProvider {
             @Override
             public VectorFloat<?> approximateCentroid() {
                 return pqv.getCompressor().getOrComputeCentroid();
+            }
+        };
+    }
+
+    /**
+     * Returns a BSP that performs exact score comparisons using the given
+     * {@link RandomAccessByteVectorValues} and {@link ByteVectorSimilarityFunction}.
+     * All scoring is byte×byte with no float32 round-trip.
+     */
+    static BuildScoreProvider byteVectorScoreProvider(RandomAccessByteVectorValues ravv, ByteVectorSimilarityFunction bvsf) {
+        var vectors     = ravv.threadLocalSupplier();
+        var vectorsCopy = ravv.threadLocalSupplier();
+
+        return new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return true;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                var vv = vectors.get();
+                var centroid = vts.createFloatVector(vv.dimension());
+                for (int i = 0; i < vv.size(); i++) {
+                    var v = vv.getVector(i);
+                    for (int d = 0; d < vv.dimension(); d++) {
+                        centroid.set(d, centroid.get(d) + v.get(d));
+                    }
+                }
+                VectorUtil.scale(centroid, 1.0f / vv.size());
+                return centroid;
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                throw new UnsupportedOperationException(
+                        "byteVectorScoreProvider does not support float query vectors; use searchProviderFor(int node)");
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                var v  = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(v, vc.getVector(node2));
+                return new DefaultSearchScoreProvider(sf);
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                return searchProviderFor(node1);
+            }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
+                var v  = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                return (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(v, vc.getVector(node2));
             }
         };
     }
