@@ -130,6 +130,15 @@ public interface VectorUtilSupport {
    */
   float assembleAndSumPQ(VectorFloat<?> codebookPartialSums, int subspaceCount, ByteSequence<?> vector1Ordinals, int vector1OrdinalOffset, ByteSequence<?> node2Ordinals, int node2OrdinalOffset, int clusterCount);
 
+  /** Calculates the dot product of two signed int8 byte vectors. */
+  float dotProduct(ByteSequence<?> a, ByteSequence<?> b);
+
+  /** Returns the sum of squared differences of two signed int8 byte vectors. */
+  float squareDistance(ByteSequence<?> a, ByteSequence<?> b);
+
+  /** Returns the cosine similarity of two signed int8 byte vectors. */
+  float cosine(ByteSequence<?> a, ByteSequence<?> b);
+
   int hammingDistance(long[] v1, long[] v2);
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
