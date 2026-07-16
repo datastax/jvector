@@ -98,9 +98,8 @@ public class PQRetrainer {
 
         log.info("Collected {} training samples", samples.size());
 
-        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
-
         long t0 = System.nanoTime();
+        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
         log.info("Extracted {} vectors in {}ms; starting PQ refinement",
                  trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
 
