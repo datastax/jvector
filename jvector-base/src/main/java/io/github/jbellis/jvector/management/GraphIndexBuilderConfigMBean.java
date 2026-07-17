@@ -70,4 +70,25 @@ public interface GraphIndexBuilderConfigMBean {
      * @param refineFinalGraph {@code true} to enable refinement (default), {@code false} to skip
      */
     void setRefineFinalGraph(boolean refineFinalGraph);
+
+    // ── Write path ────────────────────────────────────────────────────────────
+
+    /**
+     * Returns whether graph index writes use the parallel writer
+     * ({@link io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter}) or the
+     * sequential writer ({@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter}).
+     *
+     * <p>The parallel writer serialises level-0 records concurrently via an
+     * {@code AsynchronousFileChannel}, which substantially reduces wall-clock write time for
+     * large indexes.  Both writers produce an identical on-disk format; switching this flag
+     * does not require re-reading or re-indexing existing data.
+     */
+    boolean isParallelBuild();
+
+    /**
+     * Enables or disables the parallel graph index writer for subsequent builds.
+     *
+     * @param parallelBuild {@code true} to use the parallel writer, {@code false} for sequential (default)
+     */
+    void setParallelBuild(boolean parallelBuild);
 }

@@ -16,15 +16,22 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.function.IntFunction;
 
 /**
@@ -40,6 +47,8 @@ import java.util.function.IntFunction;
  * </ul>
  */
 public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIndexWriter<RandomAccessWriter> {
+    private static final Logger logger = LoggerFactory.getLogger(RandomAccessOnDiskGraphIndexWriter.class);
+
     protected final long startOffset;
 
     /**
@@ -177,6 +186,71 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
 
     protected abstract void writeL0Records(ImmutableGraphIndex.View view,
                                            Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
+
+    /**
+     * Unified builder for {@link RandomAccessOnDiskGraphIndexWriter}.
+     *
+     * <p>Reads {@link GraphIndexBuilderConfig#isParallelBuild()} at {@link #build()} time to decide
+     * whether to instantiate an {@link OnDiskParallelGraphIndexWriter} (parallel L0 serialisation
+     * via {@code AsynchronousFileChannel}) or an {@link OnDiskGraphIndexWriter} (sequential).
+     * Both produce an identical on-disk format.
+     *
+     * <p>Parallel-specific options ({@link #withParallelWorkerThreads}, {@link #withParallelDirectBuffers},
+     * {@link #withExecutor}) are accepted unconditionally but silently ignored when the sequential
+     * writer is selected.
+     */
+    public static class Builder extends AbstractGraphIndexWriter.Builder<RandomAccessOnDiskGraphIndexWriter, RandomAccessWriter> {
+        private long startOffset = 0L;
+        private final Path filePath;
+        private int parallelWorkerThreads = 0;
+        private boolean parallelUseDirectBuffers = false;
+        private ExecutorService parallelExecutor = null;
+
+        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+            super(graphIndex, new BufferedRandomAccessWriter(outPath));
+            this.filePath = outPath;
+        }
+
+        public Builder withStartOffset(long startOffset) {
+            this.startOffset = startOffset;
+            return this;
+        }
+
+        /** Number of worker threads for parallel L0 writes (0 = available processors). Ignored in sequential mode. */
+        public Builder withParallelWorkerThreads(int workerThreads) {
+            this.parallelWorkerThreads = workerThreads;
+            return this;
+        }
+
+        /** Whether to use direct {@code ByteBuffer}s for parallel L0 writes. Ignored in sequential mode. */
+        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
+            this.parallelUseDirectBuffers = useDirectBuffers;
+            return this;
+        }
+
+        /**
+         * Caller-supplied executor for parallel L0 writes; must outlive the writer and is the
+         * caller's to shut down.  Ignored in sequential mode.
+         */
+        public Builder withExecutor(ExecutorService executor) {
+            this.parallelExecutor = executor;
+            return this;
+        }
+
+        @Override
+        protected RandomAccessOnDiskGraphIndexWriter reallyBuild(int dimension) {
+            if (GraphIndexBuilderConfig.getInstance().isParallelBuild()) {
+                logger.debug("graph index write path: parallel (OnDiskParallelGraphIndexWriter)");
+                return new OnDiskParallelGraphIndexWriter(out, version, startOffset, graphIndex,
+                        ordinalMapper, dimension, features, filePath,
+                        parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor);
+            } else {
+                logger.debug("graph index write path: sequential (OnDiskGraphIndexWriter)");
+                return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex,
+                        ordinalMapper, dimension, features);
+            }
+        }
+    }
 
     /**
      * Computes the file offset for the inline features of a given ordinal.

@@ -107,6 +107,7 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
 
     private volatile boolean addHierarchy = true;
     private volatile boolean refineFinalGraph = true;
+    private volatile boolean parallelBuild = false;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -149,6 +150,20 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
         this.refineFinalGraph = refineFinalGraph;
         if (previous != refineFinalGraph) {
             logger.info("JMX: refineFinalGraph changed {} → {}", previous, refineFinalGraph);
+        }
+    }
+
+    @Override
+    public boolean isParallelBuild() {
+        return parallelBuild;
+    }
+
+    @Override
+    public void setParallelBuild(boolean parallelBuild) {
+        boolean previous = this.parallelBuild;
+        this.parallelBuild = parallelBuild;
+        if (previous != parallelBuild) {
+            logger.info("JMX: parallelBuild changed {} → {}", previous, parallelBuild);
         }
     }
 }

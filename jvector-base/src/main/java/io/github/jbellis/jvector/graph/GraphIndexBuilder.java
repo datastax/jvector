@@ -71,6 +71,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     @VisibleForTesting
     final MutableGraphIndex graph;
 
+    @VisibleForTesting
+    boolean isRefineFinalGraph() {
+        return refineFinalGraph;
+    }
+
     private final ConcurrentSkipListSet<NodeAtLevel> insertionsInProgress = new ConcurrentSkipListSet<>();
 
     private final BuildScoreProvider scoreProvider;
