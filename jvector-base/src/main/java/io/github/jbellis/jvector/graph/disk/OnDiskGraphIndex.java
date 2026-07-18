@@ -443,6 +443,22 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
     }
 
+    /**
+     * Streams the L0 records of ordinals {@code [minNode, maxNode]} (inclusive) into the page
+     * cache; see {@link ReaderSupplier#prefetch(long, long)}. An L0 record holds the node's id,
+     * inline features (vector, fused codes), and adjacency, so warming it covers every read a
+     * bulk scan makes for that node. Best-effort no-op when unsupported.
+     */
+    public void prefetchL0Records(int minNode, int maxNode) {
+        if (maxNode < minNode) {
+            return;
+        }
+        long blockBytes = Integer.BYTES + inlineBlockSize
+                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
+        long start = neighborsOffset + blockBytes * minNode;
+        readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
+    }
+
     // re-declared to specify type
     @Override
     public View getView() {

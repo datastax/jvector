@@ -217,6 +217,8 @@ public class PQRetrainer {
      * cover them efficiently. Each source's view is opened once and reused for all its samples.
      */
     private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples) {
+        prefetchSampleRanges(samples);
+
         OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
             views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
@@ -229,6 +231,33 @@ public class PQRetrainer {
             vectors.add(tmp.copy());
         }
         return vectors;
+    }
+
+    // Merging samples closer than this many ordinals into one range keeps the prefetch mostly
+    // sequential without dragging in long runs of unsampled records.
+    private static final int PREFETCH_MERGE_GAP = 256;
+
+    /**
+     * Streams the records of the (source, node)-sorted sample list into the page cache before
+     * extraction. The mappings advise {@code MADV_RANDOM}, so without this the extraction loop
+     * faults one page at a time on a cold cache; total demand is bounded by the training-set
+     * size, not the file size.
+     */
+    private void prefetchSampleRanges(List<SampleRef> samples) {
+        int i = 0;
+        while (i < samples.size()) {
+            SampleRef first = samples.get(i);
+            int last = first.node;
+            int j = i + 1;
+            while (j < samples.size()
+                    && samples.get(j).source == first.source
+                    && samples.get(j).node - last <= PREFETCH_MERGE_GAP) {
+                last = samples.get(j).node;
+                j++;
+            }
+            sources.get(first.source).prefetchL0Records(first.node, last);
+            i = j;
+        }
     }
 
     /**

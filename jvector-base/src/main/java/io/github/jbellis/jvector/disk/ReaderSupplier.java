@@ -30,6 +30,17 @@ public interface ReaderSupplier extends AutoCloseable {
      */
     RandomAccessReader get() throws IOException;
 
+    /**
+     * Streams the byte range {@code [offset, offset + length)} of the underlying storage into
+     * the page cache, if the implementation supports it. Synchronous and best-effort; a no-op
+     * by default. Sized for repeated windowed calls — a caller that knows which records a bulk
+     * phase is about to read (e.g. graph compaction, whose readers otherwise advise
+     * {@code MADV_RANDOM} and forgo kernel readahead) can warm exactly those, keeping transient
+     * cache demand proportional to the window rather than the file.
+     */
+    default void prefetch(long offset, long length) {
+    }
+
     default void close() throws IOException {
     }
 }

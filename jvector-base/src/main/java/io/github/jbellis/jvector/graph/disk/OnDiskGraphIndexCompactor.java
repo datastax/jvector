@@ -84,7 +84,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
-
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -997,6 +996,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
+        if (bs.end > bs.start) {
+            // Stream this batch's own records into the page cache before processing. Search
+            // reads into other sources are data-dependent and stay demand-faulted, but each
+            // node's own record read (adjacency + vector) is fully predictable.
+            sources.get(bs.sourceIdx).prefetchL0Records(bs.nodes[bs.start], bs.nodes[bs.end - 1]);
+        }
 
         for (int i = bs.start; i < bs.end; i++) {
             int node = bs.nodes[i];

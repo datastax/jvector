@@ -148,12 +148,14 @@ public class MemorySegmentReader implements RandomAccessReader {
     public static class Supplier implements ReaderSupplier {
         private final Arena arena;
         private final MemorySegment memory;
+        private final Path path;
 
         public Supplier(Path path) throws IOException {
+            this.path = path;
             this.arena = Arena.ofShared();
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
-                
+
                 // Apply MADV_RANDOM advice
                 var linker = Linker.nativeLinker();
                 var maybeMadvise = linker.defaultLookup().find("posix_madvise");
@@ -173,6 +175,39 @@ public class MemorySegmentReader implements RandomAccessReader {
                     throw (IOException) e;
                 }
                 throw new RuntimeException(e);
+            }
+        }
+
+        // Windowed prefetch streams ranges through a separate read-ahead-enabled file descriptor:
+        // the mapping itself advises MADV_RANDOM (disables kernel readahead), and MADV_WILLNEED
+        // proved to be a no-op hint for large ranges. The page cache is shared per file, so
+        // subsequent random access through the mapping hits the populated pages. The bytes read
+        // here are discarded, so the buffer is sized to stay L2-resident rather than for syscall
+        // amortization (cold throughput is device-bound at any size >= 32KB, and the warm case
+        // is within noise of larger buffers at 64KB).
+        private static final ThreadLocal<java.nio.ByteBuffer> PREFETCH_BUF =
+                ThreadLocal.withInitial(() -> java.nio.ByteBuffer.wrap(new byte[64 << 10]));
+
+        @Override
+        public void prefetch(long offset, long length) {
+            if (length <= 0) {
+                return;
+            }
+            var buf = PREFETCH_BUF.get();
+            long end = Math.min(offset + length, memory.byteSize());
+            try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
+                long pos = Math.max(0, offset);
+                while (pos < end) {
+                    buf.clear().limit((int) Math.min(buf.capacity(), end - pos));
+                    int n = ch.read(buf, pos);
+                    if (n < 0) {
+                        break;
+                    }
+                    pos += n;
+                }
+            } catch (IOException e) {
+                logger.warn("ranged prefetch of {} [{}, {}) failed; continuing without warm cache",
+                            path, offset, end, e);
             }
         }
 
