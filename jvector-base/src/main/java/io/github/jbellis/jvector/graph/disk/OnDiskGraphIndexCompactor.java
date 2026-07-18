@@ -84,6 +84,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
+    private boolean refineAfterCompaction = false;
+
+    /**
+     * Whether to run the second-pass neighbor refinement after the merged graph is written
+     * (default false). Refinement is a navigability pass: it has no measurable effect on
+     * recall, but it improves query latency on the merged index at the cost of a significant
+     * fraction of total compaction time. Enable it when search latency matters more than
+     * compaction throughput.
+     */
+    @Experimental
+    public void setRefineAfterCompaction(boolean refineAfterCompaction) {
+        this.refineAfterCompaction = refineAfterCompaction;
+    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -297,7 +310,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         try {
             compactGraphImpl(outputPath, strategy);
             releaseSourcesBeforeRefine(strategy);
-            refineCompactedGraph(outputPath, strategy);
+            if (refineAfterCompaction) {
+                refineCompactedGraph(outputPath, strategy);
+            }
         } finally {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
             // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
@@ -329,7 +344,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         try {
             sidecarStrategy.retrain(similarityFunction);
             compactGraphImpl(graphPath, inlineStrategy);
-            refineCompactedGraph(graphPath, inlineStrategy);
+            if (refineAfterCompaction) {
+                refineCompactedGraph(graphPath, inlineStrategy);
+            }
             sidecarStrategy.writeSidecar(compressedPath);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
