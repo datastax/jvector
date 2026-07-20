@@ -2506,6 +2506,192 @@ public class NativeSimdOps {
         }
     }
 
+    private static class dot_product_i8 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("dot_product_i8");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * float dot_product_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static FunctionDescriptor dot_product_i8$descriptor() {
+        return dot_product_i8.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * float dot_product_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MethodHandle dot_product_i8$handle() {
+        return dot_product_i8.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * float dot_product_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MemorySegment dot_product_i8$address() {
+        return dot_product_i8.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * float dot_product_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static float dot_product_i8(MemorySegment a, long aoffset, MemorySegment b, long boffset, long length) {
+        var mh$ = dot_product_i8.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("dot_product_i8", a, aoffset, b, boffset, length);
+            }
+            return (float)mh$.invokeExact(a, aoffset, b, boffset, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class euclidean_i8 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("euclidean_i8");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * float euclidean_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static FunctionDescriptor euclidean_i8$descriptor() {
+        return euclidean_i8.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * float euclidean_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MethodHandle euclidean_i8$handle() {
+        return euclidean_i8.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * float euclidean_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MemorySegment euclidean_i8$address() {
+        return euclidean_i8.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * float euclidean_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static float euclidean_i8(MemorySegment a, long aoffset, MemorySegment b, long boffset, long length) {
+        var mh$ = euclidean_i8.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("euclidean_i8", a, aoffset, b, boffset, length);
+            }
+            return (float)mh$.invokeExact(a, aoffset, b, boffset, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class cosine_i8 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("cosine_i8");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * float cosine_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static FunctionDescriptor cosine_i8$descriptor() {
+        return cosine_i8.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * float cosine_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MethodHandle cosine_i8$handle() {
+        return cosine_i8.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * float cosine_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static MemorySegment cosine_i8$address() {
+        return cosine_i8.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * float cosine_i8(const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length)
+     * }
+     */
+    public static float cosine_i8(MemorySegment a, long aoffset, MemorySegment b, long boffset, long length) {
+        var mh$ = cosine_i8.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("cosine_i8", a, aoffset, b, boffset, length);
+            }
+            return (float)mh$.invokeExact(a, aoffset, b, boffset, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jvector_simd_get_active_isa {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             NativeSimdOps.C_POINTER    );

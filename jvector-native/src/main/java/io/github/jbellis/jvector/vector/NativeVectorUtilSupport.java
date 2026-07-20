@@ -62,6 +62,30 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.dot_product_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.euclidean_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.cosine_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
         return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
     }

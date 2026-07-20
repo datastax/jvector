@@ -1640,4 +1640,173 @@ HWY_FLATTEN int64_t nvq_cosine_8bit_packed(const float   *HWY_RESTRICT vector,
     return ((int64_t)bmag_bits << 32) | (int64_t)(uint32_t)sum_bits;
 }
 
+// =============================================================================
+// Int8 byte-vector similarity kernels
+// =============================================================================
+//
+// These kernels operate on signed int8 (int8_t) vectors — e.g. the output of
+// scalar quantization.  The generic path here (compiled for SSE4.2, AVX2, AVX3)
+// widens i8→i16 using ReorderWidenMulAccumulate, then accumulates into i32.
+//
+// On the AVX3_DL (Ice Lake+) tier these implementations are overridden in
+// jvector_avx3_dl_kernels.cpp with raw AVX-512 VNNI intrinsics — processing
+// 64 bytes per VPDPBUSD clock in a single instruction.
+// =============================================================================
+
+// Horizontal dot product of two signed int8 vectors.
+HWY_FLATTEN float dot_product_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
+                                  const int8_t *HWY_RESTRICT b, size_t boffset,
+                                  size_t length)
+{
+    a += aoffset;
+    b += boffset;
+    const hn::ScalableTag<int8_t>                     d8;
+    const hn::RepartitionToWideX2<decltype(d8)>       d32; // int32, lanes = len(d8)/4
+    const hn::Repartition<int16_t, decltype(d32)>     d16; // int16
+    const size_t lanes8 = hn::Lanes(d8);
+
+    // Four independent accumulators hide the multi-cycle MADD latency.
+    auto acc0 = hn::Zero(d32), acc1 = hn::Zero(d32);
+    auto acc2 = hn::Zero(d32), acc3 = hn::Zero(d32);
+    auto dummy0 = hn::Zero(d32), dummy1 = hn::Zero(d32);
+    auto dummy2 = hn::Zero(d32), dummy3 = hn::Zero(d32);
+    size_t i = 0;
+    for (; i + 4 * lanes8 <= length; i += 4 * lanes8) {
+        auto va0 = hn::LoadU(d8, a + i);
+        auto vb0 = hn::LoadU(d8, b + i);
+        auto va1 = hn::LoadU(d8, a + i + lanes8);
+        auto vb1 = hn::LoadU(d8, b + i + lanes8);
+        auto va2 = hn::LoadU(d8, a + i + 2*lanes8);
+        auto vb2 = hn::LoadU(d8, b + i + 2*lanes8);
+        auto va3 = hn::LoadU(d8, a + i + 3*lanes8);
+        auto vb3 = hn::LoadU(d8, b + i + 3*lanes8);
+        
+        // Promote to i16 and accumulate using ReorderWidenMulAccumulate (2 i16s -> 1 i32)
+        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va0), hn::PromoteLowerTo(d16, vb0), acc0, dummy0);
+        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va0), hn::PromoteUpperTo(d16, vb0), acc0, dummy0);
+        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va1), hn::PromoteLowerTo(d16, vb1), acc1, dummy1);
+        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va1), hn::PromoteUpperTo(d16, vb1), acc1, dummy1);
+        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va2), hn::PromoteLowerTo(d16, vb2), acc2, dummy2);
+        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va2), hn::PromoteUpperTo(d16, vb2), acc2, dummy2);
+        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va3), hn::PromoteLowerTo(d16, vb3), acc3, dummy3);
+        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va3), hn::PromoteUpperTo(d16, vb3), acc3, dummy3);
+    }
+    auto acc = hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3));
+    auto dummy = hn::Zero(d32);
+    
+    for (; i + lanes8 <= length; i += lanes8) {
+        auto va = hn::LoadU(d8, a + i);
+        auto vb = hn::LoadU(d8, b + i);
+        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, vb), acc, dummy);
+        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, vb), acc, dummy);
+    }
+    int32_t result = hn::ReduceSum(d32, acc);
+    for (; i < length; i++) result += (int32_t)a[i] * (int32_t)b[i];
+    return (float)result;
+}
+
+// Sum of squared differences of two signed int8 vectors.
+// Promote i8→i16, subtract in i16, then ReorderWidenMulAccumulate into i32.
+HWY_FLATTEN float euclidean_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
+                                const int8_t *HWY_RESTRICT b, size_t boffset,
+                                size_t length)
+{
+    a += aoffset;
+    b += boffset;
+    const hn::ScalableTag<int8_t>                     d8;
+    const hn::RepartitionToWideX2<decltype(d8)>       d32; // int32, lanes = len(d8)/4
+    const size_t lanes8 = hn::Lanes(d8);
+
+    auto acc0 = hn::Zero(d32), acc0h = hn::Zero(d32);
+    auto acc1 = hn::Zero(d32), acc1h = hn::Zero(d32);
+    auto acc2 = hn::Zero(d32), acc2h = hn::Zero(d32);
+    auto acc3 = hn::Zero(d32), acc3h = hn::Zero(d32);
+    size_t i = 0;
+    for (; i + 4 * lanes8 <= length; i += 4 * lanes8) {
+#define DO_EUCL_BLOCK(off, lo_var, hi_var)                                                   \
+        {                                                                                    \
+            const hn::RepartitionToWide<decltype(d8)> _d16;                                 \
+            auto _va8     = hn::LoadU(d8, a + i + (off));                                   \
+            auto _vb8     = hn::LoadU(d8, b + i + (off));                                   \
+            auto _diff_lo = hn::Sub(hn::PromoteLowerTo(_d16, _va8),                         \
+                                    hn::PromoteLowerTo(_d16, _vb8));                         \
+            auto _diff_hi = hn::Sub(hn::PromoteUpperTo(_d16, _va8),                         \
+                                    hn::PromoteUpperTo(_d16, _vb8));                         \
+            lo_var = hn::ReorderWidenMulAccumulate(d32, _diff_lo, _diff_lo, lo_var, hi_var); \
+            lo_var = hn::ReorderWidenMulAccumulate(d32, _diff_hi, _diff_hi, lo_var, hi_var); \
+        }
+        DO_EUCL_BLOCK(0,          acc0, acc0h)
+        DO_EUCL_BLOCK(lanes8,     acc1, acc1h)
+        DO_EUCL_BLOCK(2*lanes8,   acc2, acc2h)
+        DO_EUCL_BLOCK(3*lanes8,   acc3, acc3h)
+#undef DO_EUCL_BLOCK
+    }
+    auto acc  = hn::Add(hn::Add(acc0,  acc1),  hn::Add(acc2,  acc3));
+    auto acch = hn::Add(hn::Add(acc0h, acc1h), hn::Add(acc2h, acc3h));
+    acc = hn::Add(acc, acch);
+    for (; i + lanes8 <= length; i += lanes8) {
+        const hn::RepartitionToWide<decltype(d8)> d16;
+        auto va8     = hn::LoadU(d8, a + i);
+        auto vb8     = hn::LoadU(d8, b + i);
+        auto diff_lo = hn::Sub(hn::PromoteLowerTo(d16, va8), hn::PromoteLowerTo(d16, vb8));
+        auto diff_hi = hn::Sub(hn::PromoteUpperTo(d16, va8), hn::PromoteUpperTo(d16, vb8));
+        auto dummy_hi = hn::Zero(d32);
+        acc = hn::ReorderWidenMulAccumulate(d32, diff_lo, diff_lo, acc, dummy_hi);
+        acc = hn::Add(acc, dummy_hi);
+        dummy_hi = hn::Zero(d32);
+        acc = hn::ReorderWidenMulAccumulate(d32, diff_hi, diff_hi, acc, dummy_hi);
+        acc = hn::Add(acc, dummy_hi);
+    }
+    int32_t result = hn::ReduceSum(d32, acc);
+    for (; i < length; i++) {
+        int32_t d = (int32_t)a[i] - (int32_t)b[i];
+        result += d * d;
+    }
+    return (float)result;
+}
+
+// Cosine similarity of two signed int8 vectors.
+// Computes dot(a,b), dot(a,a), dot(b,b) in parallel over a single pass.
+HWY_FLATTEN float cosine_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
+                             const int8_t *HWY_RESTRICT b, size_t boffset,
+                             size_t length)
+{
+    a += aoffset;
+    b += boffset;
+    const hn::ScalableTag<int8_t>                     d8;
+    const hn::RepartitionToWideX2<decltype(d8)>       d32;
+    const hn::Repartition<int16_t, decltype(d32)>     d16;
+    const size_t lanes8 = hn::Lanes(d8);
+
+    auto dot       = hn::Zero(d32);
+    auto normA     = hn::Zero(d32);
+    auto normB     = hn::Zero(d32);
+    auto dummy_acc = hn::Zero(d32);
+
+    size_t i = 0;
+    for (; i + lanes8 <= length; i += lanes8) {
+        auto va = hn::LoadU(d8, a + i);
+        auto vb = hn::LoadU(d8, b + i);
+        
+        dot   = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, vb), dot, dummy_acc);
+        dot   = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, vb), dot, dummy_acc);
+        normA = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, va), normA, dummy_acc);
+        normA = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, va), normA, dummy_acc);
+        normB = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, vb), hn::PromoteLowerTo(d16, vb), normB, dummy_acc);
+        normB = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, vb), hn::PromoteUpperTo(d16, vb), normB, dummy_acc);
+    }
+    
+    int64_t dotResult   = (int64_t)hn::ReduceSum(d32, dot);
+    int64_t normAResult = (int64_t)hn::ReduceSum(d32, normA);
+    int64_t normBResult = (int64_t)hn::ReduceSum(d32, normB);
+    
+    for (; i < length; i++) {
+        int32_t ai = a[i], bi = b[i];
+        dotResult   += ai * bi;
+        normAResult += ai * ai;
+        normBResult += bi * bi;
+    }
+    return (float)(dotResult / sqrt((double)normAResult * (double)normBResult));
+}
+
 }  // namespace JV_ISA
