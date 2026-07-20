@@ -976,43 +976,266 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return res;
     }
 
+    // -----------------------------------------------------------------------
+    // ByteSequence similarity metrics – Panama SIMD implementations
+    //
+    // Strategy: widen signed bytes to int32 via B2I (no AND-mask needed for
+    // signed arithmetic), accumulate products in IntVector lanes, then reduce.
+    // The byte-vector species is 1/4 the width of the int species:
+    //   512-bit int (16 lanes) <- SPECIES_128 bytes
+    //   256-bit int  (8 lanes) <- SPECIES_64  bytes
+    //   128-bit preferred      <- scalar (ByteVector.SPECIES_32 does not exist;
+    //                             128-bit SIMD shows no benefit for this workload)
+    // -----------------------------------------------------------------------
+
     /**
-     * Vectorized calculation of Hamming distance for two arrays of long integers.
-     * Both arrays should have the same length.
-     *
-     * @param a The first array
-     * @param b The second array
-     * @return The Hamming distance
+     * Vectorized dot product of two signed int8 byte vectors.
      */
     @Override
     public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
-        float sum = 0;
-        for (int i = 0; i < a.length(); i++) {
-            sum += (int) a.get(i) * (int) b.get(i);
-        }
-        return sum;
+        return switch (PREFERRED_BIT_SIZE) {
+            case 512 -> dotProductBytes512(a, b);
+            case 256 -> dotProductBytes256(a, b);
+            default  -> dotProductBytes128(a, b);
+        };
     }
 
+    float dotProductBytes512(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_128.length(); // 16
+        final int limit  = ByteVector.SPECIES_128.loopBound(length);
+        IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            acc = acc.add(va.mul(vb));
+        }
+
+        int result = acc.reduceLanes(VectorOperators.ADD);
+        for (int i = limit; i < length; i++) {
+            result += a.get(aOff + i) * b.get(bOff + i);
+        }
+        return result;
+    }
+
+    float dotProductBytes256(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_64.length(); // 8
+        final int limit  = ByteVector.SPECIES_64.loopBound(length);
+        IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            acc = acc.add(va.mul(vb));
+        }
+
+        int result = acc.reduceLanes(VectorOperators.ADD);
+        for (int i = limit; i < length; i++) {
+            result += a.get(aOff + i) * b.get(bOff + i);
+        }
+        return result;
+    }
+
+    float dotProductBytes128(ByteSequence<?> a, ByteSequence<?> b) {
+        // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        int result = 0;
+        for (int i = 0; i < length; i++) {
+            result += a.get(aOff + i) * b.get(bOff + i);
+        }
+        return result;
+    }
+
+    /**
+     * Vectorized sum of squared differences between two signed int8 byte vectors.
+     */
     @Override
     public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
-        float sum = 0;
-        for (int i = 0; i < a.length(); i++) {
-            float diff = a.get(i) - b.get(i);
-            sum += diff * diff;
-        }
-        return sum;
+        return switch (PREFERRED_BIT_SIZE) {
+            case 512 -> squareDistanceBytes512(a, b);
+            case 256 -> squareDistanceBytes256(a, b);
+            default  -> squareDistanceBytes128(a, b);
+        };
     }
 
+    float squareDistanceBytes512(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_128.length();
+        final int limit  = ByteVector.SPECIES_128.loopBound(length);
+        IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            IntVector diff = va.sub(vb);
+            acc = acc.add(diff.mul(diff));
+        }
+
+        int result = acc.reduceLanes(VectorOperators.ADD);
+        for (int i = limit; i < length; i++) {
+            int diff = a.get(aOff + i) - b.get(bOff + i);
+            result += diff * diff;
+        }
+        return result;
+    }
+
+    float squareDistanceBytes256(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_64.length();
+        final int limit  = ByteVector.SPECIES_64.loopBound(length);
+        IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            IntVector diff = va.sub(vb);
+            acc = acc.add(diff.mul(diff));
+        }
+
+        int result = acc.reduceLanes(VectorOperators.ADD);
+        for (int i = limit; i < length; i++) {
+            int diff = a.get(aOff + i) - b.get(bOff + i);
+            result += diff * diff;
+        }
+        return result;
+    }
+
+    float squareDistanceBytes128(ByteSequence<?> a, ByteSequence<?> b) {
+        // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        int result = 0;
+        for (int i = 0; i < length; i++) {
+            int diff = a.get(aOff + i) - b.get(bOff + i);
+            result += diff * diff;
+        }
+        return result;
+    }
+
+    /**
+     * Vectorized cosine similarity between two signed int8 byte vectors.
+     */
     @Override
     public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
-        float dot = 0, normA = 0, normB = 0;
-        for (int i = 0; i < a.length(); i++) {
-            float ai = a.get(i), bi = b.get(i);
-            dot   += ai * bi;
-            normA += ai * ai;
-            normB += bi * bi;
+        return switch (PREFERRED_BIT_SIZE) {
+            case 512 -> cosineBytes512(a, b);
+            case 256 -> cosineBytes256(a, b);
+            default  -> cosineBytes128(a, b);
+        };
+    }
+
+    float cosineBytes512(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_128.length();
+        final int limit  = ByteVector.SPECIES_128.loopBound(length);
+        IntVector dot    = IntVector.zero(IntVector.SPECIES_512);
+        IntVector normA  = IntVector.zero(IntVector.SPECIES_512);
+        IntVector normB  = IntVector.zero(IntVector.SPECIES_512);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
+                    .reinterpretAsInts();
+            dot   = dot.add(va.mul(vb));
+            normA = normA.add(va.mul(va));
+            normB = normB.add(vb.mul(vb));
         }
-        return (float) (dot / Math.sqrt(normA * normB));
+
+        long dotResult   = dot.reduceLanes(VectorOperators.ADD);
+        long normAResult = normA.reduceLanes(VectorOperators.ADD);
+        long normBResult = normB.reduceLanes(VectorOperators.ADD);
+
+        for (int i = limit; i < length; i++) {
+            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            dotResult   += ai * bi;
+            normAResult += ai * ai;
+            normBResult += bi * bi;
+        }
+        return (float) (dotResult / Math.sqrt((double) normAResult * normBResult));
+    }
+
+    float cosineBytes256(ByteSequence<?> a, ByteSequence<?> b) {
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        final int step   = ByteVector.SPECIES_64.length();
+        final int limit  = ByteVector.SPECIES_64.loopBound(length);
+        IntVector dot    = IntVector.zero(IntVector.SPECIES_256);
+        IntVector normA  = IntVector.zero(IntVector.SPECIES_256);
+        IntVector normB  = IntVector.zero(IntVector.SPECIES_256);
+
+        for (int i = 0; i < limit; i += step) {
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+                    .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
+                    .reinterpretAsInts();
+            dot   = dot.add(va.mul(vb));
+            normA = normA.add(va.mul(va));
+            normB = normB.add(vb.mul(vb));
+        }
+
+        long dotResult   = dot.reduceLanes(VectorOperators.ADD);
+        long normAResult = normA.reduceLanes(VectorOperators.ADD);
+        long normBResult = normB.reduceLanes(VectorOperators.ADD);
+
+        for (int i = limit; i < length; i++) {
+            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            dotResult   += ai * bi;
+            normAResult += ai * ai;
+            normBResult += bi * bi;
+        }
+        return (float) (dotResult / Math.sqrt((double) normAResult * normBResult));
+    }
+
+    float cosineBytes128(ByteSequence<?> a, ByteSequence<?> b) {
+        // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
+        final int length = a.length();
+        final int aOff   = a.offset();
+        final int bOff   = b.offset();
+        long dotResult = 0, normAResult = 0, normBResult = 0;
+        for (int i = 0; i < length; i++) {
+            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            dotResult   += ai * bi;
+            normAResult += ai * ai;
+            normBResult += bi * bi;
+        }
+        return (float) (dotResult / Math.sqrt((double) normAResult * normBResult));
     }
 
     @Override
