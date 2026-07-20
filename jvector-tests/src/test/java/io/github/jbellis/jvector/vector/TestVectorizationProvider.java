@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.vector;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Assert;
@@ -50,6 +51,39 @@ public class TestVectorizationProvider extends RandomizedTest {
         Assert.assertEquals(a.getVectorUtilSupport().dotProduct(v1a,v2a), b.getVectorUtilSupport().dotProduct(v1b, v2b), 0.0001f);
         Assert.assertEquals(a.getVectorUtilSupport().cosine(v1a,v2a), b.getVectorUtilSupport().cosine(v1b, v2b), 0.0001f);
         Assert.assertEquals(a.getVectorUtilSupport().squareDistance(v1a, v2a), b.getVectorUtilSupport().squareDistance(v1b, v2b), 0.0001f);
+    }
+
+    @Test
+    public void testSimilarityMetricsByte() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider a = new DefaultVectorizationProvider();
+        VectorizationProvider b = VectorizationProvider.getInstance();
+
+        // Use a prime-length vector that is not a multiple of 8 or 16
+        int dim = 107;
+        byte[] rawA = new byte[dim];
+        byte[] rawB = new byte[dim];
+        getRandom().nextBytes(rawA);
+        getRandom().nextBytes(rawB);
+
+        ByteSequence<?> bsA_scalar = a.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> bsB_scalar = a.getVectorTypeSupport().createByteSequence(rawB);
+        ByteSequence<?> bsA_simd   = b.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> bsB_simd   = b.getVectorTypeSupport().createByteSequence(rawB);
+
+        Assert.assertEquals(
+                a.getVectorUtilSupport().dotProduct(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().dotProduct(bsA_simd, bsB_simd),
+                0.0001f);
+        Assert.assertEquals(
+                a.getVectorUtilSupport().squareDistance(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().squareDistance(bsA_simd, bsB_simd),
+                0.0001f);
+        Assert.assertEquals(
+                a.getVectorUtilSupport().cosine(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().cosine(bsA_simd, bsB_simd),
+                0.0001f);
     }
 
     @Test
