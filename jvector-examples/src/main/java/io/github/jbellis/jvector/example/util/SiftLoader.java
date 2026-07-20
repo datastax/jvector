@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -80,5 +81,33 @@ public class SiftLoader {
         }
 
         return groundTruthTopK;
+    }
+
+    /**
+     * Reads a .bvecs file (SIFT-style format).
+     * Each vector is stored as a 4-byte little-endian dimension followed by {@code dim} signed bytes.
+     *
+     * @param filePath  path to the .bvecs file
+     * @param dimension expected vector dimensionality (validated against the file's per-vector header)
+     * @return list of ByteSequence vectors
+     */
+    public static List<ByteSequence<?>> readBvecs(String filePath, int dimension) {
+        var vectors = new ArrayList<ByteSequence<?>>();
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
+            byte[] dimBytes = new byte[4];
+            byte[] buf = new byte[dimension];
+            while (dis.available() > 0) {
+                dis.readFully(dimBytes);
+                int dim = ByteBuffer.wrap(dimBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                if (dim != dimension) {
+                    throw new IOException("Expected dimension " + dimension + " but got " + dim);
+                }
+                dis.readFully(buf);
+                vectors.add(vectorTypeSupport.createByteSequence(buf.clone()));
+            }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+        return vectors;
     }
 }
