@@ -132,7 +132,7 @@ jobs:
               for f in "${all_files_for_section[@]}"; do
                 fname=$(basename "$f")
                 [[ "$fname" =~ ^([0-9]+)\. ]] && echo "${BASH_REMATCH[1]} $f"
-              done | sort -n | awk '{print $2}'
+              done | sort -n | cut -d' ' -f2-
             ))
             unset IFS
 
