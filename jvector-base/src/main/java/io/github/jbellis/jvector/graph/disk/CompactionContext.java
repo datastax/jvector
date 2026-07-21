@@ -16,12 +16,14 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Bundle of inputs that {@link QuantizationCompactionStrategy} implementations need to do their work
@@ -38,8 +40,29 @@ public final class CompactionContext {
     public final List<OrdinalMapper> remappers;
     public final int dimension;
     public final int maxOrdinal;
-    public final ForkJoinPool executor;
+    public final ExecutorService executor;
+    /**
+     * The {@link ParallelExecutor} for PQ operations (retrain/refine). Set to the compaction's own
+     * pool ({@code forkJoin}) when it supplied a {@code ForkJoinPool}, so PQ retrain stays there
+     * rather than leaking to an all-core default; {@code callerRuns()} when the compaction runs on a
+     * non-{@code ForkJoinPool} executor (so retrain stays on the caller's thread instead of leaking).
+     */
+    public final ParallelExecutor computeExecutor;
     public final int taskWindowSize;
+
+    /** Back-compat: {@code computeExecutor} defaults to the shared physical-core pool. */
+    public CompactionContext(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            int dimension,
+            int maxOrdinal,
+            ExecutorService executor,
+            int taskWindowSize) {
+        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal, executor,
+                ParallelExecutor.forkJoin(PhysicalCoreExecutor.pool()), taskWindowSize);
+    }
 
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
@@ -48,7 +71,8 @@ public final class CompactionContext {
             List<OrdinalMapper> remappers,
             int dimension,
             int maxOrdinal,
-            ForkJoinPool executor,
+            ExecutorService executor,
+            ParallelExecutor computeExecutor,
             int taskWindowSize) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
@@ -57,6 +81,7 @@ public final class CompactionContext {
         this.dimension = dimension;
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
+        this.computeExecutor = computeExecutor;
         this.taskWindowSize = taskWindowSize;
     }
 }

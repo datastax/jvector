@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
@@ -36,12 +37,9 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.SplittableRandom;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.util.MathUtil.square;
@@ -60,7 +58,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     static final int DEFAULT_CLUSTERS = 256; // number of clusters per subspace = one byte's worth
-    static final int K_MEANS_ITERATIONS = 6;
+    public static final int K_MEANS_ITERATIONS = 6;
     public static final int MAX_PQ_TRAINING_SET_SIZE = 128000;
 
     final VectorFloat<?>[] codebooks; // array of codebooks, where each codebook is a VectorFloat consisting of k contiguous subvectors each of length M
@@ -114,6 +112,30 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                                               ForkJoinPool simdExecutor,
                                               ForkJoinPool parallelExecutor)
     {
+        return compute(ravv, M, clusterCount, globallyCenter, anisotropicThreshold,
+                ParallelExecutor.forkJoin(simdExecutor), ParallelExecutor.forkJoin(parallelExecutor));
+    }
+
+    /**
+     * As {@link #compute(RandomAccessVectorValues, int, int, boolean, float, ForkJoinPool, ForkJoinPool)},
+     * but the executors may be {@link ParallelExecutor#callerRuns()} to train synchronously on the
+     * calling thread with no worker threads.
+     * <p>
+     * Codebook training draws random k-means++ seeds from {@code ThreadLocalRandom}, so the trained
+     * codebooks are already non-deterministic run-to-run and are <b>not</b> byte-identical between the
+     * caller-runs and pool-backed paths; both produce validly-trained, recall-equivalent codebooks.
+     *
+     * @param simdExecutor     executor for SIMD/codebook operations
+     * @param parallelExecutor executor for training-vector extraction/centering
+     */
+    public static ProductQuantization compute(RandomAccessVectorValues ravv,
+                                              int M,
+                                              int clusterCount,
+                                              boolean globallyCenter,
+                                              float anisotropicThreshold,
+                                              ParallelExecutor simdExecutor,
+                                              ParallelExecutor parallelExecutor)
+    {
         checkClusterCount(clusterCount);
 
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
@@ -123,9 +145,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         VectorFloat<?> globalCentroid;
         if (globallyCenter) {
             globalCentroid = KMeansPlusPlusClusterer.centroidOf(vectors);
-            // subtract the centroid from each vector
+            // subtract the centroid from each vector (distinct-index array fill; the executor's
+            // completion barrier safely publishes the writes back to this thread)
             List<VectorFloat<?>> finalVectors = vectors;
-            vectors = simdExecutor.submit(() -> finalVectors.stream().parallel().map(v -> VectorUtil.sub(v, globalCentroid)).collect(Collectors.<VectorFloat<?>>toList())).join();
+            VectorFloat<?>[] centered = new VectorFloat[finalVectors.size()];
+            simdExecutor.forEachInt(finalVectors.size(), i -> centered[i] = VectorUtil.sub(finalVectors.get(i), globalCentroid));
+            vectors = Arrays.asList(centered);
         } else {
             globalCentroid = null;
         }
@@ -135,11 +160,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return new ProductQuantization(codebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
 
-    static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        final IntStream ordinalStream;
+    static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ParallelExecutor parallelExecutor) {
+        final int[] ords;
 
         if (ravv.size() <= MAX_PQ_TRAINING_SET_SIZE) {
-            ordinalStream = IntStream.range(0, ravv.size());
+            ords = new int[ravv.size()];
+            for (int i = 0; i < ords.length; i++) {
+                ords[i] = i;
+            }
         } else {
             // Uses Floyd’s sampling algorithm to select MAX_PQ_TRAINING_SET_SIZE random ordinals from 0 to ravv.size()
             // while only iterating MAX_PQ_TRAINING_SET_SIZE times.
@@ -154,25 +182,25 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                     ordinals.add(t);
                 }
             }
-            int[] ordinalArray = new int[ordinals.size()];
+            ords = new int[ordinals.size()];
             IntHashSet.IntIterator it = ordinals.iterator();
-            for (int i = 0; i < ordinals.size(); i++) {
+            for (int i = 0; i < ords.length; i++) {
                 assert it.hasNext();
-                ordinalArray[i] = it.next();
+                ords[i] = it.next();
             }
             assert !it.hasNext();
-            ordinalStream = IntStream.of(ordinalArray);
         }
 
+        // Distinct-index array fill in the target order; the executor's completion barrier safely
+        // publishes the writes (identical result under forkJoin and callerRuns).
         var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> ordinalStream.parallel()
-                        .mapToObj(targetOrd -> {
-                            var localRavv = ravvCopy.get();
-                            VectorFloat<?> v = localRavv.getVector(targetOrd);
-                            return localRavv.isValueShared() ? v.copy() : v;
-                        })
-                        .collect(Collectors.toList()))
-                .join();
+        VectorFloat<?>[] out = new VectorFloat[ords.length];
+        parallelExecutor.forEachInt(ords.length, i -> {
+            var localRavv = ravvCopy.get();
+            VectorFloat<?> v = localRavv.getVector(ords[i]);
+            out[i] = localRavv.isValueShared() ? v.copy() : v;
+        });
+        return Arrays.asList(out);
     }
 
     /**
@@ -194,6 +222,22 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                                       ForkJoinPool simdExecutor,
                                       ForkJoinPool parallelExecutor)
     {
+        return refine(ravv, lloydsRounds, anisotropicThreshold,
+                ParallelExecutor.forkJoin(simdExecutor), ParallelExecutor.forkJoin(parallelExecutor));
+    }
+
+    /**
+     * As {@link #refine(RandomAccessVectorValues, int, float, ForkJoinPool, ForkJoinPool)}, but the
+     * executors may be {@link ParallelExecutor#callerRuns()} to refine synchronously on the calling
+     * thread. See {@link #compute(RandomAccessVectorValues, int, int, boolean, float, ParallelExecutor, ParallelExecutor)}
+     * for the determinism note (codebooks are recall-equivalent, not byte-identical, across paths).
+     */
+    public ProductQuantization refine(RandomAccessVectorValues ravv,
+                                      int lloydsRounds,
+                                      float anisotropicThreshold,
+                                      ParallelExecutor simdExecutor,
+                                      ParallelExecutor parallelExecutor)
+    {
         if (lloydsRounds < 0) {
             throw new IllegalArgumentException("lloydsRounds must be non-negative");
         }
@@ -201,18 +245,21 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectorsMutable = extractTrainingVectors(ravv, parallelExecutor);
         if (globalCentroid != null) {
-            var vectors = vectorsMutable;
-            vectorsMutable = simdExecutor.submit(() -> vectors.stream().parallel().map(v -> VectorUtil.sub(v, globalCentroid)).collect(Collectors.<VectorFloat<?>>toList())).join();
+            List<VectorFloat<?>> src = vectorsMutable;
+            VectorFloat<?>[] centered = new VectorFloat[src.size()];
+            simdExecutor.forEachInt(src.size(), i -> centered[i] = VectorUtil.sub(src.get(i), globalCentroid));
+            vectorsMutable = Arrays.asList(centered);
         }
         var vectors = vectorsMutable; // "effectively final" to make the closure happy
 
-        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        // Per-subquantizer (independent) codebook fill; completion barrier publishes the writes.
+        VectorFloat<?>[] refinedCodebooks = new VectorFloat[M];
+        simdExecutor.forEachInt(M, m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, codebooks[m], anisotropicThreshold);
-            return clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
-                                     anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
-        }).toArray(VectorFloat<?>[]::new);
-        var refinedCodebooks = simdExecutor.submit(callable).join();
+            refinedCodebooks[m] = clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
+                                                    anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
+        });
 
         return new ProductQuantization(refinedCodebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
@@ -255,8 +302,13 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * as a zero vector.
      */
     @Override
-    public PQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public PQVectors encodeAll(RandomAccessVectorValues ravv, ParallelExecutor simdExecutor) {
         return PQVectors.encodeAndBuild(this, ravv.size(), ravv, simdExecutor);
+    }
+
+    @Override
+    public PQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAll(ravv, ParallelExecutor.forkJoin(simdExecutor));
     }
 
     /**
@@ -481,14 +533,16 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return clusterCount;
     }
 
-    static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
+    static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ParallelExecutor simdExecutor) {
         int M = subvectorSizeAndOffset.length;
-        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        // Per-subquantizer (independent) codebook fill; completion barrier publishes the writes.
+        VectorFloat<?>[] codebooks = new VectorFloat[M];
+        simdExecutor.forEachInt(M, m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizeAndOffset);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, clusters, anisotropicThreshold);
-            return clusterer.cluster(K_MEANS_ITERATIONS, anisotropicThreshold == UNWEIGHTED ? 0 : K_MEANS_ITERATIONS);
-        }).toArray(VectorFloat<?>[]::new);
-        return simdExecutor.submit(callable).join();
+            codebooks[m] = clusterer.cluster(K_MEANS_ITERATIONS, anisotropicThreshold == UNWEIGHTED ? 0 : K_MEANS_ITERATIONS);
+        });
+        return codebooks;
     }
 
     /**

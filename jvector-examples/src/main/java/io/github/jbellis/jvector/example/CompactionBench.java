@@ -172,7 +172,7 @@ public final class CompactionBench {
 
             // Compact
             Path compactPath = tempDir.resolve("compacted");
-            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null, -1);
             long t0 = System.currentTimeMillis();
             compactor.compact(compactPath);
             long compactionMs = System.currentTimeMillis() - t0;
