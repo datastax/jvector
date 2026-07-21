@@ -59,6 +59,43 @@ a dependency from any Java 11 code. When run on a Java 20+ JVM with the Vector m
 providers will be used. In general, the project is structured to be built with JDK 20+, but when `JAVA_HOME` is set to
 Java 11 -> Java 19, certain build features will still be available.
 
+### Cloning
+
+This repository uses a Git submodule for [Google Highway](https://github.com/google/highway), located at
+`jvector-native/src/main/native/third_party/highway`. After cloning, initialise it with:
+
+```bash
+git submodule update --init
+```
+
+Or clone with submodules in one step:
+
+```bash
+git clone --recurse-submodules <repo-url>
+```
+
+### Building native libraries
+
+The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)
+and requires **g++ 11+**. The entry-point script is
+`jvector-native/src/main/native/jextract_vector_simd.sh`. Run it from that directory:
+
+```bash
+cd jvector-native/src/main/native
+bash jextract_vector_simd.sh
+```
+
+On a fresh Ubuntu machine you can install all required dependencies (g++, meson, ninja) and build in one step:
+
+```bash
+cd jvector-native/src/main/native
+bash jextract_vector_simd.sh --auto-install-deps
+```
+
+For other distributions the script will print the install commands needed. See
+[`jvector-native/src/main/native/README.md`](./jvector-native/src/main/native/README.md) for full build options,
+Maven integration, ISA dispatch details, and how to add new kernels.
+
 Base code is in [jvector-base](./jvector-base) and will be built for Java 11 releases, restricting language features and APIs
 appropriately. Code in [jvector-twenty](./jvector-twenty) will be compiled for Java 20 language features/APIs and included in the final
 multirelease jar targeting supported JVMs. [jvector-multirelease](./jvector-multirelease) packages [jvector-base](./jvector-base) and [jvector-twenty](./jvector-twenty) as a

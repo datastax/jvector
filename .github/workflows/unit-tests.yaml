@@ -14,14 +14,19 @@ on:
 jobs:
   build-avx512:
     concurrency:
-      group: ${{ matrix.isa }}-${{ matrix.jdk }}
+      group: isa-avx512f-${{ matrix.max_isa }}-${{ matrix.jdk }}
       cancel-in-progress: false
     strategy:
       matrix:
         jdk: [ 20, 24 ]
 #        jdk: [ 24 ]
-        isa: [ isa-avx512f ]
-    runs-on: ${{ matrix.isa }}
+        max_isa: [ avx512f, avx2, sse42 ]
+        exclude:
+          - jdk: 20
+            max_isa: avx2
+          - jdk: 20
+            max_isa: sse42
+    runs-on: isa-avx512f
     steps:
       - name: verify-avx512
         run: |
@@ -40,7 +45,12 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - uses: actions/checkout@v4
+      - name: Initialize Git Submodules
+        run: git submodule update --init
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
         with:
@@ -56,27 +66,31 @@ jobs:
           -Dtest=TestVectorizationProvider
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
-      - name: Test Panama Support (JDK ${{ matrix.jdk }})
+      - name: Test full suite with Panama (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '20'
         run: >-
-          mvn -B -Pjdk20 -pl jvector-tests test -am test
+          mvn -B -Pjdk20 -pl jvector-tests -am test
           -DTest_RequireSpecificVectorizationProvider=PanamaVectorizationProvider
 
       - name: Verify native-access vector support (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '24'
+        env:
+          JVECTOR_MAX_ISA: ${{ matrix.max_isa }}
         run: >-
           mvn -B -Punix-amd64-profile -pl jvector-tests -am test
           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dtest=TestVectorizationProvider
 
-      - name: Compile, run tests and package (JDK ${{ matrix.jdk }})
+      - name: Test full suite with native vectorization (JDK ${{ matrix.jdk }})
         if: matrix.jdk == '24'
+        env:
+          JVECTOR_MAX_ISA: ${{ matrix.max_isa }}
         run: >-
-          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          mvn -B -Punix-amd64-profile test
           -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
 
-      - name: Test Summary for (ISA:${{ matrix.isa}},JDK${{ matrix.jdk }})
+      - name: Test Summary for (ISA:isa-avx512f/max:${{ matrix.max_isa }},JDK${{ matrix.jdk }})
         if: always()
         uses: test-summary/action@v2
         with:
@@ -88,7 +102,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always() # ensures upload happens even if tests fail
         with:
-          name: surefire-results--${{ matrix.isa }}-${{ matrix.jdk }}
+          name: surefire-results--isa-avx512f-${{ matrix.max_isa }}-${{ matrix.jdk }}
           path: "**/target/surefire-reports/**"
 
   build:
@@ -102,6 +116,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Initialize Git Submodules
+        run: git submodule update --init
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
@@ -112,6 +128,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt install -y gcc
+      - name: Install Meson and Ninja
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'
