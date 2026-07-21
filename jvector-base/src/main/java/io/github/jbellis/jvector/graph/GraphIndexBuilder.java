@@ -25,7 +25,12 @@ import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
+import io.github.jbellis.jvector.quantization.BinaryQuantization;
+import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -109,12 +114,33 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              float neighborOverflow,
                              float alpha)
     {
-        this(BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction),
+        this(getBuildScoreProvider(vectorValues, similarityFunction),
                 vectorValues.dimension(),
                 M,
                 beamWidth,
                 neighborOverflow,
                 alpha);
+    }
+
+    private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
+        switch(resolveJmxBuildCompressionType()) {
+            case NONE:
+                return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+            case PQ: {
+                var config = GraphIndexBuilderConfig.getInstance();
+                int m = vectorValues.dimension() / config.getPqMFactor();
+                var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
+                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold());
+                PQVectors pqVectors = compressor.encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+            }
+            case BQ: {
+                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues).encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
+            }
+            default:
+                throw new IllegalArgumentException("Unsupported build compression type: " + resolveJmxBuildCompressionType());
+        }
     }
 
     /**
@@ -536,6 +562,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         boolean v = GraphIndexBuilderConfig.getInstance().isRefineFinalGraph();
         logger.debug("refineFinalGraph={} (from GraphIndexBuilderConfig)", v);
         return v;
+    }
+
+    private static CompressionType resolveJmxBuildCompressionType() {
+        String v = GraphIndexBuilderConfig.getInstance().getBuildCompressionType();
+        logger.debug("buildCompressionType={} (from GraphIndexBuilderConfig)", v);
+        return CompressionType.valueOf(v);
     }
 
     private static boolean logCallerAddHierarchy(boolean v) {

@@ -108,6 +108,13 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
     private volatile boolean addHierarchy = true;
     private volatile boolean refineFinalGraph = true;
     private volatile boolean parallelBuild = false;
+    private volatile String buildCompressionType = CompressionType.NONE.name();
+
+    // PQ build compression parameters — only used when buildCompressionType == "PQ"
+    private volatile int pqMFactor = 8;
+    private volatile int pqK = 256;
+    private volatile boolean pqCenterData = false;
+    private volatile float pqAnisotropicThreshold = -1.0f;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -164,6 +171,82 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
         this.parallelBuild = parallelBuild;
         if (previous != parallelBuild) {
             logger.info("JMX: parallelBuild changed {} → {}", previous, parallelBuild);
+        }
+    }
+
+    @Override
+    public String getBuildCompressionType() {
+        return this.buildCompressionType;
+    }
+
+    @Override
+    public void setBuildCompressionType(String compressionType) {
+        // Validate eagerly so JMX clients get an error immediately rather than at build time.
+        CompressionType.valueOf(compressionType);
+        String previous = this.buildCompressionType;
+        this.buildCompressionType = compressionType;
+        if (!previous.equals(compressionType)) {
+            logger.info("JMX: buildCompressionType changed {} → {}", previous, compressionType);
+        }
+    }
+
+    // ── PQ build compression parameters ─────────────────────────────────────
+
+    @Override
+    public int getPqMFactor() {
+        return pqMFactor;
+    }
+
+    @Override
+    public void setPqMFactor(int mFactor) {
+        if (mFactor <= 0) throw new IllegalArgumentException("pqMFactor must be positive");
+        int previous = this.pqMFactor;
+        this.pqMFactor = mFactor;
+        if (previous != mFactor) {
+            logger.info("JMX: pqMFactor changed {} → {}", previous, mFactor);
+        }
+    }
+
+    @Override
+    public int getPqK() {
+        return pqK;
+    }
+
+    @Override
+    public void setPqK(int k) {
+        if (k <= 0) throw new IllegalArgumentException("pqK must be positive");
+        int previous = this.pqK;
+        this.pqK = k;
+        if (previous != k) {
+            logger.info("JMX: pqK changed {} → {}", previous, k);
+        }
+    }
+
+    @Override
+    public boolean isPqCenterData() {
+        return pqCenterData;
+    }
+
+    @Override
+    public void setPqCenterData(boolean centerData) {
+        boolean previous = this.pqCenterData;
+        this.pqCenterData = centerData;
+        if (previous != centerData) {
+            logger.info("JMX: pqCenterData changed {} → {}", previous, centerData);
+        }
+    }
+
+    @Override
+    public float getPqAnisotropicThreshold() {
+        return pqAnisotropicThreshold;
+    }
+
+    @Override
+    public void setPqAnisotropicThreshold(float threshold) {
+        float previous = this.pqAnisotropicThreshold;
+        this.pqAnisotropicThreshold = threshold;
+        if (Float.compare(previous, threshold) != 0) {
+            logger.info("JMX: pqAnisotropicThreshold changed {} → {}", previous, threshold);
         }
     }
 }

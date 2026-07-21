@@ -91,4 +91,75 @@ public interface GraphIndexBuilderConfigMBean {
      * @param parallelBuild {@code true} to use the parallel writer, {@code false} for sequential (default)
      */
     void setParallelBuild(boolean parallelBuild);
+
+    /**
+     * Returns the compression type used during graph construction scoring.
+     * Valid values are the names of {@link CompressionType} constants: {@code "NONE"}, {@code "PQ"}, {@code "BQ"}.
+     */
+    String getBuildCompressionType();
+
+    /**
+     * Sets the compression type used during graph construction scoring.
+     *
+     * @param compressionType one of {@code "NONE"}, {@code "PQ"}, {@code "BQ"}
+     * @throws IllegalArgumentException if the value is not a valid {@link CompressionType} name
+     */
+    void setBuildCompressionType(String compressionType);
+
+    // ── PQ build compression parameters ──────────────────────────────────────
+    // These are only consulted when BuildCompressionType is "PQ".
+
+    /**
+     * Returns the PQ subspace divisor. The number of PQ subspaces {@code m} is computed as
+     * {@code dimension / mFactor}. Ignored when {@code BuildCompressionType} is not {@code "PQ"}.
+     */
+    int getPqMFactor();
+
+    /**
+     * Sets the PQ subspace divisor.
+     *
+     * @param mFactor must be a positive integer that evenly divides the vector dimension
+     */
+    void setPqMFactor(int mFactor);
+
+    /**
+     * Returns the number of centroids per PQ subspace (default 256).
+     * Ignored when {@code BuildCompressionType} is not {@code "PQ"}.
+     */
+    int getPqK();
+
+    /**
+     * Sets the number of centroids per PQ subspace.
+     *
+     * @param k must be a positive power of two; typical value is 256
+     */
+    void setPqK(int k);
+
+    /**
+     * Returns whether PQ training globally centers the data before clustering.
+     * Recommended {@code true} for Euclidean similarity, {@code false} otherwise.
+     * Ignored when {@code BuildCompressionType} is not {@code "PQ"}.
+     */
+    boolean isPqCenterData();
+
+    /**
+     * Enables or disables global centering during PQ training.
+     *
+     * @param centerData {@code true} to center, {@code false} to skip (default)
+     */
+    void setPqCenterData(boolean centerData);
+
+    /**
+     * Returns the anisotropic loss threshold used during PQ encoding.
+     * {@code -1.0} disables anisotropic weighting (default).
+     * Ignored when {@code BuildCompressionType} is not {@code "PQ"}.
+     */
+    float getPqAnisotropicThreshold();
+
+    /**
+     * Sets the anisotropic loss threshold.
+     *
+     * @param threshold use {@code -1.0} to disable anisotropic weighting (default)
+     */
+    void setPqAnisotropicThreshold(float threshold);
 }
