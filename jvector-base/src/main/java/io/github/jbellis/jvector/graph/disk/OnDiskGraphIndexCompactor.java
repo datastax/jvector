@@ -86,6 +86,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
 
+    // Deferred batched exact rescore (gated by -Djvector.compaction.deferredRescore). In fused-PQ
+    // L0 compaction, cross-source search scoring is ADC (RAM-resident codes) but each candidate's
+    // exact rescore reads its full vector — a random disk fault per candidate when the source is
+    // larger than RAM. When enabled, a whole batch's cross-source candidates are rescored in one
+    // ascending-ordinal pass, converting scattered faults into sequential reads (and warming the
+    // page cache for the diversity reads that follow). Output is identical to the inline path.
+    // Default off: it is a >RAM lever, neutral when the source is cache-resident.
+    private static final boolean DEFERRED_RESCORE =
+            Boolean.getBoolean("jvector.compaction.deferredRescore");
+
     /**
      * Whether to run the second-pass neighbor refinement after the merged graph is written
      * (default false). Refinement is a navigability pass: it has no measurable effect on
@@ -889,7 +899,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
             int beamWidth = Math.max(maxDegrees.get(level), searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
-            CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, beamWidth, pq);
+            // Deferred batched rescore only applies to the fused L0 path (upper layers are tiny).
+            boolean deferRescore = DEFERRED_RESCORE && fusedPQEnabled && level == 0;
+            CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, beamWidth, pq, deferRescore);
 
             if (level == 0) {
                 log.info("Compacting level 0 (base layer)");
@@ -1012,6 +1024,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               Scratch scratch,
                                               CompactionParams params) throws IOException {
 
+        if (params.deferRescore) {
+            return computeBaseBatchDeferred(writer, bs, scratch, params);
+        }
+
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
         if (bs.end > bs.start) {
             // Stream this batch's own records into the page cache before processing. Search
@@ -1072,6 +1088,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
+        return selectAndWrite(node, sourceIdx, candSize, scratch, scratch.baseVec, writer);
+    }
+
+    /**
+     * Runs diversity selection over the candidates in {@code scratch} (positions [0, candSize)),
+     * remaps the selected neighbors, and writes the node's record. Assumes {@code scratch.candSrc},
+     * {@code candNode}, and {@code candScore} are populated with exact scores. Shared by the inline
+     * and deferred-rescore base-node paths.
+     */
+    private WriteResult selectAndWrite(int node, int sourceIdx, int candSize, Scratch scratch,
+                                       VectorFloat<?> baseVec, CompactWriter writer) throws IOException {
         int[] order = IntStream.range(0, candSize).toArray();
         sortOrderByScoreDesc(order, scratch.candScore, candSize);
 
@@ -1101,10 +1128,103 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         return writer.writeInlineNodeRecord(
                 newOrdinal,
-                scratch.baseVec,
+                baseVec,
                 selected,
                 scratch.pqCode
         );
+    }
+
+    /**
+     * Deferred-rescore variant of {@link #computeBaseBatch}: gathers every live node's candidates
+     * (cross-source candidates carrying approximate scores), then exact-rescores all of them in a
+     * single ascending-ordinal pass so the full-vector reads are sequential rather than random,
+     * then runs diversity selection per node. Output is identical to the inline path.
+     */
+    private List<WriteResult> computeBaseBatchDeferred(CompactWriter writer, BatchSpec bs,
+                                                       Scratch scratch, CompactionParams params) throws IOException {
+        int src = bs.sourceIdx;
+        if (bs.end > bs.start) {
+            sources.get(src).prefetchL0Records(bs.nodes[bs.start], bs.nodes[bs.end - 1]);
+        }
+
+        // Phase 1: gather. One entry per live node; cross-source candidate scores are approximate.
+        List<int[]> allSrc = new ArrayList<>();
+        List<int[]> allNode = new ArrayList<>();
+        List<float[]> allScore = new ArrayList<>();
+        List<VectorFloat<?>> allBase = new ArrayList<>();
+        List<Integer> nodeIds = new ArrayList<>();
+        var sourceView = (OnDiskGraphIndex.View) scratch.gs[src].getView();
+        for (int i = bs.start; i < bs.end; i++) {
+            int node = bs.nodes[i];
+            if (!liveNodes.get(src).get(node)) continue;
+            sourceView.getVectorInto(node, scratch.baseVec, 0);
+            int candSize = gatherCandidates(node, 0, src, scratch, scratch.baseVec, params);
+            allSrc.add(Arrays.copyOf(scratch.candSrc, candSize));
+            allNode.add(Arrays.copyOf(scratch.candNode, candSize));
+            allScore.add(Arrays.copyOf(scratch.candScore, candSize));
+            allBase.add(scratch.baseVec.copy());
+            nodeIds.add(node);
+        }
+        int n = nodeIds.size();
+
+        // Phase 2: one sorted exact-rescore pass over all cross-source candidates. Requests are
+        // packed as (candSrc<<40 | candOrdinal) for the sort key, with parallel slot/candIdx.
+        int reqCount = 0;
+        for (int s = 0; s < n; s++) {
+            int[] cs = allSrc.get(s);
+            for (int c = 0; c < cs.length; c++) {
+                if (cs[c] != src) reqCount++;
+            }
+        }
+        long[] keys = new long[reqCount];
+        int[] reqSlot = new int[reqCount];
+        int[] reqCand = new int[reqCount];
+        int r = 0;
+        for (int s = 0; s < n; s++) {
+            int[] cs = allSrc.get(s);
+            int[] cn = allNode.get(s);
+            for (int c = 0; c < cs.length; c++) {
+                if (cs[c] == src) continue;
+                keys[r] = ((long) cs[c] << 40) | (cn[c] & 0xFFFFFFFFFFL);
+                reqSlot[r] = s;
+                reqCand[r] = c;
+                r++;
+            }
+        }
+        // Sort request indices by key (ascending source, then ordinal) → sequential reads.
+        Integer[] ord = new Integer[reqCount];
+        for (int i = 0; i < reqCount; i++) ord[i] = i;
+        Arrays.sort(ord, (a, b) -> Long.compareUnsigned(keys[a], keys[b]));
+        OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
+        for (int s = 0; s < sources.size(); s++) {
+            views[s] = (OnDiskGraphIndex.View) scratch.gs[s].getView();
+        }
+        long lastKey = -1;
+        for (int idx = 0; idx < reqCount; idx++) {
+            int req = ord[idx];
+            int candSrc = (int) (keys[req] >>> 40);
+            int candOrd = (int) (keys[req] & 0xFFFFFFFFFFL);
+            if (keys[req] != lastKey) {
+                // New (source, ordinal): read its full vector once into tmpVec.
+                views[candSrc].getVectorInto(candOrd, scratch.tmpVec, 0);
+                lastKey = keys[req];
+            }
+            float score = similarityFunction.compare(allBase.get(reqSlot[req]), scratch.tmpVec);
+            allScore.get(reqSlot[req])[reqCand[req]] = score;
+        }
+
+        // Phase 3: diversity + write per node (candidate vectors now warm in the page cache).
+        List<WriteResult> out = new ArrayList<>(n);
+        for (int s = 0; s < n; s++) {
+            int[] cs = allSrc.get(s), cn = allNode.get(s);
+            float[] sc = allScore.get(s);
+            int candSize = cs.length;
+            System.arraycopy(cs, 0, scratch.candSrc, 0, candSize);
+            System.arraycopy(cn, 0, scratch.candNode, 0, candSize);
+            System.arraycopy(sc, 0, scratch.candScore, 0, candSize);
+            out.add(selectAndWrite(nodeIds.get(s), src, candSize, scratch, allBase.get(s), writer));
+        }
+        return out;
     }
 
     /**
@@ -1249,8 +1369,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             for (var r : results.getNodes()) {
                 scratch.candSrc[candSize] = sourceIdx;
                 scratch.candNode[candSize] = r.node;
+                // In deferred mode leave the approximate score; the batch rescores all
+                // cross-source candidates in one sorted pass before diversity selection.
                 scratch.candScore[candSize] =
-                        params.fusedPQEnabled
+                        (params.fusedPQEnabled && !params.deferRescore)
                                 ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
                                 : r.score;
                 candSize++;
@@ -1551,14 +1673,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final int searchTopK;
         final int beamWidth;
         final ProductQuantization pq;
+        final boolean deferRescore;
 
         CompactionParams(boolean fusedPQEnabled, boolean compressedPrecision,
-                        int searchTopK, int beamWidth, ProductQuantization pq) {
+                        int searchTopK, int beamWidth, ProductQuantization pq, boolean deferRescore) {
             this.fusedPQEnabled = fusedPQEnabled;
             this.compressedPrecision = compressedPrecision;
             this.searchTopK = searchTopK;
             this.beamWidth = beamWidth;
             this.pq = pq;
+            this.deferRescore = deferRescore;
         }
     }
 
