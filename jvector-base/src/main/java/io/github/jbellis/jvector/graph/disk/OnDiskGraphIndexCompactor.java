@@ -981,12 +981,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int s = 0; s < sources.size(); ++s) {
             var source = sources.get(s);
             if (level > source.getMaxLevel()) continue;
-            NodesIterator sourceNodes = source.getNodes(level);
-            int numNodes = sourceNodes.size();
-            int[] nodes = new int[numNodes];
-            int i = 0;
-            while (sourceNodes.hasNext()) {
-                nodes[i++] = sourceNodes.next();
+
+            int[] nodes;
+            int numNodes;
+            if (level == 0) {
+                // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
+                // seeks and reads a 4-byte id at every node's record offset — a full random disk
+                // scan of the source. When nothing has warmed the page cache first (e.g. a
+                // full-precision compaction, which has no PQ retrain/pre-encode phase), that scan
+                // is the first cold access and dominates the run. liveNodes already holds exactly
+                // the live ordinals, so read them from there and skip the scan (also drops dead
+                // nodes up front instead of per-batch).
+                FixedBitSet alive = liveNodes.get(s);
+                numNodes = alive.cardinality();
+                nodes = new int[numNodes];
+                int i = 0;
+                for (int n = alive.nextSetBit(0);
+                     n != DocIdSetIterator.NO_MORE_DOCS;
+                     n = alive.nextSetBit(n + 1)) {
+                    nodes[i++] = n;
+                }
+            } else {
+                NodesIterator sourceNodes = source.getNodes(level);
+                numNodes = sourceNodes.size();
+                nodes = new int[numNodes];
+                int i = 0;
+                while (sourceNodes.hasNext()) {
+                    nodes[i++] = sourceNodes.next();
+                }
             }
 
             int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
