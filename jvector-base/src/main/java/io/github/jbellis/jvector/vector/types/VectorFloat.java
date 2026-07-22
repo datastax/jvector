@@ -55,4 +55,12 @@ public interface VectorFloat<T> extends Accountable
         }
         return result;
     }
+    
+    default float[] toArray() {
+        final float[] arr = new float[length()];
+        for (int i = 0; i < length(); ++i) {
+            arr[i] = get(i);
+        }
+        return arr;
+    }
 }
