@@ -903,7 +903,10 @@ public class CompactorBenchmark {
                     searchLatenciesNs[n] = System.nanoTime() - startNs;
                 }
                 else {
-                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(n), similarityFunction, ravv);
+                    // Score against the compacted graph's on-disk vectors (COMPACT mode does not
+                    // load the in-memory base ravv, which would be null here).
+                    var rerank = view.rerankerFor(queryVectors.get(n), similarityFunction);
+                    SearchScoreProvider ssp = new DefaultSearchScoreProvider(rerank);
                     long startNs = System.nanoTime();
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
                     searchLatenciesNs[n] = System.nanoTime() - startNs;

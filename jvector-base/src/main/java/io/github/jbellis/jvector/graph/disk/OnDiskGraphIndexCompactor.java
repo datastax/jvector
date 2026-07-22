@@ -97,6 +97,56 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     public void setRefineAfterCompaction(boolean refineAfterCompaction) {
         this.refineAfterCompaction = refineAfterCompaction;
     }
+
+    // ---- Full-precision cross-source search seeding (always on for full-precision compaction) ----
+    // The full-precision cross-source search descends from the global entry node and reads a full
+    // vector (getVectorInto) on every hop — a disk fault per hop at >RAM scale. Seeding warm-starts
+    // the layer-0 beam from entry points near the query, produced during compaction: when node u
+    // searches source t, a finished same-source neighbor k of u contributes the members of its
+    // merged adjacency that belong to t (they are near k, hence near u). This cuts the hop count and
+    // therefore the full-vector reads. Seeds are scored with full vectors (a few per partition),
+    // which is cheap against the descent hops they replace. Only the WHERE-candidates-come-from
+    // changes; diversity, scores fed to it, and the output are unaffected. Distinct from the fused
+    // ADC path — this targets the full-vector-read regime where hop count dominates.
+    //
+    // Memory: a finished node's merged edges are NOT mirrored in heap — they are read back from the
+    // output file (which already holds them) on demand, so per-node heap is just the done-flag and
+    // the two ordinal maps (~12 bytes/node) rather than ~142 with a degree-wide adjacency mirror.
+    // The done-flag is published only after the record is physically written, so an output-file
+    // read of a flagged node always sees committed data.
+    private static final int SEEDS_PER_PARTITION = 4;
+    private static final int SEED_POOL_CAPACITY = 64;
+    private boolean seedingActive;
+    private int seedDegree;
+    private java.util.concurrent.atomic.AtomicIntegerArray doneFlag;
+    private int[] srcOfNewOrd;
+    private int[] oldOfNewOrd;
+    private CompactWriter seedWriter;   // for neighborCountFileOffset; set during L0 compaction
+    final java.util.concurrent.atomic.AtomicLong seededSearches = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong coldSearches = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Builds the seeding structures (done-flag + ordinal maps; no adjacency mirror). */
+    private void setupSeeding(int baseDegree) {
+        int bound = maxOrdinal + 1;
+        seedDegree = baseDegree;
+        doneFlag = new java.util.concurrent.atomic.AtomicIntegerArray(bound);
+        srcOfNewOrd = new int[bound];
+        oldOfNewOrd = new int[bound];
+        Arrays.fill(srcOfNewOrd, -1);
+        for (int s = 0; s < sources.size(); s++) {
+            FixedBitSet alive = liveNodes.get(s);
+            OrdinalMapper mapper = remappers.get(s);
+            for (int oldOrd = 0; oldOrd < alive.length(); oldOrd++) {
+                if (!alive.get(oldOrd)) continue;
+                int newOrd = mapper.oldToNew(oldOrd);
+                srcOfNewOrd[newOrd] = s;
+                oldOfNewOrd[newOrd] = oldOrd;
+            }
+        }
+        seedingActive = true;
+        log.info("Full-precision search seeding enabled ({} nodes, degree {}; edges read from output)",
+                bound, baseDegree);
+    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -440,6 +490,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             strategy.onAfterHeader(writer);
 
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+            if (seedingActive) {
+                long seeded = seededSearches.get(), cold = coldSearches.get();
+                log.info("Full-precision seeding: {} seeded / {} cold cross-source searches ({}% seeded)",
+                        seeded, cold, cold + seeded == 0 ? 0 : 100 * seeded / (seeded + cold));
+            }
 
             strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
@@ -880,9 +935,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
         int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
+        // When seeding, each thread reads finished nodes' edges from the output file — give Scratch
+        // the path so it can open its own read channel.
+        Path seedOutputPath = !fusedPQEnabled ? writer.getOutputPath() : null;
         final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() ->
-            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq)
+            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath)
         );
+
+        // Seeding only helps the full-precision cross-source search (fused already scores hops via
+        // RAM-resident ADC codes); enable it there when requested.
+        // Seeding is always on for full-precision compaction (fused already scores hops via
+        // RAM-resident ADC codes, so it gains nothing there).
+        if (!fusedPQEnabled && !seedingActive) {
+            setupSeeding(maxDegrees.get(0));
+        }
+        if (seedingActive) {
+            seedWriter = writer; // exposes neighborCountFileOffset for reading finished nodes' edges
+        }
 
         for (int level = 0; level < maxDegrees.size(); level++) {
             List<BatchSpec> batches = buildBatches(level);
@@ -919,6 +988,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                         while (b.hasRemaining()) {
                                             int n = fc.write(b, pos);
                                             pos += n;
+                                        }
+                                        // Publish AFTER the write so a seed reader that sees the
+                                        // flag can safely read this node's edges from the file.
+                                        if (seedingActive) {
+                                            doneFlag.set(r.newOrdinal, 1);
                                         }
                                     }
                                 } catch (IOException e) {
@@ -981,12 +1055,32 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int s = 0; s < sources.size(); ++s) {
             var source = sources.get(s);
             if (level > source.getMaxLevel()) continue;
-            NodesIterator sourceNodes = source.getNodes(level);
-            int numNodes = sourceNodes.size();
-            int[] nodes = new int[numNodes];
-            int i = 0;
-            while (sourceNodes.hasNext()) {
-                nodes[i++] = sourceNodes.next();
+
+            int[] nodes;
+            int numNodes;
+            if (level == 0) {
+                // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
+                // seeks and reads a 4-byte id at every node's record offset — a full random disk
+                // scan of the source (the dominant cost of full-precision compaction disk-cold,
+                // where nothing warms the cache first), and unnecessary: liveNodes already holds
+                // exactly the live ordinals. Also skips dead nodes up front rather than in-batch.
+                FixedBitSet alive = liveNodes.get(s);
+                numNodes = alive.cardinality();
+                nodes = new int[numNodes];
+                int i = 0;
+                for (int n = alive.nextSetBit(0);
+                     n != io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
+                     n = alive.nextSetBit(n + 1)) {
+                    nodes[i++] = n;
+                }
+            } else {
+                NodesIterator sourceNodes = source.getNodes(level);
+                numNodes = sourceNodes.size();
+                nodes = new int[numNodes];
+                int i = 0;
+                while (sourceNodes.hasNext()) {
+                    nodes[i++] = sourceNodes.next();
+                }
             }
 
             int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
@@ -1099,12 +1193,105 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
 
+        // Note: the done-flag that makes this node's edges available as seeds is set after the
+        // record is physically written (in the L0 write callback), not here — so a reader of a
+        // flagged node's edges from the output file always sees committed data.
+
         return writer.writeInlineNodeRecord(
                 newOrdinal,
                 scratch.baseVec,
                 selected,
                 scratch.pqCode
         );
+    }
+
+    /**
+     * Collects up to {@link #SEEDS_PER_PARTITION} entry points in {@code targetSourceIdx} for node
+     * {@code u}'s search of that source, taken from {@code u}'s finished same-source neighbors'
+     * merged edges into the target, scored with full vectors. Writes into
+     * {@code scratch.seedNodes}/{@code seedScores}; returns the seed count.
+     */
+    private int gatherSeeds(int node, int nodeSourceIdx, int targetSourceIdx, VectorFloat<?> baseVec,
+                            OnDiskGraphIndex.View targetView, FixedBitSet targetAlive, Scratch scratch) {
+        var uView = (OnDiskGraphIndex.View) scratch.gs[nodeSourceIdx].getView();
+        var it = uView.getNeighborsIterator(0, node);
+        OrdinalMapper uMapper = remappers.get(nodeSourceIdx);
+        FixedBitSet uAlive = liveNodes.get(nodeSourceIdx);
+        int poolSize = 0;
+        while (it.hasNext() && poolSize < SEED_POOL_CAPACITY) {
+            int nb = it.nextInt();
+            if (!uAlive.get(nb)) continue;
+            int nbNew = uMapper.oldToNew(nb);
+            if (doneFlag.get(nbNew) == 0) continue; // neighbor not finished; no merged edges yet
+            // Read the finished neighbor's merged edges (new ordinals) back from the output file
+            // — it already holds them — instead of a heap-resident adjacency mirror.
+            int deg = readCompactedNeighbors(nbNew, scratch);
+            ByteBuffer buf = scratch.seedEdgeBuf;
+            for (int j = 0; j < deg && poolSize < SEED_POOL_CAPACITY; j++) {
+                int m = buf.getInt();
+                if (m < 0) continue; // padding slot
+                if (srcOfNewOrd[m] != targetSourceIdx) continue;
+                int mOld = oldOfNewOrd[m];
+                if (!targetAlive.get(mOld)) continue;
+                boolean dup = false;
+                for (int p = 0; p < poolSize; p++) {
+                    if (scratch.seedPool[p] == mOld) { dup = true; break; }
+                }
+                if (!dup) scratch.seedPool[poolSize++] = mOld;
+            }
+        }
+        // Score the pool with full vectors, keep the top SEEDS_PER_PARTITION (descending score).
+        int seedCount = 0;
+        for (int p = 0; p < poolSize; p++) {
+            int cand = scratch.seedPool[p];
+            targetView.getVectorInto(cand, scratch.tmpVec, 0);
+            float score = similarityFunction.compare(baseVec, scratch.tmpVec);
+            if (seedCount < SEEDS_PER_PARTITION) {
+                int pos = seedCount++;
+                while (pos > 0 && scratch.seedScores[pos - 1] < score) {
+                    scratch.seedScores[pos] = scratch.seedScores[pos - 1];
+                    scratch.seedNodes[pos] = scratch.seedNodes[pos - 1];
+                    pos--;
+                }
+                scratch.seedScores[pos] = score;
+                scratch.seedNodes[pos] = cand;
+            } else if (score > scratch.seedScores[SEEDS_PER_PARTITION - 1]) {
+                int pos = SEEDS_PER_PARTITION - 1;
+                while (pos > 0 && scratch.seedScores[pos - 1] < score) {
+                    scratch.seedScores[pos] = scratch.seedScores[pos - 1];
+                    scratch.seedNodes[pos] = scratch.seedNodes[pos - 1];
+                    pos--;
+                }
+                scratch.seedScores[pos] = score;
+                scratch.seedNodes[pos] = cand;
+            }
+        }
+        return seedCount;
+    }
+
+    /**
+     * Reads finished node {@code newOrd}'s merged neighbor list from the output file into
+     * {@code scratch.seedEdgeBuf}, leaving the buffer positioned at the first neighbor int;
+     * returns the neighbor count. On-disk ints are big-endian (ByteBuffer's default order).
+     * Safe because the caller only reads flagged nodes, whose records are already written.
+     */
+    private int readCompactedNeighbors(int newOrd, Scratch scratch) {
+        long off = seedWriter.neighborCountFileOffset(newOrd);
+        ByteBuffer buf = scratch.seedEdgeBuf;
+        int need = (seedDegree + 1) * Integer.BYTES;
+        buf.clear().limit(need);
+        try {
+            int got = 0;
+            while (got < need) {
+                int r = scratch.outputChannel.read(buf, off + got);
+                if (r <= 0) break;
+                got += r;
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        buf.flip();
+        return buf.getInt(); // count; buffer now positioned at the first neighbor
     }
 
     /**
@@ -1192,7 +1379,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
                                                  baseVec, scratch, candSize);
             } else {
-                candSize = gatherFromOtherSource(node, level, ss, searchView, indexAlive,
+                candSize = gatherFromOtherSource(node, sourceIdx, level, ss, searchView, indexAlive,
                                                   baseVec, scratch, candSize, params);
             }
         }
@@ -1225,7 +1412,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Gathers candidates from a different source index via graph search.
      */
-    private int gatherFromOtherSource(int node, int level, int sourceIdx,
+    private int gatherFromOtherSource(int node, int nodeSourceIdx, int level, int sourceIdx,
                                       OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                       VectorFloat<?> baseVec, Scratch scratch, int candSize,
                                       CompactionParams params) {
@@ -1239,6 +1426,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         if (level == 0) {
+            // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
+            // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to a
+            // normal search when no seeds are available (e.g. node processed before its neighbors).
+            int seedCount = seedingActive
+                    ? gatherSeeds(node, nodeSourceIdx, sourceIdx, baseVec, searchView, indexAlive, scratch)
+                    : 0;
+            if (seedCount > 0) {
+                seededSearches.incrementAndGet();
+                scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
+                        scratch.seedNodes, scratch.seedScores, seedCount);
+                scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
+                return appendApproximateResults(
+                        scratch.gs[sourceIdx].approximateResults(), sourceIdx, scratch, candSize);
+            }
+            if (seedingActive) {
+                coldSearches.incrementAndGet();
+            }
             // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
             // pruned by diversity selection, so the doubled approximate-phase cost buys almost
             // no recall.
@@ -1642,11 +1846,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final VectorFloat<?> tmpVec, baseVec;
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
+        // Seeding scratch: candidate seed pool (old ordinals in the target source), the chosen top
+        // seeds with their exact scores, a per-thread read channel on the output file, and a buffer
+        // sized for one record's neighbor-count + list.
+        final int[] seedPool = new int[SEED_POOL_CAPACITY];
+        final int[] seedNodes = new int[SEEDS_PER_PARTITION];
+        final float[] seedScores = new float[SEEDS_PER_PARTITION];
+        final FileChannel outputChannel;      // null unless seeding
+        final ByteBuffer seedEdgeBuf;         // null unless seeding
 
         /**
          * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
          */
-        Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, ProductQuantization pq) {
+        Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources,
+                ProductQuantization pq, Path seedOutputPath) {
             this.candSrc = new int[maxCandidateSize];
             this.candNode = new int[maxCandidateSize];
             this.candScore = new float[maxCandidateSize];
@@ -1660,6 +1873,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 gs[i] = new GraphSearcher(sources.get(i));
                 gs[i].usePruning(false);
             }
+
+            if (seedOutputPath != null) {
+                try {
+                    this.outputChannel = FileChannel.open(seedOutputPath, StandardOpenOption.READ);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                // count int + up to maxDegree neighbor ints
+                this.seedEdgeBuf = ByteBuffer.allocate(Integer.BYTES * (maxDegree + 1));
+            } else {
+                this.outputChannel = null;
+                this.seedEdgeBuf = null;
+            }
         }
 
         /**
@@ -1669,6 +1895,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         public void close() throws IOException {
             for (var s : gs) s.close();
             selectedCache.reset();
+            if (outputChannel != null) outputChannel.close();
         }
     }
 
