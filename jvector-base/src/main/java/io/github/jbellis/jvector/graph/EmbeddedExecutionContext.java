@@ -23,10 +23,12 @@ import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.PQRetrainer;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.NVQVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -199,6 +201,15 @@ public final class EmbeddedExecutionContext {
     /** Encodes all vectors with PQ on the compute executor. */
     public PQVectors encodePQ(ProductQuantization pq, RandomAccessVectorValues ravv) {
         return pq.encodeAll(ravv, compute);
+    }
+
+    /**
+     * Encodes all vectors with an arbitrary {@link VectorCompressor} (PQ, NVQ, or BQ) on the compute
+     * executor. The compressor-agnostic counterpart to {@link #encodePQ} / {@link #encodeNVQ} for
+     * embedders that hold the compressor behind the interface type.
+     */
+    public CompressedVectors encode(VectorCompressor<?> compressor, RandomAccessVectorValues ravv) {
+        return compressor.encodeAll(ravv, compute);
     }
 
     // ---- non-uniform vector quantization ----
