@@ -24,50 +24,50 @@ import java.io.IOException;
 import java.util.Map;
 
 /**
- * Factory for creating version-specific graph index serializers.
- * This centralizes version detection and serializer instantiation.
+ * Factory for creating version-specific graph index formats.
+ * This centralizes version detection and format instantiation.
  */
-public class GraphIndexSerializerFactory {
-    private static final Logger logger = LoggerFactory.getLogger(GraphIndexSerializerFactory.class);
+public class GraphIndexFormatFactory {
+    private static final Logger logger = LoggerFactory.getLogger(GraphIndexFormatFactory.class);
 
-    private static final Map<Integer, GraphIndexSerializer> SERIALIZERS = Map.of(
-        2, new GraphIndexSerializerV2(),
-        3, new GraphIndexSerializerV3(),
-        4, new GraphIndexSerializerV4(),
-        5, new GraphIndexSerializerV5(),
-        6, new GraphIndexSerializerV6()
+    private static final Map<Integer, GraphIndexFormat> FORMATS = Map.of(
+        2, new GraphIndexFormatV2(),
+        3, new GraphIndexFormatV3(),
+        4, new GraphIndexFormatV4(),
+        5, new GraphIndexFormatV5(),
+        6, new GraphIndexFormatV6()
     );
 
     /**
-     * Gets a serializer for a specific version.
+     * Gets a format for a specific version.
      * @param version the version number
-     * @return the serializer for that version
+     * @return the format for that version
      * @throws UnsupportedVersionException if the version is not supported
      */
-    public static GraphIndexSerializer forVersion(int version) {
-        GraphIndexSerializer serializer = SERIALIZERS.get(version);
-        if (serializer == null) {
+    public static GraphIndexFormat forVersion(int version) {
+        GraphIndexFormat format = FORMATS.get(version);
+        if (format == null) {
             throw new UnsupportedVersionException("Version " + version + " is not supported. " +
-                "Supported versions: " + SERIALIZERS.keySet());
+                "Supported versions: " + FORMATS.keySet());
         }
-        return serializer;
+        return format;
     }
 
     /**
-     * Detects the version from the input stream and returns the appropriate serializer.
+     * Detects the version from the input stream and returns the appropriate format.
      * The reader position will be reset to where it started.
-     * 
+     *
      * @param in the input reader
-     * @return the serializer for the detected version
+     * @return the format for the detected version
      * @throws IOException if an I/O error occurs
      * @throws UnsupportedVersionException if the version is not supported
      */
-    public static GraphIndexSerializer detectVersion(RandomAccessReader in) throws IOException {
+    public static GraphIndexFormat detectVersion(RandomAccessReader in) throws IOException {
         long startPosition = in.getPosition();
-        
+
         try {
             int maybeMagic = in.readInt();
-            
+
             if (maybeMagic == OnDiskGraphIndex.MAGIC) {
                 // Version 3+ with magic number
                 int version = in.readInt();

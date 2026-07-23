@@ -112,67 +112,13 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
      * the mapper is not invoked.
      */
     public synchronized void writeFeaturesInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException {
-        for (var featureId : stateMap.keySet()) {
-            if (!featureMap.containsKey(featureId)) {
-                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
-            }
-        }
-
-        out.seek(featureOffsetForOrdinal(ordinal));
-
-        for (var feature : inlineFeatures) {
-            var state = stateMap.get(feature.id());
-            if (state == null) {
-                out.seek(out.position() + feature.featureSize());
-            } else {
-                feature.writeInline(out, state);
-            }
-        }
-
+        serializer.writeFeaturesInline(createContext(startOffset), ordinal, stateMap, out);
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
     }
 
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        if (graph instanceof OnHeapGraphIndex) {
-            var ohgi = (OnHeapGraphIndex) graph;
-            if (ohgi.getDeletedNodes().cardinality() > 0) {
-                throw new IllegalArgumentException("Run builder.cleanup() before writing the graph");
-            }
-        }
-        for (var featureId : featureStateSuppliers.keySet()) {
-            if (!featureMap.containsKey(featureId)) {
-                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
-            }
-        }
-        if (ordinalMapper.maxOrdinal() < graph.size(0) - 1) {
-            var msg = String.format("Ordinal mapper from [0..%d] does not cover all nodes in the graph of size %d",
-                    ordinalMapper.maxOrdinal(), graph.size(0));
-            throw new IllegalStateException(msg);
-        }
-
-        var view = graph.getView();
-
-        writeHeader(view); // sets position to start writing features
-
-        writeL0Records(view, featureStateSuppliers);
-
-        // We will use the abstract method because no random access is needed
-        writeSparseLevels(view, featureStateSuppliers);
-
-        // We will use the abstract method because no random access is needed
-        writeSeparatedFeatures(featureStateSuppliers);
-
-        if (version >= 5) {
-            writeFooter(view, out.position());
-        }
-        final var endOfGraphPosition = out.position();
-
-        // Write the header again with updated offsets
-        writeHeader(view);
-        out.seek(endOfGraphPosition);
-        out.flush();
-        view.close();
+        serializer.writeRandomAccess(createContext(startOffset), out, featureStateSuppliers, this::writeL0Records);
     }
 
     protected abstract void writeL0Records(ImmutableGraphIndex.View view,

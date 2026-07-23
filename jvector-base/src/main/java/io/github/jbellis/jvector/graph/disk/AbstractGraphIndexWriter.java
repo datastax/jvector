@@ -57,11 +57,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final int dimension;
     final Map<FeatureId, Feature> featureMap;
     final T out; /* output for graph nodes and inline features */
-    private final long headerSize;
+    final long headerSize;
 
     volatile int maxOrdinalWritten = -1;
     final List<Feature> inlineFeatures;
-    final GraphIndexSerializer serializer;
+    final GraphIndexFormat serializer;
 
     AbstractGraphIndexWriter(T out,
                              int version,
@@ -70,8 +70,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                              int dimension,
                              EnumMap<FeatureId, Feature> features)
     {
-        serializer = GraphIndexSerializerFactory.forVersion(version);
-        if (!serializer.supportsMultiLayer()) {
+        serializer = GraphIndexFormatFactory.forVersion(version);
+        if (graph.isHierarchical() && !serializer.supportsMultiLayer()) {
             throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
         }
         this.version = version;
@@ -124,8 +124,12 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         return featureMap.keySet();
     }
 
+    WriteContext createContext(long startOffset) {
+        return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension);
+    }
+
     long featureOffsetForOrdinal(long startOffset, int ordinal) {
-        return serializer.featureOffsetForOrdinal(graph, inlineFeatures, startOffset, ordinal, headerSize);
+        return serializer.featureOffsetForOrdinal(createContext(startOffset), ordinal);
     }
 
     /**
@@ -164,8 +168,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
-        serializer.writeFooter(graph, ordinalMapper, headerOffset, dimension, out, featureMap, headerSize);
+    void writeFooter(ImmutableGraphIndex.View view, long headerOffset, long startOffset) throws IOException {
+        serializer.writeFooter(createContext(startOffset), headerOffset, out);
     }
 
     /**
@@ -176,15 +180,15 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @throws IOException if an I/O error occurs
      */
     protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
-        serializer.writeHeader(graph, ordinalMapper, featureMap, dimension, startOffset, out, headerSize);
+        serializer.writeHeader(createContext(startOffset), out);
     }
 
-    void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
-        serializer.writeSparseLevels(graph, ordinalMapper, out, featureStateSuppliers);
+    void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
+        serializer.writeSparseLevels(createContext(startOffset), out, featureStateSuppliers);
     }
 
-    void writeSeparatedFeatures(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
-        serializer.writeSeparatedFeatures(featureStateSuppliers, featureMap, out, ordinalMapper);
+    void writeSeparatedFeatures(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
+        serializer.writeSeparatedFeatures(createContext(startOffset), out, featureStateSuppliers);
     }
 
     /**
