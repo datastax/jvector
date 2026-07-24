@@ -123,7 +123,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
-        switch(resolveJmxBuildCompressionType()) {
+        CompressionType type = resolveJmxBuildCompressionType();
+        switch(type) {
             case NONE:
                 return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
             case PQ: {
@@ -139,7 +140,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
             }
             default:
-                throw new IllegalArgumentException("Unsupported build compression type: " + resolveJmxBuildCompressionType());
+                throw new IllegalArgumentException("Unsupported build compression type: " + type);
         }
     }
 

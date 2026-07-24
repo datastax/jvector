@@ -5,8 +5,9 @@ Introduces `GraphIndexBuilderConfig`, a JMX-managed singleton that exposes `Grap
 construction parameters as runtime-tunable attributes. Before this change, options such as
 `addHierarchy`, `refineFinalGraph`, and `parallelBuild` could only be set at the construction
 call site and required a code change or application restart to modify. With this change, all
-three parameters can be inspected and updated live via any standard JMX client — JConsole,
-jvisualvm, jmxterm, or a monitoring agent — without restarting the JVM.
+parameters — graph topology flags, write path selection, build-time compression type, and PQ
+compression tuning — can be inspected and updated live via any standard JMX client (JConsole,
+jvisualvm, jmxterm, or a monitoring agent) without restarting the JVM.
 
 Changes take effect the next time a `GraphIndexBuilder` is constructed; they do not affect
 indexes that are already being built or have already been built.
@@ -21,11 +22,33 @@ not disrupt normal operation — the singleton continues to supply its default v
 
 **Managed Attributes**
 
+*Graph topology*
+
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `AddHierarchy` | `boolean` | `true` | When `true`, builds HNSW-style hierarchy layers on top of the base Vamana graph. `false` produces a flat level-0 (plain Vamana) index, which uses less memory and may build faster on small datasets. |
 | `RefineFinalGraph` | `boolean` | `true` | When `true`, runs a second diversity-refinement pass over each node's edges after the initial build. Improves recall at the cost of additional build time. |
+
+*Write path*
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
 | `ParallelBuild` | `boolean` | `false` | When `true`, serializes level-0 node records concurrently via `OnDiskParallelGraphIndexWriter`. Both writers produce an identical on-disk format; switching this flag does not require re-indexing existing data. |
+
+*Build-time compression*
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `BuildCompressionType` | `String` | `"NONE"` | Compression used for scoring during graph construction. Valid values: `"NONE"` (full-precision), `"PQ"` (Product Quantization), `"BQ"` (Binary Quantization). |
+
+*PQ build compression parameters* — consulted only when `BuildCompressionType` is `"PQ"`
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `PqMFactor` | `int` | `8` | Subspace divisor: the number of PQ subspaces `m` is computed as `dimension / mFactor`. Must be a positive integer that evenly divides the vector dimension. |
+| `PqK` | `int` | `256` | Number of centroids per PQ subspace. Must be positive; conventionally a power of two (256 is the standard value). |
+| `PqCenterData` | `boolean` | `false` | When `true`, globally centers the dataset before PQ cluster training. Recommended for Euclidean similarity; typically not needed for cosine or dot-product. |
+| `PqAnisotropicThreshold` | `float` | `-1.0` | Anisotropic loss threshold for PQ encoding. `-1.0` disables anisotropic weighting; positive values bias the quantizer toward directions that matter most for inner-product search. |
 
 **How to Enable**
 
@@ -41,13 +64,24 @@ import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 GraphIndexBuilderConfig config = GraphIndexBuilderConfig.getInstance();
 
 // Read current values
-boolean addHierarchy   = config.isAddHierarchy();
-boolean refineFinal    = config.isRefineFinalGraph();
-boolean parallelBuild  = config.isParallelBuild();
+boolean addHierarchy            = config.isAddHierarchy();
+boolean refineFinal             = config.isRefineFinalGraph();
+boolean parallelBuild           = config.isParallelBuild();
+String  buildCompressionType    = config.getBuildCompressionType(); // "NONE", "PQ", or "BQ"
+int     pqMFactor               = config.getPqMFactor();
+int     pqK                     = config.getPqK();
+boolean pqCenterData            = config.isPqCenterData();
+float   pqAnisotropicThreshold  = config.getPqAnisotropicThreshold();
 
 // Update at runtime (affects all subsequent GraphIndexBuilder constructions)
 config.setAddHierarchy(false);
 config.setParallelBuild(true);
+
+// Switch to PQ build-time compression with custom parameters
+config.setBuildCompressionType("PQ");
+config.setPqMFactor(4);        // dimension / 4 subspaces
+config.setPqK(256);
+config.setPqCenterData(true);  // recommended for Euclidean similarity
 ```
 
 *Non-deprecated constructor* — `GraphIndexBuilder` constructors that do not accept explicit
@@ -95,13 +129,18 @@ JConsole is the standard JMX browser included with every JDK installation.
 
 3. **Read an attribute**
 
-   Click on **Attributes**. The right-hand panel lists all three attributes with their
+   Click on **Attributes**. The right-hand panel lists all attributes with their
    current values:
 
    ```
-   AddHierarchy    true
-   RefineFinalGraph  true
-   ParallelBuild   false
+   AddHierarchy              true
+   RefineFinalGraph          true
+   ParallelBuild             false
+   BuildCompressionType      NONE
+   PqMFactor                 8
+   PqK                       256
+   PqCenterData              false
+   PqAnisotropicThreshold    -1.0
    ```
 
 4. **Set an attribute**
@@ -131,10 +170,18 @@ info -b
 
 # Read a specific attribute
 get AddHierarchy
+get BuildCompressionType
 
-# Set an attribute
+# Set graph topology flags
 set AddHierarchy false
 set ParallelBuild true
+
+# Switch to PQ build-time compression
+set BuildCompressionType PQ
+set PqMFactor 4
+set PqK 256
+set PqCenterData true
+set PqAnisotropicThreshold -1.0
 ```
 
 **Notes**
@@ -145,7 +192,14 @@ set ParallelBuild true
   after the change in the same JVM. Per-graph overrides are not supported in this release;
   callers that need per-graph control should pass values explicitly to the appropriate
   constructor.
-- The `parallelBuild` attribute requires the `OnDiskParallelGraphIndexWriter` to be on the
-  classpath (it is part of `jvector-base`). When `parallelBuild` is `true`, the unified
-  `RandomAccessOnDiskGraphIndexWriter.Builder` automatically selects the parallel writer at
-  `build()` time.
+- The `parallelBuild` attribute requires `OnDiskParallelGraphIndexWriter` to be on the
+  classpath (it is part of `jvector-base`). Both writers produce an identical on-disk format;
+  switching this flag does not require re-indexing existing data.
+- The PQ parameters (`PqMFactor`, `PqK`, `PqCenterData`, `PqAnisotropicThreshold`) are only
+  consulted when `BuildCompressionType` is `"PQ"`. Setting them while `BuildCompressionType`
+  is `"NONE"` or `"BQ"` has no effect on the current build but the values are retained and
+  will apply if `BuildCompressionType` is later changed to `"PQ"`.
+- `setBuildCompressionType` accepts values case-insensitively (`"none"`, `"None"`, and `"NONE"`
+  are all valid) and normalizes to the canonical name on storage. It validates immediately and
+  throws `IllegalArgumentException` for unrecognised strings, so JMX clients receive an error
+  at set time rather than silently at build time.

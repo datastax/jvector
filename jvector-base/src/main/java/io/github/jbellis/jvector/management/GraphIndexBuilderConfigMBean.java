@@ -100,9 +100,10 @@ public interface GraphIndexBuilderConfigMBean {
 
     /**
      * Sets the compression type used during graph construction scoring.
+     * Matching is case-insensitive; the value is normalized to the canonical enum name on storage.
      *
-     * @param compressionType one of {@code "NONE"}, {@code "PQ"}, {@code "BQ"}
-     * @throws IllegalArgumentException if the value is not a valid {@link CompressionType} name
+     * @param compressionType one of {@code "NONE"}, {@code "PQ"}, {@code "BQ"} (case-insensitive)
+     * @throws IllegalArgumentException if the value does not match any {@link CompressionType}
      */
     void setBuildCompressionType(String compressionType);
 
@@ -131,7 +132,7 @@ public interface GraphIndexBuilderConfigMBean {
     /**
      * Sets the number of centroids per PQ subspace.
      *
-     * @param k must be a positive power of two; typical value is 256
+     * @param k must be positive; conventionally a power of two (typical value 256)
      */
     void setPqK(int k);
 

@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import java.lang.management.ManagementFactory;
+import java.util.Locale;
 
 /**
  * Singleton that holds JMX-managed default values for
@@ -182,11 +183,18 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
     @Override
     public void setBuildCompressionType(String compressionType) {
         // Validate eagerly so JMX clients get an error immediately rather than at build time.
-        CompressionType.valueOf(compressionType);
+        // Matching is case-insensitive; the canonical enum name is stored for consistency.
+        CompressionType ct;
+        try {
+            ct = CompressionType.valueOf(compressionType.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid build compression type: '" + compressionType + "'. Valid values: NONE, PQ, BQ", e);
+        }
+        String canonical = ct.name();
         String previous = this.buildCompressionType;
-        this.buildCompressionType = compressionType;
-        if (!previous.equals(compressionType)) {
-            logger.info("JMX: buildCompressionType changed {} → {}", previous, compressionType);
+        this.buildCompressionType = canonical;
+        if (!previous.equals(canonical)) {
+            logger.info("JMX: buildCompressionType changed {} → {}", previous, canonical);
         }
     }
 
