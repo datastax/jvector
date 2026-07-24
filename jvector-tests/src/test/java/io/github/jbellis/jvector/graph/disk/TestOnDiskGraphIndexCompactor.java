@@ -676,6 +676,122 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
 
+    /** Search the compacted graph with exact scoring and return recall@10 vs brute-force GT. */
+    private double recallOnCompacted(OnDiskGraphIndex g) throws IOException {
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        List<List<Integer>> gt = buildGT(queries, 10);
+        List<SearchResult> results = new ArrayList<>();
+        try (GraphSearcher searcher = new GraphSearcher(g)) {
+            for (VectorFloat<?> q : queries) {
+                SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                results.add(searcher.search(ssp, 10, Bits.ALL));
+            }
+        }
+        return AccuracyMetrics.recallFromSearchResults(gt, results, 10, 10);
+    }
+
+    @Test
+    public void testFusedCompactionAcrossMultipleCacheChunks() throws Exception {
+        // 3 sources x 256 vectors = 768 merged nodes; PQ has 8 subspaces => 8-byte codes. A 256-byte
+        // chunk budget => 32 codes/chunk => 24 chunks, so the pre-encode cache genuinely spans many
+        // chunks. Refinement is enabled so BOTH cache consumers (CompactWriter and refineOneNode)
+        // read neighbor codes across chunk boundaries in a real compaction.
+        assertEquals("test intends a multi-chunk setup", 32, PqCodeCache.codesPerChunkFor(8, 256));
+
+        List<ReaderSupplier> rss = new ArrayList<>();
+        try {
+            var path = testDirectory.resolve("multichunk");
+            var compactor = newAllLiveCompactor(rss);
+            compactor.setPqCodeCacheConfig(PqCodeCacheConfig.DEFAULT.withMaxChunkBytes(256));
+            compactor.setRefineAfterCompaction(true);
+            compactor.compact(path);
+
+            try (ReaderSupplier out = ReaderSupplierFactory.open(path)) {
+                var g = OnDiskGraphIndex.load(out);
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+                double recall = recallOnCompacted(g);
+                assertTrue("multi-chunk compacted graph recall should be reasonable, got " + recall, recall >= 0.2);
+            }
+        } finally {
+            for (var rs : rss) rs.close();
+        }
+    }
+
+    @Test
+    public void testFusedCompactionWithCodeCacheDisabled() throws Exception {
+        // Leaving the cache off must still produce a valid graph — every neighbor code is encoded
+        // per write (the pre-fix fallback path), exercised here as a first-class config, not a cliff.
+        List<ReaderSupplier> rss = new ArrayList<>();
+        try {
+            var path = testDirectory.resolve("cache_disabled");
+            var compactor = newAllLiveCompactor(rss);
+            compactor.setPqCodeCacheConfig(PqCodeCacheConfig.DISABLED);
+            compactor.setRefineAfterCompaction(true);
+            compactor.compact(path);
+
+            try (ReaderSupplier out = ReaderSupplierFactory.open(path)) {
+                var g = OnDiskGraphIndex.load(out);
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+                double recall = recallOnCompacted(g);
+                assertTrue("cache-disabled compacted graph recall should be reasonable, got " + recall, recall >= 0.2);
+            }
+        } finally {
+            for (var rs : rss) rs.close();
+        }
+    }
+
+    /**
+     * Search the compacted graph with the FUSED approximate score function — the decoder reads the
+     * on-disk neighbor PQ codes during traversal — plus an exact reranker, returning recall@10 vs
+     * brute-force GT. Unlike {@link #recallOnCompacted}, this path actually decodes the codes the
+     * pre-encode cache wrote.
+     */
+    private double fusedApproxRecall(OnDiskGraphIndex g, int rerankK) throws IOException {
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        List<List<Integer>> gt = buildGT(queries, 10);
+        List<SearchResult> results = new ArrayList<>();
+        try (GraphSearcher searcher = new GraphSearcher(g)) {
+            for (VectorFloat<?> q : queries) {
+                var scoringView = (ImmutableGraphIndex.ScoringView) searcher.getView();
+                var asf = scoringView.approximateScoreFunctionFor(q, similarityFunction);
+                var rr = scoringView.rerankerFor(q, similarityFunction);
+                SearchScoreProvider ssp = new DefaultSearchScoreProvider(asf, rr);
+                results.add(searcher.search(ssp, 10, rerankK, 0f, 0f, Bits.ALL));
+            }
+        }
+        return AccuracyMetrics.recallFromSearchResults(gt, results, 10, 10);
+    }
+
+    @Test
+    public void testFusedApproximateSearchDecodesMultiChunkCodes() throws Exception {
+        // Compact across many cache chunks, then search with the FUSED approximate score function so
+        // the FusedPQDecoder reads the multi-chunk-written neighbor codes back off disk during
+        // traversal. A chunk-addressing bug in the code cache would corrupt those codes and collapse
+        // recall; the exact-scoring integration tests above never read the on-disk codes, this does.
+        assertEquals("test intends a multi-chunk setup", 32, PqCodeCache.codesPerChunkFor(8, 256));
+
+        List<ReaderSupplier> rss = new ArrayList<>();
+        try {
+            var path = testDirectory.resolve("multichunk_fused_search");
+            var compactor = newAllLiveCompactor(rss);
+            compactor.setPqCodeCacheConfig(PqCodeCacheConfig.DEFAULT.withMaxChunkBytes(256));
+            compactor.setRefineAfterCompaction(true);
+            compactor.compact(path);
+
+            try (ReaderSupplier out = ReaderSupplierFactory.open(path)) {
+                var g = OnDiskGraphIndex.load(out);
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+                double recall = fusedApproxRecall(g, 32);
+                assertTrue("fused-approximate recall over multi-chunk codes should be high, got " + recall,
+                        recall >= 0.6);
+            }
+        } finally {
+            for (var rs : rss) rs.close();
+        }
+    }
+
     @Test
     public void testCallerRunsRunsOnCallingThreadOnly() throws Exception {
         List<ReaderSupplier> rss = new ArrayList<>();

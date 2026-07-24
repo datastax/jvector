@@ -104,6 +104,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
+    private PqCodeCacheConfig pqCodeCacheConfig = PqCodeCacheConfig.DEFAULT;
 
     // Embedder progress + work-admission control surface (see io.github.jbellis.jvector.util.work).
     // Default UNLIMITED = no observation and no throttling → byte-identical output and equivalent
@@ -160,6 +161,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     @Experimental
     public void setRefineAfterCompaction(boolean refineAfterCompaction) {
         this.refineAfterCompaction = refineAfterCompaction;
+    }
+
+    /**
+     * Configures the fused-PQ pre-encode {@link PqCodeCache} for this run: whether it is composed in
+     * or left off, and its chunk sizing. Defaults to {@link PqCodeCacheConfig#DEFAULT} (composed in,
+     * 1 GiB chunks). Passing {@code null} restores the default. Only affects fused-PQ compactions.
+     * Returns {@code this} for chaining.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor setPqCodeCacheConfig(PqCodeCacheConfig config) {
+        this.pqCodeCacheConfig = (config == null) ? PqCodeCacheConfig.DEFAULT : config;
+        return this;
     }
 
     /**
@@ -670,7 +683,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private QuantizationCompactionStrategy detectInlineStrategy() {
         for (var feature : sources.get(0).getFeatures().values()) {
             if (feature instanceof FusedFeature) {
-                return ((FusedFeature) feature).createCompactionStrategy(buildContext());
+                QuantizationCompactionStrategy strategy = ((FusedFeature) feature).createCompactionStrategy(buildContext());
+                if (strategy instanceof FusedCompactionStrategy) {
+                    ((FusedCompactionStrategy) strategy).setPqCodeCacheConfig(pqCodeCacheConfig);
+                }
+                return strategy;
             }
         }
         return QuantizationCompactionStrategy.NONE;
@@ -783,11 +800,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 baseDegree * SEARCH_TOP_K_MULTIPLIER);
         final int beamWidth = Math.max(baseDegree, searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
-        // Code cache may or may not be present; capture once so refineOneNode can take the fast path.
-        // The cache is shared across threads; refineOneNode duplicates per call (cheap; no per-thread
-        // state to track and the duplicates are tiny GC-friendly ByteBuffer wrappers).
-        final java.nio.MappedByteBuffer codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
-        final int cacheCodeSize = hasFusedPQ ? strategy.getCacheCodeSize() : 0;
+        // Code cache may or may not be present/active; capture once so refineOneNode can take the
+        // fast path. The cache is shared across threads; refineOneNode takes its own per-chunk views
+        // per call (cheap; the duplicates are tiny GC-friendly ByteBuffer wrappers).
+        final PqCodeCache codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
+        final int cacheCodeSize = codeCache != null ? codeCache.codeSize() : 0;
 
         try (var supplier = new SimpleReader.Supplier(outputPath);
              FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE, StandardOpenOption.READ)) {
@@ -824,7 +841,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             final int codeSize = pqCodeSize;
             final VectorCompressor<ByteSequence<?>> cmp = compressor;
             final int bw = beamWidth;
-            final java.nio.MappedByteBuffer cache = codeCache;
+            final PqCodeCache cache = codeCache;
             final int cacheSz = cacheCodeSize;
             final OnDiskGraphIndex graphRef = mergedGraph;
 
@@ -914,7 +931,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                VectorCompressor<ByteSequence<?>> compressor,
                                int beamWidth,
                                OnDiskGraphIndex mergedGraph,
-                               java.nio.MappedByteBuffer codeCache,
+                               PqCodeCache codeCache,
                                int cacheCodeSize) {
         OnDiskGraphIndex.View view = scratch.view;
         view.getVectorInto(node, scratch.queryVec, 0);
@@ -1006,16 +1023,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (hasFusedPQ) {
             // PQ codes block sits between the inline vector and the neighbor count.
             writeOffset = view.offsetFor(node, FeatureId.FUSED_PQ);
-            if (codeCache != null) {
+            if (codeCache != null && codeCache.isActive()) {
                 // Memcpy from the pre-encoded cache (indexed by new ordinal). Avoids one FP
-                // vector read AND one PQ encode per selected neighbor. duplicate() gives this
-                // call its own position cursor without racing other workers.
-                ByteBuffer cacheView = codeCache.duplicate();
+                // vector read AND one PQ encode per selected neighbor. newViews() gives this
+                // call its own per-chunk cursors without racing other workers.
+                ByteBuffer[] cacheViews = codeCache.newViews();
                 byte[] codeBuf = scratch.pqCodeBytes;
                 for (int k = 0; k < selectedSize; k++) {
                     int newOrd = scratch.selectedNodes[k];
-                    cacheView.position(newOrd * cacheCodeSize);
-                    cacheView.get(codeBuf, 0, cacheCodeSize);
+                    codeCache.copyCode(cacheViews, newOrd, codeBuf);
                     rec.put(codeBuf, 0, cacheCodeSize);
                 }
             } else {

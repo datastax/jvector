@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -71,12 +70,12 @@ final class CompactWriter implements AutoCloseable {
     // Mirrors what AbstractGraphIndexWriter.writeSparseLevels writes in the no-hierarchy branch.
     private ByteSequence<?> entryNodePqCode;
 
-    // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
-    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
-    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
-    private MappedByteBuffer pqCodeCache;
+    // Optional pre-computed PQ codes by new ordinal. When set and active, writeInlineNodeRecord
+    // copies codes from this cache instead of calling pq.encodeTo per neighbor. Each worker thread
+    // gets its own per-chunk duplicate views via pqCacheViewsPerThread so positions don't race.
+    private PqCodeCache pqCodeCache;
     private int pqCodeSize;
-    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
+    private ThreadLocal<ByteBuffer[]> pqCacheViewsPerThread;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
     CompactWriter(Path outputPath,
@@ -136,18 +135,17 @@ final class CompactWriter implements AutoCloseable {
 
     /**
      * Enables the pre-computed PQ code cache. Must be called before any writeInlineNodeRecord
-     * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
-     * re-encoded per write.
+     * call. Once enabled and while {@link PqCodeCache#isActive() active}, neighbor PQ codes are
+     * copied from {@code cache} (indexed by new ordinal) instead of being re-encoded per write.
      *
-     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
-     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
-     * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
+     * @param cache the chunked pre-encode cache holding one code per new ordinal; carries its own
+     *              {@link PqCodeCache#codeSize() code size}
      */
-    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+    public void enablePqCodeCache(PqCodeCache cache) {
         this.pqCodeCache = cache;
-        this.pqCodeSize = pqCodeSize;
-        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
-        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
+        this.pqCodeSize = cache.codeSize();
+        // Each worker thread gets its own per-chunk views so relative-position reads don't race.
+        this.pqCacheViewsPerThread = ThreadLocal.withInitial(cache::newViews);
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
     }
 
@@ -270,15 +268,14 @@ final class CompactWriter implements AutoCloseable {
         // we cannot use fusedPQfeature.writeInline
         if (fusedPQEnabled) {
             int k = 0;
-            if (pqCodeCache != null) {
+            // Decide cache-vs-encode once per record (a single volatile read of the dynamic bypass).
+            if (pqCodeCache != null && pqCodeCache.isActive()) {
                 // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
-                ByteBuffer cacheView = pqCacheViewPerThread.get();
+                ByteBuffer[] cacheViews = pqCacheViewsPerThread.get();
                 byte[] codeBuf = pqCodeBufPerThread.get();
                 for (; k < selectedCache.size; k++) {
                     int newOrd = selectedCache.nodes[k]; // already remapped before this call
-                    int offset = newOrd * pqCodeSize;
-                    cacheView.position(offset);
-                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    pqCodeCache.copyCode(cacheViews, newOrd, codeBuf);
                     bwriter.write(codeBuf, 0, pqCodeSize);
                 }
             } else {
