@@ -47,6 +47,7 @@ public class HelloVectorWorld {
         // Run
         Grid.runAll(ds,
                 config.construction.useSavedIndexIfExists,
+                config.construction.isParallelGraphConstruction(),
                 config.construction.outDegree,
                 config.construction.efConstruction,
                 config.construction.neighborOverflow,
