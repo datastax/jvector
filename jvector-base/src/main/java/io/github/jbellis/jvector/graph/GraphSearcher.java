@@ -348,6 +348,34 @@ public class GraphSearcher implements Closeable {
         expandedCountBaseLayer = 0;
     }
 
+    /**
+     * Initializes a layer-0 search from caller-provided seed nodes with precomputed scores, instead
+     * of descending the hierarchy from the global entry node. Seed scores must be oriented like
+     * {@link io.github.jbellis.jvector.vector.VectorSimilarityFunction#compare} (higher = closer).
+     * Intended for cross-package internal use (compaction seeding); not part of the stable API.
+     */
+    @Experimental
+    public void initializeWithSeeds(SearchScoreProvider scoreProvider, Bits rawAcceptOrds,
+                                    int[] seedNodes, float[] seedScores, int seedCount) {
+        initializeScoreProvider(scoreProvider);
+        this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
+
+        approximateResults.clear();
+        evictedResults.clear();
+        candidates.clear();
+        visited.clear();
+
+        for (int i = 0; i < seedCount; i++) {
+            if (visited.add(seedNodes[i])) {
+                candidates.push(seedNodes[i], seedScores[i]);
+            }
+        }
+
+        visitedCount = 0;
+        expandedCount = 0;
+        expandedCountBaseLayer = 0;
+    }
+
     private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
         float topCandidateScore = localCandidates.topScore();
         // we're done when we have K results and the best candidate is worse than the worst result so far
