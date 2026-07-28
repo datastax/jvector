@@ -11,6 +11,7 @@ package.json
 .github/workflows/run-compaction.yml
 .mvn/wrapper/maven-wrapper.properties
 .mvn/jvm.config
+.gitmodules
 README.md
 UPGRADING.md
 CHANGELOG.md
@@ -34,3 +35,5 @@ docs/**/*.md
 yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**
+jvector-native/src/main/native/third_party/**
+src/main/native/third_party/**

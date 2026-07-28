@@ -1,0 +1,516 @@
+<!--
+Copyright DataStax, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# JVector Native SIMD Library
+
+This directory contains the C++ source for `libjvector.so`, the native SIMD
+backend that accelerates vector operations in JVector via the Java Foreign
+Function & Memory (FFM) API.
+
+> **Platform support:** Currently enabled on **Linux x86-64** (SSE4.2, AVX2,
+> and AVX-512). Windows and macOS are not yet supported. Support for **ARM**
+> (NEON and SVE) is planned for the near future; the
+> [Google Highway](https://github.com/google/highway) library used for SIMD
+> portability already targets both AArch64 targets, which will make the
+> extension straightforward.
+
+---
+
+## Directory layout
+
+```
+jvector_simd.h                — Public C ABI (symbols exported to Java via FFM)
+jvector_simd.cpp              — Runtime ISA dispatcher; thin wrappers over the vtable
+jvector_simd_kernels.h        — Internal C++ declarations for all ISA namespaces (auto-generated from kernel list)
+jvector_simd_kernels.cpp      — Actual SIMD kernels (compiled three times, see below)
+jvector_simd_kernel_list.h    — X-Macro table: single source of truth for all kernel signatures
+jvector_cpu_features.h        — CPUID/XGETBV-based CPU feature detection
+assert_hwy_targets.h          — Compile-time assertions that the expected HWY target is active
+meson.build                   — Build description
+jextract_vector_simd.sh       — Build + jextract script (the usual entry point)
+third_party/highway/          — Google Highway header-only library (git submodule)
+```
+
+---
+
+## How to build
+
+### Prerequisites
+
+| Tool | Minimum version | Notes |
+|------|----------------|-------|
+| g++ / clang++ | GCC 11+ | Must support `-march=skylake-avx512` |
+| [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
+| [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
+| Git submodules | — | `git submodule update --init` (needed once) |
+
+### Build steps
+
+Run the build script from this directory:
+
+```bash
+bash jextract_vector_simd.sh [buildtype]
+```
+
+The `buildtype` parameter is optional and defaults to `release`. Valid values are:
+- `release` (default) - Optimized build with no debug symbols
+- `debug` - Unoptimized build with debug symbols (`-g -O0`)
+- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+
+The script:
+1. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+2. Runs `meson setup ../../../target/meson-build --wipe --buildtype=<buildtype>` then `meson compile`.
+3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
+   `LibraryLoader` expects it.
+4. Optionally re-generates the Java FFM bindings via `jextract` (only needed
+   when `jvector_simd.h` changes — see [Updating the Java bindings](#updating-the-java-bindings)).
+
+To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
+
+```bash
+bash jextract_vector_simd.sh --auto-install-deps
+```
+
+This is the easiest way to get started on a fresh Ubuntu machine. For other
+distributions the script will print an error indicating which install commands
+need to be added.
+
+To build without regenerating bindings (e.g. when `jextract` is not installed):
+
+```bash
+bash jextract_vector_simd.sh   # jextract step is skipped with a warning if not found
+```
+
+### Building with Maven
+
+From the project root, you can build the native module using Maven:
+
+**Release build (default):**
+```bash
+mvn clean install
+```
+
+**Debug build:**
+```bash
+mvn clean install -Dnative.debug
+```
+
+**Debug-optimized build:**
+```bash
+mvn clean install -Dnative.debugoptimized
+```
+
+The Maven build automatically invokes the `jextract_vector_simd.sh` script with the appropriate buildtype parameter. The available profiles are:
+- `release` (default) - Optimized build with no debug symbols
+- `debug` - Unoptimized build with debug symbols (`-g -O0`)
+- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+
+### Manual meson build
+
+```bash
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build --wipe --buildtype=release
+meson compile -C ../../../target/meson-build
+```
+
+The output is `target/meson-build/libjvector.so.<version>` (relative to the project root).
+
+---
+
+## How it is integrated into JVector
+
+```
+Java caller
+  └─ NativeVectorUtilSupport   (jvector-native/.../vector/)
+       └─ NativeSimdOps        (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
+            └─ libjvector.so   (this library, loaded at runtime by LibraryLoader)
+                 └─ jvector_simd.cpp — dispatches to the best ISA vtable
+                      ├─ AVX3_SPR::* (compiled with -march=skylake-avx512 -mavx512fp16 …, Sapphire Rapids)
+                      ├─ AVX3_DL::*  (compiled with -march=skylake-avx512 -mavx512vnni …, Ice Lake)
+                      ├─ AVX3::*     (compiled with -march=skylake-avx512)
+                      ├─ AVX2::*     (compiled with -march=haswell)
+                      └─ SSE42::*    (compiled with -msse4.2, scalar fallback)
+```
+
+### Load sequence
+
+1. `NativeVectorizationProvider` calls `LibraryLoader.loadJvector()` at startup.
+2. `LibraryLoader` first tries `System.loadLibrary("jvector")` (picks up a
+   system-installed `.so`), then falls back to extracting `libjvector.so` from
+   the JAR's resources and loading it from a temp file.
+3. On first call into `NativeSimdOps`, the FFM `SymbolLookup` resolves each
+   exported symbol directly against the loaded library.
+
+### ISA dispatch
+
+Dispatch happens **once** at C++ static-init time (before `main()`):
+
+1. `populate_cpu_features()` issues CPUID / XGETBV and fills a feature array.
+2. `dispatch_kernels()` checks the feature array in descending capability order
+   (`AVX3` ⊃ `AVX2` ⊃ `SSE42`) and returns a copy of the matching `KernelVTable`.
+3. All public API functions are one-liner wrappers that call through
+   `kernels.<fn>`.
+
+### ISA cap (runtime override)
+
+Set the `JVECTOR_MAX_ISA` environment variable before starting the JVM to cap
+the selected ISA without recompiling:
+
+```bash
+JVECTOR_MAX_ISA=avx3_spr java ...   # use Sapphire-Rapids FP16 tier
+JVECTOR_MAX_ISA=avx3_dl  java ...   # use Ice Lake tier
+JVECTOR_MAX_ISA=avx3  java ...      # use AVX-512 even if a higher tier is available
+JVECTOR_MAX_ISA=avx2  java ...      # use AVX2 even on an AVX-512 machine
+JVECTOR_MAX_ISA=sse42 java ...      # force scalar/SSE4.2 fallback
+```
+
+Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42`.
+An unrecognised value is silently ignored and full CPU detection is used.
+
+### Updating the Java bindings
+
+The Java FFM glue in `cnative/NativeSimdOps.java` is generated from
+`jvector_simd.h` by `jextract`. Re-run the script whenever the public C header
+changes:
+
+```bash
+bash jextract_vector_simd.sh   # requires jextract on PATH
+```
+
+After regeneration the script automatically patches the generated file to add
+`Linker.Option.critical(true)` to every downcall, which avoids heap allocation
+on each call.
+
+---
+
+## Adding a new SIMD kernel
+
+The kernel registry is driven by the X-macro file
+[`jvector_simd_kernel_list.h`](jvector_simd_kernel_list.h). A single entry
+there auto-generates:
+
+- the public C declaration in `jvector_simd.h` (exported to Java via FFM)
+- the per-ISA `namespace` declarations in `jvector_simd_kernels.h`
+- the `KernelVTable` struct member in `jvector_simd.cpp`
+- the per-ISA vtable initialisers (`AVX3_SPR_vtable`, `AVX3_DL_vtable`, `AVX3_vtable`, `AVX2_vtable`, `SSE42_vtable`)
+- the public C wrapper function that dispatches through `kernels`
+
+This means adding a new kernel, e.g. `my_new_op_f32`, only requires **two
+steps** plus a Java call site.
+
+### 1. Register the kernel in `jvector_simd_kernel_list.h`
+
+Add one `KERNEL_ENTRY` line inside `JVECTOR_SIMD_KERNEL_LIST`:
+
+```cpp
+// KERNEL_ENTRY(return_type, function_name, (param_declarations), (param_names))
+KERNEL_ENTRY(float, my_new_op_f32, (const float *a, size_t length), (a, length)) \
+```
+
+- **`param_declarations`** — full parameter list including types and names
+  (used in declarations and the public wrapper signature).
+- **`param_names`** — parameter names only, used to forward the call from the
+  public wrapper into `kernels.my_new_op_f32(...)`.
+
+That single line is sufficient for the public C ABI (`jvector_simd.h`), the
+vtable struct, all five vtable initialisers, and the dispatch wrapper. No other
+boilerplate files need to be edited.
+
+### 2. Implement the kernel in `jvector_simd_kernels.cpp`
+
+The file is compiled three times (once per base ISA — `AVX3`, `AVX2`, `SSE42`
+— via different `-DJV_ISA=<NS>` / `-march=` flags), so a single implementation
+body covers those tiers. Use Highway intrinsics so the compiler emits the right
+instructions for each target:
+
+```cpp
+namespace JV_ISA {   // expands to AVX3 / AVX2 / SSE42 at compile time
+
+HWY_FLATTEN float my_new_op_f32(const float* HWY_RESTRICT a, size_t length)
+{
+    const ScalableTag<float> d;
+    auto sum = Zero(d);
+    size_t i = 0;
+    for (; i + Lanes(d) <= length; i += Lanes(d))
+        sum = Add(sum, LoadU(d, a + i));
+    // scalar tail
+    for (; i < length; ++i) sum = Add(sum, Set(d, a[i]));
+    return ReduceSum(d, sum);
+}
+
+} // namespace JV_ISA
+```
+
+`HWY_FLATTEN` ensures the compiler inlines all Highway helpers into one body,
+preventing cross-ISA call overhead.
+
+#### AVX3_DL / AVX3_SPR overrides
+
+`AVX3_DL` and `AVX3_SPR` each have their own dedicated source file
+(`jvector_avx3_dl_kernels.cpp` and `jvector_avx3_spr_kernels.cpp`) and inherit
+all vtable slots from the tier below via the vtable chain
+`AVX3 → AVX3_DL → AVX3_SPR`.
+
+**Key invariant — avoid code bloat:** only put a kernel in a tier-specific file
+if it genuinely requires an instruction unavailable in the tier below (e.g.
+`avx512fp16` for SPR, or VNNI/VBMI for DL). A kernel that Highway compiles
+identically under both `-march=skylake-avx512` and `-march=icelake-server`
+belongs in `jvector_simd_kernels.cpp`, not in the tier file. The vtable
+inheritance means the AVX3 function pointer is reused by DL and SPR at zero
+additional `.text` cost — the kernel's machine code exists exactly once.
+
+To give `AVX3_DL` or `AVX3_SPR` a specialised implementation of `my_new_op_f32`:
+
+1. Add the function body to the appropriate tier file inside its namespace.
+2. Override the vtable slot in `jvector_simd.cpp` using the lambda pattern:
+
+```cpp
+static const KernelVTable AVX3_DL_vtable = []() {
+    KernelVTable t = AVX3_vtable;
+    t.my_new_op_f32 = AVX3_DL::my_new_op_f32;
+    return t;
+}();
+```
+
+#### Platform-specific override in `jvector_simd_kernels.cpp` (when Highway's auto-vectorisation is suboptimal)
+
+In rare cases where Highway generates sub-optimal code for a particular base ISA,
+write a hand-tuned path for that tier and keep the generic path for the rest.
+Use `HWY_STATIC_TARGET` (the compile-time target for this translation unit) to
+gate the specialisation:
+
+```cpp
+namespace JV_ISA {
+
+HWY_FLATTEN float my_new_op_f32(const float* HWY_RESTRICT a, size_t length)
+{
+#if HWY_STATIC_TARGET == HWY_AVX3
+    // Hand-tuned AVX-512 path
+    __m512 acc = _mm512_setzero_ps();
+    size_t i = 0;
+    for (; i + 16 <= length; i += 16)
+        acc = _mm512_add_ps(acc, _mm512_loadu_ps(a + i));
+    float result = _mm512_reduce_add_ps(acc);
+    for (; i < length; ++i) result += a[i];
+    return result;
+#else
+    // Generic Highway path — works for SSE42, AVX2, and any future target
+    const ScalableTag<float> d;
+    auto sum = Zero(d);
+    size_t i = 0;
+    for (; i + Lanes(d) <= length; i += Lanes(d))
+        sum = Add(sum, LoadU(d, a + i));
+    for (; i < length; ++i) sum = Add(sum, Set(d, a[i]));
+    return ReduceSum(d, sum);
+#endif
+}
+
+} // namespace JV_ISA
+```
+
+Key points:
+
+- `HWY_STATIC_TARGET` is defined by Highway to the active compile-time target.
+  Because each ISA variant is a **separate compilation unit** (see `meson.build`),
+  the preprocessor condition is resolved at compile time with zero runtime overhead.
+- The available macros in `jvector_simd_kernels.cpp` are `HWY_SSE4`, `HWY_AVX2`,
+  and `HWY_AVX3` (AVX-512 / Skylake-AVX512 baseline). `HWY_AVX3_DL` and
+  `HWY_AVX3_SPR` are only active in their respective dedicated source files.
+- Only add a specialised path when benchmarks justify the extra maintenance
+  cost. The generic Highway path is usually within a few percent of hand-written
+  intrinsics.
+- Raw intrinsics (`_mm512_*`, `_mm256_*`) require the corresponding headers
+  (`<immintrin.h>`). Highway already includes them transitively, so no
+  additional `#include` is needed.
+
+### 3. Add the Java call site
+
+In `NativeVectorUtilSupport.java` (or wherever appropriate), call through
+`NativeSimdOps`:
+
+```java
+public float myNewOp(VectorFloat<?> a) {
+    return NativeSimdOps.my_new_op_f32(
+        ((MemorySegmentVectorFloat) a).get(), a.length());
+}
+```
+
+Override the corresponding method in the `VectorUtilSupport` interface if one
+exists, or add a new interface method and update `PanamaVectorUtilSupport` with
+a pure-Java fallback first.
+
+---
+
+## Adding a new Highway ISA tier
+
+Use this process when you need an entirely new ISA tier — a distinct
+`-march=` compilation unit with its own vtable slot — rather than a new kernel
+within an existing tier. A tier is appropriate when a new ISA extension (e.g.
+native FP16, BF16, or AMX arithmetic) requires a different compiler target than
+any existing tier, so the kernels cannot share a compilation unit with
+`jvector_simd_kernels.cpp`.
+
+The pattern is deliberately **minimal**: the new tier inherits every slot from
+the nearest lower tier and overrides only the kernels that actually benefit.
+This keeps the per-tier source file small and avoids maintaining a full
+duplicate of `jvector_simd_kernels.cpp`.
+
+### Step 1 — Declare the namespace (`jvector_simd_kernel_list.h` and `jvector_simd_kernels.h`)
+
+The kernel list drives declaration of every ISA namespace. Two changes are
+needed:
+
+**`jvector_simd_kernel_list.h`** — add any kernels that are new to this tier
+(i.e. kernels whose signatures do not yet exist in any namespace). If the tier
+only overrides existing kernels with a better implementation, no new
+`KERNEL_ENTRY` lines are needed; the existing signatures already cover the new
+namespace.
+
+**`jvector_simd_kernels.h`** — add a `DECLARE_SIMD_KERNELS` call for the new
+namespace so that `jvector_simd.cpp` can reference `MY_NEW_TIER::my_kernel`:
+
+```cpp
+DECLARE_SIMD_KERNELS(MY_NEW_TIER)
+DECLARE_SIMD_KERNELS(AVX3_SPR)
+DECLARE_SIMD_KERNELS(AVX3_DL)
+DECLARE_SIMD_KERNELS(AVX3)
+DECLARE_SIMD_KERNELS(AVX2)
+DECLARE_SIMD_KERNELS(SSE42)
+```
+
+The order does not matter — these are just forward declarations.
+
+### Step 2 — Add the `MaxIsa` enum value (`jvector_simd.cpp`)
+
+`MaxIsa` controls the `JVECTOR_MAX_ISA` override and the dispatch ordering.
+Add the new tier above `AVX3_SPR` in ascending capability order:
+
+```cpp
+// jvector_simd.cpp
+enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4, MY_NEW_TIER = 5 };
+```
+
+Also update `read_max_isa()` to map the corresponding string:
+
+```cpp
+if (std::strcmp(val, "my_new_tier") == 0) return MaxIsa::MY_NEW_TIER;
+```
+
+### Step 3 — Build the vtable (`jvector_simd.cpp`)
+
+The new tier should start from the vtable of the tier directly below it and
+patch only the slots it overrides. Use a lambda to inherit all slots and then
+overwrite the ones that benefit:
+
+```cpp
+static const KernelVTable MY_NEW_TIER_vtable = []() {
+    KernelVTable t = AVX3_SPR_vtable;          // inherit all slots from lower tier
+    t.my_kernel = MY_NEW_TIER::my_kernel;      // override only what benefits
+    return t;
+}();
+```
+
+Avoid copying the full `JVECTOR_SIMD_KERNEL_LIST` xmacro expansion for the new
+tier unless *every* kernel needs a different implementation; the lambda
+inheritance approach keeps the diff small and makes it obvious which slots
+differ.
+
+### Step 4 — Add the CPUID gate in `dispatch_kernels()` (`jvector_simd.cpp`)
+
+Insert the new check at the **top** of the dispatch chain, before the `AVX3_SPR`
+check:
+
+```cpp
+// MY_NEW_TIER requires AVX3_SPR baseline plus <your feature bits>
+if (max_isa != MaxIsa::SSE42 && max_isa != MaxIsa::AVX2
+    && max_isa != MaxIsa::AVX3 && max_isa != MaxIsa::AVX3_DL
+    && max_isa != MaxIsa::AVX3_SPR
+    && has(CpuFeature::AVX512F) /* ... your required features ... */
+    && has(CpuFeature::MY_NEW_FEATURE)) {
+    return MY_NEW_TIER_vtable;
+}
+```
+
+If the required CPUID bits are not yet in [`jvector_cpu_features.h`](jvector_cpu_features.h),
+add them to the `CpuFeature` enum and populate them in
+`populate_cpu_features()`.
+
+### Step 5 — Create the kernel source file
+
+Create `jvector_<tier>_kernels.cpp` containing only the kernels that justify
+the new tier:
+
+```cpp
+#include "jvector_simd.h"
+#include "hwy/highway.h"
+#include "assert_hwy_targets.h"
+
+namespace hn = hwy::HWY_NAMESPACE;
+
+namespace MY_NEW_TIER {
+
+HWY_FLATTEN float my_kernel(const float *a, size_t length)
+{
+    // ... implementation using new ISA features ...
+}
+
+} // namespace MY_NEW_TIER
+```
+
+### Step 6 — Add a compile-time assertion (`assert_hwy_targets.h`)
+
+Add a `JV_REQUIRE_HWY_*` guard so the build fails loudly if the compiler selects
+the wrong Highway target for this translation unit. The existing checks for
+`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](assert_hwy_targets.h)
+show the pattern — add an `#elif` block for the new tier:
+
+```cpp
+// assert_hwy_targets.h
+#elif defined(JV_REQUIRE_HWY_MY_NEW_TIER)
+#if HWY_STATIC_TARGET != HWY_MY_NEW_TIER
+#error "Highway did not select HWY_MY_NEW_TIER. Check compiler flags, compiler support, and Highway blocklists."
+#endif
+```
+
+### Step 7 — Register the new compilation unit in `meson.build`
+
+Add a `static_library()` entry for the new source file, passing the correct
+`-march=` flag and the `JV_REQUIRE_HWY_*` guard defined above:
+
+```meson
+my_new_tier_lib = static_library(
+  'simdKernels_my_new_tier',
+  sources            : 'jvector_my_new_tier_kernels.cpp',
+  include_directories: hwy_inc,
+  cpp_args           : ['-march=<target-arch>',
+                        '-DHWY_COMPILE_ONLY_STATIC',
+                        '-DJV_REQUIRE_HWY_MY_NEW_TIER',
+                        '-DJV_ISA=MY_NEW_TIER',
+                        '-fvisibility=hidden'],
+)
+```
+
+Then append it to `isa_libs` so it is linked into `libjvector.so`:
+
+```meson
+isa_libs += my_new_tier_lib
+```
+
+### Step 8 — Update documentation
+
+- Update the architecture diagram in the **How it is integrated into JVector**
+  section above.
+- Add the new `JVECTOR_MAX_ISA` value to the **ISA cap** section.
