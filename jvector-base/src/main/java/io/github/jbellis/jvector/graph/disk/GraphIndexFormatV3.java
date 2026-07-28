@@ -28,6 +28,6 @@ class GraphIndexFormatV3 extends AbstractGraphIndexFormat {
 
     /** Creates the singleton format for version 3. */
     GraphIndexFormatV3() {
-        super(3, nonFusedFeatures(), false, false, FeatureOrdering.BY_FEATURE_ID);
+        super(3, nonFusedFeatures(), false, false);
     }
 }

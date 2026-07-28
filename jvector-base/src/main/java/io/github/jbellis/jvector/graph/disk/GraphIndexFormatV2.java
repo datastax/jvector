@@ -28,6 +28,6 @@ class GraphIndexFormatV2 extends AbstractGraphIndexFormat {
 
     /** Creates the singleton format for version 2. */
     GraphIndexFormatV2() {
-        super(2, inlineVectorsOnly(), false, false, FeatureOrdering.BY_FEATURE_ID);
+        super(2, inlineVectorsOnly(), false, false);
     }
 }

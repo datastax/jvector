@@ -33,14 +33,14 @@ class GraphIndexFormatV4 extends AbstractGraphIndexFormat {
 
     /** Creates the singleton format for version 4. */
     GraphIndexFormatV4() {
-        super(4, nonFusedFeatures(), true, false, FeatureOrdering.BY_FEATURE_ID);
+        super(4, nonFusedFeatures(), true, false);
     }
 
     /**
      * Protected constructor allowing subclasses (V5, V6) to specify their own version,
-     * feature set, footer flag, and feature ordering while sharing V4's wire format.
+     * feature set, and footer flag while sharing V4's wire format.
      */
-    protected GraphIndexFormatV4(int version, Set<FeatureId> supportedFeatures, boolean usesFooter, FeatureOrdering featureOrdering) {
-        super(version, supportedFeatures, true, usesFooter, featureOrdering);
+    protected GraphIndexFormatV4(int version, Set<FeatureId> supportedFeatures, boolean usesFooter) {
+        super(version, supportedFeatures, true, usesFooter);
     }
 }

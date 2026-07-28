@@ -31,7 +31,6 @@ import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -79,19 +78,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
 
-        if (version <= 5) {
-            // Versions <= 5 use the old feature ordering, simply provided by the FeatureId
-            this.featureMap = features;
-            this.inlineFeatures = features.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
-        } else {
-            // Version 6 uses the new feature ordering to place fused features last in the list
-            var sortedFeatures = features.values().stream().sorted().collect(Collectors.toList());
-            this.featureMap = new LinkedHashMap<>();
-            for (var feature : sortedFeatures) {
-                this.featureMap.put(feature.id(), feature);
-            }
-            this.inlineFeatures = sortedFeatures.stream().filter(f -> !(f instanceof SeparatedFeature)).sorted().collect(Collectors.toList());
-        }
+        this.featureMap = serializer.orderFeatures(features);
+        this.inlineFeatures = this.featureMap.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
 
         long fusedFeaturesCount = this.inlineFeatures.stream().filter(Feature::isFused).count();
         if (fusedFeaturesCount > 1) {

@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntFunction;
@@ -61,12 +62,6 @@ public interface GraphIndexFormat {
     boolean usesFooter();
 
     /**
-     * Gets the feature ordering strategy for this version.
-     * @return the feature ordering strategy
-     */
-    FeatureOrdering getFeatureOrdering();
-
-    /**
      * Returns the complete set of {@link FeatureId}s that this format version is capable of storing.
      *
      * @return an unmodifiable set of supported feature identifiers
@@ -91,14 +86,15 @@ public interface GraphIndexFormat {
     }
 
     /**
-     * Defines how features should be ordered when writing/reading.
+     * Returns the feature map for this format version, ordered as required by the on-disk layout.
+     * Versions 2–5 preserve the natural {@link FeatureId} enum ordinal order; version 6 places
+     * fused features last so that non-fused inline features occupy a contiguous prefix.
+     * The returned map preserves insertion order.
+     *
+     * @param features the raw feature map supplied by the caller
+     * @return an ordered map suitable for use during write operations
      */
-    enum FeatureOrdering {
-        /** Features ordered by their FeatureId enum ordinal (versions &lt;= 5) */
-        BY_FEATURE_ID,
-        /** Features ordered with fused features last (version 6+) */
-        FUSED_LAST
-    }
+    Map<FeatureId, Feature> orderFeatures(EnumMap<FeatureId, Feature> features);
 
     /**
      * Writes adjacency records for all graph levels above level 0 (the "sparse" upper layers).

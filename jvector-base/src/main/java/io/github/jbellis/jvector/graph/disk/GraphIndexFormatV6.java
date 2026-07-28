@@ -22,8 +22,11 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 
 import java.io.IOException;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.IntFunction;
+import java.util.stream.Collectors;
 
 /**
  * Format for version 6 of the on-disk graph format.
@@ -40,7 +43,18 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
 
     /** Creates the singleton format for version 6. */
     GraphIndexFormatV6() {
-        super(6, allFeatures(), FeatureOrdering.FUSED_LAST);
+        super(6, allFeatures());
+    }
+
+    /** Places fused features last so non-fused inline features occupy a contiguous prefix. */
+    @Override
+    public Map<FeatureId, Feature> orderFeatures(EnumMap<FeatureId, Feature> features) {
+        var sorted = features.values().stream().sorted().collect(Collectors.toList());
+        var map = new LinkedHashMap<FeatureId, Feature>();
+        for (var f : sorted) {
+            map.put(f.id(), f);
+        }
+        return map;
     }
 
     /**
@@ -77,9 +91,15 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
                 throw new IllegalStateException("Mismatch between layer 1 size and features written");
             }
         } else {
-            final int originalEntryNode = ctx.graph.getView().entryNode().node;
-            out.writeInt(ctx.ordinalMapper.oldToNew(originalEntryNode));
-            fusedFeature.writeSourceFeature(out, supplier.apply(originalEntryNode));
+            try (var view = ctx.graph.getView()) {
+                var en = view.entryNode();
+                if (en == null) {
+                    return;
+                }
+                final int originalEntryNode = en.node;
+                out.writeInt(ctx.ordinalMapper.oldToNew(originalEntryNode));
+                fusedFeature.writeSourceFeature(out, supplier.apply(originalEntryNode));
+            }
         }
     }
 }

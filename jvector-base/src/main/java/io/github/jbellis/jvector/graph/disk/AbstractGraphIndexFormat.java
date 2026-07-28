@@ -25,7 +25,9 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntFunction;
@@ -38,7 +40,6 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     private final Set<FeatureId> supportedFeatures;
     private final boolean supportsMultiLayer;
     private final boolean usesFooter;
-    private final FeatureOrdering featureOrdering;
 
     /** A magic number to indicate the file footer */
     public static final int FOOTER_MAGIC = 0x4a564244;
@@ -56,18 +57,15 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
      * @param supportedFeatures the set of {@link FeatureId}s this version can store
      * @param supportsMultiLayer whether this version supports hierarchical (multi-layer) graphs
      * @param usesFooter        whether metadata is placed in a footer rather than a header
-     * @param featureOrdering   the ordering strategy used when laying out feature data
      */
     protected AbstractGraphIndexFormat(int version,
                                        Set<FeatureId> supportedFeatures,
                                        boolean supportsMultiLayer,
-                                       boolean usesFooter,
-                                       FeatureOrdering featureOrdering) {
+                                       boolean usesFooter) {
         this.version = version;
         this.supportedFeatures = supportedFeatures;
         this.supportsMultiLayer = supportsMultiLayer;
         this.usesFooter = usesFooter;
-        this.featureOrdering = featureOrdering;
     }
 
     @Override
@@ -95,36 +93,41 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         return usesFooter;
     }
 
+    /**
+     * Default ordering: preserves the natural {@link FeatureId} enum ordinal order.
+     * Version 6 overrides this to place fused features last.
+     */
     @Override
-    public FeatureOrdering getFeatureOrdering() {
-        return featureOrdering;
+    public Map<FeatureId, Feature> orderFeatures(EnumMap<FeatureId, Feature> features) {
+        return new LinkedHashMap<>(features);
     }
 
     @Override
     public void writeSparseLevels(WriteContext ctx, IndexWriter out, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException {
-        for (int level = 1; level <= ctx.graph.getMaxLevel(); level++) {
-            int layerSize = ctx.graph.size(level);
-            int layerDegree = ctx.graph.getDegree(level);
-            int nodesWritten = 0;
-            for (var it = ctx.graph.getNodes(level); it.hasNext(); ) {
-                int originalOrdinal = it.nextInt();
-                final int newOrdinal = ctx.ordinalMapper.oldToNew(originalOrdinal);
-                out.writeInt(newOrdinal);
-                var view = ctx.graph.getView();
-                var neighbors = view.getNeighborsIterator(level, originalOrdinal);
-                out.writeInt(neighbors.size());
-                int n = 0;
-                for ( ; n < neighbors.size(); n++) {
-                    out.writeInt(ctx.ordinalMapper.oldToNew(neighbors.nextInt()));
+        try (var view = ctx.graph.getView()) {
+            for (int level = 1; level <= ctx.graph.getMaxLevel(); level++) {
+                int layerSize = ctx.graph.size(level);
+                int layerDegree = ctx.graph.getDegree(level);
+                int nodesWritten = 0;
+                for (var it = ctx.graph.getNodes(level); it.hasNext(); ) {
+                    int originalOrdinal = it.nextInt();
+                    final int newOrdinal = ctx.ordinalMapper.oldToNew(originalOrdinal);
+                    out.writeInt(newOrdinal);
+                    var neighbors = view.getNeighborsIterator(level, originalOrdinal);
+                    out.writeInt(neighbors.size());
+                    int n = 0;
+                    for ( ; n < neighbors.size(); n++) {
+                        out.writeInt(ctx.ordinalMapper.oldToNew(neighbors.nextInt()));
+                    }
+                    assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
+                    for (; n < layerDegree; n++) {
+                        out.writeInt(-1);
+                    }
+                    nodesWritten++;
                 }
-                assert !neighbors.hasNext() : "Mismatch between neighbor's reported size and actual size";
-                for (; n < layerDegree; n++) {
-                    out.writeInt(-1);
+                if (nodesWritten != layerSize) {
+                    throw new IllegalStateException("Mismatch between layer size and nodes written");
                 }
-                nodesWritten++;
-            }
-            if (nodesWritten != layerSize) {
-                throw new IllegalStateException("Mismatch between layer size and nodes written");
             }
         }
         writeAfterSparseLevels(ctx, out, suppliers);
@@ -139,9 +142,11 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     @Override
     public void writeHeader(WriteContext ctx, IndexWriter out) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(ctx.graph, ctx.ordinalMapper);
-        var entryNode = ctx.graph.getView().entryNode() == null
-                ? ImmutableGraphIndex.ENTRY_NODE_ABSENT
-                : ctx.ordinalMapper.oldToNew(ctx.graph.getView().entryNode().node);
+        final int entryNode;
+        try (var view = ctx.graph.getView()) {
+            var en = view.entryNode();
+            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+        }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
@@ -159,9 +164,11 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     @Override
     public void writeFooter(WriteContext ctx, long headerOffset, IndexWriter out) throws IOException {
         var layerInfo = CommonHeader.LayerInfo.fromGraph(ctx.graph, ctx.ordinalMapper);
-        var entryNode = ctx.graph.getView().entryNode() == null
-                ? ImmutableGraphIndex.ENTRY_NODE_ABSENT
-                : ctx.ordinalMapper.oldToNew(ctx.graph.getView().entryNode().node);
+        final int entryNode;
+        try (var view = ctx.graph.getView()) {
+            var en = view.entryNode();
+            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+        }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
@@ -232,58 +239,58 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
                     ctx.ordinalMapper.maxOrdinal(), ctx.graph.size(0)));
         }
 
-        var view = ctx.graph.getView();
-
         writeHeader(ctx, out);
 
-        for (int newOrdinal = 0; newOrdinal <= ctx.ordinalMapper.maxOrdinal(); newOrdinal++) {
-            var originalOrdinal = ctx.ordinalMapper.newToOld(newOrdinal);
+        try (var view = ctx.graph.getView()) {
+            for (int newOrdinal = 0; newOrdinal <= ctx.ordinalMapper.maxOrdinal(); newOrdinal++) {
+                var originalOrdinal = ctx.ordinalMapper.newToOld(newOrdinal);
 
-            if (originalOrdinal == OrdinalMapper.OMITTED) {
-                throw new IllegalStateException("Ordinal mapper mapped new ordinal " + newOrdinal
-                        + " to non-existing node. This behavior is not supported on OnDiskSequentialGraphIndexWriter. Use OnDiskGraphIndexWriter instead.");
-            }
-            if (!ctx.graph.containsNode(originalOrdinal)) {
-                throw new IllegalStateException(String.format("Ordinal mapper mapped new ordinal %s to non-existing node %s", newOrdinal, originalOrdinal));
-            }
-
-            out.writeInt(newOrdinal);
-            long featureOffset = featureOffsetForOrdinal(ctx, newOrdinal);
-            assert out.position() == featureOffset : String.format("%d != %d", out.position(), featureOffset);
-
-            for (var feature : ctx.inlineFeatures) {
-                var supplier = suppliers.get(feature.id());
-                if (supplier == null) {
-                    throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
+                if (originalOrdinal == OrdinalMapper.OMITTED) {
+                    throw new IllegalStateException("Ordinal mapper mapped new ordinal " + newOrdinal
+                            + " to non-existing node. This behavior is not supported on OnDiskSequentialGraphIndexWriter. Use OnDiskGraphIndexWriter instead.");
                 }
-                feature.writeInline(out, supplier.apply(originalOrdinal));
-            }
-
-            var neighbors = view.getNeighborsIterator(0, originalOrdinal);
-            if (neighbors.size() > ctx.graph.getDegree(0)) {
-                throw new IllegalStateException(String.format("Node %d has more neighbors %d than the graph's max degree %d -- run Builder.cleanup()!",
-                        originalOrdinal, neighbors.size(), ctx.graph.getDegree(0)));
-            }
-            out.writeInt(neighbors.size());
-            int n = 0;
-            for (; n < neighbors.size(); n++) {
-                var newNeighborOrdinal = ctx.ordinalMapper.oldToNew(neighbors.nextInt());
-                if (newNeighborOrdinal < 0 || newNeighborOrdinal > ctx.ordinalMapper.maxOrdinal()) {
-                    throw new IllegalStateException(String.format("Neighbor ordinal out of bounds: %d/%d", newNeighborOrdinal, ctx.ordinalMapper.maxOrdinal()));
+                if (!ctx.graph.containsNode(originalOrdinal)) {
+                    throw new IllegalStateException(String.format("Ordinal mapper mapped new ordinal %s to non-existing node %s", newOrdinal, originalOrdinal));
                 }
-                out.writeInt(newNeighborOrdinal);
-            }
-            assert !neighbors.hasNext();
-            for (; n < ctx.graph.getDegree(0); n++) {
-                out.writeInt(-1);
+
+                out.writeInt(newOrdinal);
+                long featureOffset = featureOffsetForOrdinal(ctx, newOrdinal);
+                assert out.position() == featureOffset : String.format("%d != %d", out.position(), featureOffset);
+
+                for (var feature : ctx.inlineFeatures) {
+                    var supplier = suppliers.get(feature.id());
+                    if (supplier == null) {
+                        throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
+                    }
+                    feature.writeInline(out, supplier.apply(originalOrdinal));
+                }
+
+                var neighbors = view.getNeighborsIterator(0, originalOrdinal);
+                if (neighbors.size() > ctx.graph.getDegree(0)) {
+                    throw new IllegalStateException(String.format("Node %d has more neighbors %d than the graph's max degree %d -- run Builder.cleanup()!",
+                            originalOrdinal, neighbors.size(), ctx.graph.getDegree(0)));
+                }
+                out.writeInt(neighbors.size());
+                int n = 0;
+                for (; n < neighbors.size(); n++) {
+                    var newNeighborOrdinal = ctx.ordinalMapper.oldToNew(neighbors.nextInt());
+                    if (newNeighborOrdinal < 0 || newNeighborOrdinal > ctx.ordinalMapper.maxOrdinal()) {
+                        throw new IllegalStateException(String.format("Neighbor ordinal out of bounds: %d/%d", newNeighborOrdinal, ctx.ordinalMapper.maxOrdinal()));
+                    }
+                    out.writeInt(newNeighborOrdinal);
+                }
+                assert !neighbors.hasNext();
+                for (; n < ctx.graph.getDegree(0); n++) {
+                    out.writeInt(-1);
+                }
             }
         }
 
         writeSparseLevels(ctx, out, suppliers);
         writeSeparatedFeatures(ctx, out, suppliers);
-        writeFooter(ctx, out.position(), out);
-
-        view.close();
+        if (usesFooter()) {
+            writeFooter(ctx, out.position(), out);
+        }
     }
 
     @Override
@@ -304,20 +311,22 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
                     ctx.ordinalMapper.maxOrdinal(), ctx.graph.size(0)));
         }
 
-        var view = ctx.graph.getView();
-
         out.seek(ctx.startOffset);
         writeHeader(ctx, out);
-        l0Writer.write(view, suppliers);
+        try (var view = ctx.graph.getView()) {
+            l0Writer.write(view, suppliers);
+        }
         writeSparseLevels(ctx, out, suppliers);
         writeSeparatedFeatures(ctx, out, suppliers);
+        if (usesFooter()) {
+            writeFooter(ctx, out.position(), out);
+        }
 
         final var endOfGraphPosition = out.position();
         out.seek(ctx.startOffset);
         writeHeader(ctx, out);
         out.seek(endOfGraphPosition);
         out.flush();
-        view.close();
     }
 
     /**
