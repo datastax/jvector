@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 #
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+#
 # build-jvector.sh — Build the jvector multi-release jar with the JDK the node runs.
 #
 # The Cassandra node runs JDK 25, so jvector is built with it too. Note that the
@@ -23,17 +41,23 @@
 # `mvn clean` is likewise avoided by default — it forces the javadoc fork to
 # redo work that only fails in interesting ways.
 #
+# --deploy INSTALLS to the local maven repository. Copying the jar into
+# cassandra/lib is useless on its own: cassandra's ant build declares jvector as a
+# resolved dependency (<dependency groupId="io.github.jbellis" artifactId="jvector"/>)
+# and re-copies it from ~/.m2 into lib/ on every build, silently overwriting
+# anything placed there by hand. A hand-copied jar therefore survives exactly until
+# the next cassandra build -- which is the build that would have used it.
+#
 # Usage:
 #   ./bin/build-jvector.sh [--clean] [--verify] [--deploy]
 #
 # Examples:
 #   ./bin/build-jvector.sh                   # package only
 #   ./bin/build-jvector.sh --verify          # ...and confirm the SIMD path loads
-#   ./bin/build-jvector.sh --verify --deploy # ...and install into cassandra/lib
+#   ./bin/build-jvector.sh --verify --deploy # ...and install into ~/.m2
 #
 # Env overrides:
 #   JV_JDK        JDK to build with          (default: /opt/jdk25)
-#   JV_CASS_LIB   deploy target for --deploy (default: /mnt/nvme/opt/cassandra/lib)
 #   CASS_UNIT     systemd unit to check      (default: cassandra.service)
 set -euo pipefail
 
@@ -70,8 +94,12 @@ if [[ "$do_clean" -eq 1 ]]; then
     mvn clean -q
 fi
 
-echo "==> mvn package -DskipTests"
-mvn package -DskipTests
+# `install` rather than `package` when deploying: the cassandra build resolves
+# jvector out of the local repository, so that is the only copy that matters.
+goal="package"
+[[ "$do_deploy" -eq 1 ]] && goal="install"
+echo "==> mvn $goal -DskipTests"
+mvn "$goal" -DskipTests
 
 # Newest matching jar, chosen without a pipeline: under `set -o pipefail` a
 # reader that exits early (head, grep -q) SIGPIPEs the writer and fails the
@@ -119,9 +147,21 @@ if [[ "$do_deploy" -eq 1 ]]; then
         echo "       progressive NoClassDefFoundError. Stop it first." >&2
         exit 1
     fi
-    target="$JV_CASS_LIB/$(basename "$jar")"
-    [[ -f "$target" ]] && cp -p "$target" "$target.bak"
-    cp -p "$jar" "$target"
-    echo "==> deployed $target (previous kept as $(basename "$target").bak)"
-    echo "    Cassandra must be rebuilt against this jar if its API surface moved."
+    version="$(basename "$jar")"; version="${version#jvector-}"; version="${version%.jar}"
+    installed="$HOME/.m2/repository/io/github/jbellis/jvector/$version/$(basename "$jar")"
+    if [[ ! -f "$installed" ]]; then
+        echo "error: expected the install to produce $installed" >&2
+        exit 1
+    fi
+    if ! cmp -s "$jar" "$installed"; then
+        echo "error: installed artifact differs from the jar just built:" >&2
+        echo "         built:     $jar" >&2
+        echo "         installed: $installed" >&2
+        echo "       The cassandra build resolves the installed copy, so it would use" >&2
+        echo "       something other than what was built here." >&2
+        exit 1
+    fi
+    echo "==> installed $installed (identical to the built jar)"
+    echo "    Now rebuild cassandra so it resolves this artifact into lib/ and compiles"
+    echo "    against it: /mnt/nvme/opt/cassandra/bin/build-cassandra.sh --clean"
 fi
