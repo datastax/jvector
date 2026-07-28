@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
 
 import java.io.IOException;
@@ -82,7 +81,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
         long startOffset = out.position();
-        serializer.writeOnDiskSequential(createContext(startOffset), out, featureStateSuppliers);
+        graphIndexFormat.writeOnDiskSequential(createContext(startOffset), out, featureStateSuppliers);
     }
 
 

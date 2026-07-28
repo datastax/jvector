@@ -16,6 +16,14 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+
+import java.io.IOException;
+import java.util.*;
+
 /**
  * Format for version 3 of the on-disk graph format.
  * Version 3 characteristics:
@@ -26,8 +34,53 @@ package io.github.jbellis.jvector.graph.disk;
  */
 class GraphIndexFormatV3 extends AbstractGraphIndexFormat {
 
-    /** Creates the singleton format for version 3. */
+    /**
+     * Creates the singleton format for version 3.
+     */
     GraphIndexFormatV3() {
         super(3, nonFusedFeatures(), false, false);
     }
+
+    protected GraphIndexFormatV3(int version, Set<FeatureId> supportedFeatures, boolean supportsMultiLayer, boolean usesFooter) {
+        super(version, supportedFeatures, supportsMultiLayer, usesFooter);
+    }
+
+    @Override
+    public void writeCommonHeader(IndexWriter out, List<CommonHeader.LayerInfo> layerInfo, int dimension, int entryNode, int idUpperBound) throws IOException {
+        out.writeInt(OnDiskGraphIndex.MAGIC);
+        out.writeInt(this.getVersion());
+        super.writeCommonHeader(out, layerInfo, dimension, entryNode, idUpperBound);
+    }
+
+    @Override
+    public int commonHeaderSize() {
+        return 6 * Integer.BYTES;
+    }
+
+    @Override
+    public void writeHeaderFeatures(IndexWriter out, Map<FeatureId, ? extends Feature> features) throws IOException {
+        out.writeInt(FeatureId.serialize(EnumSet.copyOf(features.keySet())));
+        super.writeHeaderFeatures(out, features);
+    }
+
+    @Override
+    public int headerSize(Map<FeatureId, ? extends Feature> features) {
+        int size = super.headerSize(features);
+
+        size += Integer.BYTES;
+
+        return size;
+    }
+
+    @Override
+    public Map<FeatureId, Feature> loadHeaderFeatures(RandomAccessReader reader, CommonHeader common) throws IOException {
+        EnumSet<FeatureId> featureIds;
+        Map<FeatureId, Feature> features = new EnumMap<>(FeatureId.class);
+        featureIds = FeatureId.deserialize(reader.readInt());
+        for (FeatureId featureId : featureIds) {
+            features.put(featureId, featureId.load(common, reader));
+        }
+        return features;
+    }
+
 }

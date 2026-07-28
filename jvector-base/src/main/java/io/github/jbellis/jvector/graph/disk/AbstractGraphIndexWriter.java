@@ -20,7 +20,6 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
@@ -60,7 +59,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
 
     volatile int maxOrdinalWritten = -1;
     final List<Feature> inlineFeatures;
-    final GraphIndexFormat serializer;
+    final GraphIndexFormat graphIndexFormat;
 
     AbstractGraphIndexWriter(T out,
                              int version,
@@ -69,8 +68,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                              int dimension,
                              EnumMap<FeatureId, Feature> features)
     {
-        serializer = GraphIndexFormatFactory.forVersion(version);
-        if (graph.isHierarchical() && !serializer.supportsMultiLayer()) {
+        graphIndexFormat = GraphIndexFormatFactory.forVersion(version);
+        if (graph.isHierarchical() && !graphIndexFormat.supportsMultiLayer()) {
             throw new IllegalArgumentException("Multilayer graphs must be written with version 4 or higher");
         }
         this.version = version;
@@ -78,14 +77,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.ordinalMapper = oldToNewOrdinals;
         this.dimension = dimension;
 
-        this.featureMap = serializer.orderFeatures(features);
+        this.featureMap = graphIndexFormat.orderFeatures(features);
         this.inlineFeatures = this.featureMap.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
 
         long fusedFeaturesCount = this.inlineFeatures.stream().filter(Feature::isFused).count();
         if (fusedFeaturesCount > 1) {
             throw new IllegalArgumentException("At most one fused feature is allowed");
         }
-        if (fusedFeaturesCount == 1 && version < 6) {
+        if (fusedFeaturesCount == 1 && !graphIndexFormat.supportsFeature(FeatureId.FUSED_PQ)) {
             throw new IllegalArgumentException("Fused features require version 6 or higher");
         }
         this.out = out;
@@ -117,7 +116,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     }
 
     long featureOffsetForOrdinal(long startOffset, int ordinal) {
-        return serializer.featureOffsetForOrdinal(createContext(startOffset), ordinal);
+        return graphIndexFormat.featureOffsetForOrdinal(createContext(startOffset), ordinal);
     }
 
     /**
@@ -157,7 +156,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @throws IOException IOException
      */
     void writeFooter(ImmutableGraphIndex.View view, long headerOffset, long startOffset) throws IOException {
-        serializer.writeFooter(createContext(startOffset), headerOffset, out);
+        graphIndexFormat.writeFooter(createContext(startOffset), headerOffset, out);
     }
 
     /**
@@ -168,15 +167,15 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @throws IOException if an I/O error occurs
      */
     protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
-        serializer.writeHeader(createContext(startOffset), out);
+        graphIndexFormat.writeHeader(createContext(startOffset), out);
     }
 
     void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
-        serializer.writeSparseLevels(createContext(startOffset), out, featureStateSuppliers);
+        graphIndexFormat.writeSparseLevels(createContext(startOffset), out, featureStateSuppliers);
     }
 
     void writeSeparatedFeatures(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
-        serializer.writeSeparatedFeatures(createContext(startOffset), out, featureStateSuppliers);
+        graphIndexFormat.writeSeparatedFeatures(createContext(startOffset), out, featureStateSuppliers);
     }
 
     /**
@@ -248,8 +247,13 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @throws IOException if an I/O error occurs
          */
         public K build() throws IOException {
-            if (version < 3 && (!features.containsKey(FeatureId.INLINE_VECTORS) || features.size() > 1)) {
-                throw new IllegalArgumentException("Only INLINE_VECTORS is supported until version 3");
+            var format = GraphIndexFormatFactory.forVersion(version);
+            for (var featureId : features.keySet()) {
+                if (!format.supportsFeature(featureId)) {
+                    throw new IllegalArgumentException(String.format(
+                            "Feature %s is not supported by version %d (supported features: %s)",
+                            featureId, version, format.getSupportedFeatures()));
+                }
             }
 
             int dimension;

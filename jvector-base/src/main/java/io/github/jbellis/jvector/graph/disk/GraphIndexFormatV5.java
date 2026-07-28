@@ -16,8 +16,13 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Set;
 
 /**
@@ -33,6 +38,7 @@ import java.util.Set;
  * a footer is written after the graph data.
  */
 class GraphIndexFormatV5 extends GraphIndexFormatV4 {
+    private static final Logger logger = LoggerFactory.getLogger(GraphIndexFormatV5.class);
 
     /** Creates the singleton format for version 5. */
     GraphIndexFormatV5() {
@@ -45,5 +51,15 @@ class GraphIndexFormatV5 extends GraphIndexFormatV4 {
      */
     protected GraphIndexFormatV5(int version, Set<FeatureId> supportedFeatures) {
         super(version, supportedFeatures, true);
+    }
+
+    @Override
+    public OnDiskGraphIndex loadOnDiskIndex(RandomAccessReader reader, Header header, ReaderSupplier readerSupplier, boolean useFooter) throws IOException {
+        if (useFooter) {
+            logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
+            return OnDiskGraphIndex.loadFromFooter(readerSupplier, reader.getPosition());
+        } else {
+            return super.loadOnDiskIndex(reader, header, readerSupplier, useFooter);
+        }
     }
 }

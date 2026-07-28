@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -25,11 +27,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 
 import java.io.IOException;
-import java.util.EnumMap;
-import java.util.EnumSet;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.IntFunction;
 
 /**
@@ -329,20 +327,86 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         out.flush();
     }
 
-    /**
-     * Helper to create a set of all known features.
-     * Only correct for the current maximum version — do not use for older versions.
-     */
-    protected static Set<FeatureId> allFeatures() {
-        return EnumSet.allOf(FeatureId.class);
+    @Override
+    public void writeCommonHeader(IndexWriter out, List<CommonHeader.LayerInfo> layerInfo, int dimension, int entryNode, int idUpperBound) throws IOException {
+        out.writeInt(layerInfo.get(0).size);
+        out.writeInt(dimension);
+        out.writeInt(entryNode);
+        out.writeInt(layerInfo.get(0).degree);
+        if (layerInfo.size() > 1) {
+            throw new IllegalArgumentException("Layer info is not supported in version " + getVersion());
+        }
+    }
+
+    @Override
+    public CommonHeader readCommonHeader(RandomAccessReader in, int size) throws IOException {
+        int dimension = in.readInt();
+        int entryNode = in.readInt();
+        int maxDegree = in.readInt();
+
+        List<CommonHeader.LayerInfo> layerInfo;
+        layerInfo = List.of(new CommonHeader.LayerInfo(size, maxDegree));
+        logger.debug("Common header finished reading at position {}", in.getPosition());
+
+        return new CommonHeader(version, dimension, entryNode, layerInfo, size);
+    }
+
+    @Override
+    public int commonHeaderSize() {
+        return 4 * Integer.BYTES;
+    }
+
+    @Override
+    public void writeHeaderFeatures(IndexWriter out, Map<FeatureId,? extends Feature> features) throws IOException {
+        // we restrict pre-version-3 writers to INLINE_VECTORS features, so we don't need additional version-handling here
+        for (Feature writer : features.values()) {
+            writer.writeHeader(out);
+        }
+    }
+
+    @Override
+    public int headerSize(Map<FeatureId,? extends Feature> features) {
+        int size = this.commonHeaderSize();
+
+        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+
+        return size;
+    }
+
+    @Override
+    public Map<FeatureId, Feature> loadHeaderFeatures(RandomAccessReader reader, CommonHeader common) throws IOException {
+        Map<FeatureId, Feature> features = new EnumMap<>(FeatureId.class);
+        FeatureId featureId = FeatureId.INLINE_VECTORS;
+        features.put(featureId, featureId.load(common, reader));
+        return features;
+    }
+
+    @Override
+    public OnDiskGraphIndex loadOnDiskIndex(RandomAccessReader reader, Header header, ReaderSupplier readerSupplier, boolean useFooter) throws IOException {
+        return OnDiskGraphIndex.construct(readerSupplier, header, reader.getPosition(), reader);
     }
 
     /**
-     * Helper to create a set of all features except FUSED_PQ.
-     * Used by versions 3–5, which predate fused PQ hierarchy support (version 6).
+     * Helper to create the frozen set of features supported by version 6.
+     * Deliberately enumerated rather than {@code EnumSet.allOf(FeatureId.class)}: version 6's
+     * supported-feature set is a historical fact about a shipped format and must not change just
+     * because a new {@link FeatureId} is added to the enum for some future version.
+     */
+    protected static Set<FeatureId> allFeatures() {
+        return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
+    }
+
+    /**
+     * Helper to create the frozen set of features supported by versions 3–5, which predate fused
+     * PQ hierarchy support (version 6). Deliberately enumerated rather than
+     * {@code EnumSet.complementOf(EnumSet.of(FUSED_PQ))}, so that adding a new {@link FeatureId}
+     * in the future requires an explicit decision about which already-shipped versions support it,
+     * instead of silently being included here.
      */
     protected static Set<FeatureId> nonFusedFeatures() {
-        return EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ));
+        return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
     }
 
     /**

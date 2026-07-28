@@ -17,13 +17,18 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntFunction;
@@ -37,6 +42,20 @@ import java.util.function.IntFunction;
  * makes it easy to add new versions without modifying existing code.
  */
 public interface GraphIndexFormat {
+    static final Logger logger = LoggerFactory.getLogger(GraphIndexFormat.class);
+
+    static OnDiskGraphIndex loadOnDiskIndex(RandomAccessReader reader, long offset, boolean useFooter, ReaderSupplier readerSupplier) throws IOException {
+        logger.debug("Loading OnDiskGraphIndex from offset={}", offset);
+        var header = Header.load(reader, offset);
+
+        logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
+                header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
+        logger.debug("Position after reading header={}", reader.getPosition());
+        return header.common.getGraphIndexFormat().loadOnDiskIndex(reader, header, readerSupplier, useFooter);
+    }
+
+    OnDiskGraphIndex loadOnDiskIndex(RandomAccessReader reader, Header header, ReaderSupplier readerSupplier, boolean useFooter) throws IOException;
+
     /**
      * @return the version number this format handles
      */
@@ -67,6 +86,14 @@ public interface GraphIndexFormat {
      * @return an unmodifiable set of supported feature identifiers
      */
     Set<FeatureId> getSupportedFeatures();
+
+    int commonHeaderSize();
+
+    void writeHeaderFeatures(IndexWriter out, Map<FeatureId,? extends Feature> features) throws IOException;
+
+    int headerSize(Map<FeatureId,? extends Feature> features);
+
+    Map<FeatureId, Feature> loadHeaderFeatures(RandomAccessReader reader, CommonHeader common) throws IOException;
 
     /**
      * Callback for writing L0 (base layer) node records. Implemented by the writer so that
@@ -184,4 +211,24 @@ public interface GraphIndexFormat {
      * @throws IOException if an I/O error occurs while writing
      */
     void writeRandomAccess(WriteContext ctx, RandomAccessWriter out, Map<FeatureId, IntFunction<Feature.State>> suppliers, L0RecordWriter l0Writer) throws IOException;
+    
+    void writeCommonHeader(IndexWriter out, List<CommonHeader.LayerInfo> layerInfo, int dimension, int entryNode, int idUpperBound) throws IOException;
+
+    static CommonHeader loadCommonHeader(RandomAccessReader in) throws IOException {
+        logger.debug("Loading common header at position {}", in.getPosition());
+        int maybeMagic = in.readInt();
+        int version;
+        int size;
+        if (maybeMagic == OnDiskGraphIndex.MAGIC) {
+            version = in.readInt();
+            size = in.readInt();
+        } else {
+            version = 2;
+            size = maybeMagic;
+        }
+        GraphIndexFormat format = GraphIndexFormatFactory.forVersion(version);
+        return format.readCommonHeader(in, size);
+    }
+
+    CommonHeader readCommonHeader(RandomAccessReader in, int size) throws IOException;
 }

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
@@ -102,4 +103,39 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
             }
         }
     }
+
+    @Override
+    public void writeHeaderFeatures(IndexWriter out, Map<FeatureId,? extends Feature> features) throws IOException {
+        // Writing the features in order instead of writing a single integer with all the features (as done in <V6),
+        // preserves the initial ordering computed in the writer.
+        out.writeInt(features.size());
+        for (var featureId : features.keySet()) {
+            out.writeInt(featureId.ordinal());
+            Feature feature = features.get(featureId);
+            feature.writeHeader(out);
+        }
+    }
+
+    @Override
+    public int headerSize(Map<FeatureId,? extends Feature> features) {
+        int size = this.commonHeaderSize();
+        // In V6, this accounts for the number of features and the ordinal of each feature
+        size += Integer.BYTES + features.size() * Integer.BYTES;
+
+        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+
+        return size;
+    }
+
+    @Override
+    public Map<FeatureId, Feature> loadHeaderFeatures(RandomAccessReader reader, CommonHeader common) throws IOException {
+        Map<FeatureId, Feature> features = new LinkedHashMap<>();
+        int nFeatures = reader.readInt();
+        for (int i = 0; i < nFeatures; i++) {
+            FeatureId featureId = FeatureId.values()[reader.readInt()];
+            features.put(featureId, featureId.load(common, reader));
+        }
+        return features;
+    }
+
 }

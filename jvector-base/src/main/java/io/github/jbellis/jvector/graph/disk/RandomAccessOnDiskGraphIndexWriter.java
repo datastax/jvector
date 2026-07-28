@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -112,13 +111,13 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
      * the mapper is not invoked.
      */
     public synchronized void writeFeaturesInline(int ordinal, Map<FeatureId, Feature.State> stateMap) throws IOException {
-        serializer.writeFeaturesInline(createContext(startOffset), ordinal, stateMap, out);
+        graphIndexFormat.writeFeaturesInline(createContext(startOffset), ordinal, stateMap, out);
         maxOrdinalWritten = Math.max(maxOrdinalWritten, ordinal);
     }
 
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        serializer.writeRandomAccess(createContext(startOffset), out, featureStateSuppliers, this::writeL0Records);
+        graphIndexFormat.writeRandomAccess(createContext(startOffset), out, featureStateSuppliers, this::writeL0Records);
     }
 
     protected abstract void writeL0Records(ImmutableGraphIndex.View view,
