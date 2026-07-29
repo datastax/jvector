@@ -121,22 +121,28 @@ vectorutil_dep = declare_dependency(
 #  sources     : 'examples/cpp_driver.cpp',
 #  dependencies: vectorutil_dep,
 #)
-#
-## ---- Tests -----------------------------------------------------------------
-#gtest_dep = dependency('gtest_main', required: true)
-#
-#test_exe = executable(
-#  'test_kernels',
-#  sources     : [
-#    'tests/test_kernels.cpp',
-#    'tests/test_cpuFeatures.cpp',
-#  ],
-#  dependencies: [vectorutil_dep, gtest_dep],
-#)
-#
+
+# ---- Tests -----------------------------------------------------------------
+gtest_dep = dependency('gtest_main', required: false)
+
+if gtest_dep.found()
+  simd_kernels_test = executable(
+    'test_simd_kernels',
+    sources     : [
+      'tests/test_helpers.cpp',
+      'tests/test_similarity.cpp',
+      'tests/test_elementwise.cpp',
+      'tests/test_cpu_features.cpp',
+    ],
+    dependencies: [vectorutil_dep, gtest_dep],
+  )
+
+  test('simd_kernels', simd_kernels_test, protocol: 'gtest', suite: 'simd_kernels')
+
 #test('kernels',     test_exe, protocol: 'gtest', suite: 'kernels')
 #test('cpu_features', test_exe, protocol: 'gtest', suite: 'cpu',
 #     args: ['--gtest_filter=CpuFeaturesTest.*'])
+endif
 #
 ## ---- Benchmarks ------------------------------------------------------------
 #gbench_dep = dependency('benchmark', required: false)
