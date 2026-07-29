@@ -54,7 +54,7 @@ isa_libs = []
 foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
-    sources            : 'jvector_simd_kernels.cpp',
+    sources            : 'src/jvector_simd_kernels.cpp',
     include_directories: hwy_inc,
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
@@ -65,7 +65,7 @@ endforeach
 # set (AVX3 + VNNI, VBMI, VBMI2, IFMA, BITALG, VPOPCNTDQ, GFNI, VAES, VPCLMULQDQ).
 avx3_dl_lib = static_library(
   'simdKernels_avx3_dl',
-  sources            : 'jvector_avx3_dl_kernels.cpp',
+  sources            : 'src/jvector_avx3_dl_kernels.cpp',
   include_directories: hwy_inc,
   cpp_args           : [
     '-march=icelake-server',
@@ -81,7 +81,7 @@ isa_libs += avx3_dl_lib
 # Requires GCC >= 12 or Clang >= 14.
 avx3_spr_lib = static_library(
   'simdKernels_avx3_spr',
-  sources            : 'jvector_avx3_spr_kernels.cpp',
+  sources            : 'src/jvector_avx3_spr_kernels.cpp',
   include_directories: hwy_inc,
   cpp_args           : [
     '-march=sapphirerapids',
@@ -100,9 +100,9 @@ isa_libs += avx3_spr_lib
 # projects that manage their own dispatch (google/highway#1935).
 vectorutil_lib = shared_library(
   'jvector',
-  sources            : ['jvector_simd.cpp',
+  sources            : ['src/jvector_simd.cpp',
                         'third_party/highway/hwy/abort.cc'],
-  include_directories: [include_directories('.'), hwy_inc],
+  include_directories: [include_directories('src'), hwy_inc],
   cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'],
   link_whole         : isa_libs,
   version            : meson.project_version(),
@@ -112,7 +112,7 @@ vectorutil_lib = shared_library(
 # Dependency object for use by executables/tests in this build tree.
 vectorutil_dep = declare_dependency(
   link_with          : vectorutil_lib,
-  include_directories: include_directories('.'),
+  include_directories: include_directories('src'),
 )
 
 ## Example driver that exercises the runtime-dispatch API.
