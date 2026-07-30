@@ -491,7 +491,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Code cache may or may not be present; capture once so refineOneNode can take the fast path.
         // The cache is shared across threads; refineOneNode duplicates per call (cheap; no per-thread
         // state to track and the duplicates are tiny GC-friendly ByteBuffer wrappers).
-        final java.nio.MappedByteBuffer codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
+        final PreEncodedCodeCache codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
         final int cacheCodeSize = hasFusedPQ ? strategy.getCacheCodeSize() : 0;
 
         try (var supplier = new SimpleReader.Supplier(outputPath);
@@ -529,7 +529,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             final int codeSize = pqCodeSize;
             final VectorCompressor<ByteSequence<?>> cmp = compressor;
             final int bw = beamWidth;
-            final java.nio.MappedByteBuffer cache = codeCache;
+            final PreEncodedCodeCache cache = codeCache;
             final int cacheSz = cacheCodeSize;
             final OnDiskGraphIndex graphRef = mergedGraph;
 
@@ -593,7 +593,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                VectorCompressor<ByteSequence<?>> compressor,
                                int beamWidth,
                                OnDiskGraphIndex mergedGraph,
-                               java.nio.MappedByteBuffer codeCache,
+                               PreEncodedCodeCache codeCache,
                                int cacheCodeSize) {
         OnDiskGraphIndex.View view = scratch.view;
         view.getVectorInto(node, scratch.queryVec, 0);
@@ -687,14 +687,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             writeOffset = view.offsetFor(node, FeatureId.FUSED_PQ);
             if (codeCache != null) {
                 // Memcpy from the pre-encoded cache (indexed by new ordinal). Avoids one FP
-                // vector read AND one PQ encode per selected neighbor. duplicate() gives this
-                // call its own position cursor without racing other workers.
-                ByteBuffer cacheView = codeCache.duplicate();
+                // vector read AND one PQ encode per selected neighbor. The cache resolves the
+                // ordinal to a per-thread view internally, so workers don't race.
                 byte[] codeBuf = scratch.pqCodeBytes;
                 for (int k = 0; k < selectedSize; k++) {
                     int newOrd = scratch.selectedNodes[k];
-                    cacheView.position(newOrd * cacheCodeSize);
-                    cacheView.get(codeBuf, 0, cacheCodeSize);
+                    codeCache.get(newOrd, codeBuf);
                     rec.put(codeBuf, 0, cacheCodeSize);
                 }
             } else {

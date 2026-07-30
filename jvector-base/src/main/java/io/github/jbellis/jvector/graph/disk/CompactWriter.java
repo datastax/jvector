@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -72,11 +71,10 @@ final class CompactWriter implements AutoCloseable {
     private ByteSequence<?> entryNodePqCode;
 
     // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
-    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
-    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
-    private MappedByteBuffer pqCodeCache;
+    // codes from the cache instead of calling pq.encodeTo per neighbor. The cache handles
+    // per-thread view duplication internally, so positions don't race.
+    private PreEncodedCodeCache pqCodeCache;
     private int pqCodeSize;
-    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
     CompactWriter(Path outputPath,
@@ -139,15 +137,13 @@ final class CompactWriter implements AutoCloseable {
      * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
      * re-encoded per write.
      *
-     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
-     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
+     * @param cache       a cache holding one code per new ordinal, for ordinals
+     *                    {@code 0..maxOrdinal}
      * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
      */
-    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+    public void enablePqCodeCache(PreEncodedCodeCache cache, int pqCodeSize) {
         this.pqCodeCache = cache;
         this.pqCodeSize = pqCodeSize;
-        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
-        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
     }
 
@@ -272,13 +268,10 @@ final class CompactWriter implements AutoCloseable {
             int k = 0;
             if (pqCodeCache != null) {
                 // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
-                ByteBuffer cacheView = pqCacheViewPerThread.get();
                 byte[] codeBuf = pqCodeBufPerThread.get();
                 for (; k < selectedCache.size; k++) {
                     int newOrd = selectedCache.nodes[k]; // already remapped before this call
-                    int offset = newOrd * pqCodeSize;
-                    cacheView.position(offset);
-                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    pqCodeCache.get(newOrd, codeBuf);
                     bwriter.write(codeBuf, 0, pqCodeSize);
                 }
             } else {
