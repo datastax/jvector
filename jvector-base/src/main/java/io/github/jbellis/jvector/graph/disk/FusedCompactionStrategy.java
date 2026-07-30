@@ -25,12 +25,9 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Unsafe;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -56,18 +53,6 @@ import java.util.concurrent.Future;
 public final class FusedCompactionStrategy extends QuantizationCompactionStrategy {
     private static final Logger log = LoggerFactory.getLogger(FusedCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private static final Unsafe UNSAFE = getUnsafe();
-
-    private static Unsafe getUnsafe() {
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            return (Unsafe) f.get(null);
-        } catch (Exception e) {
-            log.warn("FusedCompactionStrategy can't acquire needed Unsafe access; code-cache will not be explicitly unmapped");
-            return null;
-        }
-    }
 
     // Non-final: nulled by releaseSources() after compactGraphImpl so the source graphs reachable
     // through ctx.sources can be GC'd before refinement. onAfterClose must not touch ctx.
@@ -78,9 +63,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     private VectorCompressor<ByteSequence<?>> retrainedCompressor;
 
     // Transient pre-encode cache: lives in a memory-mapped section appended past the projected
-    // end of the output graph file. Truncated away in onAfterClose. Off-heap; single-mapping
-    // limit (2 GB) caps this at ~10M nodes for typical codeSize.
-    private MappedByteBuffer codeCache;
+    // end of the output graph file. Truncated away in onAfterClose. Off-heap, and chunked across
+    // several mappings so it is not bounded by the 2 GB single-mapping limit — see
+    // PreEncodedCodeCache for why that ceiling used to disable the pass entirely.
+    private PreEncodedCodeCache codeCache;
     private int cacheCodeSize;
     private long cacheTruncateAt;
 
@@ -105,7 +91,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
-    public MappedByteBuffer getCodeCache() {
+    public PreEncodedCodeCache getCodeCache() {
         return codeCache;
     }
 
@@ -177,12 +163,8 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     @Override
     public void onAfterClose(Path graphPath) {
         if (cacheTruncateAt > 0) {
-            if (codeCache != null && UNSAFE != null) {
-                try {
-                    UNSAFE.invokeCleaner(codeCache);
-                } catch (IllegalArgumentException ignored) {
-                    // duplicated/indirect buffer; not cleanable
-                }
+            if (codeCache != null) {
+                codeCache.close();
             }
             codeCache = null;
             try (FileChannel fc = FileChannel.open(graphPath, StandardOpenOption.WRITE)) {
@@ -199,9 +181,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     /** Pre-encode every live node's code into a memory-mapped section past the projected output end. */
     private void precomputeCodes(CompactWriter writer) throws IOException {
         cacheCodeSize = retrainedCompressor.compressedVectorSize();
-        long tempSize = (long) (ctx.maxOrdinal + 1) * cacheCodeSize;
-        if (tempSize <= 0 || tempSize > Integer.MAX_VALUE) {
-            log.info("Code pre-encode skipped: required cache size {} bytes exceeds single-mapping limit", tempSize);
+        int codeCount = ctx.maxOrdinal + 1;
+        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize);
+        if (codeCount <= 0 || tempSize <= 0) {
+            log.info("Code pre-encode skipped: degenerate cache size {} bytes for {} codes", tempSize, codeCount);
             return;
         }
 
@@ -213,7 +196,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
             fc.write(pad, totalSize - 1);
-            codeCache = fc.map(FileChannel.MapMode.READ_WRITE, tempOffset, tempSize);
+            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize);
         }
 
         final int cs = cacheCodeSize;
@@ -243,10 +226,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                             code.zero();
                             compressor.encodeTo(vec, code);
                             int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                            int offset = newOrd * cs;
-                            for (int i = 0; i < cs; i++) {
-                                codeCache.put(offset + i, code.get(i));
-                            }
+                            codeCache.put(newOrd, code);
                             count++;
                         }
                     }
@@ -259,8 +239,8 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
             for (Future<Long> f : ctx.executor.invokeAll(tasks)) {
                 total += f.get();
             }
-            log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache (offset {})",
-                    total, tempSize / (1024 * 1024), tempOffset);
+            log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {})",
+                    total, tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
         } catch (InterruptedException | ExecutionException e) {
             throw new IOException("Code pre-encode failed", e);
         }
