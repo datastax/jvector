@@ -1,0 +1,27 @@
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+dataset: sift-128-euclidean
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: SQ
+      # Per-dimension min/max scalar quantization: maps float32 → int8.
+      # No parameters required; scheme is fixed to per_dim.
+  reranking:
+    - FP   # INLINE_VECTORS stores dequantized float32 for reranking after INT8 graph traversal
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 5.0, 10.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: None   # INT8 search uses byte scoring directly via ByteVectorSimilarityFunction

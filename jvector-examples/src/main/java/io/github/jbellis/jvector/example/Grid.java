@@ -35,10 +35,13 @@ import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
+import io.github.jbellis.jvector.quantization.ScalarQuantizer;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -46,6 +49,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.disk.feature.SQFeature;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -57,6 +61,9 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.FileNotFoundException;
@@ -242,8 +249,48 @@ public class Grid {
             VectorCompressor<?> buildCompressorObj = null;
             String buildQuantType = null;
 
-            if (buildCompressor != null) {
-                var buildParams = buildCompressor.apply(ds);
+            // Check for INT8/SQ path before resolving the compressor object
+            CompressorParameters buildParams = buildCompressor != null ? buildCompressor.apply(ds) : null;
+
+            if (buildParams instanceof CompressorParameters.SQParameters) {
+                // --- INT8 scalar-quantization build path ---
+                String buildCompressorString = "SQ(per_dim)";
+                ScalarQuantizer sq = ScalarQuantizer.fit(ds.getBaseRavv());
+                Int8BuildResult int8Result =
+                        buildInt8InMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, sq, workDirectory);
+
+                // Capture post-build metrics
+                diagnostics.capturePostPhaseSnapshot("Graph Build");
+                diagnostics.printDiskStatistics("Graph Index Build");
+                System.out.printf("Index build time: %f seconds%n%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
+                constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
+
+                try {
+                    int8Result.indexes.forEach((features, index) -> {
+                        final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex
+                                ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
+                        try (var cs = new ConfiguredSystem(ds, index, null, featureSetForIndex, int8Result.byteRavv)) {
+                            testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                                    featureSetForIndex, buildCompressorString, artifacts, constructionMetrics, workDirectory);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+                    for (var index : int8Result.indexes.values()) {
+                        index.close();
+                    }
+                } finally {
+                    for (int nn = 0; nn < featureSets.size(); nn++) {
+                        Path p = workDirectory.resolve("graph" + nn);
+                        try { Files.deleteIfExists(p); } catch (IOException e) {
+                            System.err.println("Cleanup Failed: Could not delete " + p.getFileName() + " -> " + e.getMessage());
+                        }
+                    }
+                }
+                return; // done for this grid cell
+            }
+
+            if (buildParams != null) {
                 buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
                 buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
             }
@@ -606,6 +653,95 @@ public class Grid {
         }
         indexBuildTimes.put(ds.getName(), buildTimeS);
         return indexes;
+    }
+
+    /** Return type for buildInt8InMemory, bundling the index map with the quantized base vectors. */
+    private static class Int8BuildResult {
+        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final ListRandomAccessByteVectorValues byteRavv;
+        Int8BuildResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, ListRandomAccessByteVectorValues byteRavv) {
+            this.indexes = indexes;
+            this.byteRavv = byteRavv;
+        }
+    }
+
+    /**
+     * Builds an INT8 graph index in-memory from a float32 DataSet by applying per-dimension
+     * scalar quantization. Embeds the ScalarQuantizer in the index header via SQFeature so it
+     * is available at search time without re-fitting. Writes original float32 vectors as
+     * INLINE_VECTORS for full-fidelity reranking.
+     * Feature sets other than INLINE_VECTORS are skipped for INT8 builds.
+     */
+    private static Int8BuildResult buildInt8InMemory(List<? extends Set<FeatureId>> featureSets,
+                                                     int M,
+                                                     int efConstruction,
+                                                     float neighborOverflow,
+                                                     boolean addHierarchy,
+                                                     boolean refineFinalGraph,
+                                                     DataSet ds,
+                                                     ScalarQuantizer sq,
+                                                     Path testDirectory)
+            throws IOException
+    {
+        var floatVectors = ds.getBaseRavv();
+        System.out.format("%s: Scalar-quantizing %d vectors (per_dim)%n", ds.getName(), floatVectors.size());
+        long sqStart = System.nanoTime();
+        ListRandomAccessByteVectorValues byteRavv = sq.quantizeAll(floatVectors);
+        System.out.format("%s: Quantization done in %.2fs%n", ds.getName(), (System.nanoTime() - sqStart) / 1e9);
+
+        ByteVectorSimilarityFunction byteSimFunc = toByteSimFunc(ds.getSimilarityFunction());
+
+        GraphIndexBuilder builder = new GraphIndexBuilder(byteRavv, byteSimFunc, M, efConstruction, neighborOverflow, 1.2f, addHierarchy);
+        long start = System.nanoTime();
+        var onHeapGraph = builder.build(byteRavv);
+        double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+        System.out.format("Build (INT8/SQ) M=%d overflow=%.2f ef=%d in %.2fs%n", M, neighborOverflow, efConstruction, buildTimeS);
+        for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+            System.out.format("  L%d: %d nodes, %.2f avg degree%n", i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
+        }
+
+        // Validate up-front: every feature set must contain INLINE_VECTORS.
+        // NVQ and FUSED_PQ require float32 codebooks and are not supported for INT8 builds.
+        for (var features : featureSets) {
+            if (!features.contains(FeatureId.INLINE_VECTORS)) {
+                throw new IllegalArgumentException(
+                        "INT8/SQ build requires reranking: [FP] in YAML (feature set must contain INLINE_VECTORS). " +
+                        "Got: " + features + ". NVQ and FUSED_PQ are not supported for INT8 builds.");
+            }
+        }
+
+        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        int n = 0;
+        for (var features : featureSets) {
+            var graphPath = testDirectory.resolve("graph" + n++);
+            var identityMapper = new OrdinalMapper.IdentityMapper(byteRavv.size() - 1);
+            var writer = new OnDiskGraphIndexWriter.Builder(onHeapGraph, graphPath)
+                    .withMapper(identityMapper)
+                    .with(new SQFeature(sq))
+                    .with(new InlineVectors(floatVectors.dimension()))
+                    .build();
+            try (writer) {
+                start = System.nanoTime();
+                writer.write(Map.of(
+                        FeatureId.INLINE_VECTORS,
+                        (IntFunction<Feature.State>) nodeId -> new InlineVectors.State(floatVectors.getVector(nodeId))
+                ));
+                System.out.format("Wrote %s (INT8) in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+            }
+            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
+        }
+        indexBuildTimes.put(ds.getName(), buildTimeS);
+        return new Int8BuildResult(indexes, byteRavv);
+    }
+
+    /** Maps a float VectorSimilarityFunction to its byte equivalent. */
+    private static ByteVectorSimilarityFunction toByteSimFunc(VectorSimilarityFunction vsf) {
+        switch (vsf) {
+            case EUCLIDEAN:   return ByteVectorSimilarityFunction.EUCLIDEAN;
+            case DOT_PRODUCT: return ByteVectorSimilarityFunction.DOT_PRODUCT;
+            case COSINE:      return ByteVectorSimilarityFunction.COSINE;
+            default: throw new IllegalArgumentException("No ByteVectorSimilarityFunction for " + vsf);
+        }
     }
 
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
@@ -1101,18 +1237,49 @@ public class Grid {
         CompressedVectors cv;
         Set<FeatureId> features;
 
+        // Non-null for INT8/SQ builds; null otherwise. sq is recovered from the index header.
+        final ListRandomAccessByteVectorValues byteRavv;
+
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
             return new GraphSearcher(index);
         });
 
+        /** Constructor for float32 builds. */
         ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
+            this.byteRavv = null;
+        }
+
+        /** Constructor for INT8/SQ builds. sq is recovered from the SQFeature in the index header. */
+        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv,
+                         Set<FeatureId> features, ListRandomAccessByteVectorValues byteRavv) {
+            this.ds = ds;
+            this.index = index;
+            this.cv = cv;
+            this.features = features;
+            this.byteRavv = byteRavv;
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+            // INT8/SQ path: recover the ScalarQuantizer from the index header (SQFeature),
+            // encode the query on-the-fly, score byte×byte against the in-memory byteRavv,
+            // then rerank via INLINE_VECTORS (original float32 vectors) for final accuracy.
+            if (features.contains(FeatureId.SQ_QUANTIZER)) {
+                ScalarQuantizer sq = ((SQFeature) ((OnDiskGraphIndex) index).getFeatures().get(FeatureId.SQ_QUANTIZER))
+                        .getScalarQuantizer();
+                ByteSequence<?> qByte = sq.encode(queryVector);
+                ByteVectorSimilarityFunction byteSimFunc = toByteSimFunc(ds.getSimilarityFunction());
+                ScoreFunction.ApproximateScoreFunction asf =
+                        node -> byteSimFunc.compare(qByte, byteRavv.getVector(node));
+                var scoringView = (ImmutableGraphIndex.ScoringView) view;
+                var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+                return new DefaultSearchScoreProvider(asf, rr);
+            }
+
+            // Float32 path (unchanged)
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {

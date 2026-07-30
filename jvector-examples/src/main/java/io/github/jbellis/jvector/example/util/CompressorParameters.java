@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
-
 public abstract class CompressorParameters {
     public static final CompressorParameters NONE = new NoCompressionParameters();
 
@@ -92,6 +91,28 @@ public abstract class CompressorParameters {
         @Override
         public boolean supportsCaching() {
             return true;
+        }
+    }
+
+    /**
+     * Sentinel parameters for scalar (INT8) quantization.
+     * Grid detects this type via instanceof and routes to the INT8 build path;
+     * computeCompressor() is never called on this class.
+     */
+    public static class SQParameters extends CompressorParameters {
+        @Override
+        public VectorCompressor<?> computeCompressor(DataSet ds) {
+            throw new UnsupportedOperationException("SQ uses the INT8 build path; computeCompressor should not be called");
+        }
+
+        @Override
+        public String idStringFor(DataSet ds) {
+            return "SQ_per_dim_" + ds.getName();
+        }
+
+        @Override
+        public boolean supportsCaching() {
+            return false;
         }
     }
 
