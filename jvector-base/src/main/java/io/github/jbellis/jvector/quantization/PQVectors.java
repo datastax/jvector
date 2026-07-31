@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.util.RuntimeMode;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -449,6 +450,16 @@ public abstract class PQVectors implements CompressedVectors {
         return 1024;
     }
 
+    // Incrementally-maintained chunk accounting for the production-mode
+    // ramBytesUsed path. Chunks are materialized in order and never resized
+    // (MutablePQVectors allocates each at a fixed chunkBytes), so summing only
+    // the chunks added since the last call is EXACT, not an estimate. Guarded
+    // by its own lock: the accounting path is called from an embedding host's
+    // build loop concurrently with encode threads.
+    private final Object ramAccountingLock = new Object();
+    private long accountedChunkBytes = 0;
+    private int accountedChunkCount = 0;
+
     @Override
     public long ramBytesUsed() {
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
@@ -457,6 +468,27 @@ public abstract class PQVectors implements CompressedVectors {
 
         long codebooksSize = pq.ramBytesUsed();
         long chunksArraySize = OH_BYTES + AH_BYTES + (long) validChunkCount() * REF_BYTES;
+
+        if (RuntimeMode.isProduction()) {
+            // Diagnostic-walk gate (jvector.mode): sum only the chunks that
+            // appeared since the last call. An embedding host that asks for
+            // the total once per inserted vector gets amortized O(1) instead
+            // of O(chunks) — the full walk once turned a 29M-row index build
+            // into two CPU-hours of accounting.
+            long dataSize;
+            synchronized (ramAccountingLock) {
+                int count = validChunkCount();
+                for (int i = accountedChunkCount; i < count; i++) {
+                    accountedChunkBytes += compressedDataChunks[i].ramBytesUsed();
+                }
+                accountedChunkCount = count;
+                dataSize = accountedChunkBytes;
+            }
+            return codebooksSize + chunksArraySize + dataSize;
+        }
+
+        // Development mode: the full walk, recomputed from first principles
+        // every call, so accounting drift is observable.
         long dataSize = 0;
         for (int i = 0; i < validChunkCount(); i++) {
             dataSize += compressedDataChunks[i].ramBytesUsed();

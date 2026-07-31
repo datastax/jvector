@@ -406,6 +406,39 @@ public class TestProductQuantization extends RandomizedTest {
         System.out.println("Test completed successfully");
     }
 
+    /**
+     * The production-mode (default) ramBytesUsed path maintains its chunk
+     * total incrementally instead of walking every chunk per call — the walk
+     * once turned per-insert accounting into O(n^2). Chunks are materialized
+     * in order and never resized, so the incremental total must be EXACTLY the
+     * full walk, at every growth point, including across chunk boundaries.
+     */
+    @Test
+    public void testRamBytesUsedIncrementalAccountingIsExact() {
+        var vectors = createRandomVectors(3000, 64);
+        var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, 64), 8, 256, false);
+        MutablePQVectors pqm = new MutablePQVectors(pq);
+        for (int ordinal = 0; ordinal < vectors.size(); ordinal++) {
+            pqm.encodeAndSet(ordinal, vectors.get(ordinal));
+            if (ordinal % 257 == 0 || ordinal == vectors.size() - 1) {
+                long reported = pqm.ramBytesUsed();
+                // Reference: the full walk, computed here from the same
+                // protected state the diagnostic path reads.
+                long walk = 0;
+                for (int i = 0; i < pqm.validChunkCount(); i++)
+                    walk += pqm.compressedDataChunks[i].ramBytesUsed();
+                long overhead = pqm.pq.ramBytesUsed()
+                        + io.github.jbellis.jvector.util.RamUsageEstimator.NUM_BYTES_OBJECT_HEADER
+                        + io.github.jbellis.jvector.util.RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                        + (long) pqm.validChunkCount() * io.github.jbellis.jvector.util.RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+                assertEquals("at ordinal " + ordinal, overhead + walk, reported);
+                // And a repeated call with no growth returns the same value —
+                // the cache must be a fixed point, not an accumulator.
+                assertEquals(reported, pqm.ramBytesUsed());
+            }
+        }
+    }
+
     @Test
     public void testPQCodebookSums() {
         // Generate a PQ for random 2D vectors
