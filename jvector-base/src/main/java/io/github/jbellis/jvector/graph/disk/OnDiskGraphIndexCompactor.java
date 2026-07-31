@@ -36,6 +36,7 @@ import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
 import io.github.jbellis.jvector.util.work.WorkLimiter;
 import io.github.jbellis.jvector.util.work.WorkStage;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -117,10 +118,40 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public enum Phase implements WorkStage {
+        /** Complete public compaction invocation. */
+        TOTAL,
+        /** Selects and orders the balanced PQ training sample. */
+        PQ_SAMPLE,
+        /** Reads full-precision training vectors from source graphs. */
+        PQ_EXTRACT,
+        /** Refines the quantization codebook from the training vectors. */
+        PQ_REFINE,
+        /** Complete quantization retraining hook, including scheme-specific work. */
+        QUANTIZATION_RETRAIN,
+        /** Computes output features, hierarchy layout, and entry-node mapping. */
+        PREPARE_OUTPUT,
+        /** Writes the graph header. */
+        WRITE_HEADER,
+        /** Pre-encodes live-node quantization codes for fused output. */
+        PRE_ENCODE,
+        /** Merges and writes the base graph layer. */
+        MERGE_BASE_LAYER,
+        /** Merges and writes every upper graph layer. */
+        MERGE_UPPER_LAYERS,
         /** Merging source graphs level-by-level and writing the compacted graph body. */
         MERGE_LEVELS,
+        /** Writes strategy-specific records after graph levels. */
+        WRITE_TAIL,
+        /** Writes the jvector graph footer. */
+        WRITE_FOOTER,
+        /** Drops source graph references before optional refinement. */
+        RELEASE_SOURCES,
         /** Second pass refining neighborhoods in the compacted graph. */
-        REFINE
+        REFINE,
+        /** Encodes and writes a non-fused compressed-vector sidecar. */
+        WRITE_SIDECAR,
+        /** Releases transient mappings and truncates temporary output sections. */
+        CLEANUP
     }
 
     /**
@@ -700,23 +731,31 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path outputPath, long startOffset) throws FileNotFoundException {
-        if (startOffset < 0) {
-            throw new IllegalArgumentException("startOffset must be >= 0, got " + startOffset);
-        }
-        if (startOffset == 0) {
-            truncateStandaloneDestination(outputPath);
-        }
-        QuantizationCompactionStrategy strategy = detectInlineStrategy();
-        try {
-            compactGraphImpl(outputPath, startOffset, strategy);
-            releaseSourcesBeforeRefine(strategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(outputPath, startOffset, strategy);
+        try (ProgressTracker.PhaseScope total = limiter.startPhase(Phase.TOTAL)) {
+            if (startOffset < 0) {
+                throw new IllegalArgumentException("startOffset must be >= 0, got " + startOffset);
             }
-        } finally {
-            // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
-            // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
-            strategy.onAfterClose(outputPath);
+            if (startOffset == 0) {
+                truncateStandaloneDestination(outputPath);
+            }
+            QuantizationCompactionStrategy strategy = detectInlineStrategy();
+            try {
+                compactGraphImpl(outputPath, startOffset, strategy);
+                try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.RELEASE_SOURCES)) {
+                    releaseSourcesBeforeRefine(strategy);
+                }
+                if (refineAfterCompaction) {
+                    try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.REFINE)) {
+                        refineCompactedGraph(outputPath, startOffset, strategy);
+                    }
+                }
+            } finally {
+                // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
+                // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
+                try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.CLEANUP)) {
+                    strategy.onAfterClose(outputPath);
+                }
+            }
         }
     }
 
@@ -761,33 +800,43 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
-        if (sourceCompressed == null) {
-            throw new IllegalStateException(
-                    "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
-        }
-        Objects.requireNonNull(compressedPath, "compressedPath");
-
-        // Both outputs are wholly jvector-owned standalone files; clear stale content the same
-        // way compact(Path) does. The graph reload is footer-based and provably corruptible by a
-        // stale tail, and the sidecar writer likewise opens "rw" without truncating.
-        truncateStandaloneDestination(graphPath);
-        truncateStandaloneDestination(compressedPath);
-
-        // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
-        // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
-        QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
-        QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
-        try {
-            sidecarStrategy.retrain(similarityFunction);
-            compactGraphImpl(graphPath, 0L, inlineStrategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(graphPath, 0L, inlineStrategy);
+        try (ProgressTracker.PhaseScope total = limiter.startPhase(Phase.TOTAL)) {
+            if (sourceCompressed == null) {
+                throw new IllegalStateException(
+                        "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
             }
-            sidecarStrategy.writeSidecar(compressedPath);
-        } catch (IOException e) {
-            throw new RuntimeException("Sidecar compaction failed", e);
-        } finally {
-            inlineStrategy.onAfterClose(graphPath);
+            Objects.requireNonNull(compressedPath, "compressedPath");
+
+            // Both outputs are wholly jvector-owned standalone files; clear stale content the same
+            // way compact(Path) does. The graph reload is footer-based and provably corruptible by a
+            // stale tail, and the sidecar writer likewise opens "rw" without truncating.
+            truncateStandaloneDestination(graphPath);
+            truncateStandaloneDestination(compressedPath);
+
+            // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+            // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+            QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
+            QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
+            try {
+                try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.QUANTIZATION_RETRAIN)) {
+                    sidecarStrategy.retrain(similarityFunction);
+                }
+                compactGraphImpl(graphPath, 0L, inlineStrategy);
+                if (refineAfterCompaction) {
+                    try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.REFINE)) {
+                        refineCompactedGraph(graphPath, 0L, inlineStrategy);
+                    }
+                }
+                try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.WRITE_SIDECAR)) {
+                    sidecarStrategy.writeSidecar(compressedPath);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Sidecar compaction failed", e);
+            } finally {
+                try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.CLEANUP)) {
+                    inlineStrategy.onAfterClose(graphPath);
+                }
+            }
         }
     }
 
@@ -855,7 +904,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, asExecutorService(executor), taskWindowSize);
+                dimension, maxOrdinal, asExecutorService(executor), taskWindowSize, limiter);
     }
 
     /**
@@ -869,26 +918,39 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
     private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
-        strategy.retrain(similarityFunction);
+        try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.QUANTIZATION_RETRAIN)) {
+            strategy.retrain(similarityFunction);
+        }
 
-        boolean fusedPQEnabled = strategy.writesCodesInline();
-        ProductQuantization pq = strategy.compressorAsPQ();
-        boolean compressedPrecision = fusedPQEnabled;
-        int maxBaseDegree = java.util.Collections.max(maxDegrees);
-        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
-                strategy.outputFusedFeature(maxBaseDegree);
-
-        List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
-        int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
-        int entryNode = remappers.get(entryNodeSource[0]).oldToNew(entryNodeSource[1]);
+        boolean fusedPQEnabled;
+        ProductQuantization pq;
+        boolean compressedPrecision;
+        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature;
+        List<CommonHeader.LayerInfo> layerInfo;
+        int[] entryNodeSource;
+        int entryNode;
+        try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.PREPARE_OUTPUT)) {
+            fusedPQEnabled = strategy.writesCodesInline();
+            pq = strategy.compressorAsPQ();
+            compressedPrecision = fusedPQEnabled;
+            int maxBaseDegree = java.util.Collections.max(maxDegrees);
+            outputFusedFeature = strategy.outputFusedFeature(maxBaseDegree);
+            layerInfo = computeLayerInfoFromSources();
+            entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
+            entryNode = remappers.get(entryNodeSource[0]).oldToNew(entryNodeSource[1]);
+        }
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
         try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, startOffset, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
-            writer.writeHeader();
-            strategy.onAfterHeader(writer);
+            try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.WRITE_HEADER)) {
+                writer.writeHeader();
+            }
+            try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.PRE_ENCODE)) {
+                strategy.onAfterHeader(writer);
+            }
 
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
             if (seedingActive) {
@@ -897,9 +959,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         seeded, cold, cold + seeded == 0 ? 0 : 100 * seeded / (seeded + cold));
             }
 
-            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
+            try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.WRITE_TAIL)) {
+                strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
+            }
 
-            writer.writeFooter();
+            try (ProgressTracker.PhaseScope ignored = limiter.startPhase(Phase.WRITE_FOOTER)) {
+                writer.writeFooter();
+            }
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -1391,18 +1457,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, beamWidth, pq);
 
-            if (level == 0) {
-                log.info("Compacting level 0 (base layer)");
+            Phase timedPhase = level == 0 ? Phase.MERGE_BASE_LAYER : Phase.MERGE_UPPER_LAYERS;
+            try (ProgressTracker.PhaseScope ignored = limiter.startPhase(timedPhase)) {
+                if (level == 0) {
+                    log.info("Compacting level 0 (base layer)");
 
-                ExecutorCompletionService<List<WriteResult>> ecs =
-                        new ExecutorCompletionService<>(executor);
+                    ExecutorCompletionService<List<WriteResult>> ecs =
+                            new ExecutorCompletionService<>(executor);
 
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
-                        return computeBaseBatch(writer, bs, scratch, params);
-                    });
-                };
+                    java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
+                        ecs.submit(() -> {
+                            Scratch scratch = threadLocalScratch.get();
+                            return computeBaseBatch(writer, bs, scratch, params);
+                        });
+                    };
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
@@ -1492,6 +1560,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         mergeProgress
                 );
             }
+            } // PhaseScope(timedPhase)
         }
 
         Scratch s = threadLocalScratch.get();
@@ -2639,4 +2708,3 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
 }
-

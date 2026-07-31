@@ -154,6 +154,22 @@ public class TestProgressLimiter {
     }
 
     @Test
+    public void loggingDelegatesPhaseLifetime() {
+        RecordingLimiter delegate = new RecordingLimiter();
+        List<String> log = Collections.synchronizedList(new ArrayList<>());
+        ProgressLimiter limiter = ProgressLimiter.logging(delegate, log::add);
+
+        try (ProgressTracker.PhaseScope ignored = limiter.startPhase(STAGE)) {
+            assertEquals(1, delegate.phaseStarts.get());
+            assertEquals(0, delegate.phaseCloses.get());
+        }
+
+        assertEquals(1, delegate.phaseCloses.get());
+        assertTrue(log.stream().anyMatch(s -> s.contains("phase[TEST] started")));
+        assertTrue(log.stream().anyMatch(s -> s.contains("phase[TEST] completed")));
+    }
+
+    @Test
     public void loggingPreservesDelegateGrant() throws Exception {
         RecordingLimiter delegate = new RecordingLimiter();
         ProgressLimiter limiter = ProgressLimiter.logging(delegate, s -> { });
@@ -213,6 +229,7 @@ public class TestProgressLimiter {
         });
         assertTrue("UNLIMITED.acquire must not block, waited " + ms + "ms", ms < 500);
         ProgressLimiter.UNLIMITED.onProgress(STAGE, 7, -1); // no-op, must not throw
+        ProgressLimiter.UNLIMITED.startPhase(STAGE).close();
 
         // Facet no-op constants exist and are safe.
         WorkLimiter.Grant.NOOP.close();
@@ -257,6 +274,8 @@ public class TestProgressLimiter {
         final AtomicInteger progressCalls = new AtomicInteger();
         final AtomicInteger acquireCalls = new AtomicInteger();
         final AtomicInteger grantCloses = new AtomicInteger();
+        final AtomicInteger phaseStarts = new AtomicInteger();
+        final AtomicInteger phaseCloses = new AtomicInteger();
         volatile long lastCompleted, lastTotal, lastAmount;
 
         @Override
@@ -271,6 +290,12 @@ public class TestProgressLimiter {
             acquireCalls.incrementAndGet();
             lastAmount = amount;
             return grantCloses::incrementAndGet;
+        }
+
+        @Override
+        public PhaseScope startPhase(WorkStage stage) {
+            phaseStarts.incrementAndGet();
+            return phaseCloses::incrementAndGet;
         }
     }
 

@@ -557,6 +557,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         final AtomicInteger acquires = new AtomicInteger();
         final AtomicInteger closes = new AtomicInteger();
         final AtomicLong bytesAcquired = new AtomicLong();
+        final Set<String> phaseStarts = ConcurrentHashMap.newKeySet();
+        final Map<String, AtomicInteger> phaseStartCounts = new ConcurrentHashMap<>();
+        final Map<String, AtomicInteger> phaseCloseCounts = new ConcurrentHashMap<>();
 
         @Override
         public void onProgress(WorkStage stage, long completed, long total) {
@@ -573,6 +576,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             acquires.incrementAndGet();
             bytesAcquired.addAndGet(amount);
             return () -> { closes.incrementAndGet(); };
+        }
+
+        @Override
+        public PhaseScope startPhase(WorkStage stage) {
+            String name = stage.name();
+            phaseStarts.add(name);
+            phaseStartCounts.computeIfAbsent(name, ignored -> new AtomicInteger()).incrementAndGet();
+            return () -> phaseCloseCounts.computeIfAbsent(name, ignored -> new AtomicInteger()).incrementAndGet();
         }
     }
 
@@ -722,6 +733,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         assertTrue("acquire never called", rec.acquires.get() > 0);
         assertTrue("acquire amounts were all zero", rec.bytesAcquired.get() > 0);
         assertEquals("every grant must be closed exactly once", rec.acquires.get(), rec.closes.get());
+
+        // Every long-task phase must close, including failure-safe cleanup and the opt-in refine pass.
+        for (String phase : Arrays.asList("TOTAL", "QUANTIZATION_RETRAIN", "PREPARE_OUTPUT",
+                                          "WRITE_HEADER", "PRE_ENCODE", "MERGE_BASE_LAYER",
+                                          "WRITE_TAIL", "WRITE_FOOTER", "RELEASE_SOURCES",
+                                          "REFINE", "CLEANUP")) {
+            assertTrue("phase not started: " + phase, rec.phaseStarts.contains(phase));
+            assertEquals("phase start/close mismatch for " + phase,
+                    rec.phaseStartCounts.get(phase).get(), rec.phaseCloseCounts.get(phase).get());
+        }
 
         // Output is a valid, complete graph.
         try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {

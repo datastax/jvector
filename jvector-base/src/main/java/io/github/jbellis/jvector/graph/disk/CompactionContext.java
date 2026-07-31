@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
 
 import java.util.Collections;
 import java.util.List;
@@ -40,6 +41,7 @@ public final class CompactionContext {
     public final int maxOrdinal;
     public final ExecutorService executor;
     public final int taskWindowSize;
+    public final ProgressLimiter progressLimiter;
 
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
@@ -50,6 +52,20 @@ public final class CompactionContext {
             int maxOrdinal,
             ExecutorService executor,
             int taskWindowSize) {
+        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal,
+             executor, taskWindowSize, ProgressLimiter.UNLIMITED);
+    }
+
+    public CompactionContext(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            int dimension,
+            int maxOrdinal,
+            ExecutorService executor,
+            int taskWindowSize,
+            ProgressLimiter progressLimiter) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
@@ -58,5 +74,6 @@ public final class CompactionContext {
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
         this.taskWindowSize = taskWindowSize;
+        this.progressLimiter = progressLimiter == null ? ProgressLimiter.UNLIMITED : progressLimiter;
     }
 }

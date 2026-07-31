@@ -23,6 +23,8 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -55,11 +57,18 @@ public class PQRetrainer {
     private final List<Integer> numLiveNodesPerSource;
     private final int dimension;
     private final int numTotalNodes;
+    private final ProgressLimiter progressLimiter;
 
     public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension) {
+        this(sources, liveNodes, dimension, ProgressLimiter.UNLIMITED);
+    }
+
+    public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension,
+                       ProgressLimiter progressLimiter) {
         this.sources = sources;
         this.liveNodes = liveNodes;
         this.dimension = dimension;
+        this.progressLimiter = progressLimiter == null ? ProgressLimiter.UNLIMITED : progressLimiter;
 
         this.numLiveNodesPerSource = new ArrayList<>(sources.size());
         int total = 0;
@@ -90,16 +99,22 @@ public class PQRetrainer {
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
         log.info("Training PQ using balanced sampling across sources");
 
-        List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
+        List<SampleRef> samples;
+        try (ProgressTracker.PhaseScope ignored = progressLimiter.startPhase(OnDiskGraphIndexCompactor.Phase.PQ_SAMPLE)) {
+            samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
 
-        // Sort by (source, node) so extractVectorsSequential reads each source's file
-        // in ascending order, enabling OS read-ahead instead of random page faults.
-        samples.sort(Comparator.comparingInt((SampleRef r) -> r.source).thenComparingInt(r -> r.node));
+            // Sort by (source, node) so extractVectorsSequential reads each source's file
+            // in ascending order, enabling OS read-ahead instead of random page faults.
+            samples.sort(Comparator.comparingInt((SampleRef r) -> r.source).thenComparingInt(r -> r.node));
+        }
 
         log.info("Collected {} training samples", samples.size());
 
         long t0 = System.nanoTime();
-        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        List<VectorFloat<?>> trainingVectors;
+        try (ProgressTracker.PhaseScope ignored = progressLimiter.startPhase(OnDiskGraphIndexCompactor.Phase.PQ_EXTRACT)) {
+            trainingVectors = extractVectorsSequential(samples);
+        }
         log.info("Extracted {} vectors in {}ms; starting PQ refinement",
                  trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
 
@@ -111,11 +126,14 @@ public class PQRetrainer {
         // Since the source codebooks are already trained on data from the same underlying
         // distribution, this warm-start converges in far fewer passes with no recall loss.
         long t1 = System.nanoTime();
-        ProductQuantization result = basePQ.refine(ravv,
-                                                   ProductQuantization.K_MEANS_ITERATIONS,
-                                                   -1.0f, // UNWEIGHTED / isotropic
-                                                   PhysicalCoreExecutor.pool(),
-                                                   ForkJoinPool.commonPool());
+        ProductQuantization result;
+        try (ProgressTracker.PhaseScope ignored = progressLimiter.startPhase(OnDiskGraphIndexCompactor.Phase.PQ_REFINE)) {
+            result = basePQ.refine(ravv,
+                                   ProductQuantization.K_MEANS_ITERATIONS,
+                                   -1.0f, // UNWEIGHTED / isotropic
+                                   PhysicalCoreExecutor.pool(),
+                                   ForkJoinPool.commonPool());
+        }
         log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
         return result;
     }

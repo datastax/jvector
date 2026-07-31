@@ -78,6 +78,19 @@ public interface ProgressLimiter extends ProgressTracker, WorkLimiter {
             }
 
             @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                sink.accept("phase[" + stage.name() + "] started");
+                PhaseScope scope = d.startPhase(stage);
+                return () -> {
+                    try {
+                        scope.close();
+                    } finally {
+                        sink.accept("phase[" + stage.name() + "] completed");
+                    }
+                };
+            }
+
+            @Override
             public Grant acquire(long amount) throws InterruptedException {
                 long startNanos = System.nanoTime();
                 Grant g = d.acquire(amount);

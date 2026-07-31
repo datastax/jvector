@@ -38,6 +38,24 @@ public interface ProgressTracker {
      */
     void onProgress(WorkStage stage, long completed, long total);
 
+    /**
+     * Starts observing the lifetime of {@code stage}. The returned scope must be closed exactly
+     * once, normally with try-with-resources. Implementations may use this for a long-task timer;
+     * the default keeps instrumentation optional for embedders that only consume progress.
+     */
+    default PhaseScope startPhase(WorkStage stage) {
+        return PhaseScope.NOOP;
+    }
+
+    /** Closeable lifetime token returned by {@link #startPhase}. */
+    @FunctionalInterface
+    interface PhaseScope extends AutoCloseable {
+        @Override
+        void close();
+
+        PhaseScope NOOP = () -> { };
+    }
+
     /** A tracker that discards every update. */
     ProgressTracker NOOP = (stage, completed, total) -> { };
 }
