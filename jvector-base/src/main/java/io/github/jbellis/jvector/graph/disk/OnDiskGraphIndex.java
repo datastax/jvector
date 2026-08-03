@@ -73,6 +73,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
     final int version;
+    final GraphIndexFormat format;
     final int dimension;
     final NodeAtLevel entryNode;
     final int idUpperBound;
@@ -92,6 +93,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     {
         this.readerSupplier = readerSupplier;
         this.version = header.common.version;
+        this.format = header.common.getGraphIndexFormat();
         this.layerInfo = header.common.layerInfo;
         this.dimension = header.common.dimension;
         if (header.common.entryNode == ENTRY_NODE_ABSENT) {
@@ -191,8 +193,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
         in.seek(neighborsOffset + L0size + inMemorySize);
 
-        // In V6, fused features for the in-memory hierarchy are written in a block after the top layers of the graph.
-        if (version == 6) {
+        // Fused features for the in-memory hierarchy are written in a block after the top layers of the graph,
+        // for formats that support fused features.
+        if (format.supportsFeature(FeatureId.FUSED_PQ)) {
             if (layerInfo.size() >= 2) {
                 int level = 1;
                 CommonHeader.LayerInfo info = layerInfo.get(level);
@@ -237,6 +240,19 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /**
+     * Constructs an {@link OnDiskGraphIndex} and eagerly primes its in-memory caches (upper-layer
+     * adjacency and, for fused graphs, hierarchy features) using the given reader. Used by every
+     * {@link GraphIndexFormat#loadOnDiskIndex} implementation so that priming happens exactly once,
+     * regardless of whether the format is header- or footer-based.
+     */
+    static OnDiskGraphIndex construct(ReaderSupplier readerSupplier, Header header, long neighborsOffset, RandomAccessReader reader) throws IOException {
+        var odgi = new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+        odgi.getInMemoryLayers(reader);
+        odgi.getInMemoryFeatures(reader);
+        return odgi;
+    }
+
+    /**
      * Load an index from the given reader supplier where header and graph are located on the same file,
      * where the index starts at `offset`.
      *
@@ -247,22 +263,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      */
     public static OnDiskGraphIndex load(ReaderSupplier readerSupplier, long offset, boolean useFooter) {
         try (var reader = readerSupplier.get()) {
-            logger.debug("Loading OnDiskGraphIndex from offset={}", offset);
-            var header = Header.load(reader, offset);
-
-            logger.debug("Header loaded: version={}, dimension={}, entryNode={}, layerInfoCount={}",
-                    header.common.version, header.common.dimension, header.common.entryNode, header.common.layerInfo.size());
-            logger.debug("Position after reading header={}",
-                    reader.getPosition());
-            if (header.common.version >= 5 && useFooter) {
-                logger.debug("Version 5+ onwards uses a footer instead of header for metadata. Loading from footer");
-                return loadFromFooter(readerSupplier, reader.getPosition());
-            } else {
-                var odgi = new OnDiskGraphIndex(readerSupplier, header, reader.getPosition());
-                odgi.getInMemoryLayers(reader);
-                odgi.getInMemoryFeatures(reader);
-                return odgi;
-            }
+            return GraphIndexFormat.loadOnDiskIndex(reader, offset, useFooter, readerSupplier);
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph at offset " + offset, e);
         }
@@ -284,7 +285,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
      *                       This reader supplier must vend slices of IndexOutput that contain the graph index and nothing else.
      * @return the loaded index.
      */
-    private static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
+    protected static OnDiskGraphIndex loadFromFooter(ReaderSupplier readerSupplier, long neighborsOffset) {
         try (var in = readerSupplier.get()) {
             final long magicOffset = in.length() - FOOTER_MAGIC_SIZE;
             logger.debug("Loading OnDiskGraphIndex footer from offset={}", magicOffset);
@@ -306,10 +307,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     header.common.entryNode,
                     header.common.layerInfo.size(),
                     in.getPosition());
-            var odgi = new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
-            odgi.getInMemoryLayers(in);
-            odgi.getInMemoryFeatures(in);
-            return odgi;
+            return construct(readerSupplier, header, neighborsOffset, in);
 
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
@@ -600,7 +598,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             reader.seek(offset);
             featureConsumer.accept(reader);
 
-            if (version < 6) {
+            if (!format.supportsFeature(FeatureId.FUSED_PQ)) {
                 reader.seek(neighborsOffsetFor(0, node));
             }
 
