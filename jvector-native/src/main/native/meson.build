@@ -139,28 +139,15 @@ if gtest_dep.found()
 
   test('simd_kernels', simd_kernels_test, protocol: 'gtest', suite: 'simd_kernels')
 
-#test('kernels',     test_exe, protocol: 'gtest', suite: 'kernels')
-#test('cpu_features', test_exe, protocol: 'gtest', suite: 'cpu',
-#     args: ['--gtest_filter=CpuFeaturesTest.*'])
 endif
-#
-## ---- Benchmarks ------------------------------------------------------------
-#gbench_dep = dependency('benchmark', required: false)
-#if gbench_dep.found()
-#  executable(
-#    'bench_kernels',
-#    sources     : 'benchmarks/bench_kernels.cpp',
-#    dependencies: [vectorutil_dep, gbench_dep],
-#    cpp_args    : ['-O3'],
-#  )
-#endif
-#
-#rust_enabled = add_languages('rust', required: false)
-#if rust_enabled
-#  executable(
-#    'rust_driver',
-#    'examples/rust_driver.rs',
-#    link_with: vectorutil_lib,
-#  )
-#endif
-#
+# ---- Benchmarks ------------------------------------------------------------
+gbench_dep = dependency('benchmark', required: false)
+
+if gbench_dep.found()
+  executable(
+    'bench_simd_kernels',
+    sources     : 'benchmarks/bench_similarity_f32.cpp',
+    dependencies: [vectorutil_dep, gbench_dep],
+    cpp_args    : ['-O3'],
+  )
+endif
