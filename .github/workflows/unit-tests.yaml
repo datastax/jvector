@@ -45,12 +45,38 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
-      - name: Install Meson and Ninja
+      - name: Install Meson, Ninja, and GTest
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build
+          sudo apt update && sudo apt install -y meson ninja-build libgtest-dev
       - uses: actions/checkout@v4
       - name: Initialize Git Submodules
         run: git submodule update --init
+
+      - name: Build test_simd_kernels (native C++)
+        working-directory: jvector-native/src/main/native
+        run: |
+          meson setup build --wipe
+          ninja -C build test_simd_kernels
+
+      - name: Run test_simd_kernels — no ISA cap (auto-detect)
+        if: matrix.max_isa == 'avx512f'
+        working-directory: jvector-native/src/main/native
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — capped at avx2
+        if: matrix.max_isa == 'avx2'
+        working-directory: jvector-native/src/main/native
+        env:
+          JVECTOR_MAX_ISA: avx2
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — capped at sse42
+        if: matrix.max_isa == 'sse42'
+        working-directory: jvector-native/src/main/native
+        env:
+          JVECTOR_MAX_ISA: sse42
+        run: ./build/test_simd_kernels
+
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
         with:
