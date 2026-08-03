@@ -141,7 +141,7 @@
                                         <argument>${native.buildtype}</argument>
                                     </arguments>
                                     <skip>false</skip>
-                                    <workingDirectory>${project.basedir}/src/main/native/</workingDirectory>
+                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
                                 </configuration>
                             </execution>
                         </executions>
