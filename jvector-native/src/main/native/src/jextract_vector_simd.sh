@@ -35,7 +35,7 @@ mkdir -p ../resources
 # produce one shared library
 
 # Check that the Google Highway submodule has been initialised
-HIGHWAY_DIR="third_party/highway"
+HIGHWAY_DIR="../third_party/highway"
 if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
   echo "ERROR: Google Highway submodule not found at ${HIGHWAY_DIR}."
   echo "       Run the following command from the repository root to fix this:"
@@ -80,11 +80,11 @@ if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head
     exit 1
 fi
 
-BUILD_DIR="../../../target/meson-build"
+BUILD_DIR="../../../../target/meson-build"
 rm -rf ../resources/libjvector.so
 
 # Configure (--wipe resets any stale configuration) then compile
-meson setup "${BUILD_DIR}" \
+meson setup "${BUILD_DIR}" .. \
     --wipe \
     --buildtype="${BUILDTYPE}"
 
@@ -109,11 +109,11 @@ then
 fi
 
 jextract \
-  --output ../java \
+  --output ../../java \
   -t io.github.jbellis.jvector.vector.cnative \
   -I . \
   --header-class-name NativeSimdOps \
   jvector_simd.h
 
 # Set critical linker option with heap-based segments for all generated methods
-sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' ../java/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java
+sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' ../../java/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java
