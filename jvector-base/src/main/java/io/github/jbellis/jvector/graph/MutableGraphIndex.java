@@ -38,7 +38,7 @@ import java.util.stream.IntStream;
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-interface MutableGraphIndex extends ImmutableGraphIndex {
+public interface MutableGraphIndex extends ImmutableGraphIndex {
     /**
      * Add the given node ordinal with an empty set of neighbors.
      *
@@ -161,6 +161,13 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
      * Remove edges to deleted nodes and add the new connections, maintaining diversity
      */
     void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates);
+
+    /**
+     * Algorithm 6 (IP-DiskANN): removes out-edges from {@code node} at {@code level} that
+     * point to nodes no longer structurally present in the graph at that level.
+     * Pure filter — no replacement candidates, no diversity pruning on survivors.
+     */
+    void removeDeadEdges(int level, int node);
 
     /**
      * Signals that all mutations have been completed and the graph will not be mutated any further.

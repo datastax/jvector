@@ -60,7 +60,7 @@ public class NodeArray {
     }
 
     /** always creates a new NodeArray to return, even when a1 or a2 is empty */
-    static NodeArray merge(NodeArray a1, NodeArray a2) {
+    public static NodeArray merge(NodeArray a1, NodeArray a2) {
         NodeArray merged = new NodeArray(a1.size() + a2.size());
         int i = 0, j = 0;
 
