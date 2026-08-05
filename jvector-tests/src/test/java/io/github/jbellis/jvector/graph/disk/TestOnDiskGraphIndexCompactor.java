@@ -537,6 +537,106 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
+     * Tests the retained-only fast path with a heavily skewed merge: the small source's few
+     * searches can only offer reverse candidates to a bounded set of large-source nodes, so
+     * most large-source nodes must take the fast path (their merged edges are exactly their
+     * retained edges, remapped). Verifies the path fired, that fast-path records preserve the
+     * source adjacency, and that the merged graph searches sanely.
+     */
+    @Test
+    public void testCompactRetainedOnlyFastPath() throws Exception {
+        int dim = 16;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<VectorFloat<?>> smallVecs = createRandomVectors(8, dim);
+        List<VectorFloat<?>> bigVecs = createRandomVectors(300, dim);
+
+        Path smallPath = buildSimpleSourceGraph(smallVecs, dim, vsf, "fastpath_small");
+        Path bigPath = buildSimpleSourceGraph(bigVecs, dim, vsf, "fastpath_big");
+
+        try (ReaderSupplier smallRs = ReaderSupplierFactory.open(smallPath);
+             ReaderSupplier bigRs = ReaderSupplierFactory.open(bigPath)) {
+            var smallGraph = OnDiskGraphIndex.load(smallRs);
+            var bigGraph = OnDiskGraphIndex.load(bigRs);
+
+            List<OnDiskGraphIndex> graphs = new ArrayList<>(List.of(smallGraph, bigGraph));
+            List<FixedBitSet> live = new ArrayList<>();
+            var liveSmall = new FixedBitSet(smallVecs.size());
+            liveSmall.set(0, smallVecs.size());
+            var liveBig = new FixedBitSet(bigVecs.size());
+            liveBig.set(0, bigVecs.size());
+            live.add(liveSmall);
+            live.add(liveBig);
+            List<OrdinalMapper> remappers = new ArrayList<>(List.of(
+                    new OrdinalMapper.OffsetMapper(0, smallVecs.size()),
+                    new OrdinalMapper.OffsetMapper(smallVecs.size(), bigVecs.size())));
+
+            var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, vsf, null);
+            var outputPath = testDirectory.resolve("fastpath_compacted");
+            compactor.compact(outputPath);
+
+            assertTrue("fast path should fire for offer-free big-source nodes, got "
+                            + compactor.retainedOnlyNodes.get(),
+                    compactor.retainedOnlyNodes.get() > 0);
+
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals(smallVecs.size() + bigVecs.size(), merged.size(0));
+                try (var mergedView = merged.getView(); var bigView = bigGraph.getView()) {
+                    VectorFloat<?> tmp = vectorTypeSupport.createFloatVector(dim);
+                    int offset = smallVecs.size();
+                    int verifiedRetained = 0;
+                    for (int n = 0; n < bigVecs.size(); n++) {
+                        // Vector placement always holds.
+                        mergedView.getVectorInto(offset + n, tmp, 0);
+                        assertVecEquals(bigVecs.get(n), tmp, offset + n);
+                        // Collect merged neighbors; for nodes whose merged edges are entirely
+                        // big-source, they must equal the retained adjacency (fast path keeps
+                        // order and membership).
+                        List<Integer> mergedNbrs = new ArrayList<>();
+                        var mit = mergedView.getNeighborsIterator(0, offset + n);
+                        boolean anyCross = false;
+                        while (mit.hasNext()) {
+                            int nb = mit.nextInt();
+                            if (nb < offset) anyCross = true;
+                            mergedNbrs.add(nb);
+                        }
+                        if (anyCross) continue;
+                        // Fast-path nodes keep source order; slow-path nodes whose offers all
+                        // lost to diversity keep the same membership re-ordered by score — so
+                        // membership equality is the invariant common to both.
+                        List<Integer> retained = new ArrayList<>();
+                        var bit = bigView.getNeighborsIterator(0, n);
+                        while (bit.hasNext()) {
+                            retained.add(offset + bit.nextInt());
+                        }
+                        assertEquals("all-retained node " + n + " must keep source adjacency membership",
+                                new HashSet<>(retained), new HashSet<>(mergedNbrs));
+                        verifiedRetained++;
+                    }
+                    assertTrue("expected some purely-retained records", verifiedRetained > 0);
+                }
+
+                // Search sanity on the merged graph.
+                var allFast = new ArrayList<VectorFloat<?>>();
+                allFast.addAll(smallVecs);
+                allFast.addAll(bigVecs);
+                var fastRavv = new ListRandomAccessVectorValues(allFast, dim);
+                try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                    int found = 0;
+                    for (int q = 0; q < 10; q++) {
+                        VectorFloat<?> query = allFast.get(randomIntBetween(0, allFast.size() - 1));
+                        SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, fastRavv);
+                        SearchResult sr = searcher.search(ssp, 5, Bits.ALL);
+                        if (sr.getNodes().length > 0) found++;
+                    }
+                    assertEquals(10, found);
+                }
+                merged.close();
+            }
+        }
+    }
+
+    /**
      * Tests compaction with deleted nodes.
      * Verifies that deleted nodes are properly excluded from the compacted graph.
      */
