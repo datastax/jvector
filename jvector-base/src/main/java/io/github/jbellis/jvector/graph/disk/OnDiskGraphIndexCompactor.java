@@ -163,6 +163,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int[] sizeRank;            // rank of each source in ascending live-node order
     private int[] l0ProcessOrder;      // source indices in ascending live-node order
     private ReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+    final java.util.concurrent.atomic.AtomicLong retainedOnlyNodes = new java.util.concurrent.atomic.AtomicLong();
 
     /** Orders sources by live-node count (ties by index) and allocates the reverse buffer. */
     private void setupCrossLink() {
@@ -234,6 +235,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     scores[base + minIdx] = score;
                 }
             }
+        }
+
+        /** Number of accumulated reverse candidates for a target; final once the target's group runs. */
+        int countAt(int targetNewOrd) {
+            return counts[targetNewOrd];
         }
 
         /** Appends the target's reverse candidates to the scratch arrays; returns new candSize. */
@@ -1111,8 +1117,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                 }
 
-                log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node)",
-                        reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
+                log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node), {} retained-only fast-path nodes",
+                        reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS,
+                        retainedOnlyNodes.get());
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
                 writer.offsetAfterInline();
 
@@ -1284,6 +1291,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             CompactionParams params
     ) throws IOException {
 
+        // Retained-only fast path: a node of the largest source runs no forward searches, so if
+        // it also received no reverse candidates its candidate set is exactly its retained
+        // same-source edges — and re-running diversity over an already-diversity-selected edge
+        // set is a fixed point. Skip selection entirely: filter dead neighbors, remap, write.
+        if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1) {
+            int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+            if (reverseCandidates.countAt(newOrdinal) == 0) {
+                return writeRetainedOnlyRecord(node, sourceIdx, newOrdinal, scratch, writer);
+            }
+        }
+
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
 
@@ -1326,6 +1344,44 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 selected,
                 scratch.pqCode
         );
+    }
+
+    /**
+     * Writes a record whose neighbors are the node's live retained same-source edges, unchanged
+     * and in their original order — used by the retained-only fast path. Neighbor vectors are
+     * read only when the writer must encode per-neighbor codes from them (fused output without
+     * the pre-encoded code cache); otherwise the only read is the node's own record.
+     */
+    private WriteResult writeRetainedOnlyRecord(int node, int sourceIdx, int newOrdinal,
+                                                Scratch scratch, CompactWriter writer) throws IOException {
+        var view = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        view.getVectorInto(node, scratch.baseVec, 0);
+        FixedBitSet alive = liveNodes.get(sourceIdx);
+        OrdinalMapper mapper = remappers.get(sourceIdx);
+        var selected = scratch.selectedCache;
+        selected.reset();
+        boolean needVecs = writer.needsNeighborVectors();
+
+        var it = view.getNeighborsIterator(0, node);
+        while (it.hasNext()) {
+            int nb = it.nextInt();
+            if (!alive.get(nb)) continue;
+            if (needVecs) {
+                view.getVectorInto(nb, scratch.tmpVec, 0);
+                selected.add(sourceIdx, view, nb, 0f, scratch.tmpVec);
+            } else {
+                selected.sourceIdx[selected.size] = sourceIdx;
+                selected.views[selected.size] = view;
+                selected.nodes[selected.size] = nb;
+                selected.scores[selected.size] = 0f;
+                selected.size++;
+            }
+        }
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] = mapper.oldToNew(selected.nodes[k]);
+        }
+        retainedOnlyNodes.incrementAndGet();
+        return writer.writeInlineNodeRecord(newOrdinal, scratch.baseVec, selected, scratch.pqCode);
     }
 
     /**
