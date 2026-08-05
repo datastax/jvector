@@ -157,6 +157,16 @@ final class CompactWriter implements AutoCloseable {
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
     }
 
+    /**
+     * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
+     * fused output without the pre-encoded code cache, where neighbor codes are produced by
+     * encoding the neighbor vectors. Callers that can supply neighbor ids without vectors
+     * (the retained-only fast path) use this to skip the vector reads.
+     */
+    boolean needsNeighborVectors() {
+        return fusedPQEnabled && pqCodeCache == null;
+    }
+
     public void writeHeader() throws IOException {
         writer.seek(startOffset);
         header.write(writer);
