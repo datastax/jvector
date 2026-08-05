@@ -126,6 +126,7 @@ public class BenchYAML {
 
             Grid.runAll(ds,
                     config.construction.useSavedIndexIfExists,
+                    config.construction.isParallelGraphConstruction(),
                     config.construction.outDegree,
                     config.construction.efConstruction,
                     config.construction.neighborOverflow,

@@ -1,7 +1,7 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 6
 
-dataset: dpr-gemma-10M
+dataset: dpr-gemma-10m
 
 construction:
   outDegree: [32]
