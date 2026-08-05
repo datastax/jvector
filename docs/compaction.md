@@ -33,7 +33,8 @@ for (var src : sources) {
 var compactor = new OnDiskGraphIndexCompactor(
     sources, liveNodes, remappers,
     VectorSimilarityFunction.COSINE,
-    /* executor= */ null                  // null = use by default shared threadpool in compactor
+    /* executor= */ null,                 // null = jvector's shared physical-core pool
+    /* taskWindowSize= */ -1              // <= 0 derives the window from the pool's parallelism
 );
 
 compactor.compact(Path.of("compacted.index"));
@@ -56,6 +57,99 @@ for (int i = 0; i < source.size(); i++) {
 }
 remappers.add(new OrdinalMapper.MapMapper(oldToNew));
 ```
+
+## Embedding API
+
+For embedding the compactor into a host system (for example, a database's compaction pipeline), this branch adds `@Experimental` extension points that let the host supply its own threads, observe and throttle the merge, and place the output inside its own container file. All are additive: with none of them used, behavior and output are unchanged (a jvector-owned pool, no throttling, a standalone output file).
+
+### Supplying an executor
+
+The compactor dispatches its batch work through an internal `ExecutorCompletionService`, so it runs on any `Executor` the host supplies, with an explicit in-flight window:
+
+```java
+new OnDiskGraphIndexCompactor(sources, liveNodes, remappers, sim, executor, taskWindowSize);
+```
+
+- Pass a **`ForkJoinPool`** (work-stealing makes submit-and-block safe), or a **caller-runs** executor (`Runnable::run`) to run the entire merge on the *calling* thread — no jvector-owned pool. A host then gets parallelism by running multiple compactions concurrently rather than from a per-compaction pool.
+- **Do not** pass a bounded `ThreadPoolExecutor` that is *also* running the calling thread: the caller blocks in `take()` while its sub-tasks queue behind it, which can thread-starvation-deadlock.
+- `taskWindowSize` bounds in-flight batches (concurrency and peak write-side memory); `<= 0` derives it from a `ForkJoinPool`'s parallelism, else defaults to `1`. Read it back with `getTaskWindowSize()`.
+
+A `ForkJoinPool` is passed as the `executor` (with `taskWindowSize <= 0` to derive its window) — there is no separate `ForkJoinPool` constructor.
+
+### Progress and throttling
+
+`setProgressLimiter(ProgressLimiter)` installs a control surface (package `io.github.jbellis.jvector.util.work`) that melds two independently-optional facets:
+
+- **`onProgress(WorkStage stage, long completed, long total)`** — progress observation. Stages are `OnDiskGraphIndexCompactor.Phase.{MERGE_LEVELS, REFINE}`; `total` may be `-1` until known.
+- **`acquire(long amount) → Grant`** — blocking work admission. For the compactor the unit is **bytes about to be written**. `acquire` is called on the orchestrating thread (never a pool worker), so a blocking limiter back-pressures dispatch without a `ForkJoinPool.ManagedBlocker` — exactly like ordinary code blocking on a rate limiter.
+
+The default is `ProgressLimiter.UNLIMITED` (both facets no-op), so output and timing are unchanged when unset.
+
+Two ready-made implementations compose as decorators:
+
+```java
+// Cap merge write bandwidth to 100 MB/s, logging throttled writes and progress.
+compactor.setProgressLimiter(
+    ProgressLimiter.logging(
+        ProgressLimiter.rateLimited(100.0 * 1024 * 1024),   // leaky-bucket meter, bytes/sec
+        msg -> log.info("compaction: {}", msg)));
+```
+
+- `rateLimited(unitsPerSecond)` — a leaky-bucket rate meter (drains when idle, interruptible; grant is a no-op).
+- `logging(delegate, sink)` / `logging(sink)` — logs each `onProgress` and each *blocked* `acquire`, delegating both facets; a `sink` is any `Consumer<String>`.
+
+A host that draws from its own shared budget implements `acquire` directly:
+
+```java
+compactor.setProgressLimiter(new ProgressLimiter() {
+    @Override public void onProgress(WorkStage stage, long completed, long total) {
+        metrics.report(stage, completed, total);
+    }
+    @Override public Grant acquire(long bytes) throws InterruptedException {
+        hostIoBudget.acquire(bytes);   // block against a host-wide IO limiter
+        return Grant.NOOP;             // rate-limiter model: nothing to release
+    }
+});
+```
+
+The returned `Grant` is closed when the admitted work completes. A **rate-limiter** realization pays its cost at `acquire` and returns `Grant.NOOP`; a **semaphore** realization (permits = in-flight bytes) releases on `Grant.close()`.
+
+> **Caveat (semaphore realization).** During `REFINE`, batches are submitted and drained through a sliding window of `taskWindowSize`, so a permit-releasing semaphore must admit at least `taskWindowSize` batches' worth of bytes or the window can't fill. `MERGE_LEVELS` has no such constraint, and the rate-limiter realization has none in either phase.
+
+### Output destination (no temp-file copy)
+
+By default `compact(Path)` writes a standalone file. To place the graph body directly inside a host container after a reserved header — eliminating a temp-file-and-copy — use either overload:
+
+```java
+// (1) write the body into an existing file at a reserved offset; bytes in [0, startOffset) are preserved.
+compactor.compact(componentPath, /* startOffset= */ headerSize);
+
+// (2) resource-scoped destination with a commit/abort lifecycle; returns the body length.
+long bodyLength = compactor.compact(CompactionDestination.toFile(outputPath));
+```
+
+`compact(CompactionDestination)` opens one `Target` per call and drives its lifecycle:
+
+```java
+CompactionDestination dest = () -> {
+    FileChannel ch = FileChannel.open(componentPath, CREATE, WRITE, READ);
+    writeHostHeader(ch);                                        // reserve [0, headerSize)
+    return new CompactionDestination.Target() {
+        public Path file()        { return componentPath; }
+        public long startOffset() { return headerSize; }
+        public void commit(long bodyLength) throws IOException { // success: finalize the container
+            writeHostFooter(ch, bodyLength);
+            ch.force(true);
+        }
+        public void close() throws IOException { ch.close(); }   // always runs; no commit ⇒ host discards the file
+    };
+};
+long bodyLength = compactor.compact(dest);
+```
+
+- `commit(bodyLength)` fires exactly once, only on success, after the body is written and forced. `close()` always runs (try-with-resources); reaching it without a prior `commit` is an unambiguous abort — discard the partial output.
+- The compactor writes into `file()` at `startOffset()` using its own random-access and memory-mapped IO — the destination expresses *where*, not *how*.
+- To read the committed body back (e.g. for a checksum), address the region with the `SeekableSink` primitive (package `io.github.jbellis.jvector.disk`): `SeekableSink.over(channel, target.startOffset())` gives region-relative `writeAt`/`readAt`.
 
 ## Algorithm
 
@@ -104,7 +198,7 @@ for alpha in [1.0, 1.2]:
 
 Level 0 (base layer) stores inline vectors, FusedPQ codes, and the neighbor list. Upper levels store only the neighbor list (plus PQ codes at level 1 for cross-level searching).
 
-Processing is batched per source and run in parallel across sources using a `ForkJoinPool`. A backpressure window keeps at most `taskWindowSize` batches in-flight at once, bounding memory use.
+Processing is batched per source and run in parallel across sources on the supplied executor (a `ForkJoinPool` by default; see [Embedding API](#embedding-api)). A backpressure window keeps at most `taskWindowSize` batches in-flight at once, bounding memory use.
 
 ### Entry Node
 

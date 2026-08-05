@@ -227,7 +227,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file,
-     * where the index starts at `offset`.
+     * where the index starts at `offset`. Equivalent to {@code load(readerSupplier, offset, true)};
+     * for v5+ graphs the metadata is located via the footer — see the
+     * {@link #load(ReaderSupplier, long, boolean)} warning about suppliers whose range extends
+     * past the graph's end.
      *
      * @param readerSupplier the reader supplier to use to read the graph and index.
      * @param offset the offset in bytes from the start of the file where the index starts.
@@ -239,6 +242,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file,
      * where the index starts at `offset`.
+     * <p>
+     * <b>Footer loading trusts the end of the supplier's range.</b> With {@code useFooter=true}
+     * and a v5+ graph, metadata is located relative to the reader's {@code length()} — the file
+     * end, for whole-file suppliers. That is only correct when the graph is the <i>last</i>
+     * content in the supplier's range. Never footer-load a reused or embedder-owned container
+     * whose length extends past the graph body: stale bytes there either fail the load loudly
+     * or, if they end in a stale-but-still-valid footer, silently resurrect the old graph over
+     * the new bytes. For such containers, pass {@code useFooter=false} with the known
+     * {@code offset}, or use a region-bounded {@link ReaderSupplier} whose {@code length()} is
+     * the end of the graph's region.
      *
      * @param readerSupplier the reader supplier to use to read the graph and index.
      * @param offset the offset in bytes from the start of the file where the index starts.
@@ -270,6 +283,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
+     * For v5+ graphs, metadata is located via the footer at the end of the supplier's range —
+     * the supplier must contain the graph and nothing after it; see the
+     * {@link #load(ReaderSupplier, long, boolean)} warning.
      *
      * @param readerSupplier the reader supplier to use to read the graph index.
      */
@@ -446,6 +462,22 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
     }
 
+    /**
+     * Streams the L0 records of ordinals {@code [minNode, maxNode]} (inclusive) into the page
+     * cache; see {@link ReaderSupplier#prefetch(long, long)}. An L0 record holds the node's id,
+     * inline features (vector, fused codes), and adjacency, so warming it covers every read a
+     * bulk scan makes for that node. Best-effort no-op when unsupported.
+     */
+    public void prefetchL0Records(int minNode, int maxNode) {
+        if (maxNode < minNode) {
+            return;
+        }
+        long blockBytes = Integer.BYTES + inlineBlockSize
+                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
+        long start = neighborsOffset + blockBytes * minNode;
+        readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
+    }
+
     // re-declared to specify type
     @Override
     public View getView() {
@@ -478,6 +510,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
         }
 
+        /**
+         * Guards every on-disk record access. A node ordinal outside the L0 record space
+         * ({@code idUpperBound}, which exceeds {@code size(0)} for graphs renumbered with holes)
+         * would otherwise become a silent wild offset into the mapped file — reading garbage (or
+         * faulting) instead of failing diagnosably. Both package-private offset entry points call
+         * this, so each access is validated exactly once, with a single branch against a final
+         * bound.
+         */
+        private void requireValidNode(int node) {
+            if (node < 0 || node >= idUpperBound) {
+                throw new IllegalArgumentException(
+                        "node ordinal " + node + " out of range [0, " + idUpperBound + ") for this graph");
+            }
+        }
+
         @Override
         public int dimension() {
             return dimension;
@@ -496,6 +543,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
         long offsetFor(int node, FeatureId featureId) {
+            requireValidNode(node);
             Feature feature = features.get(featureId);
 
             // Separated features are just global offset + node offset
@@ -512,6 +560,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
         long neighborsOffsetFor(int level, int node) {
+            requireValidNode(node);
             assert level == 0; // higher layers are in memory
 
             // skip node ID + inline features
@@ -572,8 +621,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
                     nodeDegree = reader.readInt();
-                    assert nodeDegree <= neighbors.length
-                            : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
+                    if (nodeDegree < 0 || nodeDegree > neighbors.length) {
+                        // A real check, not an assert: an out-of-range on-disk degree means the
+                        // block is corrupt or the metadata is stale, and the garbage ints that a
+                        // blind read would yield become out-of-range node ids downstream.
+                        throw new IllegalStateException(String.format(
+                                "Corrupt neighbor block: node %d at level 0 declares degree %d outside [0, %d] (block offset %d)",
+                                node, nodeDegree, neighbors.length, neighborsOffsetFor(level, node)));
+                    }
                     reader.read(neighbors, 0, nodeDegree);
                     stored = neighbors;
                 } else {

@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -26,7 +27,6 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.IntStream;
 
 /**
  * Binary Quantization of float vectors: each float is compressed to a single bit,
@@ -57,26 +57,33 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
         return new BinaryQuantization(ravv.dimension());
     }
 
+    /** {@link ParallelExecutor} overload; the executor is unused (BQ needs no training). */
+    @Deprecated
+    public static BinaryQuantization compute(RandomAccessVectorValues ravv, ParallelExecutor parallelExecutor) {
+        return new BinaryQuantization(ravv.dimension());
+    }
+
     @Override
     public CompressedVectors createCompressedVectors(Object[] compressedVectors) {
         return new ImmutableBQVectors(this, (long[][]) compressedVectors);
     }
 
     @Override
-    public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+    public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ParallelExecutor simdExecutor) {
         var ravvCopy = ravv.threadLocalSupplier();
-        var cv = simdExecutor.submit(() -> IntStream.range(0, ravv.size())
-                .parallel()
-                .mapToObj(i -> {
-                    var localRavv = ravvCopy.get();
-                    VectorFloat<?> v = localRavv.getVector(i);
-                    return v == null
-                            ? new long[compressedVectorSize() / Long.BYTES]
-                            : encode(v);
-                        })
-                .toArray(long[][]::new))
-                .join();
+        // Distinct-index array fill; the executor's completion barrier publishes the writes.
+        long[][] cv = new long[ravv.size()][];
+        simdExecutor.forEachInt(ravv.size(), i -> {
+            var localRavv = ravvCopy.get();
+            VectorFloat<?> v = localRavv.getVector(i);
+            cv[i] = v == null ? new long[compressedVectorSize() / Long.BYTES] : encode(v);
+        });
         return new ImmutableBQVectors(this, cv);
+    }
+
+    @Override
+    public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAll(ravv, ParallelExecutor.forkJoin(simdExecutor));
     }
 
     /**

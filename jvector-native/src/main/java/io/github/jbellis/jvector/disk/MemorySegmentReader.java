@@ -148,31 +148,73 @@ public class MemorySegmentReader implements RandomAccessReader {
     public static class Supplier implements ReaderSupplier {
         private final Arena arena;
         private final MemorySegment memory;
+        private final Path path;
 
         public Supplier(Path path) throws IOException {
+            this.path = path;
             this.arena = Arena.ofShared();
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
-                
-                // Apply MADV_RANDOM advice
-                var linker = Linker.nativeLinker();
-                var maybeMadvise = linker.defaultLookup().find("posix_madvise");
-                if (maybeMadvise.isPresent()) {
-                    var madvise = linker.downcallHandle(maybeMadvise.get(),
-                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-                    int result = (int) madvise.invokeExact(memory, memory.byteSize(), MADV_RANDOM);
-                    if (result != 0) {
-                        throw new IOException("posix_madvise failed with error code: " + result);
-                    }
-                } else {
-                    logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
-                }
+                // Search-time access is random; disable kernel readahead by default.
+                madvise(memory, MADV_RANDOM, true);
             } catch (Throwable e) {
                 arena.close();
                 if (e instanceof IOException) {
                     throw (IOException) e;
                 }
                 throw new RuntimeException(e);
+            }
+        }
+
+        private static void madvise(MemorySegment memory, int advice, boolean strict) throws IOException {
+            var linker = Linker.nativeLinker();
+            var maybeMadvise = linker.defaultLookup().find("posix_madvise");
+            if (maybeMadvise.isPresent()) {
+                var madvise = linker.downcallHandle(maybeMadvise.get(),
+                        FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+                int result;
+                try {
+                    result = (int) madvise.invokeExact(memory, memory.byteSize(), advice);
+                } catch (Throwable t) {
+                    throw new RuntimeException(t);
+                }
+                if (result != 0 && strict) {
+                    throw new IOException("posix_madvise failed with error code: " + result);
+                }
+            } else {
+                logger.warn("posix_madvise not found, advice {} not applied", advice);
+            }
+        }
+
+        // Windowed prefetch streams ranges through a separate read-ahead-enabled file descriptor:
+        // the mapping itself advises MADV_RANDOM (disables kernel readahead), and MADV_WILLNEED
+        // proved to be a no-op hint for large ranges. The page cache is shared per file, so
+        // subsequent random access through the mapping hits the populated pages. Called
+        // concurrently from many worker threads; positional reads on a shared channel are
+        // thread-safe, and the per-thread buffer avoids allocation churn.
+        private static final ThreadLocal<java.nio.ByteBuffer> PREFETCH_BUF =
+                ThreadLocal.withInitial(() -> java.nio.ByteBuffer.wrap(new byte[4 << 20]));
+
+        @Override
+        public void prefetch(long offset, long length) {
+            if (length <= 0) {
+                return;
+            }
+            var buf = PREFETCH_BUF.get();
+            long end = Math.min(offset + length, memory.byteSize());
+            try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
+                long pos = Math.max(0, offset);
+                while (pos < end) {
+                    buf.clear().limit((int) Math.min(buf.capacity(), end - pos));
+                    int n = ch.read(buf, pos);
+                    if (n < 0) {
+                        break;
+                    }
+                    pos += n;
+                }
+            } catch (IOException e) {
+                logger.warn("ranged prefetch of {} [{}, {}) failed; continuing without warm cache",
+                            path, offset, end, e);
             }
         }
 

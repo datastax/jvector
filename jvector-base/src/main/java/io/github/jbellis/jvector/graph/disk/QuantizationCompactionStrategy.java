@@ -22,7 +22,6 @@ import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.IOException;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -148,18 +147,14 @@ public abstract class QuantizationCompactionStrategy {
 
     /**
      * For compaction use. Returns the precomputed code cache built by {@link #onAfterHeader},
-     * indexed by new ordinal so refinement can memcpy neighbor codes instead of re-encoding them.
-     * Returns {@code null} when no cache is held (non-fused strategy, NONE, or graph too large for
-     * a single mapping). The returned buffer is shared; callers must {@code .duplicate()} per
-     * thread before using.
+     * indexed by new ordinal so both the base-layer writer and refinement can memcpy neighbor codes
+     * instead of re-encoding them. Returns {@code null} when no cache is held (non-fused strategy,
+     * NONE); a fused strategy that was configured off returns {@link PqCodeCache#NONE}. Callers
+     * must gate reads on {@link PqCodeCache#isActive()} and take their own {@link PqCodeCache#newViews()}
+     * per thread. The cache carries its own {@link PqCodeCache#codeSize() code size}.
      */
-    public MappedByteBuffer getCodeCache() {
+    public PqCodeCache getCodeCache() {
         return null;
-    }
-
-    /** For compaction use. Bytes per code in {@link #getCodeCache()}, or {@code 0} when no cache. */
-    public int getCacheCodeSize() {
-        return 0;
     }
 
     /**
