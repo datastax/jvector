@@ -147,6 +147,113 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         log.info("Full-precision search seeding enabled ({} nodes, degree {}; edges read from output)",
                 bound, baseDegree);
     }
+
+    // ---- Pair-asymmetric cross-linking (reverse-edge propagation) ----
+    // L0 sources are processed in ascending live-size order with a barrier between sources, and a
+    // node searches only sources LARGER than its own. The reverse direction of each source pair is
+    // supplied by propagation instead of a search: when node u finds v in a larger source, u is
+    // offered as a reverse candidate for v, and v's diversity selection (which runs in a later
+    // group, after the barrier) unions those offers with v's retained same-source edges. Similarity
+    // is symmetric and offers carry exact scores, so the propagated candidates are exactly what v's
+    // own search would have scored — only WHERE candidates come from changes. The larger source of
+    // every pair therefore does no cross-source searching at all; under skewed source sizes that
+    // population dominates total search count, which is what this trades against the smaller
+    // reverse candidate budget (REVERSE_CANDIDATE_SLOTS vs searchTopK per source).
+    private static final int REVERSE_CANDIDATE_SLOTS = 16;
+    private int[] sizeRank;            // rank of each source in ascending live-node order
+    private int[] l0ProcessOrder;      // source indices in ascending live-node order
+    private ReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+
+    /** Orders sources by live-node count (ties by index) and allocates the reverse buffer. */
+    private void setupCrossLink() {
+        int k = sources.size();
+        Integer[] order = new Integer[k];
+        for (int s = 0; s < k; s++) order[s] = s;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer s) -> numLiveNodesPerSource.get(s))
+                .thenComparingInt(s -> s));
+        l0ProcessOrder = new int[k];
+        sizeRank = new int[k];
+        for (int i = 0; i < k; i++) {
+            l0ProcessOrder[i] = order[i];
+            sizeRank[order[i]] = i;
+        }
+        reverseCandidates = new ReverseCandidateBuffer(maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
+        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node",
+                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS);
+    }
+
+    /**
+     * Bounded per-node pool of cross-source neighbor candidates discovered by smaller-source
+     * searches, keyed by the target's merged (new) ordinal. Offers keep the top-{@code slots}
+     * entries by score. Writers are the smaller sources' worker threads; the reader is the
+     * target's own processing task, which runs in a later source group — the inter-group barrier
+     * (completion-service drain on the main thread) orders every offer before the read, so
+     * {@link #appendTo} needs no locking.
+     */
+    private static final class ReverseCandidateBuffer {
+        final int slots;
+        final int[] srcs;
+        final int[] nodes;    // old ordinals, parallel to srcs
+        final float[] scores;
+        final int[] counts;   // per target ordinal
+        final Object[] locks = new Object[1024];
+        final java.util.concurrent.atomic.LongAdder offered = new java.util.concurrent.atomic.LongAdder();
+
+        ReverseCandidateBuffer(int numOrdinals, int slots) {
+            this.slots = slots;
+            this.srcs = new int[numOrdinals * slots];
+            this.nodes = new int[numOrdinals * slots];
+            this.scores = new float[numOrdinals * slots];
+            this.counts = new int[numOrdinals];
+            for (int i = 0; i < locks.length; i++) locks[i] = new Object();
+        }
+
+        void offer(int targetNewOrd, int src, int oldOrd, float score) {
+            offered.increment();
+            int base = targetNewOrd * slots;
+            synchronized (locks[targetNewOrd & (locks.length - 1)]) {
+                int n = counts[targetNewOrd];
+                for (int i = 0; i < n; i++) {
+                    if (srcs[base + i] == src && nodes[base + i] == oldOrd) return;
+                }
+                if (n < slots) {
+                    srcs[base + n] = src;
+                    nodes[base + n] = oldOrd;
+                    scores[base + n] = score;
+                    counts[targetNewOrd] = n + 1;
+                    return;
+                }
+                int minIdx = 0;
+                for (int i = 1; i < slots; i++) {
+                    if (scores[base + i] < scores[base + minIdx]) minIdx = i;
+                }
+                if (score > scores[base + minIdx]) {
+                    srcs[base + minIdx] = src;
+                    nodes[base + minIdx] = oldOrd;
+                    scores[base + minIdx] = score;
+                }
+            }
+        }
+
+        /** Appends the target's reverse candidates to the scratch arrays; returns new candSize. */
+        int appendTo(int targetNewOrd, Scratch scratch, int candSize) {
+            int base = targetNewOrd * slots;
+            int n = counts[targetNewOrd];
+            for (int i = 0; i < n; i++) {
+                scratch.candSrc[candSize] = srcs[base + i];
+                scratch.candNode[candSize] = nodes[base + i];
+                scratch.candScore[candSize] = scores[base + i];
+                candSize++;
+            }
+            return candSize;
+        }
+
+        long ramBytesUsed() {
+            return (long) srcs.length * (Integer.BYTES * 2 + Float.BYTES)
+                    + (long) counts.length * Integer.BYTES;
+        }
+    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -930,7 +1037,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
@@ -953,8 +1060,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             seedWriter = writer; // exposes neighborCountFileOffset for reading finished nodes' edges
         }
 
+        setupCrossLink();
+
         for (int level = 0; level < maxDegrees.size(); level++) {
-            List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
             int beamWidth = Math.max(maxDegrees.get(level), searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
@@ -975,38 +1083,43 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
-
-                    runBatchesWithBackpressure(
-                            batches,
-                            ecs,
-                            submitOne,
-                            (results) -> {
-                                try {
-                                    for (WriteResult r : results) {
-                                        ByteBuffer b = r.data;
-                                        long pos = r.fileOffset;
-                                        while (b.hasRemaining()) {
-                                            int n = fc.write(b, pos);
-                                            pos += n;
-                                        }
-                                        // Publish AFTER the write so a seed reader that sees the
-                                        // flag can safely read this node's edges from the file.
-                                        if (seedingActive) {
-                                            doneFlag.set(r.newOrdinal, 1);
-                                        }
-                                    }
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
+                    java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
+                        try {
+                            for (WriteResult r : results) {
+                                ByteBuffer b = r.data;
+                                long pos = r.fileOffset;
+                                while (b.hasRemaining()) {
+                                    int n = fc.write(b, pos);
+                                    pos += n;
+                                }
+                                // Publish AFTER the write so a seed reader that sees the
+                                // flag can safely read this node's edges from the file.
+                                if (seedingActive) {
+                                    doneFlag.set(r.newOrdinal, 1);
                                 }
                             }
-                    );
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    };
+
+                    // Sources run smallest-first, one group at a time: the drain between groups is
+                    // the barrier that guarantees every reverse-candidate offer into a source has
+                    // completed before that source's own nodes read them.
+                    for (int s : l0ProcessOrder) {
+                        runBatchesWithBackpressure(buildBatchesForSource(s, 0), ecs, submitOne, writeResults);
+                    }
                 }
 
+                log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node)",
+                        reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
+                reverseCandidates = null; // consumed entirely within L0; scales with node count
                 writer.offsetAfterInline();
 
             } else {
                 final int lvl = level;
                 log.info("Compacting upper layer {}", level);
+                List<BatchSpec> batches = buildBatches(level);
 
                 ExecutorCompletionService<List<UpperLayerWriteResult>> ecs =
                         new ExecutorCompletionService<>(executor);
@@ -1051,46 +1164,56 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private List<BatchSpec> buildBatches(int level) {
         List<BatchSpec> batches = new ArrayList<>();
-
         for (int s = 0; s < sources.size(); ++s) {
-            var source = sources.get(s);
-            if (level > source.getMaxLevel()) continue;
+            batches.addAll(buildBatchesForSource(s, level));
+        }
+        return batches;
+    }
 
-            int[] nodes;
-            int numNodes;
-            if (level == 0) {
-                // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
-                // seeks and reads a 4-byte id at every node's record offset — a full random disk
-                // scan of the source (the dominant cost of full-precision compaction disk-cold,
-                // where nothing warms the cache first), and unnecessary: liveNodes already holds
-                // exactly the live ordinals. Also skips dead nodes up front rather than in-batch.
-                FixedBitSet alive = liveNodes.get(s);
-                numNodes = alive.cardinality();
-                nodes = new int[numNodes];
-                int i = 0;
-                for (int n = alive.nextSetBit(0);
-                     n != DocIdSetIterator.NO_MORE_DOCS;
-                     n = alive.nextSetBit(n + 1)) {
-                    nodes[i++] = n;
-                }
-            } else {
-                NodesIterator sourceNodes = source.getNodes(level);
-                numNodes = sourceNodes.size();
-                nodes = new int[numNodes];
-                int i = 0;
-                while (sourceNodes.hasNext()) {
-                    nodes[i++] = sourceNodes.next();
-                }
-            }
+    /**
+     * Builds the processing batches for one source at one level. Split out from
+     * {@link #buildBatches} so L0 compaction can run sources one group at a time in size order
+     * (the cross-link barrier); upper layers still batch all sources together.
+     */
+    private List<BatchSpec> buildBatchesForSource(int s, int level) {
+        List<BatchSpec> batches = new ArrayList<>();
+        var source = sources.get(s);
+        if (level > source.getMaxLevel()) return batches;
 
-            int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
-            if (numBatches > numNodes) numBatches = numNodes;
-            int batchSize = (numNodes + numBatches - 1) / numBatches;
-            for (int b = 0; b < numBatches; ++b) {
-                int start = min(numNodes, batchSize * b);
-                int end = min(numNodes, batchSize * (b + 1));
-                batches.add(new BatchSpec(s, nodes, start, end));
+        int[] nodes;
+        int numNodes;
+        if (level == 0) {
+            // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
+            // seeks and reads a 4-byte id at every node's record offset — a full random disk
+            // scan of the source (the dominant cost of full-precision compaction disk-cold,
+            // where nothing warms the cache first), and unnecessary: liveNodes already holds
+            // exactly the live ordinals. Also skips dead nodes up front rather than in-batch.
+            FixedBitSet alive = liveNodes.get(s);
+            numNodes = alive.cardinality();
+            nodes = new int[numNodes];
+            int i = 0;
+            for (int n = alive.nextSetBit(0);
+                 n != DocIdSetIterator.NO_MORE_DOCS;
+                 n = alive.nextSetBit(n + 1)) {
+                nodes[i++] = n;
             }
+        } else {
+            NodesIterator sourceNodes = source.getNodes(level);
+            numNodes = sourceNodes.size();
+            nodes = new int[numNodes];
+            int i = 0;
+            while (sourceNodes.hasNext()) {
+                nodes[i++] = sourceNodes.next();
+            }
+        }
+
+        int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
+        if (numBatches > numNodes) numBatches = numNodes;
+        int batchSize = numBatches == 0 ? 0 : (numNodes + numBatches - 1) / numBatches;
+        for (int b = 0; b < numBatches; ++b) {
+            int start = min(numNodes, batchSize * b);
+            int end = min(numNodes, batchSize * (b + 1));
+            batches.add(new BatchSpec(s, nodes, start, end));
         }
 
         return batches;
@@ -1379,9 +1502,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
                                                  baseVec, scratch, candSize);
             } else {
+                // Cross-link: at L0 only search LARGER sources; candidates from smaller sources
+                // arrive via reverse propagation (consumed below), offered when those sources'
+                // nodes searched this one in an earlier group.
+                if (level == 0 && reverseCandidates != null && sizeRank[ss] < sizeRank[sourceIdx]) {
+                    continue;
+                }
                 candSize = gatherFromOtherSource(node, sourceIdx, level, ss, searchView, indexAlive,
                                                   baseVec, scratch, candSize, params);
             }
+        }
+
+        if (level == 0 && reverseCandidates != null) {
+            candSize = reverseCandidates.appendTo(
+                    remappers.get(sourceIdx).oldToNew(node), scratch, candSize);
         }
 
         return candSize;
@@ -1426,6 +1560,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         if (level == 0) {
+            int prevCandSize = candSize;
             // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
             // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to a
             // normal search when no seeds are available (e.g. node processed before its neighbors).
@@ -1437,27 +1572,40 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
                         scratch.seedNodes, scratch.seedScores, seedCount);
                 scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
-                return appendApproximateResults(
+                candSize = appendApproximateResults(
                         scratch.gs[sourceIdx].approximateResults(), sourceIdx, scratch, candSize);
-            }
-            if (seedingActive) {
-                coldSearches.incrementAndGet();
-            }
-            // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
-            // pruned by diversity selection, so the doubled approximate-phase cost buys almost
-            // no recall.
-            SearchResult results = scratch.gs[sourceIdx].search(
-                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
-            );
+            } else {
+                if (seedingActive) {
+                    coldSearches.incrementAndGet();
+                }
+                // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
+                // pruned by diversity selection, so the doubled approximate-phase cost buys almost
+                // no recall.
+                SearchResult results = scratch.gs[sourceIdx].search(
+                        ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
+                );
 
-            for (var r : results.getNodes()) {
-                scratch.candSrc[candSize] = sourceIdx;
-                scratch.candNode[candSize] = r.node;
-                scratch.candScore[candSize] =
-                        params.fusedPQEnabled
-                                ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
-                                : r.score;
-                candSize++;
+                for (var r : results.getNodes()) {
+                    scratch.candSrc[candSize] = sourceIdx;
+                    scratch.candNode[candSize] = r.node;
+                    scratch.candScore[candSize] =
+                            params.fusedPQEnabled
+                                    ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                    : r.score;
+                    candSize++;
+                }
+            }
+
+            // Cross-link: each found node in the (larger) target also learns about this node.
+            // Scores here are exact in both scoring modes (fused results were rescored above),
+            // and similarity is symmetric, so the offer carries the score the target's own
+            // search would have computed.
+            if (reverseCandidates != null) {
+                OrdinalMapper targetMapper = remappers.get(sourceIdx);
+                for (int i = prevCandSize; i < candSize; i++) {
+                    reverseCandidates.offer(targetMapper.oldToNew(scratch.candNode[i]),
+                            nodeSourceIdx, node, scratch.candScore[i]);
+                }
             }
         } else {
             var entry = searchView.entryNode();
@@ -1675,6 +1823,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
 
+        // Cross-link reverse-candidate buffer (present only while L0 is being compacted)
+        if (reverseCandidates != null) {
+            size += reverseCandidates.ramBytesUsed();
+        }
+
         // executor: a shared pool (default) or caller-injected — not owned by the compactor, so it
         // contributes no pool allocation here. Scratch space still scales with its parallelism.
         int numThreads = taskWindowSize;
@@ -1704,7 +1857,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
         }
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
