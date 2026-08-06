@@ -1541,4 +1541,334 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             assertEquals("first-source live count", firstSourceCount, n / 2);
         }
     }
+
+    /**
+     * With the backward-edge pass in place, retain-largest completes and emits a
+     * loadable index. (Before stage 2 this same call threw by design: retaining the
+     * base's neighbour lists left nothing pointing at the delta, so every delta
+     * vector was unreachable — a recall cliff that a timing-only benchmark would
+     * have reported as a large speedup.)
+     */
+    @Test
+    public void retainLargestCompletesWithBackwardEdgePass() throws Exception {
+        int numSources = 2, numVectorsPerGraph = 32, dim = 8;
+        List<VectorFloat<?>> allVecs = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        buildSourceGraphs(numSources, numVectorsPerGraph, dim, allVecs, graphs, rss,
+                          liveNodes, remappers);
+
+        var compactor = new OnDiskGraphIndexCompactor(
+                graphs, liveNodes, remappers, similarityFunction, null, -1);
+        compactor.setRetainLargest(true);
+        var outputPath = testDirectory.resolve("retain_largest_guard");
+        ReaderSupplier outRs = null;
+        try {
+            compactor.compact(outputPath);
+            outRs = ReaderSupplierFactory.open(outputPath);
+            var compacted = OnDiskGraphIndex.load(outRs);
+            assertEquals("every live node from every source must be present",
+                         numSources * numVectorsPerGraph, compacted.size(0));
+        } finally {
+            for (var rs : rss) rs.close();
+            if (outRs != null) outRs.close();
+        }
+    }
+
+    /**
+     * The retained source is the one with the most SURVIVING nodes, not the one
+     * with the most nodes on disk — deletions are exactly what makes a formerly
+     * large segment not worth retaining.
+     */
+    @Test
+    public void retainedSourceIsChosenByLiveNodesNotTotalNodes() throws Exception {
+        int numSources = 2, numVectorsPerGraph = 32, dim = 8;
+        List<VectorFloat<?>> allVecs = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        buildSourceGraphs(numSources, numVectorsPerGraph, dim, allVecs, graphs, rss,
+                          liveNodes, remappers);
+        try {
+            // Source 0 keeps 4 of 32; source 1 keeps all 32. Equal on disk, so a
+            // total-node choice would pick either; only a live-node choice picks 1.
+            liveNodes.get(0).clear(4, numVectorsPerGraph);
+
+            var compactor = new OnDiskGraphIndexCompactor(
+                    graphs, liveNodes, remappers, similarityFunction, null, -1);
+            assertEquals("must retain the source with more LIVE nodes",
+                         1, compactor.resolveRetainedSourceForTest());
+        } finally {
+            for (var rs : rss) rs.close();
+        }
+    }
+
+    /**
+     * Four equal sources: no source dominates, so retain-largest must refuse
+     * itself and fall back to the symmetric merge.
+     *
+     * <p>This test earned its keep. When the shortcut was allowed to run in this
+     * shape it measured 0.792 recall against 0.956 symmetric — a 0.164 collapse,
+     * because delta nodes reach each other only through a base holding 25% of the
+     * graph. A timing-only benchmark would have reported it as a large win.
+     */
+    @Test
+    public void retainLargestFallsBackWhenNoSourceDominates() throws Exception {
+        int numSources = 4, numVectorsPerGraph = 256, dim = 16, topK = 10;
+
+        double symmetricRecall = compactAndMeasureRecall(
+                numSources, numVectorsPerGraph, dim, topK, false, "sym");
+        double retainRecall = compactAndMeasureRecall(
+                numSources, numVectorsPerGraph, dim, topK, true, "retain");
+
+        System.out.printf("equal-sources  symmetric: %.4f   retain-largest-requested: %.4f%n",
+                          symmetricRecall, retainRecall);
+        // Four equal sources put only 25% of nodes in the retained base, below the
+        // dominance threshold, so the compactor must FALL BACK to the symmetric
+        // merge — measured recall here was 0.792 vs 0.956 when the shortcut was
+        // allowed to run, which is why it is refused rather than merely slower.
+        // Asking for retain-largest in this shape must therefore cost no recall.
+        assertTrue(String.format(
+                "below the dominance threshold the merge must fall back to symmetric, "
+                + "so recall must match: requested %.4f vs symmetric %.4f",
+                retainRecall, symmetricRecall),
+                Math.abs(symmetricRecall - retainRecall) < 0.05);
+    }
+
+    /**
+     * Every delta vector must be REACHABLE, which is the property the backward-edge
+     * pass exists to restore. Searching for a delta vector itself must return it —
+     * if the base never gained edges toward the delta, these queries fail while
+     * overall recall could still look acceptable from base-heavy hits alone.
+     */
+    @Test
+    public void retainLargestKeepsDeltaNodesReachable() throws Exception {
+        int numSources = 3, numVectorsPerGraph = 128, dim = 16;
+        List<VectorFloat<?>> allVecs = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        buildSourceGraphs(numSources, numVectorsPerGraph, dim, allVecs, graphs, rss,
+                          liveNodes, remappers);
+        ReaderSupplier outRs = null;
+        try {
+            var compactor = new OnDiskGraphIndexCompactor(
+                    graphs, liveNodes, remappers, similarityFunction, null, -1);
+            compactor.setRetainLargest(true);
+            var outputPath = testDirectory.resolve("retain_reachable");
+            compactor.compact(outputPath);
+
+            outRs = ReaderSupplierFactory.open(outputPath);
+            var compacted = OnDiskGraphIndex.load(outRs);
+            var allravv = new ListRandomAccessVectorValues(allVecs, dim);
+            var searcher = new GraphSearcher(compacted);
+
+            // Query with each DELTA source's own vectors: sources 1..k-1 by
+            // construction here (source 0 has equal live count and ties resolve to
+            // the first, so 1+ are delta). Each must find itself.
+            int found = 0, probed = 0;
+            for (int src = 1; src < numSources; src++) {
+                for (int i = 0; i < numVectorsPerGraph; i += 16) {
+                    int global = src * numVectorsPerGraph + i;
+                    var q = allVecs.get(global);
+                    var ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                    var res = searcher.search(ssp, 10, Bits.ALL);
+                    probed++;
+                    for (var n : res.getNodes()) {
+                        if (n.node == global) { found++; break; }
+                    }
+                }
+            }
+            assertTrue(String.format(
+                    "delta vectors must be reachable after the backward-edge pass: %d/%d found",
+                    found, probed),
+                    found >= (int) (probed * 0.9));
+        } finally {
+            for (var rs : rss) rs.close();
+            if (outRs != null) outRs.close();
+        }
+    }
+
+    /**
+     * The shape retain-largest is actually FOR: one dominant source plus small
+     * flush segments (the LSM tier shape — one big sstable and eleven ~1M
+     * segments). The equal-sources test above is the opposite case and is
+     * expected to degrade; this one must hold, or the strategy has no regime
+     * where it works.
+     */
+    @Test
+    public void retainLargestHoldsRecallWhenOneSourceDominates() throws Exception {
+        int dim = 16, topK = 10;
+        int[] sizes = { 1024, 64, 64, 64 };   // 84% of nodes in the retained base
+
+        double symmetricRecall = compactAndMeasureRecallSized(sizes, dim, topK, false, "domsym");
+        double retainRecall = compactAndMeasureRecallSized(sizes, dim, topK, true, "domret");
+
+        System.out.printf("DOMINANT-SOURCE  symmetric: %.4f   retain-largest: %.4f%n",
+                          symmetricRecall, retainRecall);
+        assertTrue(String.format(
+                "with a dominant source, retain-largest recall (%.4f) must stay within "
+                + "0.10 of symmetric (%.4f) — this is the regime the strategy targets",
+                retainRecall, symmetricRecall),
+                symmetricRecall - retainRecall < 0.10);
+    }
+
+    /** Like compactAndMeasureRecall but with per-source sizes. */
+    private double compactAndMeasureRecallSized(int[] sizes, int dim, int topK,
+                                                boolean retainLargest, String tag)
+            throws Exception {
+        List<VectorFloat<?>> allVecs = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        int globalOrdinal = 0;
+        for (int s = 0; s < sizes.length; s++) {
+            List<VectorFloat<?>> vecs = createRandomVectors(sizes[s], dim);
+            allVecs.addAll(vecs);
+            var ravv = new ListRandomAccessVectorValues(vecs, dim);
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+            try (var builder = new GraphIndexBuilder(bsp, dim, 16, 60, 1.2f, 1.2f, false)) {
+                var graph = builder.build(ravv);
+                var path = testDirectory.resolve("dom_" + tag + "_" + s);
+                OnDiskGraphIndex.write(graph, ravv, path);
+                rss.add(ReaderSupplierFactory.open(path.toAbsolutePath()));
+                graphs.add(OnDiskGraphIndex.load(rss.get(s)));
+            }
+            Map<Integer, Integer> map = new HashMap<>(sizes[s]);
+            for (int i = 0; i < sizes[s]; i++) map.put(i, globalOrdinal++);
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(sizes[s]);
+            lives.set(0, sizes[s]);
+            liveNodes.add(lives);
+        }
+        ReaderSupplier outRs = null;
+        try {
+            var compactor = new OnDiskGraphIndexCompactor(
+                    graphs, liveNodes, remappers, similarityFunction, null, -1);
+            compactor.setRetainLargest(retainLargest);
+            var outputPath = testDirectory.resolve("domrecall_" + tag);
+            compactor.compact(outputPath);
+            outRs = ReaderSupplierFactory.open(outputPath);
+            var compacted = OnDiskGraphIndex.load(outRs);
+            var allravv = new ListRandomAccessVectorValues(allVecs, dim);
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < 50; i++) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> gt = new ArrayList<>();
+            for (var q : queries) gt.add(bruteForceTopK(q, allVecs, topK));
+            var searcher = new GraphSearcher(compacted);
+            List<SearchResult> results = new ArrayList<>();
+            for (var q : queries) {
+                var ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                results.add(searcher.search(ssp, topK, Bits.ALL));
+            }
+            return AccuracyMetrics.recallFromSearchResults(gt, results, topK, topK);
+        } finally {
+            for (var rs : rss) rs.close();
+            if (outRs != null) outRs.close();
+        }
+    }
+
+    /** Compacts the same generated sources with/without retain-largest; returns recall. */
+    private double compactAndMeasureRecall(int numSources, int numVectorsPerGraph, int dim,
+                                           int topK, boolean retainLargest, String tag)
+            throws Exception {
+        List<VectorFloat<?>> allVecs = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        buildSourceGraphs(numSources, numVectorsPerGraph, dim, allVecs, graphs, rss,
+                          liveNodes, remappers, tag);
+        ReaderSupplier outRs = null;
+        try {
+            var compactor = new OnDiskGraphIndexCompactor(
+                    graphs, liveNodes, remappers, similarityFunction, null, -1);
+            compactor.setRetainLargest(retainLargest);
+            var outputPath = testDirectory.resolve("recall_" + tag);
+            compactor.compact(outputPath);
+
+            outRs = ReaderSupplierFactory.open(outputPath);
+            var compacted = OnDiskGraphIndex.load(outRs);
+            var allravv = new ListRandomAccessVectorValues(allVecs, dim);
+
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < 50; i++) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> gt = new ArrayList<>();
+            for (var q : queries) {
+                gt.add(bruteForceTopK(q, allVecs, topK));
+            }
+            var searcher = new GraphSearcher(compacted);
+            List<SearchResult> results = new ArrayList<>();
+            for (var q : queries) {
+                var ssp = DefaultSearchScoreProvider.exact(q, similarityFunction, allravv);
+                results.add(searcher.search(ssp, topK, Bits.ALL));
+            }
+            return AccuracyMetrics.recallFromSearchResults(gt, results, topK, topK);
+        } finally {
+            for (var rs : rss) rs.close();
+            if (outRs != null) outRs.close();
+        }
+    }
+
+    /** Exact top-k by brute force, for ground truth. */
+    private List<Integer> bruteForceTopK(VectorFloat<?> q, List<VectorFloat<?>> all, int k) {
+        Integer[] idx = new Integer[all.size()];
+        for (int i = 0; i < idx.length; i++) idx[i] = i;
+        java.util.Arrays.sort(idx, (a, b) -> Float.compare(
+                similarityFunction.compare(q, all.get(b)),
+                similarityFunction.compare(q, all.get(a))));
+        List<Integer> out = new ArrayList<>();
+        for (int i = 0; i < k; i++) out.add(idx[i]);
+        return out;
+    }
+
+    /** Shared setup: k identity-mapped, all-live source graphs on disk. */
+    private void buildSourceGraphs(int numSources, int numVectorsPerGraph, int dim,
+                                   List<VectorFloat<?>> allVecs,
+                                   List<OnDiskGraphIndex> graphs,
+                                   List<ReaderSupplier> rss,
+                                   List<FixedBitSet> liveNodes,
+                                   List<OrdinalMapper> remappers) throws Exception {
+        buildSourceGraphs(numSources, numVectorsPerGraph, dim, allVecs, graphs, rss,
+                          liveNodes, remappers, "d");
+    }
+
+    private void buildSourceGraphs(int numSources, int numVectorsPerGraph, int dim,
+                                   List<VectorFloat<?>> allVecs,
+                                   List<OnDiskGraphIndex> graphs,
+                                   List<ReaderSupplier> rss,
+                                   List<FixedBitSet> liveNodes,
+                                   List<OrdinalMapper> remappers,
+                                   String tag) throws Exception {
+        for (int s = 0; s < numSources; s++) {
+            List<VectorFloat<?>> vecs = createRandomVectors(numVectorsPerGraph, dim);
+            allVecs.addAll(vecs);
+            var ravv = new ListRandomAccessVectorValues(vecs, dim);
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+            try (var builder = new GraphIndexBuilder(bsp, dim, 8, 60, 1.2f, 1.2f, false)) {
+                var graph = builder.build(ravv);
+                var path = testDirectory.resolve("retain_src_" + tag + "_" + s);
+                OnDiskGraphIndex.write(graph, ravv, path);
+                rss.add(ReaderSupplierFactory.open(path.toAbsolutePath()));
+                graphs.add(OnDiskGraphIndex.load(rss.get(s)));
+            }
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
+                map.put(i, s * numVectorsPerGraph + i);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+    }
 }

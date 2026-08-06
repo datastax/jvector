@@ -106,6 +106,158 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
 
+    /**
+     * EXPERIMENTAL (branch `compaction-retain-largest`). When set, the merge stops
+     * re-deriving every node's neighborhood symmetrically and instead retains the
+     * largest source's graph, searching only for the delta.
+     *
+     * <p>Symmetric gather costs {@code T x (k-1)} beam searches — measured at ~220M
+     * for a 12-source, 20M-node merge, with heap maintenance and per-search setup
+     * outweighing similarity math ~50% to 22%. No system in the literature merges
+     * this way: DiskANN unions overlapping shards with no distance computations,
+     * FreshDiskANN and Lucene retain the largest structure and insert only the
+     * delta. Overlap is unavailable to disjoint LSM segments, so this takes the
+     * latter route: base nodes reuse their existing neighbor lists, delta nodes
+     * search the base ONCE, giving {@code |delta| x 1}.
+     *
+     * <p>Off by default and gated: enabling it without backward-edge patching
+     * throws rather than emitting an index (see {@link #assertRetainLargestUsable}),
+     * because base nodes acquire no edges TOWARD delta nodes and every delta vector
+     * would become unreachable from the entry point — a silent recall cliff, not a
+     * degradation.
+     */
+    private boolean retainLargest = false;
+
+    /**
+     * Index of the source whose graph is retained wholesale under
+     * {@link #retainLargest}; the argmax of surviving-node count. -1 until resolved.
+     */
+    private int retainedSourceIdx = -1;
+
+    /** Test hook: the source that would be retained, without running a compaction. */
+    int resolveRetainedSourceForTest() {
+        return resolveRetainedSource();
+    }
+
+    /** Enable the experimental retain-largest merge. See {@link #retainLargest}. */
+    public void setRetainLargest(boolean retainLargest) {
+        this.retainLargest = retainLargest;
+    }
+
+    /**
+     * The source with the most surviving nodes — the one whose edges are worth
+     * keeping. Resolved once per compaction from the liveNodes bitsets, which are
+     * already in memory, so this costs k popcounts and no I/O.
+     */
+    private int resolveRetainedSource() {
+        int best = 0;
+        long bestCard = -1;
+        for (int s = 0; s < liveNodes.size(); s++) {
+            long card = liveNodes.get(s).cardinality();
+            if (card > bestCard) {
+                bestCard = card;
+                best = s;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Refuses to run a retain-largest merge that would emit an unreachable delta.
+     *
+     * <p>Retaining the base's neighbor lists means those lists still point only at
+     * base nodes. Delta nodes gain edges toward the base, but nothing gains edges
+     * toward the delta, so a search entering at the base entry point can never
+     * reach a delta vector. FreshDiskANN closes this with a buffered backward-edge
+     * (delta) pass; until that lands here, enabling the flag is a hard error rather
+     * than a quietly broken index.
+     */
+    private void assertRetainLargestUsable() {
+        if (retainLargest && !BACKWARD_EDGE_PATCH_IMPLEMENTED) {
+            throw new UnsupportedOperationException(
+                    "retain-largest: the backward-edge (delta) patch pass is not implemented yet. "
+                    + "Retaining the base's neighbor lists leaves every delta node unreachable from "
+                    + "the entry point, so this would emit an index with a silent recall cliff. "
+                    + "See EXPERIMENT-retain-largest.md.");
+        }
+    }
+
+    /**
+     * Flipped when the backward-edge patch pass lands. Kept as a named constant so
+     * the guard above reads as a stage marker rather than a mystery false.
+     */
+    private static final boolean BACKWARD_EDGE_PATCH_IMPLEMENTED = true;
+
+    /**
+     * Buffered backward edges: retained-base node id -> delta nodes that chose it.
+     *
+     * <p>A delta node's search gives it edges TOWARD the base. Nothing gives the
+     * base edges toward the delta, so without this the delta is unreachable from
+     * the entry point. FreshDiskANN buffers the same set (its in-RAM Delta map) and
+     * patches it in a second pass; because our record writes are positional
+     * ({@code fc.write(buf, fileOffset)}), we can simply ORDER the passes — delta
+     * first, base second — and fold these edges in as the base node is written.
+     * No record is ever rewritten.
+     *
+     * <p>Values pack {@code (sourceIdx << 32) | nodeId} rather than output ordinals,
+     * because the base node has to SCORE each incoming delta node before pruning,
+     * which means reading its vector — and that needs the source it came from.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Integer, java.util.concurrent.ConcurrentLinkedQueue<Long>>
+            backwardEdges = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Live count of buffered backward edges, checked against the ceiling. */
+    private final java.util.concurrent.atomic.AtomicLong backwardEdgeCount =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Hard ceiling on buffered backward edges. Bounded-and-REFUSE: exceeding it
+     * throws rather than spilling or silently dropping edges. Dropping would
+     * quietly cost recall on exactly the delta vectors this pass exists to make
+     * reachable, and spilling would reintroduce the unbounded heap growth the
+     * streaming design removed.
+     *
+     * <p>Default ceiling is the structural worst case — every delta node choosing
+     * a full degree of base neighbours — so it only trips when the delta is larger
+     * than retain-largest is a sensible strategy for at all. At 8 bytes a packed
+     * edge plus queue overhead, budget roughly 32-48 bytes per edge.
+     */
+    private long maxBackwardEdges = -1;
+
+    /**
+     * Minimum share of live nodes the retained source must hold for retain-largest
+     * to be used. Below this the merge silently becomes worse rather than faster,
+     * so the compactor falls back to the symmetric path. See the measured points in
+     * {@code compactLevels}.
+     */
+    private static final double RETAIN_LARGEST_MIN_BASE_FRACTION = 0.5;
+
+    /** Override the buffered backward-edge ceiling. See {@link #maxBackwardEdges}. */
+    public void setMaxBackwardEdges(long maxBackwardEdges) {
+        this.maxBackwardEdges = maxBackwardEdges;
+    }
+
+    /**
+     * Records that {@code deltaNode} (in {@code deltaSourceIdx}) chose retained-base
+     * node {@code baseNode}, so the base node can gain the reciprocal edge when it
+     * is written.
+     */
+    private void recordBackwardEdge(int baseNode, int deltaSourceIdx, int deltaNode) {
+        long packed = ((long) deltaSourceIdx << 32) | (deltaNode & 0xFFFFFFFFL);
+        backwardEdges.computeIfAbsent(baseNode,
+                k -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(packed);
+        long n = backwardEdgeCount.incrementAndGet();
+        if (n > maxBackwardEdges) {
+            throw new IllegalStateException(String.format(
+                    "retain-largest: buffered backward edges (%d) exceeded the ceiling (%d). "
+                    + "The delta is too large for retain-largest to be the right strategy here; "
+                    + "raise it with setMaxBackwardEdges only if the memory is genuinely available "
+                    + "(~32-48 bytes/edge). Refusing rather than dropping edges, which would cost "
+                    + "recall on precisely the delta vectors this pass makes reachable.",
+                    n, maxBackwardEdges));
+        }
+    }
+
     // Embedder progress + work-admission control surface (see io.github.jbellis.jvector.util.work).
     // Default UNLIMITED = no observation and no throttling → byte-identical output and equivalent
     // timing to no SPI installed.
@@ -274,9 +426,26 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             l0ProcessOrder[i] = order[i];
             sizeRank[order[i]] = i;
         }
-        reverseCandidates = new ReverseCandidateBuffer(maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
-        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node",
-                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS);
+        // Retain-largest replaces the cross-link overlay for the merge it engages on:
+        // the reciprocal structure comes from the backward-edge buffer (bounded by the
+        // delta) instead of reverse propagation (sized by ALL nodes), and base nodes
+        // must run the ordinary gather so they fold those edges in - the retained-only
+        // fast path would skip exactly that. Every overlay site (offers, the
+        // smaller-source search skip, appendTo, the fast path) guards on
+        // reverseCandidates != null, so not allocating the buffer disables the whole
+        // overlay in one place - and skips an allocation sized by node count that
+        // would otherwise be dropped unused. The ordering arrays above are shared:
+        // both schemes iterate l0ProcessOrder.
+        if (retainLargest) {
+            reverseCandidates = null;
+            log.info("Cross-link: overlay disabled for this merge (retain-largest engaged); "
+                     + "L0 source order {} (ascending live nodes)",
+                    Arrays.toString(l0ProcessOrder));
+        } else {
+            reverseCandidates = new ReverseCandidateBuffer(maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
+            log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node",
+                    Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS);
+        }
     }
 
     /**
@@ -1415,6 +1584,44 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                  ProductQuantization pq)
             throws IOException, ExecutionException, InterruptedException {
 
+        assertRetainLargestUsable();
+        if (retainLargest) {
+            retainedSourceIdx = resolveRetainedSource();
+            // Retain-largest only pays when the retained base actually dominates.
+            // Measured: with 84% of nodes in the base, recall tracks the symmetric
+            // merge within 0.014; with four equal sources (25% in the base) it falls
+            // 0.164 — the delta nodes reach each other only through a base too small
+            // to route them. Below the threshold, fall back to the symmetric merge
+            // rather than emit a quietly worse index; the compaction still completes,
+            // just without the shortcut. The threshold is provisional: the two
+            // measured points bracket it, the exact knee is not yet measured.
+            double baseFraction = numTotalNodes == 0 ? 0.0
+                    : (double) liveNodes.get(retainedSourceIdx).cardinality() / numTotalNodes;
+            if (baseFraction < RETAIN_LARGEST_MIN_BASE_FRACTION) {
+                log.info("retain-largest: DISABLED for this merge — retained source holds only "
+                         + "{}% of live nodes (threshold {}%). The delta would have to route "
+                         + "through a base too small to connect it; falling back to the "
+                         + "symmetric merge.",
+                         String.format("%.1f", baseFraction * 100),
+                         String.format("%.0f", RETAIN_LARGEST_MIN_BASE_FRACTION * 100));
+                retainLargest = false;
+                retainedSourceIdx = -1;
+            }
+        }
+        if (retainLargest) {
+            if (maxBackwardEdges < 0) {
+                // Structural worst case: every delta node choosing a full degree of
+                // base neighbours. Tripping this means the delta rivals the base,
+                // i.e. retain-largest was the wrong strategy for this merge.
+                long deltaNodes = numTotalNodes - liveNodes.get(retainedSourceIdx).cardinality();
+                maxBackwardEdges = Math.max(1L, deltaNodes) * maxDegrees.get(0);
+            }
+            log.info("retain-largest: retaining source {} ({} live nodes of {} total); "
+                     + "delta nodes search it once instead of {} cross-source searches each",
+                     retainedSourceIdx, liveNodes.get(retainedSourceIdx).cardinality(),
+                     numTotalNodes, sources.size() - 1);
+        }
+
         int maxUpperDegree = 0;
         for (int level = 1; level < maxDegrees.size(); level++) {
             maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
@@ -1493,28 +1700,64 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             throw new RuntimeException(e);
                         }
                     };
+                    java.util.function.ToLongFunction<List<WriteResult>> writeBytes = (results) -> {
+                        // exact bytes: read before the write consumes the buffers
+                        long sz = 0;
+                        for (WriteResult r : results) sz += r.data.remaining();
+                        return sz;
+                    };
 
-                    // Sources run smallest-first, one group at a time: the drain between groups is
-                    // the barrier that guarantees every reverse-candidate offer into a source has
-                    // completed before that source's own nodes read them. Each per-source drain
-                    // carries the shared MERGE_LEVELS stage + progress so admission and progress
-                    // observation span the whole base layer, not one source's slice.
-                    for (int s : l0ProcessOrder) {
-                        runBatchesWithBackpressure(buildBatchesForSource(s, 0), ecs, submitOne, writeResults,
-                                Phase.MERGE_LEVELS,
-                                (results) -> {                   // exact bytes: read before the write consumes the buffers
-                                    long sz = 0;
-                                    for (WriteResult r : results) sz += r.data.remaining();
-                                    return sz;
-                                },
-                                mergeProgress);
+                    if (retainLargest) {
+                        // Retain-largest REPLACES the cross-link scheme for this merge
+                        // (reverseCandidates was never allocated, so the offer/consume/
+                        // fast-path overlay is inert): the base keeps its edges verbatim
+                        // and the reciprocal structure comes from the backward-edge
+                        // buffer instead of reverse propagation. Two passes, ordered -
+                        // every delta batch drains before any base batch starts, because
+                        // a base node folds in the backward edges delta nodes recorded
+                        // against it, and a base node written before its delta
+                        // neighbours existed would silently lose them. The two SEPARATE
+                        // runBatchesWithBackpressure calls are what make the barrier
+                        // real: the runner keeps a window of batches in flight, so
+                        // concatenating the lists would let the delta tail overlap the
+                        // first base nodes.
+                        List<BatchSpec> deltaBatches = new ArrayList<>();
+                        List<BatchSpec> baseBatches = null;
+                        for (int s : l0ProcessOrder) {
+                            if (s == retainedSourceIdx) {
+                                baseBatches = buildBatchesForSource(s, 0);
+                            } else {
+                                deltaBatches.addAll(buildBatchesForSource(s, 0));
+                            }
+                        }
+                        log.info("retain-largest: {} delta batches, then {} retained-base batches",
+                                 deltaBatches.size(), baseBatches.size());
+                        runBatchesWithBackpressure(deltaBatches, ecs, submitOne, writeResults,
+                                Phase.MERGE_LEVELS, writeBytes, mergeProgress);
+                        log.info("retain-largest: delta pass complete, {} backward edges buffered",
+                                 backwardEdgeCount.get());
+                        runBatchesWithBackpressure(baseBatches, ecs, submitOne, writeResults,
+                                Phase.MERGE_LEVELS, writeBytes, mergeProgress);
+                    } else {
+                        // Sources run smallest-first, one group at a time: the drain between
+                        // groups is the barrier that guarantees every reverse-candidate offer
+                        // into a source has completed before that source's own nodes read
+                        // them. Each per-source drain carries the shared MERGE_LEVELS stage +
+                        // progress so admission and progress observation span the whole base
+                        // layer, not one source's slice.
+                        for (int s : l0ProcessOrder) {
+                            runBatchesWithBackpressure(buildBatchesForSource(s, 0), ecs, submitOne, writeResults,
+                                    Phase.MERGE_LEVELS, writeBytes, mergeProgress);
+                        }
                     }
                 }
 
-                log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node), {} retained-only fast-path nodes",
-                        reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS,
-                        retainedOnlyNodes.get());
-                reverseCandidates = null; // consumed entirely within L0; scales with node count
+                if (reverseCandidates != null) {
+                    log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node), {} retained-only fast-path nodes",
+                            reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS,
+                            retainedOnlyNodes.get());
+                    reverseCandidates = null; // consumed entirely within L0; scales with node count
+                }
                 writer.offsetAfterInline();
 
             } else {
@@ -1727,6 +1970,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         scratch.tmpVec,
                         scratch.gs
                 );
+
+        // Retain-largest: a delta node that chose a retained-base neighbour owes it
+        // the reciprocal edge, or the base can never reach back into the delta.
+        // Recorded BEFORE the remap below, while selected[] still carries source
+        // coordinates - the base node needs those to read and score this vector.
+        if (retainLargest && sourceIdx != retainedSourceIdx) {
+            for (int k = 0; k < selected.size; k++) {
+                if (selected.sourceIdx[k] == retainedSourceIdx) {
+                    recordBackwardEdge(selected.nodes[k], sourceIdx, node);
+                }
+            }
+        }
 
         // remap
         for (int k = 0; k < selected.size; k++) {
@@ -1954,12 +2209,38 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int candSize = 0;
 
         for (int ss = 0; ss < sources.size(); ss++) {
+            // Retain-largest: skip the sources this node has no reason to search.
+            //
+            //   node in the RETAINED base -> its own neighbor list only. Those edges
+            //       were already built against the largest structure present; the
+            //       symmetric merge re-derives them anyway, which is the cost this
+            //       experiment removes.
+            //   node in the DELTA         -> its own neighbors, plus ONE search of
+            //       the retained base. Not the other delta sources: they reach each
+            //       other through the base, and searching all of them is exactly the
+            //       k-1 fan-out being eliminated.
+            //
+            // Search count falls from T x (k-1) to |delta| x 1.
+            if (retainLargest && ss != sourceIdx) {
+                boolean nodeIsInBase = sourceIdx == retainedSourceIdx;
+                if (nodeIsInBase || ss != retainedSourceIdx) {
+                    continue;
+                }
+            }
             var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
             var indexAlive = liveNodes.get(ss);
 
             if (ss == sourceIdx) {
                 candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
                                                  baseVec, scratch, candSize);
+                // Retained-base node: fold in the delta nodes that chose it during
+                // the delta pass. They enter as ordinary scored candidates, so the
+                // SAME diversity provider prunes the union - a retained neighbour
+                // and an incoming delta neighbour compete on equal terms rather
+                // than the delta being appended past the degree bound.
+                if (retainLargest && level == 0 && sourceIdx == retainedSourceIdx) {
+                    candSize = gatherBackwardEdges(node, scratch, baseVec, candSize);
+                }
             } else {
                 // Cross-link: at L0 only search LARGER sources; candidates from smaller sources
                 // arrive via reverse propagation (consumed below), offered when those sources'
@@ -1977,6 +2258,44 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     remappers.get(sourceIdx).oldToNew(node), scratch, candSize);
         }
 
+        return candSize;
+    }
+
+    /**
+     * Adds the buffered backward edges for a retained-base node as scored candidates.
+     *
+     * <p>Each entry is a delta node that selected this base node during the delta
+     * pass. It is read from its own source view and scored against the base node's
+     * vector exactly as any other candidate, so the diversity provider that runs
+     * next prunes retained and incoming neighbours together under one degree bound.
+     *
+     * <p>Dead delta nodes are skipped (a node can be selected and then not survive),
+     * and the candidate array is respected: if the union overflows the scratch
+     * capacity the remaining edges are dropped, which is safe because the array is
+     * sized for the symmetric worst case and the extras would be pruned anyway.
+     */
+    private int gatherBackwardEdges(int baseNode, Scratch scratch, VectorFloat<?> baseVec,
+                                    int candSize) {
+        var incoming = backwardEdges.get(baseNode);
+        if (incoming == null) {
+            return candSize;
+        }
+        for (long packed : incoming) {
+            if (candSize >= scratch.candNode.length) {
+                break;
+            }
+            int deltaSource = (int) (packed >>> 32);
+            int deltaNode = (int) packed;
+            if (!liveNodes.get(deltaSource).get(deltaNode)) {
+                continue;
+            }
+            var view = (OnDiskGraphIndex.View) scratch.gs[deltaSource].getView();
+            view.getVectorInto(deltaNode, scratch.tmpVec, 0);
+            scratch.candSrc[candSize] = deltaSource;
+            scratch.candNode[candSize] = deltaNode;
+            scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            candSize++;
+        }
         return candSize;
     }
 

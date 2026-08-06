@@ -34,3 +34,7 @@ docs/**/*.md
 yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**
+DESIGN-multi-source-compaction-gather.md
+TRAVERSAL-PATTERNS-compaction.md
+EXPERIMENT-retain-largest.md
+RETAIN-LARGEST-FOR-UPSTREAM.md
