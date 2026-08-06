@@ -924,7 +924,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     new OrdinalMapper.OffsetMapper(0, smallVecs.size()),
                     new OrdinalMapper.OffsetMapper(smallVecs.size(), bigVecs.size())));
 
-            var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, vsf, null);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, vsf, null, -1);
             var outputPath = testDirectory.resolve("fastpath_compacted");
             compactor.compact(outputPath);
 
