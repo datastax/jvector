@@ -2,6 +2,8 @@
 
 # fail on error
 set -e
+# print commands as they are executed
+set +x
 
 # Copyright DataStax, Inc.
 #
@@ -17,6 +19,22 @@ set -e
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ---------------------------------------------------------------------------
+# Path anchors — all derived from the git repository root so the script works
+# regardless of the working directory it is invoked from (Maven sets
+# workingDirectory to the src directory, but developers may run it from
+# anywhere inside the repo).
+# ---------------------------------------------------------------------------
+REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+SCRIPT_DIR="${REPO_ROOT}/jvector-native/src/main/native/src"
+NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
+MODULE_ROOT="${REPO_ROOT}/jvector-native"
+
+HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
+BUILD_DIR="${MODULE_ROOT}/target/meson-build"
+RESOURCES_DIR="${MODULE_ROOT}/src/main/resources"
+JAVA_OUT_DIR="${MODULE_ROOT}/src/main/java"
+
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
 printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
 
@@ -29,13 +47,13 @@ if [ "$BUILDTYPE" != "release" ] && [ "$BUILDTYPE" != "debug" ] && [ "$BUILDTYPE
 fi
 printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
 
-mkdir -p ../resources
+mkdir -p "${RESOURCES_DIR}"
+
 # compile jvector_simd_check.cpp as x86-64
 # compile jvector_simd.cpp as skylake-avx512
 # produce one shared library
 
 # Check that the Google Highway submodule has been initialised
-HIGHWAY_DIR="third_party/highway"
 if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
   echo "ERROR: Google Highway submodule not found at ${HIGHWAY_DIR}."
   echo "       Run the following command from the repository root to fix this:"
@@ -80,24 +98,23 @@ if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head
     exit 1
 fi
 
-BUILD_DIR="../../../target/meson-build"
-rm -rf ../resources/libjvector.so
+rm -rf "${RESOURCES_DIR}/libjvector.so"
 
 # Configure (--wipe resets any stale configuration) then compile
-meson setup "${BUILD_DIR}" \
+meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
     --wipe \
     --buildtype="${BUILDTYPE}"
 
 meson compile -C "${BUILD_DIR}"
 
 # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
-# Copy it to ../resources/ as the plain libjvector.so for Java System.load().
+# Copy it to src/main/resources/ so Maven packages it into the jar for LibraryLoader.
 SOFILE=$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjvector.so.*' -type f | head -1)
 if [ -z "${SOFILE}" ]; then
     echo "ERROR: libjvector.so not found in ${BUILD_DIR} after build."
     exit 1
 fi
-cp "${SOFILE}" ../resources/libjvector.so
+cp "${SOFILE}" "${RESOURCES_DIR}/libjvector.so"
 
 # Generate Java source code
 # Should only be run when c header changes
@@ -109,11 +126,12 @@ then
 fi
 
 jextract \
-  --output ../java \
+  --output "${JAVA_OUT_DIR}" \
   -t io.github.jbellis.jvector.vector.cnative \
-  -I . \
+  -I "${SCRIPT_DIR}" \
   --header-class-name NativeSimdOps \
-  jvector_simd.h
+  "${SCRIPT_DIR}/jvector_simd.h"
 
 # Set critical linker option with heap-based segments for all generated methods
-sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' ../java/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java
+sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' \
+  "${JAVA_OUT_DIR}/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java"
