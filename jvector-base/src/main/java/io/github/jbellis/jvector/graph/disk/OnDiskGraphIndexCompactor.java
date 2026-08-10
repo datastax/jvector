@@ -193,26 +193,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * {@link #appendTo} needs no locking.
      */
     private static final class ReverseCandidateBuffer {
+        /**
+         * Ordinals per chunk of the candidate arrays. A single flat array indexes with
+         * {@code ordinal * slots}, which overflows int past floor(2^31 / slots) total nodes
+         * (~134M at 16 slots); chunking keeps each backing array's element count in range.
+         */
+        static final int PROD_CHUNK_ORDINALS = 1 << 25;
         final int slots;
-        final int[] srcs;
-        final int[] nodes;    // old ordinals, parallel to srcs
-        final float[] scores;
+        final int chunkShift;
+        final int chunkMask;
+        final int[][] srcs;
+        final int[][] nodes;    // old ordinals, parallel to srcs
+        final float[][] scores;
         final int[] counts;   // per target ordinal
         final Object[] locks = new Object[1024];
         final java.util.concurrent.atomic.LongAdder offered = new java.util.concurrent.atomic.LongAdder();
 
         ReverseCandidateBuffer(int numOrdinals, int slots) {
+            this(numOrdinals, slots, PROD_CHUNK_ORDINALS);
+        }
+
+        ReverseCandidateBuffer(int numOrdinals, int slots, int chunkOrdinals) {
+            assert Integer.bitCount(chunkOrdinals) == 1 : "chunkOrdinals must be a power of two";
+            assert (long) chunkOrdinals * slots <= Integer.MAX_VALUE;
             this.slots = slots;
-            this.srcs = new int[numOrdinals * slots];
-            this.nodes = new int[numOrdinals * slots];
-            this.scores = new float[numOrdinals * slots];
+            this.chunkShift = Integer.numberOfTrailingZeros(chunkOrdinals);
+            this.chunkMask = chunkOrdinals - 1;
+            int numChunks = (int) (((long) numOrdinals + chunkOrdinals - 1) >>> chunkShift);
+            this.srcs = new int[numChunks][];
+            this.nodes = new int[numChunks][];
+            this.scores = new float[numChunks][];
+            for (int c = 0; c < numChunks; c++) {
+                int ords = (int) Math.min(chunkOrdinals, numOrdinals - ((long) c << chunkShift));
+                srcs[c] = new int[ords * slots];
+                nodes[c] = new int[ords * slots];
+                scores[c] = new float[ords * slots];
+            }
             this.counts = new int[numOrdinals];
             for (int i = 0; i < locks.length; i++) locks[i] = new Object();
         }
 
         void offer(int targetNewOrd, int src, int oldOrd, float score) {
             offered.increment();
-            int base = targetNewOrd * slots;
+            int chunk = targetNewOrd >>> chunkShift;
+            int base = (targetNewOrd & chunkMask) * slots;
+            int[] srcs = this.srcs[chunk];
+            int[] nodes = this.nodes[chunk];
+            float[] scores = this.scores[chunk];
             synchronized (locks[targetNewOrd & (locks.length - 1)]) {
                 int n = counts[targetNewOrd];
                 for (int i = 0; i < n; i++) {
@@ -244,19 +271,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         /** Appends the target's reverse candidates to the scratch arrays; returns new candSize. */
         int appendTo(int targetNewOrd, Scratch scratch, int candSize) {
-            int base = targetNewOrd * slots;
+            int chunk = targetNewOrd >>> chunkShift;
+            int base = (targetNewOrd & chunkMask) * slots;
             int n = counts[targetNewOrd];
             for (int i = 0; i < n; i++) {
-                scratch.candSrc[candSize] = srcs[base + i];
-                scratch.candNode[candSize] = nodes[base + i];
-                scratch.candScore[candSize] = scores[base + i];
+                scratch.candSrc[candSize] = srcs[chunk][base + i];
+                scratch.candNode[candSize] = nodes[chunk][base + i];
+                scratch.candScore[candSize] = scores[chunk][base + i];
                 candSize++;
             }
             return candSize;
         }
 
         long ramBytesUsed() {
-            return (long) srcs.length * (Integer.BYTES * 2 + Float.BYTES)
+            return (long) counts.length * slots * (Integer.BYTES * 2 + Float.BYTES)
                     + (long) counts.length * Integer.BYTES;
         }
     }
