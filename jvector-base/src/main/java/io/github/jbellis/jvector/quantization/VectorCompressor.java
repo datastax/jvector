@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
@@ -44,11 +45,24 @@ public interface VectorCompressor<T> {
     /**
      * Encode all vectors in the RandomAccessVectorValues. If the RandomAccessVectorValues
      * has a missing vector for a given ordinal, the value will be encoded as a zero vector.
+     * <p>
+     * Encoding is per-vector independent, so with {@link ParallelExecutor#callerRuns()} it runs
+     * synchronously on the calling thread and produces output identical to the pool-backed path;
+     * only wall-clock and thread usage differ.
      * @param ravv RandomAccessVectorValues to encode
-     * @param simdExecutor ForkJoinPool to use for SIMD operations
+     * @param simdExecutor executor hosting the parallel encode; {@link ParallelExecutor#callerRuns()}
+     *                     runs it on the calling thread
      * @return CompressedVectors containing the encoded vectors
      */
-    CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor);
+    CompressedVectors encodeAll(RandomAccessVectorValues ravv, ParallelExecutor simdExecutor);
+
+    /**
+     * As {@link #encodeAll(RandomAccessVectorValues, ParallelExecutor)}, hosting the parallel encode
+     * on {@code simdExecutor}. Retained for callers holding a {@link ForkJoinPool}.
+     */
+    default CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAll(ravv, ParallelExecutor.forkJoin(simdExecutor));
+    }
 
     T encode(VectorFloat<?> v);
 
@@ -108,8 +122,16 @@ public interface VectorCompressor<T> {
      * @return the reconstruction error for each vector
      */
     default double[] reconstructionErrors(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        return simdExecutor.submit(() ->
-                IntStream.range(0, ravv.size()).mapToDouble(i -> reconstructionError(ravv.getVector(i))).toArray()
-        ).join();
+        return reconstructionErrors(ravv, ParallelExecutor.forkJoin(simdExecutor));
+    }
+
+    /**
+     * As {@link #reconstructionErrors(RandomAccessVectorValues, ForkJoinPool)}, hosting the parallel
+     * computation on the given {@link ParallelExecutor}.
+     */
+    default double[] reconstructionErrors(RandomAccessVectorValues ravv, ParallelExecutor simdExecutor) {
+        double[] out = new double[ravv.size()];
+        simdExecutor.forEachInt(ravv.size(), i -> out[i] = reconstructionError(ravv.getVector(i)));
+        return out;
     }
 }
