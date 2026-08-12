@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -32,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -96,22 +98,26 @@ public class PQRetrainer {
 
         log.info("Collected {} training samples", samples.size());
 
-        // Extract vectors sequentially in sorted (source, node) order so disk reads are
-        // purely sequential and the OS read-ahead can cover them efficiently.  We do this
-        // here rather than letting ProductQuantization.compute() drive the reads via its
-        // parallel stream, which would scatter page faults across a potentially very large
-        // file and cause I/O that scales with dataset size rather than sample count.
+        long t0 = System.nanoTime();
         List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        log.info("Extracted {} vectors in {}ms; starting PQ refinement",
+                 trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
+
         var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
 
-        boolean center = similarityFunction == VectorSimilarityFunction.EUCLIDEAN;
-
-        return ProductQuantization.compute(
-                ravv,
-                basePQ.getSubspaceCount(),
-                basePQ.getClusterCount(),
-                center
-        );
+        // Warm-start from the existing codebook via Lloyd's-only refinement rather than
+        // re-running k-means++ from scratch. k-means++ initialization visits every point
+        // once per centroid (256 passes for k=256), which dominates training time.
+        // Since the source codebooks are already trained on data from the same underlying
+        // distribution, this warm-start converges in far fewer passes with no recall loss.
+        long t1 = System.nanoTime();
+        ProductQuantization result = basePQ.refine(ravv,
+                                                   ProductQuantization.K_MEANS_ITERATIONS,
+                                                   -1.0f, // UNWEIGHTED / isotropic
+                                                   PhysicalCoreExecutor.pool(),
+                                                   ForkJoinPool.commonPool());
+        log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
+        return result;
     }
 
     /**
@@ -211,6 +217,8 @@ public class PQRetrainer {
      * cover them efficiently. Each source's view is opened once and reused for all its samples.
      */
     private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples) {
+        prefetchSampleRanges(samples);
+
         OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
             views[s] = (OnDiskGraphIndex.View) sources.get(s).getView();
@@ -223,6 +231,33 @@ public class PQRetrainer {
             vectors.add(tmp.copy());
         }
         return vectors;
+    }
+
+    // Merging samples closer than this many ordinals into one range keeps the prefetch mostly
+    // sequential without dragging in long runs of unsampled records.
+    private static final int PREFETCH_MERGE_GAP = 256;
+
+    /**
+     * Streams the records of the (source, node)-sorted sample list into the page cache before
+     * extraction. The mappings advise {@code MADV_RANDOM}, so without this the extraction loop
+     * faults one page at a time on a cold cache; total demand is bounded by the training-set
+     * size, not the file size.
+     */
+    private void prefetchSampleRanges(List<SampleRef> samples) {
+        int i = 0;
+        while (i < samples.size()) {
+            SampleRef first = samples.get(i);
+            int last = first.node;
+            int j = i + 1;
+            while (j < samples.size()
+                    && samples.get(j).source == first.source
+                    && samples.get(j).node - last <= PREFETCH_MERGE_GAP) {
+                last = samples.get(j).node;
+                j++;
+            }
+            sources.get(first.source).prefetchL0Records(first.node, last);
+            i = j;
+        }
     }
 
     /**

@@ -230,6 +230,9 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 final int cStart = chunkStart;
                 final int cEnd = Math.min(chunkStart + chunkSize, upper);
                 tasks.add(() -> {
+                    // Stream this chunk's records into the page cache before the encode loop;
+                    // the mapping's MADV_RANDOM otherwise faults them one page at a time.
+                    source.prefetchL0Records(cStart, cEnd - 1);
                     ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
                     long count = 0;

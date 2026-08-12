@@ -84,7 +84,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final ForkJoinPool executor;
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
+    private boolean refineAfterCompaction = false;
 
+    /**
+     * Whether to run the second-pass neighbor refinement after the merged graph is written
+     * (default false). Refinement is a navigability pass: it has no measurable effect on
+     * recall, but it improves query latency on the merged index at the cost of a significant
+     * fraction of total compaction time. Enable it when search latency matters more than
+     * compaction throughput.
+     */
+    @Experimental
+    public void setRefineAfterCompaction(boolean refineAfterCompaction) {
+        this.refineAfterCompaction = refineAfterCompaction;
+    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -298,7 +310,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         try {
             compactGraphImpl(outputPath, strategy);
             releaseSourcesBeforeRefine(strategy);
-            refineCompactedGraph(outputPath, strategy);
+            if (refineAfterCompaction) {
+                refineCompactedGraph(outputPath, strategy);
+            }
         } finally {
             // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
             // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
@@ -330,7 +344,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         try {
             sidecarStrategy.retrain(similarityFunction);
             compactGraphImpl(graphPath, inlineStrategy);
-            refineCompactedGraph(graphPath, inlineStrategy);
+            if (refineAfterCompaction) {
+                refineCompactedGraph(graphPath, inlineStrategy);
+            }
             sidecarStrategy.writeSidecar(compressedPath);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
@@ -997,6 +1013,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
+        if (bs.end > bs.start) {
+            // Stream this batch's own records into the page cache before processing. Search
+            // reads into other sources are data-dependent and stay demand-faulted, but each
+            // node's own record read (adjacency + vector) is fully predictable.
+            sources.get(bs.sourceIdx).prefetchL0Records(bs.nodes[bs.start], bs.nodes[bs.end - 1]);
+        }
 
         for (int i = bs.start; i < bs.end; i++) {
             int node = bs.nodes[i];
@@ -1217,8 +1239,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         if (level == 0) {
+            // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
+            // pruned by diversity selection, so the doubled approximate-phase cost buys almost
+            // no recall.
             SearchResult results = scratch.gs[sourceIdx].search(
-                    ssp, params.searchTopK, params.beamWidth, 0f, 0f, indexAlive
+                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
             );
 
             for (var r : results.getNodes()) {
@@ -1354,11 +1379,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int count = 0;
             for (int s = 0; s < sources.size(); s++) {
                 if (level > sources.get(s).getMaxLevel()) continue;
-                NodesIterator it = sources.get(s).getNodes(level);
-                FixedBitSet alive = liveNodes.get(s);
-                while (it.hasNext()) {
-                    int node = it.next();
-                    if (alive.get(node)) count++;
+                if (level == 0) {
+                    // Every live node is present at level 0 (HNSW base layer invariant),
+                    // so count directly from the in-memory bitset instead of scanning node
+                    // records on disk (which touches gigabytes of source data on a cold cache).
+                    count += liveNodes.get(s).cardinality();
+                } else {
+                    NodesIterator it = sources.get(s).getNodes(level);
+                    FixedBitSet alive = liveNodes.get(s);
+                    while (it.hasNext()) {
+                        int node = it.next();
+                        if (alive.get(node)) count++;
+                    }
                 }
             }
             layerInfo.add(new CommonHeader.LayerInfo(count, maxDegrees.get(level)));
