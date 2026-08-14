@@ -41,10 +41,15 @@ import java.util.function.IntFunction;
  * <p>
  * <b>Legacy path</b> (pre-written features present): some feature regions in each node record
  * were written to disk ahead of time via {@code writeFeaturesInline()}.  Those byte ranges must
- * not be overwritten.  Each node's <em>owned</em> byte spans (ordinal, non-null features,
- * neighbor section) are identified and written as a minimal set of non-blocking channel writes.
- * All writes for the entire task are submitted before any {@code Future.get()} call, so the OS
- * sees the full I/O workload and can schedule it efficiently.
+ * not be overwritten.  {@link #callLegacy()} builds one growing in-memory buffer for the whole
+ * task range, but skips writing anything into it for a pre-written (gap) feature — the buffer
+ * ends up holding only owned bytes, packed contiguously.  A run of owned bytes is sliced off and
+ * flushed as a single non-blocking write only when a gap is reached (or at the end of the task),
+ * so a run commonly spans <em>many</em> nodes rather than being flushed per-node: the seam
+ * between one node's trailing neighbor section and the next node's leading ordinal is never
+ * itself a gap, so runs only break where a {@link FeatureId} is actually pre-written, regardless
+ * of node boundaries. All writes for the entire task are submitted before any
+ * {@code Future.get()} call, so the OS sees the full I/O workload and can schedule it efficiently.
  * <p>
  * <b>Understanding {@code hasPrewrittenFeatures}</b>: this flag is derived from the
  * {@code featureStateSuppliers} map passed to {@code write()}.  It does <em>not</em> involve
@@ -56,8 +61,8 @@ import java.util.function.IntFunction;
  * per-node hot path pays no overhead checking it.
  * <p>
  * FUTURE IMPROVEMENT: when {@code writeFeaturesInline} support is removed, {@code hasPrewrittenFeatures}
- * will always be {@code false}, the legacy path ({@link #callLegacy()}, {@link #collectNodeWrites})
- * and all related helpers can be deleted, and this class becomes the clean single-path fast path only.
+ * will always be {@code false}, the legacy path ({@link #callLegacy()}) and all related helpers
+ * can be deleted, and this class becomes the clean single-path fast path only.
  */
 class NodeRecordTask implements Callable<Void> {
     private final int startOrdinal;
@@ -146,130 +151,120 @@ class NodeRecordTask implements Callable<Void> {
     // -------------------------------------------------------------------------
     // Legacy path: handle pre-written feature regions.
     //
-    // Pre-written bytes must not be overwritten.  For each node we identify the
-    // contiguous owned spans (ordinal + consecutive non-null features + neighbor
-    // section) and fire one non-blocking channel write per span.  ALL writes for
-    // the entire task are submitted before any Future.get() call, letting the OS
-    // pipeline them.
+    // Pre-written bytes must not be overwritten. A single growing buffer is built for the
+    // whole task range, same as callBatched(), except nothing is written into it for a
+    // pre-written (gap) feature -- the buffer ends up holding only owned bytes, packed
+    // contiguously. A run of owned bytes is sliced off the buffer and queued as a single
+    // non-blocking write only when a gap is reached (or at the end of the task), so runs
+    // commonly span many nodes rather than being flushed per-node: the seam between one
+    // node's trailing neighbor section and the next node's leading ordinal is never itself
+    // a gap, so runs only break where a FeatureId is actually pre-written. ALL writes for
+    // the entire task are submitted before any Future.get() call, letting the OS pipeline
+    // them.
     //
-    // FUTURE IMPROVEMENT: delete this method and collectNodeWrites() entirely once
-    // writeFeaturesInline support is removed.  The fast path handles everything.
+    // FUTURE IMPROVEMENT: delete this method entirely once writeFeaturesInline support is
+    // removed. The fast path handles everything.
     // -------------------------------------------------------------------------
 
     private void callLegacy() throws Exception {
-        List<PendingWrite> pendingWrites = new ArrayList<>();
+        int rangeSize = endOrdinal - startOrdinal;
+        ByteBuffer rangeBuffer = useDirectBuffers
+                ? ByteBuffer.allocateDirect(rangeSize * recordSize)
+                : ByteBuffer.allocate(rangeSize * recordSize);
+        rangeBuffer.order(java.nio.ByteOrder.BIG_ENDIAN);
+        var writer = new ByteBufferIndexWriter(rangeBuffer);
+
+        List<PendingWrite> pending = new ArrayList<>();
+        // Buffer-relative start of the run currently being accumulated, and the file
+        // position that buffer offset corresponds to. Advanced past both the flushed run
+        // and the skipped gap every time a gap is hit.
+        int runStart = 0;
+        long runFilePosition = baseOffset + (long) startOrdinal * recordSize;
 
         for (int newOrdinal = startOrdinal; newOrdinal < endOrdinal; newOrdinal++) {
-            collectNodeWrites(newOrdinal, pendingWrites);
+            var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
+
+            if (originalOrdinal == OrdinalMapper.OMITTED) {
+                // OMITTED nodes are holes in the ordinal space. writeFeaturesInline() is
+                // never called for them, so nothing here is a gap: the whole record extends
+                // the current run with no flush needed.
+                writer.writeInt(newOrdinal);
+                for (var feature : inlineFeatures) {
+                    for (int i = 0; i < feature.featureSize(); i++) writer.writeByte(0);
+                }
+                writer.writeInt(0); // neighbor count
+                for (int n = 0; n < graph.getDegree(0); n++) writer.writeInt(-1);
+                continue;
+            }
+
+            if (!graph.containsNode(originalOrdinal)) {
+                throw new IllegalStateException(String.format(
+                        "Ordinal mapper mapped new ordinal %d to non-existing node %d",
+                        newOrdinal, originalOrdinal));
+            }
+
+            // Ordinal: always owned.
+            writer.writeInt(newOrdinal);
+
+            for (var feature : inlineFeatures) {
+                var supplier = featureStateSuppliers.get(feature.id());
+                if (supplier != null) {
+                    // Owned: extend the current run directly.
+                    feature.writeInline(writer, supplier.apply(originalOrdinal));
+                } else {
+                    // Pre-written gap: flush the run accumulated so far (which may span
+                    // multiple earlier nodes), then skip the gap in the file without
+                    // writing anything into rangeBuffer for it.
+                    int runEnd = rangeBuffer.position();
+                    if (runEnd > runStart) {
+                        pending.add(new PendingWrite(sliceRange(rangeBuffer, runStart, runEnd), runFilePosition));
+                    }
+                    runFilePosition += (runEnd - runStart) + feature.featureSize();
+                    runStart = runEnd;
+                }
+            }
+
+            // Neighbor section: always owned — extends the current run.
+            var neighbors = view.getNeighborsIterator(0, originalOrdinal);
+            if (neighbors.size() > graph.getDegree(0)) {
+                throw new IllegalStateException(String.format(
+                        "Node %d has more neighbors %d than max degree %d -- run Builder.cleanup()!",
+                        originalOrdinal, neighbors.size(), graph.getDegree(0)));
+            }
+            writer.writeInt(neighbors.size());
+            int n = 0;
+            for (; n < neighbors.size(); n++) {
+                int newNeighbor = ordinalMapper.oldToNew(neighbors.nextInt());
+                if (newNeighbor < 0 || newNeighbor > ordinalMapper.maxOrdinal()) {
+                    throw new IllegalStateException(String.format(
+                            "Neighbor ordinal out of bounds: %d/%d",
+                            newNeighbor, ordinalMapper.maxOrdinal()));
+                }
+                writer.writeInt(newNeighbor);
+            }
+            for (; n < graph.getDegree(0); n++) writer.writeInt(-1);
         }
 
-        writeAllFully(pendingWrites);
+        // Final trailing run.
+        int runEnd = rangeBuffer.position();
+        if (runEnd > runStart) {
+            pending.add(new PendingWrite(sliceRange(rangeBuffer, runStart, runEnd), runFilePosition));
+        }
+
+        writeAllFully(pending);
     }
 
     /**
-     * Determines the owned byte spans for one node record and appends non-blocking
-     * channel writes for each span to {@code pending}.
-     * <p>
-     * The record layout is:
-     * <pre>
-     *   [ordinal: 4] [feature_0: F0] [feature_1: F1] ... [neighbor_count: 4] [neighbors: D×4]
-     * </pre>
-     * The ordinal and neighbor section are always owned.  Features are owned when their
-     * supplier is non-null; null-supplier features are pre-written gaps we skip over.
-     * Consecutive owned bytes are merged into a single write to minimise I/O calls.
-     * <p>
-     * FUTURE IMPROVEMENT: when writeFeaturesInline is removed, null suppliers cannot exist.
-     * This method disappears and every node is handled by buildFullRecord() in callBatched().
+     * Returns an independent, ready-to-read view over {@code buf}'s backing storage covering
+     * {@code [start, end)}. The view shares memory with {@code buf} but has its own position
+     * and limit, so later writes into {@code buf} at other offsets don't affect it — safe to
+     * hand off to a concurrent {@code channel.write()} while {@code buf} keeps being appended to.
      */
-    private void collectNodeWrites(int newOrdinal, List<PendingWrite> pending) throws Exception {
-        var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
-        long recordBase = baseOffset + (long) newOrdinal * recordSize;
-
-        if (originalOrdinal == OrdinalMapper.OMITTED) {
-            // OMITTED nodes are holes in the ordinal space.  writeFeaturesInline() is never
-            // called for them, so the entire record is ours — write it in one shot.
-            ByteBuffer buf = allocRegion(recordSize);
-            buf.putInt(newOrdinal);
-            for (var feature : inlineFeatures) {
-                for (int i = 0; i < feature.featureSize(); i++) buf.put((byte) 0);
-            }
-            buf.putInt(0); // neighbor count
-            for (int n = 0; n < graph.getDegree(0); n++) buf.putInt(-1);
-            buf.flip();
-            pending.add(new PendingWrite(buf, recordBase));
-            return;
-        }
-
-        if (!graph.containsNode(originalOrdinal)) {
-            throw new IllegalStateException(String.format(
-                    "Ordinal mapper mapped new ordinal %d to non-existing node %d",
-                    newOrdinal, originalOrdinal));
-        }
-
-        // Accumulate contiguous owned bytes into a region buffer.  When a null supplier
-        // (pre-written gap) is encountered, flush the current region and start a new one
-        // positioned past the gap.
-        //
-        // FUTURE IMPROVEMENT: this entire accumulation loop simplifies to a straight
-        // linear write through all features when null suppliers are impossible.
-        ByteBuffer region = allocRegion(recordSize);
-        long regionStart = recordBase;
-
-        // Ordinal: always owned.
-        region.putInt(newOrdinal);
-
-        for (var feature : inlineFeatures) {
-            var supplier = featureStateSuppliers.get(feature.id());
-            if (supplier != null) {
-                // Owned: extend the current region directly.
-                // ByteBufferIndexWriter(region, false) picks up at region.position()
-                // without clearing, so it appends to whatever we have already written.
-                var fw = new ByteBufferIndexWriter(region, false);
-                feature.writeInline(fw, supplier.apply(originalOrdinal));
-            } else {
-                // Pre-written gap: flush the current region (if any bytes are pending)
-                // then advance regionStart past both the flushed bytes and the gap.
-                //
-                // FUTURE IMPROVEMENT: this branch is only needed because writeFeaturesInline
-                // can place data at arbitrary sub-record offsets.  Remove it with that API.
-                if (region.position() > 0) {
-                    int owned = region.position();
-                    region.flip();
-                    pending.add(new PendingWrite(region, regionStart));
-                    regionStart += owned + feature.featureSize();
-                } else {
-                    // Nothing accumulated yet in this region — just skip the gap.
-                    regionStart += feature.featureSize();
-                }
-                region = allocRegion(recordSize);
-            }
-        }
-
-        // Neighbor section: always owned — append to the current region.
-        var neighbors = view.getNeighborsIterator(0, originalOrdinal);
-        if (neighbors.size() > graph.getDegree(0)) {
-            throw new IllegalStateException(String.format(
-                    "Node %d has more neighbors %d than max degree %d -- run Builder.cleanup()!",
-                    originalOrdinal, neighbors.size(), graph.getDegree(0)));
-        }
-        var nw = new ByteBufferIndexWriter(region, false);
-        nw.writeInt(neighbors.size());
-        int n = 0;
-        for (; n < neighbors.size(); n++) {
-            int newNeighbor = ordinalMapper.oldToNew(neighbors.nextInt());
-            if (newNeighbor < 0 || newNeighbor > ordinalMapper.maxOrdinal()) {
-                throw new IllegalStateException(String.format(
-                        "Neighbor ordinal out of bounds: %d/%d",
-                        newNeighbor, ordinalMapper.maxOrdinal()));
-            }
-            nw.writeInt(newNeighbor);
-        }
-        for (; n < graph.getDegree(0); n++) nw.writeInt(-1);
-
-        if (region.position() > 0) {
-            region.flip();
-            pending.add(new PendingWrite(region, regionStart));
-        }
+    private static ByteBuffer sliceRange(ByteBuffer buf, int start, int end) {
+        ByteBuffer dup = buf.duplicate();
+        dup.limit(end);
+        dup.position(start);
+        return dup.slice();
     }
 
     // -------------------------------------------------------------------------
@@ -321,15 +316,6 @@ class NodeRecordTask implements Callable<Void> {
         }
     }
 
-    /** Allocates a fresh BIG_ENDIAN ByteBuffer for a write region. */
-    private ByteBuffer allocRegion(int capacity) {
-        var buf = useDirectBuffers
-                ? ByteBuffer.allocateDirect(capacity)
-                : ByteBuffer.allocate(capacity);
-        buf.order(java.nio.ByteOrder.BIG_ENDIAN);
-        return buf;
-    }
-
     /** A not-yet-fully-written buffer destined for a fixed file offset. */
     private static final class PendingWrite {
         final ByteBuffer buffer;
@@ -342,33 +328,65 @@ class NodeRecordTask implements Callable<Void> {
     }
 
     /**
-     * Submits every write in {@code wave} without blocking, then joins them all.
+     * Caps how many writes this task submits to the channel before joining any of them.
+     * <p>
+     * On platforms without a native async file-I/O backend wired into NIO2 (macOS and most
+     * POSIX systems get {@code sun.nio.ch.SimpleAsynchronousFileChannelImpl}; only Windows gets
+     * true IOCP), {@code AsynchronousFileChannel.write()} is emulated by handing the write to an
+     * executor that is observed to spin up a fresh native thread per outstanding call rather
+     * than reusing a small, bounded pool. {@link #callLegacy()}'s per-task write count can be
+     * O(nodes) — unlike {@link #callBatched()}'s O(1) — so submitting an entire task's writes
+     * before joining any of them can create thousands of simultaneously outstanding writes per
+     * task, times however many tasks are running concurrently. In practice this has been
+     * observed to exhaust the OS thread limit ({@code OutOfMemoryError: unable to create native
+     * thread}, {@code pthread_create failed (EAGAIN)}) on a large write. This bound keeps the
+     * number of writes any single task has outstanding at once small and constant, regardless
+     * of how many nodes the task covers.
+     */
+    private static final int MAX_IN_FLIGHT_WRITES = 32;
+
+    /**
+     * Submits {@code wave} to the channel in chunks of at most {@link #MAX_IN_FLIGHT_WRITES},
+     * joining each chunk before submitting the next. Within a chunk, every write is submitted
+     * before any is joined, preserving pipelining at a bounded scale; see
+     * {@link #MAX_IN_FLIGHT_WRITES} for why an unbounded submit-everything-first approach is
+     * unsafe on some platforms.
+     */
+    private void writeAllFully(List<PendingWrite> wave) throws Exception {
+        for (int chunkStart = 0; chunkStart < wave.size(); chunkStart += MAX_IN_FLIGHT_WRITES) {
+            int chunkEnd = Math.min(chunkStart + MAX_IN_FLIGHT_WRITES, wave.size());
+            writeChunkFully(wave.subList(chunkStart, chunkEnd));
+        }
+    }
+
+    /**
+     * Submits every write in {@code chunk} without blocking, then joins them all.
      * {@code AsynchronousFileChannel.write()} is only guaranteed to write "up to" the
      * buffer's remaining bytes in a single call (see
      * {@link AsynchronousFileChannel#write(ByteBuffer, long)}); a short write is rare for a
      * regular file but can happen (disk full, quota limits, an
      * oversized single write). Any write that completes short is resubmitted for its
      * remaining bytes — which the channel has already advanced the buffer's position past —
-     * as a follow-up wave.
+     * as a follow-up chunk.
      * <p>
      * In the common case (no short writes) this runs exactly one submit-all/join-all round,
      * so the pipelining {@link #callLegacy()} and {@link #callBatched()} rely on is preserved;
      * the retry loop only does extra work on the rare short-write path.
      */
-    private void writeAllFully(List<PendingWrite> wave) throws Exception {
-        while (!wave.isEmpty()) {
-            List<Future<Integer>> futures = new ArrayList<>(wave.size());
-            for (var w : wave) {
+    private void writeChunkFully(List<PendingWrite> chunk) throws Exception {
+        while (!chunk.isEmpty()) {
+            List<Future<Integer>> futures = new ArrayList<>(chunk.size());
+            for (var w : chunk) {
                 futures.add(channel.write(w.buffer, w.position));
             }
 
             List<PendingWrite> retry = new ArrayList<>();
-            for (int i = 0; i < wave.size(); i++) {
+            for (int i = 0; i < chunk.size(); i++) {
                 int written = futures.get(i).get();
                 if (written < 0) {
                     throw new IOException("Channel closed during write");
                 }
-                var w = wave.get(i);
+                var w = chunk.get(i);
                 if (w.buffer.hasRemaining()) {
                     if (written == 0) {
                         throw new IOException("Channel made no progress writing at position " + w.position);
@@ -376,7 +394,7 @@ class NodeRecordTask implements Callable<Void> {
                     retry.add(new PendingWrite(w.buffer, w.position + written));
                 }
             }
-            wave = retry;
+            chunk = retry;
         }
     }
 }
