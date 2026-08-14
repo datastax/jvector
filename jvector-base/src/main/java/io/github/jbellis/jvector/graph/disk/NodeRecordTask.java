@@ -136,9 +136,11 @@ class NodeRecordTask implements Callable<Void> {
             buildFullRecord(writer, newOrdinal);
         }
 
-        // One channel.write() for the entire task range — one syscall, one OS I/O request.
+        // One channel.write() for the entire task range — one syscall, one OS I/O request
+        // in the common case. writeAllFully() guarantees the buffer is fully drained even
+        // if the OS reports a short write (e.g. disk full).
         rangeBuffer.flip();
-        channel.write(rangeBuffer, baseOffset + (long) startOrdinal * recordSize).get();
+        writeAllFully(List.of(new PendingWrite(rangeBuffer, baseOffset + (long) startOrdinal * recordSize)));
     }
 
     // -------------------------------------------------------------------------
@@ -155,19 +157,13 @@ class NodeRecordTask implements Callable<Void> {
     // -------------------------------------------------------------------------
 
     private void callLegacy() throws Exception {
-        List<Future<Integer>> pendingWrites = new ArrayList<>();
+        List<PendingWrite> pendingWrites = new ArrayList<>();
 
         for (int newOrdinal = startOrdinal; newOrdinal < endOrdinal; newOrdinal++) {
             collectNodeWrites(newOrdinal, pendingWrites);
         }
 
-        // All writes are in-flight; wait once rather than blocking after each one.
-        for (var f : pendingWrites) {
-            int written = f.get();
-            if (written < 0) {
-                throw new IOException("Channel closed during write");
-            }
-        }
+        writeAllFully(pendingWrites);
     }
 
     /**
@@ -185,7 +181,7 @@ class NodeRecordTask implements Callable<Void> {
      * FUTURE IMPROVEMENT: when writeFeaturesInline is removed, null suppliers cannot exist.
      * This method disappears and every node is handled by buildFullRecord() in callBatched().
      */
-    private void collectNodeWrites(int newOrdinal, List<Future<Integer>> pending) throws Exception {
+    private void collectNodeWrites(int newOrdinal, List<PendingWrite> pending) throws Exception {
         var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
         long recordBase = baseOffset + (long) newOrdinal * recordSize;
 
@@ -200,7 +196,7 @@ class NodeRecordTask implements Callable<Void> {
             buf.putInt(0); // neighbor count
             for (int n = 0; n < graph.getDegree(0); n++) buf.putInt(-1);
             buf.flip();
-            pending.add(channel.write(buf, recordBase));
+            pending.add(new PendingWrite(buf, recordBase));
             return;
         }
 
@@ -239,7 +235,7 @@ class NodeRecordTask implements Callable<Void> {
                 if (region.position() > 0) {
                     int owned = region.position();
                     region.flip();
-                    pending.add(channel.write(region, regionStart));
+                    pending.add(new PendingWrite(region, regionStart));
                     regionStart += owned + feature.featureSize();
                 } else {
                     // Nothing accumulated yet in this region — just skip the gap.
@@ -272,7 +268,7 @@ class NodeRecordTask implements Callable<Void> {
 
         if (region.position() > 0) {
             region.flip();
-            pending.add(channel.write(region, regionStart));
+            pending.add(new PendingWrite(region, regionStart));
         }
     }
 
@@ -332,5 +328,55 @@ class NodeRecordTask implements Callable<Void> {
                 : ByteBuffer.allocate(capacity);
         buf.order(java.nio.ByteOrder.BIG_ENDIAN);
         return buf;
+    }
+
+    /** A not-yet-fully-written buffer destined for a fixed file offset. */
+    private static final class PendingWrite {
+        final ByteBuffer buffer;
+        final long position;
+
+        PendingWrite(ByteBuffer buffer, long position) {
+            this.buffer = buffer;
+            this.position = position;
+        }
+    }
+
+    /**
+     * Submits every write in {@code wave} without blocking, then joins them all.
+     * {@code AsynchronousFileChannel.write()} is only guaranteed to write "up to" the
+     * buffer's remaining bytes in a single call (see
+     * {@link AsynchronousFileChannel#write(ByteBuffer, long)}); a short write is rare for a
+     * regular file but can happen (disk full, quota limits, an
+     * oversized single write). Any write that completes short is resubmitted for its
+     * remaining bytes — which the channel has already advanced the buffer's position past —
+     * as a follow-up wave.
+     * <p>
+     * In the common case (no short writes) this runs exactly one submit-all/join-all round,
+     * so the pipelining {@link #callLegacy()} and {@link #callBatched()} rely on is preserved;
+     * the retry loop only does extra work on the rare short-write path.
+     */
+    private void writeAllFully(List<PendingWrite> wave) throws Exception {
+        while (!wave.isEmpty()) {
+            List<Future<Integer>> futures = new ArrayList<>(wave.size());
+            for (var w : wave) {
+                futures.add(channel.write(w.buffer, w.position));
+            }
+
+            List<PendingWrite> retry = new ArrayList<>();
+            for (int i = 0; i < wave.size(); i++) {
+                int written = futures.get(i).get();
+                if (written < 0) {
+                    throw new IOException("Channel closed during write");
+                }
+                var w = wave.get(i);
+                if (w.buffer.hasRemaining()) {
+                    if (written == 0) {
+                        throw new IOException("Channel made no progress writing at position " + w.position);
+                    }
+                    retry.add(new PendingWrite(w.buffer, w.position + written));
+                }
+            }
+            wave = retry;
+        }
     }
 }
