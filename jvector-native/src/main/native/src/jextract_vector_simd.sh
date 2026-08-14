@@ -3,7 +3,7 @@
 # fail on error
 set -e
 # print commands as they are executed
-set +x
+set -x
 
 # Copyright DataStax, Inc.
 #
