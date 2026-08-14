@@ -130,6 +130,116 @@ The output is `target/meson-build/libjvector.so.<version>` (relative to the proj
 
 ---
 
+## How to run tests
+
+> **Standalone development tool.** The test suite is a native C++ executable
+> that links directly against `libjvector.so`. It exists solely to help develop
+> and debug the native module — it is **not** part of the JVector Java build and
+> is never invoked by Maven or the Java test harness.
+
+The test suite uses [Google Test](https://github.com/google/googletest) and is
+built automatically when `gtest_main` is available via pkg-config.
+
+### Install Google Test
+
+**Ubuntu / Debian:**
+```bash
+sudo apt install libgtest-dev cmake
+cd /usr/src/gtest && sudo cmake . && sudo make && sudo cp lib/*.a /usr/local/lib
+```
+
+Or via vcpkg / Conan if you prefer a package manager.
+
+### Build and run
+
+```bash
+# 1. Configure (from the native source directory)
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build --wipe --buildtype=debugoptimized
+
+# 2. Compile (the test binary is only emitted when gtest is found)
+meson compile -C ../../../target/meson-build
+
+# 3. Run via meson's test runner (pretty output, parallel execution)
+meson test -C ../../../target/meson-build --suite simd_kernels -v
+
+# — or run the binary directly —
+../../../target/meson-build/test_simd_kernels
+```
+
+#### What the tests cover
+
+| Source file | What it tests |
+|---|---|
+| `tests/test_similarity.cpp` | `cosine_f32`, `dot_product_f32`, `euclidean_f32` across all ISA tiers |
+| `tests/test_elementwise.cpp` | Element-wise vector operations |
+| `tests/test_cpu_features.cpp` | CPUID feature detection |
+| `tests/test_helpers.cpp` | Shared test utilities (not a test suite on its own) |
+
+#### Forcing a specific ISA in tests
+
+Set `JVECTOR_MAX_ISA` to cap dispatch before running:
+
+```bash
+JVECTOR_MAX_ISA=avx2 ../../../target/meson-build/test_simd_kernels
+JVECTOR_MAX_ISA=sse42 ../../../target/meson-build/test_simd_kernels
+```
+
+---
+
+## How to run benchmarks
+
+> **Standalone development tool.** The benchmark binary links directly against
+> `libjvector.so` and is intended for native-layer micro-benchmarking during
+> development. It is **not** wired into the JVector Java build or any Maven
+> profile.
+
+The benchmark suite uses [Google Benchmark](https://github.com/google/benchmark)
+and is built automatically when the `benchmark` pkg-config package is found.
+
+### Install Google Benchmark
+
+**Ubuntu / Debian:**
+```bash
+sudo apt install libbenchmark-dev
+```
+
+### Build and run
+
+```bash
+# 1. Configure (benchmarks are built at -O3 regardless of buildtype)
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build --wipe --buildtype=release
+
+# 2. Compile
+meson compile -C ../../../target/meson-build
+
+# 3. Run all benchmarks
+../../../target/meson-build/bench_simd_kernels
+
+# Run a specific kernel
+../../../target/meson-build/bench_simd_kernels --benchmark_filter=cosine_f32
+
+# Human-readable output with extra statistics
+../../../target/meson-build/bench_simd_kernels --benchmark_format=console --benchmark_repetitions=3
+```
+
+#### What the benchmarks cover
+
+| Source file | Kernels benchmarked | Dimensions |
+|---|---|---|
+| `benchmarks/bench_similarity_f32.cpp` | `cosine_f32`, `dot_product_f32`, `euclidean_f32` | 128, 256, 512, 1024, 1536, 3072 |
+
+The binary dispatches to the **best ISA available on the host** at startup. Use
+`JVECTOR_MAX_ISA` to benchmark a specific tier:
+
+```bash
+JVECTOR_MAX_ISA=avx2  ../../../target/meson-build/bench_simd_kernels
+JVECTOR_MAX_ISA=sse42 ../../../target/meson-build/bench_simd_kernels
+```
+
+---
+
 ## How it is integrated into JVector
 
 ```
