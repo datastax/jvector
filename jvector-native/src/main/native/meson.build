@@ -139,7 +139,15 @@ if gtest_dep.found()
 
   test('simd_kernels', simd_kernels_test, protocol: 'gtest', suite: 'simd_kernels')
 
+else
+  warning('gtest_main not found — test_simd_kernels target will not be built. ' +
+          'Install libgtest-dev (apt) or googletest (brew) and re-run meson setup.')
+  run_target('test_simd_kernels',
+    command: ['echo',
+      'ERROR: test_simd_kernels is not available because gtest_main was not found. ' +
+      'Install libgtest-dev (apt) or googletest (brew) and re-run: meson setup --wipe build'])
 endif
+
 # ---- Benchmarks ------------------------------------------------------------
 gbench_dep = dependency('benchmark', required: false)
 
@@ -150,4 +158,11 @@ if gbench_dep.found()
     dependencies: [vectorutil_dep, gbench_dep],
     cpp_args    : ['-O3'],
   )
+else
+  warning('Google Benchmark not found — bench_simd_kernels target will not be built. ' +
+          'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run meson setup.')
+  run_target('bench_simd_kernels',
+    command: ['echo',
+      'ERROR: bench_simd_kernels is not available because the benchmark library was not found. ' +
+      'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run: meson setup --wipe build'])
 endif
