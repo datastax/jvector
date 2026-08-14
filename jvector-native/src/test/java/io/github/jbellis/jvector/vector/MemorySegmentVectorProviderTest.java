@@ -18,8 +18,15 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
+import static org.hamcrest.CoreMatchers.instanceOf;
 
 import java.io.IOException;
+import java.util.Random;
+
+import org.junit.Assert;
 import org.junit.jupiter.api.Test;
 
 public class MemorySegmentVectorProviderTest {
@@ -73,6 +80,36 @@ public class MemorySegmentVectorProviderTest {
         provider.writeByteSequence(dummyWriter, emptySlice);
 
         org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[0], dummyWriter.toByteArray());
+    }
+
+    @Test
+    void testFloatVectorAsArray() {
+        final MemorySegmentVectorProvider provider = new MemorySegmentVectorProvider();
+
+        final Random random = new Random();
+        final VectorFloat<?> vf = randomVector(provider, random, 1021);
+
+        Assert.assertThat(vf, instanceOf(FloatArray.class));
+        Assert.assertArrayEquals(((FloatArray) vf).array(), getVector(vf), 0.0001f);
+    }
+
+    private static VectorFloat<?> randomVector(MemorySegmentVectorProvider provider, Random random, int dim) {
+        var vec = provider.createFloatVector(dim);
+        for (int i = 0; i < dim; i++) {
+            vec.set(i, random.nextFloat());
+            if (random.nextBoolean()) {
+                vec.set(i, -vec.get(i));
+            }
+        }
+        return vec;
+    }
+
+    private static float[] getVector(VectorFloat<?> vf) {
+        final float[] arr = new float[vf.length()];
+        for (int i = 0; i < vf.length(); ++i) {
+            arr[i] = vf.get(i);
+        }
+        return arr;
     }
 
     /**
