@@ -39,6 +39,20 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     private final boolean supportsMultiLayer;
     private final boolean usesFooter;
 
+    // Footers are used by format versions 5+ (usesFooter=true; see GraphIndexFormatV5) in place
+    // of relying solely on the header written at the start of the file. writeRandomAccess()
+    // writes a placeholder header at ctx.startOffset before the graph structure is fully known
+    // (e.g. final layer sizes), then appends a footer after all graph data (L0 records, sparse
+    // levels, separated features) once everything is final. A footer consists of, in order:
+    //   [a full duplicate Header, accurate/final] [8-byte offset back to that Header's own start]
+    //   [4-byte FOOTER_MAGIC]
+    // A reader locates it independent of header size or position by seeking to the last
+    // FOOTER_MAGIC_SIZE bytes of the file to validate the magic, then reading the preceding
+    // FOOTER_OFFSET_SIZE bytes to find where the accurate Header copy begins (see
+    // OnDiskGraphIndex#loadFromFooter). This also allows the graph index to be embedded as a
+    // slice within a larger file/stream, since locating it only requires knowing the end of
+    // that slice, not any absolute offset from the start.
+
     /** A magic number to indicate the file footer */
     public static final int FOOTER_MAGIC = 0x4a564244;
     /** The size of the offset in the footer. */
@@ -136,6 +150,17 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
      * The default implementation is a no-op; V6 overrides this to write fused feature data.
      */
     protected void writeAfterSparseLevels(WriteContext ctx, IndexWriter out, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException {}
+
+    /**
+     * Hook called at the point in {@link #writeOnDiskSequential} and {@link #writeRandomAccess}
+     * where a footer would be appended. The default implementation is a no-op; {@link GraphIndexFormatV5}
+     * overrides it to call {@link #writeFooter} with the current output position as the header
+     * offset. Version-specific behavior is selected by overriding this hook rather than by
+     * branching on {@link #usesFooter()} at the call site, mirroring {@link #writeAfterSparseLevels}.
+     * {@code usesFooter()} itself remains on the interface as a queryable capability for external
+     * callers; this hook only replaces its former use as an internal behavior-selection branch.
+     */
+    protected void maybeWriteFooter(WriteContext ctx, IndexWriter out) throws IOException {}
 
     @Override
     public void writeHeader(WriteContext ctx, IndexWriter out) throws IOException {
@@ -286,9 +311,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
 
         writeSparseLevels(ctx, out, suppliers);
         writeSeparatedFeatures(ctx, out, suppliers);
-        if (usesFooter()) {
-            writeFooter(ctx, out.position(), out);
-        }
+        maybeWriteFooter(ctx, out);
     }
 
     @Override
@@ -316,9 +339,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         }
         writeSparseLevels(ctx, out, suppliers);
         writeSeparatedFeatures(ctx, out, suppliers);
-        if (usesFooter()) {
-            writeFooter(ctx, out.position(), out);
-        }
+        maybeWriteFooter(ctx, out);
 
         final var endOfGraphPosition = out.position();
         out.seek(ctx.startOffset);

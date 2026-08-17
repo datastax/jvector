@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -61,5 +62,15 @@ class GraphIndexFormatV5 extends GraphIndexFormatV4 {
         } else {
             return super.loadOnDiskIndex(reader, header, readerSupplier, useFooter);
         }
+    }
+
+    /**
+     * V5+ always writes a footer (see the protected constructor above), so this override is
+     * unconditional -- the decision to call it at all lives in {@link AbstractGraphIndexFormat}
+     * calling this hook for every version, not in a branch here.
+     */
+    @Override
+    protected void maybeWriteFooter(WriteContext ctx, IndexWriter out) throws IOException {
+        writeFooter(ctx, out.position(), out);
     }
 }
