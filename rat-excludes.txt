@@ -37,3 +37,5 @@ local_datasets/**
 **/datasets/**
 jvector-native/src/main/native/third_party/**
 src/main/native/third_party/**
+jvector-native/src/target/meson-build/**
+jvector-native/target/meson-build/**

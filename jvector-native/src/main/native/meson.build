@@ -54,7 +54,7 @@ isa_libs = []
 foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
-    sources            : 'jvector_simd_kernels.cpp',
+    sources            : 'src/jvector_simd_kernels.cpp',
     include_directories: hwy_inc,
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
@@ -65,7 +65,7 @@ endforeach
 # set (AVX3 + VNNI, VBMI, VBMI2, IFMA, BITALG, VPOPCNTDQ, GFNI, VAES, VPCLMULQDQ).
 avx3_dl_lib = static_library(
   'simdKernels_avx3_dl',
-  sources            : 'jvector_avx3_dl_kernels.cpp',
+  sources            : 'src/jvector_avx3_dl_kernels.cpp',
   include_directories: hwy_inc,
   cpp_args           : [
     '-march=icelake-server',
@@ -81,7 +81,7 @@ isa_libs += avx3_dl_lib
 # Requires GCC >= 12 or Clang >= 14.
 avx3_spr_lib = static_library(
   'simdKernels_avx3_spr',
-  sources            : 'jvector_avx3_spr_kernels.cpp',
+  sources            : 'src/jvector_avx3_spr_kernels.cpp',
   include_directories: hwy_inc,
   cpp_args           : [
     '-march=sapphirerapids',
@@ -100,9 +100,9 @@ isa_libs += avx3_spr_lib
 # projects that manage their own dispatch (google/highway#1935).
 vectorutil_lib = shared_library(
   'jvector',
-  sources            : ['jvector_simd.cpp',
+  sources            : ['src/jvector_simd.cpp',
                         'third_party/highway/hwy/abort.cc'],
-  include_directories: [include_directories('.'), hwy_inc],
+  include_directories: [include_directories('src'), hwy_inc],
   cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'],
   link_whole         : isa_libs,
   version            : meson.project_version(),
@@ -112,7 +112,7 @@ vectorutil_lib = shared_library(
 # Dependency object for use by executables/tests in this build tree.
 vectorutil_dep = declare_dependency(
   link_with          : vectorutil_lib,
-  include_directories: include_directories('.'),
+  include_directories: include_directories('src'),
 )
 
 ## Example driver that exercises the runtime-dispatch API.
@@ -121,40 +121,48 @@ vectorutil_dep = declare_dependency(
 #  sources     : 'examples/cpp_driver.cpp',
 #  dependencies: vectorutil_dep,
 #)
-#
-## ---- Tests -----------------------------------------------------------------
-#gtest_dep = dependency('gtest_main', required: true)
-#
-#test_exe = executable(
-#  'test_kernels',
-#  sources     : [
-#    'tests/test_kernels.cpp',
-#    'tests/test_cpuFeatures.cpp',
-#  ],
-#  dependencies: [vectorutil_dep, gtest_dep],
-#)
-#
-#test('kernels',     test_exe, protocol: 'gtest', suite: 'kernels')
-#test('cpu_features', test_exe, protocol: 'gtest', suite: 'cpu',
-#     args: ['--gtest_filter=CpuFeaturesTest.*'])
-#
-## ---- Benchmarks ------------------------------------------------------------
-#gbench_dep = dependency('benchmark', required: false)
-#if gbench_dep.found()
-#  executable(
-#    'bench_kernels',
-#    sources     : 'benchmarks/bench_kernels.cpp',
-#    dependencies: [vectorutil_dep, gbench_dep],
-#    cpp_args    : ['-O3'],
-#  )
-#endif
-#
-#rust_enabled = add_languages('rust', required: false)
-#if rust_enabled
-#  executable(
-#    'rust_driver',
-#    'examples/rust_driver.rs',
-#    link_with: vectorutil_lib,
-#  )
-#endif
-#
+
+# ---- Tests -----------------------------------------------------------------
+gtest_dep = dependency('gtest_main', required: false)
+
+if gtest_dep.found()
+  simd_kernels_test = executable(
+    'test_simd_kernels',
+    sources     : [
+      'tests/test_helpers.cpp',
+      'tests/test_similarity.cpp',
+      'tests/test_elementwise.cpp',
+      'tests/test_cpu_features.cpp',
+    ],
+    dependencies: [vectorutil_dep, gtest_dep],
+  )
+
+  test('simd_kernels', simd_kernels_test, protocol: 'gtest', suite: 'simd_kernels')
+
+else
+  warning('gtest_main not found — test_simd_kernels target will not be built. ' +
+          'Install libgtest-dev (apt) or googletest (brew) and re-run meson setup.')
+  run_target('test_simd_kernels',
+    command: ['echo',
+      'ERROR: test_simd_kernels is not available because gtest_main was not found. ' +
+      'Install libgtest-dev (apt) or googletest (brew) and re-run: meson setup --wipe build'])
+endif
+
+# ---- Benchmarks ------------------------------------------------------------
+gbench_dep = dependency('benchmark', required: false)
+
+if gbench_dep.found()
+  executable(
+    'bench_simd_kernels',
+    sources     : 'benchmarks/bench_similarity_f32.cpp',
+    dependencies: [vectorutil_dep, gbench_dep],
+    cpp_args    : ['-O3'],
+  )
+else
+  warning('Google Benchmark not found — bench_simd_kernels target will not be built. ' +
+          'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run meson setup.')
+  run_target('bench_simd_kernels',
+    command: ['echo',
+      'ERROR: bench_simd_kernels is not available because the benchmark library was not found. ' +
+      'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run: meson setup --wipe build'])
+endif
