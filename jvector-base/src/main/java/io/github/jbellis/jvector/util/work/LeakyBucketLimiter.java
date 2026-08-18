@@ -24,7 +24,8 @@ import java.util.concurrent.TimeUnit;
  * would be exceeded. The bucket drains during idle gaps (a burst after a quiet period is not
  * charged for the idle time), and the first request after an idle period is admitted without
  * delay — the cost of each request is paid by the <i>next</i> one, which is the standard smooth
- * shaping behaviour. {@link #onProgress} is inherited as a no-op: this limiter only throttles.
+ * shaping behaviour. {@link #startPhase} is inherited as a no-op scope factory: this limiter only
+ * throttles.
  *
  * <p>Thread-safe and reentrant: the emission clock is advanced under a short lock, then the caller
  * sleeps <i>outside</i> the lock, so concurrent callers serialize their reservations but wait

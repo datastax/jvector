@@ -35,7 +35,7 @@ import java.util.function.Consumer;
 public interface ProgressLimiter extends ProgressTracker, WorkLimiter {
 
     @Override
-    default void onProgress(WorkStage stage, long completed, long total) { }
+    default PhaseScope startPhase(WorkStage stage) { return PhaseScope.NOOP; }
 
     @Override
     default Grant acquire(long amount) throws InterruptedException { return Grant.NOOP; }
@@ -46,9 +46,9 @@ public interface ProgressLimiter extends ProgressTracker, WorkLimiter {
     /**
      * A leaky-bucket rate meter realizing the throttle facet: {@link #acquire} paces the aggregate
      * admitted amount to {@code unitsPerSecond} (bytes/sec for the compaction consumer), blocking
-     * the caller when the rate would be exceeded and draining during idle gaps. {@link #onProgress}
-     * is a no-op and the returned grant is a no-op (cost is paid at {@code acquire}). Compose with
-     * {@link #logging(ProgressLimiter, Consumer)} to also log.
+     * the caller when the rate would be exceeded and draining during idle gaps. {@link #startPhase}
+     * returns a no-op scope and the returned grant is a no-op (cost is paid at {@code acquire}).
+     * Compose with {@link #logging(ProgressLimiter, Consumer)} to also log.
      *
      * @param unitsPerSecond the sustained admission rate; must be finite and {@code > 0}
      * @throws IllegalArgumentException if {@code unitsPerSecond} is not finite and positive
@@ -58,11 +58,12 @@ public interface ProgressLimiter extends ProgressTracker, WorkLimiter {
     }
 
     /**
-     * Wraps {@code delegate}, emitting a one-line message to {@code sink} on each
-     * {@link #onProgress} and on each {@link #acquire} that actually blocked, then delegating both
-     * facets to {@code delegate}. Composes over any limiter — e.g.
-     * {@code logging(rateLimited(bytesPerSecond), log::info)} logs a rate-limited operation. The
-     * delegate's grant is returned unchanged, so a semaphore delegate still releases on close.
+     * Wraps {@code delegate}, emitting a one-line message to {@code sink} on each phase start,
+     * each {@link PhaseScope#onProgress} report, each phase completion, and each {@link #acquire}
+     * that actually blocked, then delegating both facets to {@code delegate}. Composes over any
+     * limiter — e.g. {@code logging(rateLimited(bytesPerSecond), log::info)} logs a rate-limited
+     * operation. The delegate's grant is returned unchanged, so a semaphore delegate still
+     * releases on close.
      *
      * @param delegate the limiter to observe and delegate to; {@code null} means {@link #UNLIMITED}
      * @param sink     receives formatted log lines (e.g. {@code msg -> logger.info(msg)})
@@ -72,20 +73,23 @@ public interface ProgressLimiter extends ProgressTracker, WorkLimiter {
         final ProgressLimiter d = (delegate == null) ? UNLIMITED : delegate;
         return new ProgressLimiter() {
             @Override
-            public void onProgress(WorkStage stage, long completed, long total) {
-                sink.accept("progress[" + stage.name() + "] " + completed + "/" + (total < 0 ? "?" : Long.toString(total)));
-                d.onProgress(stage, completed, total);
-            }
-
-            @Override
             public PhaseScope startPhase(WorkStage stage) {
                 sink.accept("phase[" + stage.name() + "] started");
                 PhaseScope scope = d.startPhase(stage);
-                return () -> {
-                    try {
-                        scope.close();
-                    } finally {
-                        sink.accept("phase[" + stage.name() + "] completed");
+                return new PhaseScope() {
+                    @Override
+                    public void onProgress(long completed, long total) {
+                        sink.accept("progress[" + stage.name() + "] " + completed + "/" + (total < 0 ? "?" : Long.toString(total)));
+                        scope.onProgress(completed, total);
+                    }
+
+                    @Override
+                    public void close() {
+                        try {
+                            scope.close();
+                        } finally {
+                            sink.accept("phase[" + stage.name() + "] completed");
+                        }
                     }
                 };
             }

@@ -116,7 +116,9 @@ public class TestProgressLimiter {
         assertNotNull(g);
         g.close();
         g.close(); // idempotent no-op
-        limiter.onProgress(STAGE, 1, 2); // rate limiter does not track progress; must not throw
+        try (ProgressTracker.PhaseScope scope = limiter.startPhase(STAGE)) {
+            scope.onProgress(1, 2); // rate limiter does not track progress; must not throw
+        }
     }
 
     // ---- logging wrapper ----
@@ -145,7 +147,9 @@ public class TestProgressLimiter {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         ProgressLimiter limiter = ProgressLimiter.logging(delegate, log::add);
 
-        limiter.onProgress(STAGE, 3, 10);
+        try (ProgressTracker.PhaseScope scope = limiter.startPhase(STAGE)) {
+            scope.onProgress(3, 10);
+        }
         assertEquals("onProgress must be delegated", 1, delegate.progressCalls.get());
         assertEquals(3, delegate.lastCompleted);
         assertEquals(10, delegate.lastTotal);
@@ -213,7 +217,9 @@ public class TestProgressLimiter {
         assertTrue("composed limiter should still pace, got " + ms + "ms", ms >= 100);
         assertTrue("composed limiter should log the throttled acquire",
                 log.stream().anyMatch(s -> s.contains("throttled")));
-        limiter.onProgress(STAGE, 5, 5);
+        try (ProgressTracker.PhaseScope scope = limiter.startPhase(STAGE)) {
+            scope.onProgress(5, 5);
+        }
         assertTrue("composed limiter should log progress",
                 log.stream().anyMatch(s -> s.contains("TEST") && s.contains("5/5")));
     }
@@ -228,12 +234,14 @@ public class TestProgressLimiter {
             }
         });
         assertTrue("UNLIMITED.acquire must not block, waited " + ms + "ms", ms < 500);
-        ProgressLimiter.UNLIMITED.onProgress(STAGE, 7, -1); // no-op, must not throw
-        ProgressLimiter.UNLIMITED.startPhase(STAGE).close();
+        try (ProgressTracker.PhaseScope scope = ProgressLimiter.UNLIMITED.startPhase(STAGE)) {
+            scope.onProgress(7, -1); // no-op, must not throw
+        }
 
         // Facet no-op constants exist and are safe.
         WorkLimiter.Grant.NOOP.close();
-        ProgressTracker.NOOP.onProgress(STAGE, 1, 1);
+        ProgressTracker.PhaseScope.NOOP.onProgress(1, 1);
+        ProgressTracker.NOOP.startPhase(STAGE).onProgress(1, 1);
         try (Grant g = WorkLimiter.UNLIMITED.acquire(99)) {
             assertNotNull(g);
         }
@@ -241,20 +249,22 @@ public class TestProgressLimiter {
 
     @Test
     public void facetsAreIndependentlyOverridable() throws Exception {
-        // Tracker-only: overrides onProgress, inherits no-op acquire.
+        // Tracker-only: overrides startPhase, inherits no-op acquire.
         AtomicInteger progressSeen = new AtomicInteger();
         ProgressLimiter trackerOnly = new ProgressLimiter() {
-            @Override public void onProgress(WorkStage stage, long completed, long total) {
-                progressSeen.incrementAndGet();
+            @Override public PhaseScope startPhase(WorkStage stage) {
+                return (completed, total) -> progressSeen.incrementAndGet();
             }
         };
         try (Grant g = trackerOnly.acquire(1_000_000)) { // inherited no-op: must not block
             assertNotNull(g);
         }
-        trackerOnly.onProgress(STAGE, 1, 1);
+        try (ProgressTracker.PhaseScope scope = trackerOnly.startPhase(STAGE)) {
+            scope.onProgress(1, 1);
+        }
         assertEquals(1, progressSeen.get());
 
-        // Throttle-only: overrides acquire, inherits no-op onProgress.
+        // Throttle-only: overrides acquire, inherits no-op startPhase.
         AtomicInteger acquireSeen = new AtomicInteger();
         ProgressLimiter throttleOnly = new ProgressLimiter() {
             @Override public Grant acquire(long amount) {
@@ -262,9 +272,36 @@ public class TestProgressLimiter {
                 return Grant.NOOP;
             }
         };
-        throttleOnly.onProgress(STAGE, 1, 1); // inherited no-op: must not throw
+        throttleOnly.startPhase(STAGE).onProgress(1, 1); // inherited no-op scope: must not throw
         throttleOnly.acquire(5).close();
         assertEquals(1, acquireSeen.get());
+    }
+
+    @Test
+    public void progressOnlyTrackerIsASingleLambda() {
+        List<String> seen = new ArrayList<>();
+        // The minimal consumer shape the SPI promises: one expression, default no-op close().
+        ProgressTracker tracker = stage -> (completed, total) -> seen.add(stage.name() + ":" + completed + "/" + total);
+        try (ProgressTracker.PhaseScope scope = tracker.startPhase(STAGE)) {
+            scope.onProgress(1, 4);
+            scope.onProgress(4, 4);
+        }
+        assertEquals(List.of("TEST:1/4", "TEST:4/4"), seen);
+    }
+
+    @Test
+    public void concurrentPhasesOfSameStageGetIndependentScopes() {
+        RecordingLimiter delegate = new RecordingLimiter();
+        ProgressTracker.PhaseScope first = delegate.startPhase(STAGE);
+        ProgressTracker.PhaseScope second = delegate.startPhase(STAGE);
+        assertEquals(2, delegate.phaseStarts.get());
+
+        first.onProgress(1, 10);
+        second.onProgress(9, 10);
+        first.close();
+        assertEquals("closing one scope must not close the other", 1, delegate.phaseCloses.get());
+        second.close();
+        assertEquals(2, delegate.phaseCloses.get());
     }
 
     // ---- test doubles ----
@@ -279,13 +316,6 @@ public class TestProgressLimiter {
         volatile long lastCompleted, lastTotal, lastAmount;
 
         @Override
-        public void onProgress(WorkStage stage, long completed, long total) {
-            progressCalls.incrementAndGet();
-            lastCompleted = completed;
-            lastTotal = total;
-        }
-
-        @Override
         public Grant acquire(long amount) {
             acquireCalls.incrementAndGet();
             lastAmount = amount;
@@ -295,7 +325,19 @@ public class TestProgressLimiter {
         @Override
         public PhaseScope startPhase(WorkStage stage) {
             phaseStarts.incrementAndGet();
-            return phaseCloses::incrementAndGet;
+            return new PhaseScope() {
+                @Override
+                public void onProgress(long completed, long total) {
+                    progressCalls.incrementAndGet();
+                    lastCompleted = completed;
+                    lastTotal = total;
+                }
+
+                @Override
+                public void close() {
+                    phaseCloses.incrementAndGet();
+                }
+            };
         }
     }
 
