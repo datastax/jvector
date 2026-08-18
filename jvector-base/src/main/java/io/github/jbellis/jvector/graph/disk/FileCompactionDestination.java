@@ -28,9 +28,7 @@ final class FileCompactionDestination implements CompactionDestination {
     private final Path path;
 
     FileCompactionDestination(Path path) {
-        if (path == null) {
-            throw new NullPointerException("path");
-        }
+        Objects.requireNonNull(path);
         this.path = path;
     }
 
