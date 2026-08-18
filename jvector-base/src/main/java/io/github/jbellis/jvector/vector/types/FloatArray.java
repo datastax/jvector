@@ -14,17 +14,14 @@
  * limitations under the License.
  */
 
-#include <cpuid.h>
-#include "jvector_simd.h"
+package io.github.jbellis.jvector.vector.types;
 
-bool check_avx512_compatibility(void) {
-    /* __builtin_cpu_init required when this is used in ifunc
-       resolver/__attribute__((constructor)) context, otherwise the CPU
-       features may not be detected correctly. */
-    __builtin_cpu_init();
-    return (__builtin_cpu_supports("avx512f") &&
-        __builtin_cpu_supports("avx512cd") &&
-        __builtin_cpu_supports("avx512dq") &&
-        __builtin_cpu_supports("avx512bw") &&
-        __builtin_cpu_supports("avx512vl"));
+/**
+ * Return the {@code float[]} representation of the {@link VectorFloat} if its type supports
+ * such conversions.
+ *
+ * @apiNote this is an experimental API and may change in the future releases.
+ */
+public interface FloatArray {
+    float[] array();
 }

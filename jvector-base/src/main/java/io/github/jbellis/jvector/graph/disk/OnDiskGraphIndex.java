@@ -50,7 +50,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,7 +94,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         this.version = header.common.version;
         this.layerInfo = header.common.layerInfo;
         this.dimension = header.common.dimension;
-        this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
+        if (header.common.entryNode == ENTRY_NODE_ABSENT) {
+            this.entryNode = null;
+        } else {
+            this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
+        }
         this.idUpperBound = header.common.idUpperBound;
         this.features = header.features;
         this.neighborsOffset = neighborsOffset;
@@ -435,12 +438,28 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     @Override
     public int getMaxLevel() {
-        return entryNode.level;
+        return entryNode == null ? 0 : entryNode.level;
     }
 
     @Override
     public int maxDegree() {
         return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
+    }
+
+    /**
+     * Streams the L0 records of ordinals {@code [minNode, maxNode]} (inclusive) into the page
+     * cache; see {@link ReaderSupplier#prefetch(long, long)}. An L0 record holds the node's id,
+     * inline features (vector, fused codes), and adjacency, so warming it covers every read a
+     * bulk scan makes for that node. Best-effort no-op when unsupported.
+     */
+    public void prefetchL0Records(int minNode, int maxNode) {
+        if (maxNode < minNode) {
+            return;
+        }
+        long blockBytes = Integer.BYTES + inlineBlockSize
+                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
+        long start = neighborsOffset + blockBytes * minNode;
+        readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
     }
 
     // re-declared to specify type
