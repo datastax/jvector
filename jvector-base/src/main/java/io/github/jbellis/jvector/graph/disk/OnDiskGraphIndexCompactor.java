@@ -352,8 +352,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void validateInputSizes(List<OnDiskGraphIndex> sources,
                                     List<FixedBitSet> liveNodes,
                                     List<OrdinalMapper> remappers) {
-        if (sources.size() < 2) {
-            throw new IllegalArgumentException("Must have at least two sources");
+        if (sources.isEmpty()) {
+            throw new IllegalArgumentException("Must have at least one source");
         }
         Objects.requireNonNull(liveNodes, "liveNodes");
         Objects.requireNonNull(remappers, "remappers");

@@ -66,38 +66,6 @@ e5-base-v2-100k:
 e5-large-v2-100k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
-# Base and query vectors are unit-normalized, so DOT_PRODUCT is equivalent to COSINE here
-# and avoids recomputing norms on every comparison.
-ibm-datapile-30m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-40m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-50m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-60m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-70m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-80m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-90m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-100m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-160m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
-ibm-datapile-200m:
-  similarity_function: DOT_PRODUCT
-  load_behavior: NO_SCRUB
 gecko-100k:
   similarity_function: COSINE
   load_behavior: NO_SCRUB
