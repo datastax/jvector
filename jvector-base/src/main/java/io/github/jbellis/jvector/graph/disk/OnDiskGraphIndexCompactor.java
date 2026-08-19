@@ -1789,6 +1789,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int gatherFromSameSource(int node, int level, int sourceIdx,
                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                      VectorFloat<?> baseVec, Scratch scratch, int candSize) {
+        // The whole candidate list is known before any vector is read, so batch-hint every
+        // record and let the reads below overlap in the device queue instead of paying one
+        // fault of latency each, serially. (The extra iterator pass re-reads adjacency the
+        // first pass just faulted in — RAM-cheap.)
+        var hintIt = searchView.getNeighborsIterator(level, node);
+        var source = sources.get(sourceIdx);
+        while (hintIt.hasNext()) {
+            int nb = hintIt.nextInt();
+            if (indexAlive.get(nb)) {
+                source.willNeedL0Record(nb);
+            }
+        }
         var it = searchView.getNeighborsIterator(level, node);
         while (it.hasNext()) {
             int nb = it.nextInt();
@@ -2585,7 +2597,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             this.gs = new GraphSearcher[sources.size()];
             for (int i = 0; i < sources.size(); i++) {
-                gs[i] = new GraphSearcher(sources.get(i));
+                gs[i] = new GraphSearcher.Builder(FrontierPrefetchingView.wrap(sources.get(i))).build();
                 gs[i].usePruning(false);
             }
             int clusterCap = maxCandidateSize; // >= searchTopK + CLUSTER_MARGIN

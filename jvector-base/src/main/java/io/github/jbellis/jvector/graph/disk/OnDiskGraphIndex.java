@@ -478,6 +478,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
     }
 
+    /**
+     * Hints that the L0 record of {@code node} will likely be read soon, starting an
+     * asynchronous fetch into the page cache; see {@link ReaderSupplier#willNeed(long, long)}.
+     * Unlike {@link #prefetchL0Records}, this does not block. Best-effort no-op when unsupported.
+     */
+    public void willNeedL0Record(int node) {
+        long blockBytes = Integer.BYTES + inlineBlockSize
+                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
+        readerSupplier.willNeed(neighborsOffset + blockBytes * node, blockBytes);
+    }
 
     // re-declared to specify type
     @Override

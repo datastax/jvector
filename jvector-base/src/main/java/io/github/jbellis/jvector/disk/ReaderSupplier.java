@@ -42,6 +42,16 @@ public interface ReaderSupplier extends AutoCloseable {
     }
 
     /**
+     * Advises the OS that the byte range {@code [offset, offset + length)} will be read soon,
+     * initiating an asynchronous fetch into the page cache without blocking the caller.
+     * Unlike {@link #prefetch(long, long)}, which streams the range synchronously, this returns
+     * immediately — many small hints issued back-to-back put many reads in flight concurrently,
+     * so a single thread can drive the device at high queue depth. Best-effort no-op by default.
+     */
+    default void willNeed(long offset, long length) {
+    }
+
+    /**
      * Releases the supplier's underlying resource. Two implementation families exist, with very
      * different safety under concurrency:
      * <ul>
