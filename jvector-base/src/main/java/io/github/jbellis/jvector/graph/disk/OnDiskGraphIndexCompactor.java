@@ -160,6 +160,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // population dominates total search count, which is what this trades against the smaller
     // reverse candidate budget (REVERSE_CANDIDATE_SLOTS vs searchTopK per source).
     private static final int REVERSE_CANDIDATE_SLOTS = 16;
+
+    private PreEncodedCodeCache orderingCache;   // non-null only while L0 runs under fused mode
+
+
+    // Similarity-assigned merged ordinals: the compactor replaces the caller's remappers with a
+    // mapping that numbers each source's live nodes in PQ-code order (sources in ascending-size
+    // processing order). Record write offsets follow new ordinals, so processing in the same
+    // order makes the writer sequential, and similar vectors become adjacent records in the
+    // output — locality that also benefits post-compaction searches. Callers opting in must
+    // read the mapping back via {@link #effectiveRemappers()}.
+    private static final boolean SIMILARITY_ORDINALS_DEFAULT =
+            Boolean.parseBoolean(System.getProperty("jvector.compaction.similarityOrdinals", "false"));
+    private boolean similarityOrdinals = SIMILARITY_ORDINALS_DEFAULT;
+    private boolean similarityOrdinalsActive;
+    private List<OrdinalMapper> effectiveRemappers;   // survives releaseSourcesBeforeRefine
     private int[] sizeRank;            // rank of each source in ascending live-node order
     private int[] l0ProcessOrder;      // source indices in ascending live-node order
     private ReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
@@ -184,110 +199,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS);
     }
 
-    /**
-     * Bounded per-node pool of cross-source neighbor candidates discovered by smaller-source
-     * searches, keyed by the target's merged (new) ordinal. Offers keep the top-{@code slots}
-     * entries by score. Writers are the smaller sources' worker threads; the reader is the
-     * target's own processing task, which runs in a later source group — the inter-group barrier
-     * (completion-service drain on the main thread) orders every offer before the read, so
-     * {@link #appendTo} needs no locking.
-     */
-    private static final class ReverseCandidateBuffer {
-        /**
-         * Ordinals per chunk of the candidate arrays. A single flat array indexes with
-         * {@code ordinal * slots}, which overflows int past floor(2^31 / slots) total nodes
-         * (~134M at 16 slots); chunking keeps each backing array's element count in range.
-         */
-        static final int PROD_CHUNK_ORDINALS = 1 << 25;
-        final int slots;
-        final int chunkShift;
-        final int chunkMask;
-        final int[][] srcs;
-        final int[][] nodes;    // old ordinals, parallel to srcs
-        final float[][] scores;
-        final int[] counts;   // per target ordinal
-        final Object[] locks = new Object[1024];
-        final java.util.concurrent.atomic.LongAdder offered = new java.util.concurrent.atomic.LongAdder();
-
-        ReverseCandidateBuffer(int numOrdinals, int slots) {
-            this(numOrdinals, slots, PROD_CHUNK_ORDINALS);
-        }
-
-        ReverseCandidateBuffer(int numOrdinals, int slots, int chunkOrdinals) {
-            assert Integer.bitCount(chunkOrdinals) == 1 : "chunkOrdinals must be a power of two";
-            assert (long) chunkOrdinals * slots <= Integer.MAX_VALUE;
-            this.slots = slots;
-            this.chunkShift = Integer.numberOfTrailingZeros(chunkOrdinals);
-            this.chunkMask = chunkOrdinals - 1;
-            int numChunks = (int) (((long) numOrdinals + chunkOrdinals - 1) >>> chunkShift);
-            this.srcs = new int[numChunks][];
-            this.nodes = new int[numChunks][];
-            this.scores = new float[numChunks][];
-            for (int c = 0; c < numChunks; c++) {
-                int ords = (int) Math.min(chunkOrdinals, numOrdinals - ((long) c << chunkShift));
-                srcs[c] = new int[ords * slots];
-                nodes[c] = new int[ords * slots];
-                scores[c] = new float[ords * slots];
-            }
-            this.counts = new int[numOrdinals];
-            for (int i = 0; i < locks.length; i++) locks[i] = new Object();
-        }
-
-        void offer(int targetNewOrd, int src, int oldOrd, float score) {
-            offered.increment();
-            int chunk = targetNewOrd >>> chunkShift;
-            int base = (targetNewOrd & chunkMask) * slots;
-            int[] srcs = this.srcs[chunk];
-            int[] nodes = this.nodes[chunk];
-            float[] scores = this.scores[chunk];
-            synchronized (locks[targetNewOrd & (locks.length - 1)]) {
-                int n = counts[targetNewOrd];
-                for (int i = 0; i < n; i++) {
-                    if (srcs[base + i] == src && nodes[base + i] == oldOrd) return;
-                }
-                if (n < slots) {
-                    srcs[base + n] = src;
-                    nodes[base + n] = oldOrd;
-                    scores[base + n] = score;
-                    counts[targetNewOrd] = n + 1;
-                    return;
-                }
-                int minIdx = 0;
-                for (int i = 1; i < slots; i++) {
-                    if (scores[base + i] < scores[base + minIdx]) minIdx = i;
-                }
-                if (score > scores[base + minIdx]) {
-                    srcs[base + minIdx] = src;
-                    nodes[base + minIdx] = oldOrd;
-                    scores[base + minIdx] = score;
-                }
-            }
-        }
-
-        /** Number of accumulated reverse candidates for a target; final once the target's group runs. */
-        int countAt(int targetNewOrd) {
-            return counts[targetNewOrd];
-        }
-
-        /** Appends the target's reverse candidates to the scratch arrays; returns new candSize. */
-        int appendTo(int targetNewOrd, Scratch scratch, int candSize) {
-            int chunk = targetNewOrd >>> chunkShift;
-            int base = (targetNewOrd & chunkMask) * slots;
-            int n = counts[targetNewOrd];
-            for (int i = 0; i < n; i++) {
-                scratch.candSrc[candSize] = srcs[chunk][base + i];
-                scratch.candNode[candSize] = nodes[chunk][base + i];
-                scratch.candScore[candSize] = scores[chunk][base + i];
-                candSize++;
-            }
-            return candSize;
-        }
-
-        long ramBytesUsed() {
-            return (long) counts.length * slots * (Integer.BYTES * 2 + Float.BYTES)
-                    + (long) counts.length * Integer.BYTES;
-        }
-    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -492,6 +403,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * When enabled, the compactor assigns merged ordinals itself, numbering nodes in vector
+     * similarity order, and ignores the ordinal values of the caller-supplied remappers (their
+     * source/oldOrdinal structure is still used to enumerate nodes). The mapping actually used
+     * is available from {@link #effectiveRemappers()} after {@code compact(...)} begins.
+     * Requires fused-PQ sources; silently keeps caller ordinals otherwise.
+     */
+    @Experimental
+    public void setSimilarityOrdinals(boolean enabled) {
+        this.similarityOrdinals = enabled;
+    }
+
+    /** The ordinal mappers in effect (the caller's, or the compactor-assigned similarity mapping). */
+    public List<OrdinalMapper> effectiveRemappers() {
+        return effectiveRemappers != null ? effectiveRemappers : remappers;
+    }
+
+    /**
      * Main compaction entry point. Merges all source indexes into a single output index at the
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
@@ -617,6 +545,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int maxBaseDegree = java.util.Collections.max(maxDegrees);
         io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
                 strategy.outputFusedFeature(maxBaseDegree);
+
+        if (similarityOrdinals) {
+            if (fusedPQEnabled && pq != null && pq.getSubspaceCount() >= 4) {
+                remappers = buildSimilarityOrdinalMappers(pq);
+                effectiveRemappers = remappers;
+                similarityOrdinalsActive = true;
+            } else {
+                log.info("similarityOrdinals requested but unavailable (requires fused PQ codes); keeping caller remappers");
+            }
+        }
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
         int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
@@ -1093,6 +1031,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         setupCrossLink();
+        orderingCache = fusedPQEnabled ? writer.pqCodeCache() : null;
 
         for (int level = 0; level < maxDegrees.size(); level++) {
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
@@ -1143,10 +1082,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                 }
 
-                log.info("Cross-link reverse propagation: {} offers across {} nodes ({} slots/node), {} retained-only fast-path nodes",
-                        reverseCandidates.offered.sum(), maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS,
-                        retainedOnlyNodes.get());
+                log.info("Cross-link reverse propagation: {} offers onto {} touched of {} nodes ({} slots/node), {} retained-only fast-path nodes",
+                        reverseCandidates.offered.sum(), reverseCandidates.touchedTargets.sum(),
+                        maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
+                orderingCache = null;
                 writer.offsetAfterInline();
 
             } else {
@@ -1230,6 +1170,59 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                  n = alive.nextSetBit(n + 1)) {
                 nodes[i++] = n;
             }
+            if (similarityOrdinalsActive && numNodes > 1) {
+                // Merged ordinals were assigned in similarity order, so ordering processing by
+                // new ordinal gives similarity locality AND sequential record writes at once.
+                OrdinalMapper mapper = remappers.get(s);
+                long[] keyed = new long[numNodes];
+                for (int k = 0; k < numNodes; k++) {
+                    keyed[k] = ((long) mapper.oldToNew(nodes[k]) << 32) | (nodes[k] & 0xFFFFFFFFL);
+                }
+                Arrays.parallelSort(keyed);
+                for (int k = 0; k < numNodes; k++) {
+                    nodes[k] = (int) keyed[k];
+                }
+                log.info("L0 source {}: {} nodes in similarity-ordinal order", s, numNodes);
+            }
+            // Similarity-ordered scheduling: sort searching sources' nodes by the leading bytes
+            // of their PQ code, so consecutive searches walk overlapping target regions. The
+            // largest source runs no searches and keeps ordinal order (contiguous record
+            // streaming matters more there).
+            boolean searches = reverseCandidates == null || sizeRank[s] < sources.size() - 1;
+            if (!similarityOrdinalsActive && orderingCache != null && searches && orderingCache.codeSize() >= 4 && numNodes > 1) {
+                OrdinalMapper mapper = remappers.get(s);
+                byte[] code = new byte[orderingCache.codeSize()];
+                // Two-level order: similarity-sort WITHIN coarse ordinal chunks. A record's write
+                // offset follows its ordinal, so a global similarity sort scatters the (single
+                // threaded) writer's pwrites across the whole L0 region and random-page writeback
+                // throttling becomes the pipeline ceiling; chunking bounds the write window while
+                // consecutive nodes remain similar within each chunk.
+                int segStart = 0;
+                while (segStart < numNodes) {
+                    int chunk = nodes[segStart] >>> 22;
+                    int segEnd = segStart + 1;
+                    while (segEnd < numNodes && (nodes[segEnd] >>> 22) == chunk) {
+                        segEnd++;
+                    }
+                    int len = segEnd - segStart;
+                    if (len > 1) {
+                        long[] keyed = new long[len];
+                        for (int k = 0; k < len; k++) {
+                            orderingCache.get(mapper.oldToNew(nodes[segStart + k]), code);
+                            long key = ((code[0] & 0xFFL) << 24) | ((code[1] & 0xFFL) << 16)
+                                     | ((code[2] & 0xFFL) << 8) | (code[3] & 0xFFL);
+                            keyed[k] = (key << 32) | (nodes[segStart + k] & 0xFFFFFFFFL);
+                        }
+                        Arrays.parallelSort(keyed);
+                        for (int k = 0; k < len; k++) {
+                            nodes[segStart + k] = (int) keyed[k];
+                        }
+                    }
+                    segStart = segEnd;
+                }
+                log.info("L0 source {}: {} nodes in similarity order within {}-node ordinal chunks",
+                        s, numNodes, 1 << 22);
+            }
         } else {
             NodesIterator sourceNodes = source.getNodes(level);
             numNodes = sourceNodes.size();
@@ -1266,8 +1259,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (bs.end > bs.start) {
             // Stream this batch's own records into the page cache before processing. Search
             // reads into other sources are data-dependent and stay demand-faulted, but each
-            // node's own record read (adjacency + vector) is fully predictable.
-            sources.get(bs.sourceIdx).prefetchL0Records(bs.nodes[bs.start], bs.nodes[bs.end - 1]);
+            // node's own record read (adjacency + vector) is fully predictable. Under
+            // similarity ordering the batch's ordinals are scattered, so only prefetch when
+            // they still form a reasonably dense range.
+            int lo = Integer.MAX_VALUE;
+            int hi = -1;
+            for (int i = bs.start; i < bs.end; i++) {
+                lo = Math.min(lo, bs.nodes[i]);
+                hi = Math.max(hi, bs.nodes[i]);
+            }
+            if ((long) hi - lo <= 8L * (bs.end - bs.start)) {
+                sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+            }
         }
 
         for (int i = bs.start; i < bs.end; i++) {
@@ -1409,6 +1412,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         retainedOnlyNodes.incrementAndGet();
         return writer.writeInlineNodeRecord(newOrdinal, scratch.baseVec, selected, scratch.pqCode);
     }
+
+
+
+
 
     /**
      * Collects up to {@link #SEEDS_PER_PARTITION} entry points in {@code targetSourceIdx} for node
@@ -1596,8 +1603,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         if (level == 0 && reverseCandidates != null) {
-            candSize = reverseCandidates.appendTo(
-                    remappers.get(sourceIdx).oldToNew(node), scratch, candSize);
+            candSize = reverseCandidates.appendTo(remappers.get(sourceIdx).oldToNew(node),
+                    scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
         }
 
         return candSize;
@@ -1643,38 +1650,40 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         if (level == 0) {
             int prevCandSize = candSize;
-            // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
-            // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to a
-            // normal search when no seeds are available (e.g. node processed before its neighbors).
-            int seedCount = seedingActive
-                    ? gatherSeeds(node, nodeSourceIdx, sourceIdx, baseVec, searchView, indexAlive, scratch)
-                    : 0;
-            if (seedCount > 0) {
-                seededSearches.incrementAndGet();
-                scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
-                        scratch.seedNodes, scratch.seedScores, seedCount);
-                scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
-                candSize = appendApproximateResults(
-                        scratch.gs[sourceIdx].approximateResults(), sourceIdx, scratch, candSize);
-            } else {
-                if (seedingActive) {
-                    coldSearches.incrementAndGet();
-                }
-                // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
-                // pruned by diversity selection, so the doubled approximate-phase cost buys almost
-                // no recall.
-                SearchResult results = scratch.gs[sourceIdx].search(
-                        ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
-                );
+            {
+                // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
+                // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to
+                // a normal search when no seeds are available.
+                int seedCount = seedingActive
+                        ? gatherSeeds(node, nodeSourceIdx, sourceIdx, baseVec, searchView, indexAlive, scratch)
+                        : 0;
+                if (seedCount > 0) {
+                    seededSearches.incrementAndGet();
+                    scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
+                            scratch.seedNodes, scratch.seedScores, seedCount);
+                    scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
+                    candSize = appendApproximateResults(
+                            scratch.gs[sourceIdx].approximateResults(), sourceIdx, scratch, candSize);
+                } else {
+                    if (seedingActive) {
+                        coldSearches.incrementAndGet();
+                    }
+                    // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are
+                    // largely pruned by diversity selection, so the doubled approximate-phase cost
+                    // buys almost no recall.
+                    SearchResult results = scratch.gs[sourceIdx].search(
+                            ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
+                    );
 
-                for (var r : results.getNodes()) {
-                    scratch.candSrc[candSize] = sourceIdx;
-                    scratch.candNode[candSize] = r.node;
-                    scratch.candScore[candSize] =
-                            params.fusedPQEnabled
-                                    ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
-                                    : r.score;
-                    candSize++;
+                    for (var r : results.getNodes()) {
+                        scratch.candSrc[candSize] = sourceIdx;
+                        scratch.candNode[candSize] = r.node;
+                        scratch.candScore[candSize] =
+                                params.fusedPQEnabled
+                                        ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                        : r.score;
+                        candSize++;
+                    }
                 }
             }
 
@@ -1728,6 +1737,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         return candSize;
     }
+
+
 
     /**
      * Recomputes exact similarity score between the base vector and a node's vector,
@@ -2073,6 +2084,256 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Thread-local scratch space containing reusable buffers and search state for processing nodes.
      */
+    /** Array-backed OrdinalMapper for one source of the compactor-assigned similarity mapping. */
+    private static final class ArrayOrdinalMapper implements OrdinalMapper {
+        private final int src;
+        private final int[] oldToNew;      // per-source, indexed by old ordinal
+        private final int[] newToOldAll;   // global, indexed by new ordinal
+        private final int[] newToSrcAll;   // global, indexed by new ordinal
+        private final int maxOrdinal;
+
+        ArrayOrdinalMapper(int src, int[] oldToNew, int[] newToOldAll, int[] newToSrcAll, int maxOrdinal) {
+            this.src = src;
+            this.oldToNew = oldToNew;
+            this.newToOldAll = newToOldAll;
+            this.newToSrcAll = newToSrcAll;
+            this.maxOrdinal = maxOrdinal;
+        }
+
+        @Override
+        public int maxOrdinal() {
+            return maxOrdinal;
+        }
+
+        @Override
+        public int oldToNew(int oldOrdinal) {
+            return oldToNew[oldOrdinal];
+        }
+
+        @Override
+        public int newToOld(int newOrdinal) {
+            if (newOrdinal < 0 || newOrdinal >= newToSrcAll.length || newToSrcAll[newOrdinal] != src) {
+                return OMITTED;
+            }
+            return newToOldAll[newOrdinal];
+        }
+    }
+
+    /**
+     * Bounded per-node pool of cross-source neighbor candidates discovered by smaller-source
+     * searches, keyed by the target's merged (new) ordinal. Offers keep the top-{@code slots}
+     * entries by score. Writers are the smaller sources' worker threads; the reader is the
+     * target's own processing task, which runs in a later source group — the inter-group barrier
+     * (completion-service drain on the main thread) orders every offer before the read, so
+     * {@link #appendTo} needs no locking.
+     */
+    private static final class ReverseCandidateBuffer {
+        /**
+         * Per-target slot block, allocated on first offer and released as soon as the target
+         * consumes it. Layout: {@code [count | src[slots] | oldOrd[slots] | scoreBits[slots]]},
+         * scores stored via {@link Float#floatToRawIntBits}. Targets never discovered by a
+         * smaller source's search cost only a null reference, and a consumed target's block is
+         * dropped inside {@link #appendTo}, so heap tracks the not-yet-consumed touched targets
+         * rather than the merged graph's node count — RAM that above-cache-size merges would
+         * otherwise take from the page cache serving cross-source searches. The reference array
+         * also removes the {@code ordinal * slots} indexing of a dense layout, which overflows
+         * int past floor(2^31 / slots) total nodes (~134M at 16 slots).
+         */
+        final int slots;
+        final int[][] blocks;   // per target ordinal; null until first offer, nulled on consume
+        final Object[] locks = new Object[1024];
+        final java.util.concurrent.atomic.LongAdder offered = new java.util.concurrent.atomic.LongAdder();
+        final java.util.concurrent.atomic.LongAdder touchedTargets = new java.util.concurrent.atomic.LongAdder();
+
+        ReverseCandidateBuffer(int numOrdinals, int slots) {
+            this.slots = slots;
+            this.blocks = new int[numOrdinals][];
+            for (int i = 0; i < locks.length; i++) locks[i] = new Object();
+        }
+
+        void offer(int targetNewOrd, int src, int oldOrd, float score) {
+            offered.increment();
+            synchronized (locks[targetNewOrd & (locks.length - 1)]) {
+                int[] b = blocks[targetNewOrd];
+                if (b == null) {
+                    b = new int[1 + 3 * slots];
+                    blocks[targetNewOrd] = b;
+                    touchedTargets.increment();
+                }
+                int n = b[0];
+                for (int i = 0; i < n; i++) {
+                    if (b[1 + i] == src && b[1 + slots + i] == oldOrd) return;
+                }
+                if (n < slots) {
+                    b[1 + n] = src;
+                    b[1 + slots + n] = oldOrd;
+                    b[1 + 2 * slots + n] = Float.floatToRawIntBits(score);
+                    b[0] = n + 1;
+                    return;
+                }
+                int minIdx = 0;
+                float minScore = Float.intBitsToFloat(b[1 + 2 * slots]);
+                for (int i = 1; i < slots; i++) {
+                    float s = Float.intBitsToFloat(b[1 + 2 * slots + i]);
+                    if (s < minScore) { minScore = s; minIdx = i; }
+                }
+                if (score > minScore) {
+                    b[1 + minIdx] = src;
+                    b[1 + slots + minIdx] = oldOrd;
+                    b[1 + 2 * slots + minIdx] = Float.floatToRawIntBits(score);
+                }
+            }
+        }
+
+        /** Number of accumulated reverse candidates for a target; final once the target's group runs. */
+        int countAt(int targetNewOrd) {
+            int[] b = blocks[targetNewOrd];
+            return b == null ? 0 : b[0];
+        }
+
+        /**
+         * Appends the target's reverse candidates to the candidate arrays and releases the
+         * target's block; returns new candSize. Safe without the offer lock: every offer for
+         * this target completed before its source's group started (inter-group barrier), and
+         * each target is processed exactly once, by one thread.
+         */
+        int appendTo(int targetNewOrd, int[] candSrc, int[] candNode, float[] candScore, int candSize) {
+            int[] b = blocks[targetNewOrd];
+            if (b == null) {
+                return candSize;
+            }
+            int n = b[0];
+            for (int i = 0; i < n; i++) {
+                candSrc[candSize] = b[1 + i];
+                candNode[candSize] = b[1 + slots + i];
+                candScore[candSize] = Float.intBitsToFloat(b[1 + 2 * slots + i]);
+                candSize++;
+            }
+            blocks[targetNewOrd] = null;
+            return candSize;
+        }
+
+        long ramBytesUsed() {
+            // References plus an upper bound on live blocks (16B array header + payload);
+            // consumed and never-touched targets hold no block.
+            long blockBytes = 16 + (long) (1 + 3 * slots) * Integer.BYTES;
+            return (long) blocks.length * 8 + touchedTargets.sum() * blockBytes;
+        }
+    }
+
+    /**
+     * Builds the similarity-assigned ordinal mapping: one streaming pass per source computes a
+     * 4-byte PQ-code prefix per live node; live nodes are then numbered in (prefix, ordinal)
+     * order, source by source in ascending-size processing order — so batch processing in the
+     * same order writes records sequentially and places similar vectors in adjacent records.
+     * Dead nodes are numbered after all live nodes, preserving a total bijection.
+     */
+    private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq) {
+        long t0 = System.nanoTime();
+        int numSources = sources.size();
+        long totalOrdinals = 0;
+        for (OnDiskGraphIndex src : sources) {
+            totalOrdinals += src.size(0);
+        }
+        if (totalOrdinals > Integer.MAX_VALUE) {
+            throw new IllegalStateException("merged ordinal space exceeds int range: " + totalOrdinals);
+        }
+
+        // ascending-size processing order, matching setupCrossLink
+        Integer[] order = new Integer[numSources];
+        for (int i = 0; i < numSources; i++) order[i] = i;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer i) -> numLiveNodesPerSource.get(i))
+                .thenComparingInt(i -> i));
+
+        int[] newToOldAll = new int[(int) totalOrdinals];
+        int[] newToSrcAll = new int[(int) totalOrdinals];
+        int[][] oldToNewPerSource = new int[numSources][];
+        int next = 0;
+
+        for (int oi = 0; oi < numSources; oi++) {
+            int s = order[oi];
+            OnDiskGraphIndex source = sources.get(s);
+            int size = source.size(0);
+            FixedBitSet alive = liveNodes.get(s);
+            int[] oldToNew = new int[size];
+            oldToNewPerSource[s] = oldToNew;
+
+            // one streaming pass: 4-byte code prefix per live node, packed with the ordinal
+            int liveCount = numLiveNodesPerSource.get(s);
+            long[] keyed = new long[liveCount];
+            java.util.concurrent.atomic.AtomicInteger fill = new java.util.concurrent.atomic.AtomicInteger();
+            int window = 1 << 18;
+            List<java.util.concurrent.Callable<Void>> tasks = new ArrayList<>();
+            for (int from = 0; from < size; from += window) {
+                final int lo = from;
+                final int hi = Math.min(size, from + window);
+                tasks.add(() -> {
+                    source.prefetchL0Records(lo, hi - 1);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int node = lo; node < hi; node++) {
+                            if (!alive.get(node)) continue;
+                            view.getVectorInto(node, vec, 0);
+                            pq.encodeTo(vec, code);
+                            long key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
+                                     | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
+                            keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
+                        }
+                    }
+                    return null;
+                });
+            }
+            joinAll(tasks);
+            Arrays.parallelSort(keyed, 0, fill.get());
+
+            for (int k = 0; k < fill.get(); k++) {
+                int old = (int) keyed[k];
+                oldToNew[old] = next;
+                newToOldAll[next] = old;
+                newToSrcAll[next] = s;
+                next++;
+            }
+        }
+        // dead nodes last, any order
+        for (int oi = 0; oi < numSources; oi++) {
+            int s = order[oi];
+            FixedBitSet alive = liveNodes.get(s);
+            int size = sources.get(s).size(0);
+            int[] oldToNew = oldToNewPerSource[s];
+            for (int node = 0; node < size; node++) {
+                if (alive.get(node)) continue;
+                oldToNew[node] = next;
+                newToOldAll[next] = node;
+                newToSrcAll[next] = s;
+                next++;
+            }
+        }
+
+        this.maxOrdinal = next - 1;
+        List<OrdinalMapper> mappers = new ArrayList<>(numSources);
+        for (int s = 0; s < numSources; s++) {
+            mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
+        }
+        log.info("Similarity ordinals assigned: {} ordinals across {} sources in {} ms",
+                next, numSources, (System.nanoTime() - t0) / 1_000_000);
+        return mappers;
+    }
+
+    private void joinAll(List<java.util.concurrent.Callable<Void>> tasks) {
+        try {
+            for (var f : executor.invokeAll(tasks)) {
+                f.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw new RuntimeException(e.getCause());
+        }
+    }
+
     private static final class Scratch implements AutoCloseable {
 
         final int[] candSrc, candNode;
@@ -2122,6 +2383,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 this.seedEdgeBuf = null;
             }
         }
+
 
         /**
          * Closes all graph searchers and resets the cache.
