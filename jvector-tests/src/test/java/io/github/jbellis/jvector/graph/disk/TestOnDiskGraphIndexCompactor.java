@@ -537,6 +537,101 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
+     * Compaction with compactor-assigned similarity ordinals: verifies the effective mapping is
+     * a bijection with a working newToOld round-trip, and that search recall over the reordered
+     * graph (results translated back through effectiveRemappers) matches the golden build.
+     */
+    @Test
+    public void testCompactWithSimilarityOrdinals() throws Exception {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+
+        for (int i = 0; i < numSources; ++i) {
+            var sourcePath = testDirectory.resolve("test_graph_" + i);
+            rss.add(ReaderSupplierFactory.open(sourcePath.toAbsolutePath()));
+            graphs.add(OnDiskGraphIndex.load(rss.get(i)));
+        }
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
+                map.put(i, globalOrdinal++);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setSimilarityOrdinals(true);
+        int topK = 10;
+
+        var outputPath = testDirectory.resolve("test_compact_simord_graph");
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<SearchResult> goldenResults = searchFromAll(queries, topK);
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+
+        compactor.compact(outputPath);
+
+        // The mapping in effect must be a total bijection with a working reverse.
+        var effective = compactor.effectiveRemappers();
+        int total = numSources * numVectorsPerGraph;
+        int[] newToDataset = new int[total];
+        boolean[] seen = new boolean[total];
+        for (int src = 0; src < numSources; src++) {
+            for (int old = 0; old < numVectorsPerGraph; old++) {
+                int n = effective.get(src).oldToNew(old);
+                assertTrue("new ordinal in range: " + n, n >= 0 && n < total);
+                assertFalse("no ordinal collisions", seen[n]);
+                seen[n] = true;
+                assertEquals("newToOld round-trip", old, effective.get(src).newToOld(n));
+                newToDataset[n] = src * numVectorsPerGraph + old;
+            }
+        }
+
+        ReaderSupplier rs = ReaderSupplierFactory.open(outputPath);
+        var compactGraph = OnDiskGraphIndex.load(rs);
+        assertEquals(total, compactGraph.size(0));
+
+        // Score by graph ordinal: reorder the exact vectors into new-ordinal order.
+        List<VectorFloat<?>> reordered = new ArrayList<>(total);
+        for (int n = 0; n < total; n++) {
+            reordered.add(allVecs.get(newToDataset[n]));
+        }
+        var reorderedRavv = new ListRandomAccessVectorValues(reordered, allVecs.get(0).length());
+
+        GraphSearcher searcher = new GraphSearcher(compactGraph);
+        int hits = 0;
+        int possible = 0;
+        for (int qi = 0; qi < queries.size(); qi++) {
+            SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
+            SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+            var gt = groundTruth.get(qi);
+            for (var ns : sr.getNodes()) {
+                if (gt.contains(newToDataset[ns.node])) {
+                    hits++;
+                }
+            }
+            possible += topK;
+        }
+        double compactRecall = (double) hits / possible;
+        double goldenRecall = AccuracyMetrics.recallFromSearchResults(groundTruth, goldenResults, topK, topK);
+        System.out.printf("SimilarityOrdinals compact recall: %.4f (golden %.4f)%n", compactRecall, goldenRecall);
+        assertTrue(String.format("similarity-ordinal recall (%.4f) should be comparable to golden (%.4f)",
+                        compactRecall, goldenRecall),
+                Math.abs(goldenRecall - compactRecall) < 0.2);
+        assertTrue("similarity-ordinal recall should be at least 0.2, got " + compactRecall,
+                compactRecall >= 0.2);
+        searcher.close();
+    }
+
+    /**
      * Tests the retained-only fast path with a heavily skewed merge: the small source's few
      * searches can only offer reverse candidates to a bounded set of large-source nodes, so
      * most large-source nodes must take the fast path (their merged edges are exactly their

@@ -459,6 +459,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
     }
 
+
     // re-declared to specify type
     @Override
     public View getView() {

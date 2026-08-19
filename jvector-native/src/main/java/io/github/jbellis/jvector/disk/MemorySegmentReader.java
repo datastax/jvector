@@ -156,7 +156,10 @@ public class MemorySegmentReader implements RandomAccessReader {
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
 
-                // Apply MADV_RANDOM advice
+                // Apply MADV_RANDOM advice: graph traversal is random access, and kernel
+                // readahead extrapolates from file adjacency, which a diversity-pruned graph's
+                // edges deliberately avoid — wider speculative reads are wasted bandwidth.
+                // Targeted asynchronous warming goes through willNeed() instead.
                 var linker = Linker.nativeLinker();
                 var maybeMadvise = linker.defaultLookup().find("posix_madvise");
                 if (maybeMadvise.isPresent()) {
@@ -166,7 +169,7 @@ public class MemorySegmentReader implements RandomAccessReader {
                     if (result != 0) {
                         throw new IOException("posix_madvise failed with error code: " + result);
                     }
-                } else {
+                } else if (maybeMadvise.isEmpty()) {
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
                 }
             } catch (Throwable e) {
