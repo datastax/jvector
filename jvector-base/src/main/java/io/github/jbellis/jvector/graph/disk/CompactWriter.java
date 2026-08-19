@@ -153,6 +153,11 @@ final class CompactWriter implements AutoCloseable {
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
     }
 
+    /** The pre-encoded code cache, or null when not enabled. Codes are keyed by new ordinal. */
+    PreEncodedCodeCache pqCodeCache() {
+        return pqCodeCache;
+    }
+
     /**
      * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
      * fused output without the pre-encoded code cache, where neighbor codes are produced by
