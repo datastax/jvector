@@ -271,8 +271,13 @@ public class GraphSearcher implements Closeable {
 
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
-            // Search this layer with minimal parameters since we just want the best candidate
-            searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
+            // Search this layer with minimal parameters since we just want the best candidate.
+            // Threshold must be NEGATIVE_INFINITY, not 0.0f: 0.0f is only a valid "accept everything"
+            // floor for similarity functions bounded to (0, 1] (COSINE, EUCLIDEAN). DOT_PRODUCT with
+            // non-unit-normalized vectors can legitimately score below 0, and a 0.0f floor here would
+            // silently discard the only reachable candidate(s) in a hierarchy layer, leaving
+            // approximateResults empty and tripping the assertion below.
+            searchOneLayer(scoreProvider, 1, Float.NEGATIVE_INFINITY, lvl, Bits.ALL);
             assert approximateResults.size() == 1 : approximateResults.size();
             setEntryPointsFromPreviousLayer();
         }
