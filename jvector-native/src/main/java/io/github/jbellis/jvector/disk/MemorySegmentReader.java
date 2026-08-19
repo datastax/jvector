@@ -146,9 +146,44 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     public static class Supplier implements ReaderSupplier {
+        private static final int POSIX_FADV_WILLNEED = 3; // Value for Linux
+        // fd-side advice handles; unlike MADV_WILLNEED (a no-op on some platforms), fadvise
+        // WILLNEED reliably initiates async readahead into the (shared) page cache
+        private static final java.lang.invoke.MethodHandle OPEN_H;
+        private static final java.lang.invoke.MethodHandle CLOSE_H;
+        private static final java.lang.invoke.MethodHandle FADVISE_H;
+        static {
+            java.lang.invoke.MethodHandle open = null, close = null, fadvise = null;
+            try {
+                var linker = Linker.nativeLinker();
+                var lookup = linker.defaultLookup();
+                var openSym = lookup.find("open");
+                var closeSym = lookup.find("close");
+                var fadviseSym = lookup.find("posix_fadvise");
+                if (openSym.isPresent() && closeSym.isPresent() && fadviseSym.isPresent()) {
+                    open = linker.downcallHandle(openSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+                    close = linker.downcallHandle(closeSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+                    fadvise = linker.downcallHandle(fadviseSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+                }
+            } catch (Throwable t) {
+                logger.warn("native open/posix_fadvise unavailable; willNeed hints disabled", t);
+                open = null;
+                close = null;
+                fadvise = null;
+            }
+            OPEN_H = open;
+            CLOSE_H = close;
+            FADVISE_H = fadvise;
+        }
+
         private final Arena arena;
         private final MemorySegment memory;
         private final Path path;
+        private final int adviceFd; // -1 when unavailable
 
         public Supplier(Path path) throws IOException {
             this.path = path;
@@ -178,6 +213,37 @@ public class MemorySegmentReader implements RandomAccessReader {
                     throw (IOException) e;
                 }
                 throw new RuntimeException(e);
+            }
+            this.adviceFd = openAdviceFd(path);
+        }
+
+        private static int openAdviceFd(Path path) {
+            if (OPEN_H == null) {
+                return -1;
+            }
+            try (var confined = Arena.ofConfined()) {
+                var cPath = confined.allocateFrom(path.toString());
+                return (int) OPEN_H.invokeExact(cPath, 0); // O_RDONLY
+            } catch (Throwable t) {
+                logger.warn("open for willNeed advice failed on {}; hints disabled", path, t);
+                return -1;
+            }
+        }
+
+        @Override
+        public void willNeed(long offset, long length) {
+            if (adviceFd < 0 || FADVISE_H == null || length <= 0) {
+                return;
+            }
+            long end = Math.min(offset + length, memory.byteSize());
+            long start = Math.max(0, offset);
+            if (start >= end) {
+                return;
+            }
+            try {
+                int ignored = (int) FADVISE_H.invokeExact(adviceFd, start, end - start, POSIX_FADV_WILLNEED);
+            } catch (Throwable t) {
+                // advice is best-effort; never fail a read path over it
             }
         }
 
@@ -222,6 +288,13 @@ public class MemorySegmentReader implements RandomAccessReader {
         @Override
         public void close() {
             arena.close();
+            if (adviceFd >= 0 && CLOSE_H != null) {
+                try {
+                    int ignored = (int) CLOSE_H.invokeExact(adviceFd);
+                } catch (Throwable t) {
+                    // best-effort
+                }
+            }
         }
     }
 }
