@@ -81,6 +81,11 @@ else
   echo "WARNING: ldd not available on this OS (e.g. macOS); use 'otool -L ${LIBNAME}' manually if needed." >&2
 fi
 
+# Note that an exhaustive check of exported symbols is not strictly necessary, because the
+# Java code will fail to load the library if any of the expected symbols are missing. But
+# this check is a useful sanity-check to catch any accidental changes to the native code that
+# would break the Java code, and to catch any accidental changes to the build process that
+# would result in a library that doesn't export the expected symbols.
 echo "-- exported symbols (nm) --"
 REQUIRED_SYMBOLS=(
   jvector_simd_get_active_isa
