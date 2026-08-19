@@ -17,23 +17,24 @@
 package io.github.jbellis.jvector.management;
 
 /**
- * JMX Standard MBean interface for {@link GraphIndexBuilderConfig}.
+ * Runtime-tunable settings for {@link io.github.jbellis.jvector.graph.GraphIndexBuilder}
+ * construction: graph topology, write path, and build-time compression.
  *
- * <p>Exposes {@link io.github.jbellis.jvector.graph.GraphIndexBuilder} construction
- * parameters as JMX-managed attributes so they can be inspected and updated at runtime
- * via any JMX client (JConsole, jvisualvm, jmxterm, etc.) without restarting the
- * application.
+ * <p>This is a plain domain interface with no dependency on any particular management
+ * transport. It is implemented by {@link GraphIndexBuilderConfig} and exposed externally by
+ * whichever {@link io.github.jbellis.jvector.management.spi.ManagementBackend} is active in
+ * this JVM &mdash; by default, {@code io.github.jbellis.jvector.management.jmx.JmxManagementBackend}
+ * exposes it as a JMX MBean, inspectable and updatable at runtime via any JMX client (JConsole,
+ * jvisualvm, jmxterm, etc.) without restarting the application. See
+ * {@link io.github.jbellis.jvector.management.ManagementBackendProvider} for how to select a
+ * different backend or disable external exposure entirely.
  *
  * <p>Changes to these attributes take effect the next time a
  * {@link io.github.jbellis.jvector.graph.GraphIndexBuilder} reads the value from
  * {@link GraphIndexBuilderConfig#getInstance()}.  They do not affect indexes that are
  * already being built or have already been built.
- *
- * <p>The interface follows the Standard MBean naming convention: the implementation
- * class ({@link GraphIndexBuilderConfig}) has the same simple name as this interface
- * without the {@code MBean} suffix.
  */
-public interface GraphIndexBuilderConfigMBean {
+public interface GraphIndexBuilderSettings {
 
     // ── Graph topology ────────────────────────────────────────────────────────
 

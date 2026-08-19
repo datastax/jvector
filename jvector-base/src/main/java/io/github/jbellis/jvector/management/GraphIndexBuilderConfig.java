@@ -20,30 +20,26 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
-import java.lang.management.ManagementFactory;
 import java.util.Locale;
 
 /**
- * Singleton that holds JMX-managed default values for
+ * Singleton that holds runtime-tunable default values for
  * {@link io.github.jbellis.jvector.graph.GraphIndexBuilder} construction parameters.
  *
- * <h2>JMX Pattern — Standard MBean</h2>
+ * <h2>Management</h2>
  *
- * <p>This class uses Java's <em>Standard MBean</em> pattern, the simplest form of JMX
- * management.  The rules are:
- * <ol>
- *   <li>Define an interface whose name ends in {@code MBean}
- *       ({@link GraphIndexBuilderConfigMBean}).</li>
- *   <li>Implement that interface in a class with the same name minus the {@code MBean}
- *       suffix (this class).</li>
- *   <li>Register an instance with the platform {@link MBeanServer} under a unique
- *       {@link ObjectName}.</li>
- * </ol>
+ * <p>This class is a plain domain object: it implements {@link GraphIndexBuilderSettings} and
+ * registers itself with {@link ManagementRegistry}, which in turn exposes it through whichever
+ * {@link io.github.jbellis.jvector.management.spi.ManagementBackend} is active in this JVM. By
+ * default that backend is JMX (see
+ * {@code io.github.jbellis.jvector.management.jmx.JmxManagementBackend}), which makes this
+ * class's attributes inspectable and updatable via any JMX client (JConsole, jvisualvm,
+ * jmxterm, etc.) without restarting the application, under the object name
+ * {@code io.github.jbellis.jvector:type=GraphIndexBuilderConfig}. See
+ * {@link ManagementBackendProvider} for how to select a different backend, or disable external
+ * exposure entirely, via the {@code jvector.management.backend} system property.
  *
- * <p>Once registered, any JMX client can inspect and modify the exposed attributes.
- * For example, using JConsole:
+ * <p>For example, using JConsole with the default JMX backend:
  * <pre>
  *   MBeans → io.github.jbellis.jvector → GraphIndexBuilderConfig → Attributes
  *       AddHierarchy : true   ← current value
@@ -60,7 +56,7 @@ import java.util.Locale;
  *
  * <h2>Usage</h2>
  *
- * <p>Code that creates a {@code GraphIndexBuilder} and wants to respect the JMX-managed
+ * <p>Code that creates a {@code GraphIndexBuilder} and wants to respect the managed
  * value reads from the singleton before construction:
  * <pre>{@code
  * boolean addHierarchy = GraphIndexBuilderConfig.getInstance().isAddHierarchy();
@@ -71,27 +67,21 @@ import java.util.Locale;
  * <h2>Thread Safety</h2>
  *
  * <p>All managed attributes are stored as {@code volatile} fields so that writes from a
- * JMX thread are immediately visible to application threads without additional
- * synchronization.
+ * management-backend thread (e.g. a JMX client thread) are immediately visible to application
+ * threads without additional synchronization.
  *
  * <h2>Failure Policy</h2>
  *
- * <p>MBean registration is performed in the constructor and wrapped in a try/catch.
- * Registration failure (e.g., because the JVM has no platform MBeanServer or the name
- * is already taken) logs a warning and is otherwise silently ignored — the singleton is
- * still usable with its default values, so JMX availability is never on the critical
- * path.
+ * <p>Registration with {@link ManagementRegistry} happens in the constructor. The registry and
+ * every {@link io.github.jbellis.jvector.management.spi.ManagementBackend} implementation treat
+ * registration failure (e.g., no platform MBeanServer, or a name collision) as non-fatal: it
+ * logs a warning and is otherwise silently ignored — the singleton is still usable with its
+ * default values, so management-backend availability is never on the critical path.
  */
 @Experimental
-public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
+public class GraphIndexBuilderConfig implements GraphIndexBuilderSettings, ManagedResource {
 
     private static final Logger logger = LoggerFactory.getLogger(GraphIndexBuilderConfig.class);
-
-    /**
-     * JMX ObjectName under which this MBean is registered.
-     * Domain: project base package.  Type: simple class name.
-     */
-    public static final String OBJECT_NAME = "io.github.jbellis.jvector:type=GraphIndexBuilderConfig";
 
     // ── Singleton ────────────────────────────────────────────────────────────
     // Initialized at class-load time; the JVM guarantees exactly-once, thread-safe
@@ -120,18 +110,10 @@ public class GraphIndexBuilderConfig implements GraphIndexBuilderConfigMBean {
     // ── Constructor ──────────────────────────────────────────────────────────
 
     private GraphIndexBuilderConfig() {
-        try {
-            MBeanServer server = ManagementFactory.getPlatformMBeanServer();
-            ObjectName name = new ObjectName(OBJECT_NAME);
-            server.registerMBean(this, name);
-            logger.info("Registered JMX MBean: {}", OBJECT_NAME);
-        } catch (Exception e) {
-            // JMX registration is best-effort; do not disrupt normal operation.
-            logger.warn("Failed to register JMX MBean '{}': {}", OBJECT_NAME, e.getMessage());
-        }
+        ManagementRegistry.getInstance().register(this, GraphIndexBuilderSettings.class);
     }
 
-    // ── GraphIndexBuilderConfigMBean ─────────────────────────────────────────
+    // ── GraphIndexBuilderSettings ─────────────────────────────────────────────
 
     @Override
     public boolean isAddHierarchy() {
