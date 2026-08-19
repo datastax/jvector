@@ -163,6 +163,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     private PreEncodedCodeCache orderingCache;   // non-null only while L0 runs under fused mode
 
+    // Bounded cluster search: consecutive (similarity-ordered) nodes share one anchor search per
+    // target source. The anchor searches CLUSTER_MARGIN deeper than needed; a member rescores the
+    // anchor's list against its own query and skips its search only when the triangle inequality
+    // certifies that no point outside the shared list can reach its top-K: with delta the
+    // query-to-anchor angular distance and ThetaD the anchor's worst kept angle, certification is
+    // memberKthAngle <= ThetaD - delta. Fallback is a normal cold search (which becomes the new
+    // anchor). Valid for angular similarities (normalized DOT_PRODUCT / COSINE) and EUCLIDEAN,
+    // where the underlying distance is a metric; disabled otherwise.
+    // On-demand anchor depth: anchors search plain searchTopK; when a member's certificate
+    // fails, the anchor search is resumed in CLUSTER_EXT_STEP increments (growing ThetaD for
+    // this and all later members) up to CLUSTER_MARGIN total extra results, before the member
+    // falls back to its own search. Exact duplicates certify with no extension at all.
+    private static final int CLUSTER_MARGIN = 32;
+    private static final int CLUSTER_EXT_STEP = 16;
+    final java.util.concurrent.atomic.AtomicLong clusterResumes = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong clusterCertified = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong clusterAnchors = new java.util.concurrent.atomic.AtomicLong();
 
     // Similarity-assigned merged ordinals: the compactor replaces the caller's remappers with a
     // mapping that numbers each source's live nodes in PQ-code order (sources in ascending-size
@@ -1085,6 +1102,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 log.info("Cross-link reverse propagation: {} offers onto {} touched of {} nodes ({} slots/node), {} retained-only fast-path nodes",
                         reverseCandidates.offered.sum(), reverseCandidates.touchedTargets.sum(),
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
+                if (clusterCertified.get() + clusterAnchors.get() > 0) {
+                    log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
+                            clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
+                            clusterCertified.get() + clusterAnchors.get());
+                }
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
                 orderingCache = null;
                 writer.offsetAfterInline();
@@ -1256,6 +1278,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
+        scratch.resetChainSeeds();
         if (bs.end > bs.start) {
             // Stream this batch's own records into the page cache before processing. Search
             // reads into other sources are data-dependent and stay demand-faulted, but each
@@ -1413,9 +1436,158 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return writer.writeInlineNodeRecord(newOrdinal, scratch.baseVec, selected, scratch.pqCode);
     }
 
+    /**
+     * Bounded cluster search for one (node, target) pair. If a valid anchor exists and the
+     * triangle-inequality certificate passes — the member's k-th best rescored distance is at
+     * most the anchor's worst kept distance minus the query-to-anchor distance — the member's
+     * top-k comes from the shared list with no search. Otherwise runs a cold search
+     * {@link #CLUSTER_MARGIN} deeper than k, which becomes the new anchor. Candidates appended
+     * are exactly k either way, with exact scores.
+     */
+    private int clusterSearchL0(int node, int targetIdx, OnDiskGraphIndex.View searchView,
+                                FixedBitSet indexAlive, VectorFloat<?> baseVec, Scratch scratch,
+                                int candSize, CompactionParams params, SearchScoreProvider ssp) {
+        int k = params.searchTopK;
 
+        if (scratch.clusterAnchorValid[targetIdx]) {
+            float qaSim = similarityFunction.compare(baseVec, scratch.clusterAnchorQuery[targetIdx]);
+            double delta = metricDistance(qaSim);
+            int verified = 0;   // prefix of the anchor list already scored against this member
+            while (true) {
+                int n = scratch.clusterCount[targetIdx];
+                double thetaD = metricDistance(scratch.clusterWorstSim[targetIdx]);
+                if (delta < thetaD) {
+                    // score any anchor-list entries this member hasn't scored yet
+                    int[] nodes = scratch.clusterNodes[targetIdx];
+                    float[] ms = scratch.clusterMemberScores;
+                    for (int i = verified; i < n; i++) {
+                        ms[i] = indexAlive.get(nodes[i])
+                                ? rescore(searchView, nodes[i], baseVec, scratch.tmpVec)
+                                : Float.NEGATIVE_INFINITY;
+                    }
+                    verified = n;
+                    int live = 0;
+                    for (int i = 0; i < n; i++) {
+                        if (ms[i] != Float.NEGATIVE_INFINITY) live++;
+                    }
+                    if (live >= k) {
+                        Integer[] ord = scratch.clusterOrder;
+                        for (int i = 0; i < n; i++) ord[i] = i;
+                        Arrays.sort(ord, 0, n, (a, b) -> Float.compare(ms[b], ms[a]));
+                        double memberKth = metricDistance(ms[ord[k - 1]]);
+                        if (memberKth <= thetaD - delta) {
+                            clusterCertified.incrementAndGet();
+                            for (int j = 0; j < k; j++) {
+                                int idx = ord[j];
+                                scratch.candSrc[candSize] = targetIdx;
+                                scratch.candNode[candSize] = nodes[idx];
+                                scratch.candScore[candSize] = ms[idx];
+                                candSize++;
+                            }
+                            return candSize;
+                        }
+                    }
+                }
+                // not certified at current depth: extend the anchor's search if budget remains
+                if (scratch.clusterExtended[targetIdx] >= CLUSTER_MARGIN) {
+                    break;
+                }
+                int got = extendAnchor(targetIdx, searchView, scratch, params);
+                if (got == 0) {
+                    break; // anchor's search is exhausted; no deeper ThetaD exists
+                }
+            }
+        }
 
+        return clusterFallbackSearch(node, targetIdx, searchView, indexAlive, baseVec,
+                                     scratch, candSize, params, ssp);
+    }
 
+    /**
+     * Extends the current anchor's search by up to {@link #CLUSTER_EXT_STEP} further results via
+     * {@link GraphSearcher#resume}, exact-rescoring them against the ANCHOR's query and growing
+     * the stored list (and so ThetaD) for this and all later members. Returns how many results
+     * the resume produced; 0 means the search space is exhausted at this beam's reach.
+     */
+    private int extendAnchor(int targetIdx, OnDiskGraphIndex.View searchView, Scratch scratch,
+                             CompactionParams params) {
+        clusterResumes.incrementAndGet();
+        SearchResult more = scratch.gs[targetIdx].resume(CLUSTER_EXT_STEP, CLUSTER_EXT_STEP);
+        int[] nodes = scratch.clusterNodes[targetIdx];
+        float[] ascore = scratch.clusterAnchorScores[targetIdx];
+        int at = scratch.clusterCount[targetIdx];
+        int got = 0;
+        float worst = scratch.clusterWorstSim[targetIdx];
+        VectorFloat<?> anchorQuery = scratch.clusterAnchorQuery[targetIdx];
+        for (var r : more.getNodes()) {
+            float ex = params.fusedPQEnabled
+                    ? rescoreAgainst(searchView, r.node, anchorQuery, scratch.tmpVec)
+                    : r.score;
+            nodes[at] = r.node;
+            ascore[at] = ex;
+            worst = Math.min(worst, ex);
+            at++;
+            got++;
+        }
+        scratch.clusterCount[targetIdx] = at;
+        scratch.clusterWorstSim[targetIdx] = worst;
+        scratch.clusterExtended[targetIdx] += got;
+        return got;
+    }
+
+    /** Exact similarity of {@code node} to an arbitrary query vector (not the current baseVec). */
+    private float rescoreAgainst(OnDiskGraphIndex.View view, int node, VectorFloat<?> query,
+                                 VectorFloat<?> tmp) {
+        view.getVectorInto(node, tmp, 0);
+        return similarityFunction.compare(query, tmp);
+    }
+
+    /** Cold search k+m deep for a node that could not be certified; becomes the new anchor. */
+    private int clusterFallbackSearch(int node, int targetIdx, OnDiskGraphIndex.View searchView,
+                                      FixedBitSet indexAlive, VectorFloat<?> baseVec, Scratch scratch,
+                                      int candSize, CompactionParams params, SearchScoreProvider ssp) {
+        int k = params.searchTopK;
+        clusterAnchors.incrementAndGet();
+        int deep = k;
+        SearchResult results = scratch.gs[targetIdx].search(ssp, deep, deep, 0f, 0f, indexAlive);
+        int[] nodes = scratch.clusterNodes[targetIdx];
+        float[] ascore = scratch.clusterAnchorScores[targetIdx];
+        int stored = 0;
+        for (var r : results.getNodes()) {
+            nodes[stored] = r.node;
+            ascore[stored] = params.fusedPQEnabled
+                    ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                    : r.score;
+            stored++;
+        }
+        // rank the anchor list by exact score (defines both the top-k and the worst-kept bound)
+        final int fstored = stored;
+        Integer[] ord = scratch.clusterOrder;
+        for (int i = 0; i < fstored; i++) ord[i] = i;
+        Arrays.sort(ord, 0, fstored, (a, b) -> Float.compare(ascore[b], ascore[a]));
+        int[] tmpN = new int[fstored];
+        float[] tmpS = new float[fstored];
+        for (int i = 0; i < fstored; i++) {
+            tmpN[i] = nodes[ord[i]];
+            tmpS[i] = ascore[ord[i]];
+        }
+        System.arraycopy(tmpN, 0, nodes, 0, fstored);
+        System.arraycopy(tmpS, 0, ascore, 0, fstored);
+        scratch.clusterCount[targetIdx] = fstored;
+        scratch.clusterWorstSim[targetIdx] = fstored > 0 ? ascore[fstored - 1] : Float.NEGATIVE_INFINITY;
+        scratch.clusterExtended[targetIdx] = 0;
+        scratch.clusterAnchorQuery[targetIdx].copyFrom(baseVec, 0, 0, baseVec.length());
+        scratch.clusterAnchorValid[targetIdx] = fstored >= k;
+
+        int emit = Math.min(k, fstored);
+        for (int j = 0; j < emit; j++) {
+            scratch.candSrc[candSize] = targetIdx;
+            scratch.candNode[candSize] = nodes[j];
+            scratch.candScore[candSize] = ascore[j];
+            candSize++;
+        }
+        return candSize;
+    }
 
     /**
      * Collects up to {@link #SEEDS_PER_PARTITION} entry points in {@code targetSourceIdx} for node
@@ -1650,7 +1822,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         if (level == 0) {
             int prevCandSize = candSize;
-            {
+            boolean clusterMode = !seedingActive && orderingCache != null
+                    && clusterSearchUsable() && params.fusedPQEnabled;
+            if (clusterMode) {
+                candSize = clusterSearchL0(node, sourceIdx, searchView, indexAlive, baseVec,
+                                           scratch, candSize, params, ssp);
+                // fall through to the common reverse-offer block below
+            } else {
                 // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
                 // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to
                 // a normal search when no seeds are available.
@@ -1738,7 +1916,37 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return candSize;
     }
 
+    /**
+     * Converts a jvector similarity score to the underlying metric distance used by the
+     * cluster-search certificates: angular distance for DOT_PRODUCT/COSINE (normalized inputs),
+     * Euclidean distance for EUCLIDEAN. Returns NaN for similarities with no metric backing.
+     */
+    private double metricDistance(float sim) {
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+            case COSINE: {
+                double cos = 2.0 * sim - 1.0;
+                return Math.acos(Math.max(-1.0, Math.min(1.0, cos)));
+            }
+            case EUCLIDEAN: {
+                double d2 = 1.0 / Math.max(1e-9, sim) - 1.0;
+                return Math.sqrt(Math.max(0.0, d2));
+            }
+            default:
+                return Double.NaN;
+        }
+    }
 
+    private boolean clusterSearchUsable() {
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+            case COSINE:
+            case EUCLIDEAN:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     /**
      * Recomputes exact similarity score between the base vector and a node's vector,
@@ -2348,6 +2556,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final int[] seedPool = new int[SEED_POOL_CAPACITY];
         final int[] seedNodes = new int[SEEDS_PER_PARTITION];
         final float[] seedScores = new float[SEEDS_PER_PARTITION];
+        // Bounded cluster search: per-target anchor (query copy, result ordinals, the anchor's
+        // exact scores) and scratch for member rescoring. Reset at batch boundaries.
+        final VectorFloat<?>[] clusterAnchorQuery;   // [source]; null slot = no anchor
+        final boolean[] clusterAnchorValid;
+        final int[][] clusterNodes;                  // [source][k+m]
+        final float[][] clusterAnchorScores;         // [source][k+m]
+        final int[] clusterCount;
+        final float[] clusterWorstSim;     // worst exact score in the anchor list (defines ThetaD)
+        final int[] clusterExtended;       // results added by resume() for the current anchor
+        final float[] clusterMemberScores;           // [k+m] scratch
+        final Integer[] clusterOrder;                // [k+m] scratch for sorting members
         final FileChannel outputChannel;      // null unless seeding
         final ByteBuffer seedEdgeBuf;         // null unless seeding
 
@@ -2369,6 +2588,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 gs[i] = new GraphSearcher(sources.get(i));
                 gs[i].usePruning(false);
             }
+            int clusterCap = maxCandidateSize; // >= searchTopK + CLUSTER_MARGIN
+            this.clusterAnchorQuery = new VectorFloat<?>[sources.size()];
+            this.clusterAnchorValid = new boolean[sources.size()];
+            this.clusterNodes = new int[sources.size()][];
+            this.clusterAnchorScores = new float[sources.size()][];
+            this.clusterCount = new int[sources.size()];
+            this.clusterWorstSim = new float[sources.size()];
+            this.clusterExtended = new int[sources.size()];
+            this.clusterMemberScores = new float[clusterCap];
+            this.clusterOrder = new Integer[clusterCap];
+            for (int i = 0; i < sources.size(); i++) {
+                this.clusterAnchorQuery[i] = vectorTypeSupport.createFloatVector(dimension);
+                this.clusterNodes[i] = new int[clusterCap];
+                this.clusterAnchorScores[i] = new float[clusterCap];
+            }
 
             if (seedOutputPath != null) {
                 try {
@@ -2384,6 +2618,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        /** Forgets all cluster anchors; called at batch boundaries. */
+        void resetChainSeeds() {
+            Arrays.fill(clusterAnchorValid, false);
+            Arrays.fill(clusterCount, 0);
+        }
 
         /**
          * Closes all graph searchers and resets the cache.
