@@ -194,7 +194,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private List<OrdinalMapper> effectiveRemappers;   // survives releaseSourcesBeforeRefine
     private int[] sizeRank;            // rank of each source in ascending live-node order
     private int[] l0ProcessOrder;      // source indices in ascending live-node order
-    private ReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+    private BandedReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+    /** Reverse-offer band width: peak buffer memory is O(band), independent of node count. */
+    private static final int OFFER_BAND_WIDTH = 1 << 20;
+    private Path spillParent; // parent dir of the compaction output; set by compact()
     final java.util.concurrent.atomic.AtomicLong retainedOnlyNodes = new java.util.concurrent.atomic.AtomicLong();
 
     /** Orders sources by live-node count (ties by index) and allocates the reverse buffer. */
@@ -211,9 +214,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             l0ProcessOrder[i] = order[i];
             sizeRank[order[i]] = i;
         }
-        reverseCandidates = new ReverseCandidateBuffer(maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS);
-        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node",
-                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS);
+        reverseCandidates = new BandedReverseCandidateBuffer(sources.size(), maxOrdinal + 1,
+                                                             REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH, spillParent);
+        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node, {} ordinals/band",
+                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH);
     }
 
     /**
@@ -554,6 +558,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
     private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        this.spillParent = outputPath.toAbsolutePath().getParent();
         strategy.retrain(similarityFunction);
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
@@ -1100,13 +1105,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
 
                 log.info("Cross-link reverse propagation: {} offers onto {} touched of {} nodes ({} slots/node), {} retained-only fast-path nodes",
-                        reverseCandidates.offered.sum(), reverseCandidates.touchedTargets.sum(),
+                        reverseCandidates.offered(), reverseCandidates.touchedTargets(),
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
                 if (clusterCertified.get() + clusterAnchors.get() > 0) {
                     log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
                             clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
                             clusterCertified.get() + clusterAnchors.get());
                 }
+                reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
                 orderingCache = null;
                 writer.offsetAfterInline();
@@ -1349,7 +1355,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // set is a fixed point. Skip selection entirely: filter dead neighbors, remap, write.
         if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1) {
             int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
-            if (reverseCandidates.countAt(newOrdinal) == 0) {
+            if (reverseCandidates.countAt(sourceIdx, newOrdinal) == 0) {
                 return writeRetainedOnlyRecord(node, sourceIdx, newOrdinal, scratch, writer);
             }
         }
@@ -1775,7 +1781,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         if (level == 0 && reverseCandidates != null) {
-            candSize = reverseCandidates.appendTo(remappers.get(sourceIdx).oldToNew(node),
+            candSize = reverseCandidates.appendTo(sourceIdx, remappers.get(sourceIdx).oldToNew(node),
                     scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
         }
 
@@ -1884,7 +1890,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (reverseCandidates != null) {
                 OrdinalMapper targetMapper = remappers.get(sourceIdx);
                 for (int i = prevCandSize; i < candSize; i++) {
-                    reverseCandidates.offer(targetMapper.oldToNew(scratch.candNode[i]),
+                    reverseCandidates.offer(sourceIdx, targetMapper.oldToNew(scratch.candNode[i]),
                             nodeSourceIdx, node, scratch.candScore[i]);
                 }
             }
@@ -2336,108 +2342,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 return OMITTED;
             }
             return newToOldAll[newOrdinal];
-        }
-    }
-
-    /**
-     * Bounded per-node pool of cross-source neighbor candidates discovered by smaller-source
-     * searches, keyed by the target's merged (new) ordinal. Offers keep the top-{@code slots}
-     * entries by score. Writers are the smaller sources' worker threads; the reader is the
-     * target's own processing task, which runs in a later source group — the inter-group barrier
-     * (completion-service drain on the main thread) orders every offer before the read, so
-     * {@link #appendTo} needs no locking.
-     */
-    private static final class ReverseCandidateBuffer {
-        /**
-         * Per-target slot block, allocated on first offer and released as soon as the target
-         * consumes it. Layout: {@code [count | src[slots] | oldOrd[slots] | scoreBits[slots]]},
-         * scores stored via {@link Float#floatToRawIntBits}. Targets never discovered by a
-         * smaller source's search cost only a null reference, and a consumed target's block is
-         * dropped inside {@link #appendTo}, so heap tracks the not-yet-consumed touched targets
-         * rather than the merged graph's node count — RAM that above-cache-size merges would
-         * otherwise take from the page cache serving cross-source searches. The reference array
-         * also removes the {@code ordinal * slots} indexing of a dense layout, which overflows
-         * int past floor(2^31 / slots) total nodes (~134M at 16 slots).
-         */
-        final int slots;
-        final int[][] blocks;   // per target ordinal; null until first offer, nulled on consume
-        final Object[] locks = new Object[1024];
-        final java.util.concurrent.atomic.LongAdder offered = new java.util.concurrent.atomic.LongAdder();
-        final java.util.concurrent.atomic.LongAdder touchedTargets = new java.util.concurrent.atomic.LongAdder();
-
-        ReverseCandidateBuffer(int numOrdinals, int slots) {
-            this.slots = slots;
-            this.blocks = new int[numOrdinals][];
-            for (int i = 0; i < locks.length; i++) locks[i] = new Object();
-        }
-
-        void offer(int targetNewOrd, int src, int oldOrd, float score) {
-            offered.increment();
-            synchronized (locks[targetNewOrd & (locks.length - 1)]) {
-                int[] b = blocks[targetNewOrd];
-                if (b == null) {
-                    b = new int[1 + 3 * slots];
-                    blocks[targetNewOrd] = b;
-                    touchedTargets.increment();
-                }
-                int n = b[0];
-                for (int i = 0; i < n; i++) {
-                    if (b[1 + i] == src && b[1 + slots + i] == oldOrd) return;
-                }
-                if (n < slots) {
-                    b[1 + n] = src;
-                    b[1 + slots + n] = oldOrd;
-                    b[1 + 2 * slots + n] = Float.floatToRawIntBits(score);
-                    b[0] = n + 1;
-                    return;
-                }
-                int minIdx = 0;
-                float minScore = Float.intBitsToFloat(b[1 + 2 * slots]);
-                for (int i = 1; i < slots; i++) {
-                    float s = Float.intBitsToFloat(b[1 + 2 * slots + i]);
-                    if (s < minScore) { minScore = s; minIdx = i; }
-                }
-                if (score > minScore) {
-                    b[1 + minIdx] = src;
-                    b[1 + slots + minIdx] = oldOrd;
-                    b[1 + 2 * slots + minIdx] = Float.floatToRawIntBits(score);
-                }
-            }
-        }
-
-        /** Number of accumulated reverse candidates for a target; final once the target's group runs. */
-        int countAt(int targetNewOrd) {
-            int[] b = blocks[targetNewOrd];
-            return b == null ? 0 : b[0];
-        }
-
-        /**
-         * Appends the target's reverse candidates to the candidate arrays and releases the
-         * target's block; returns new candSize. Safe without the offer lock: every offer for
-         * this target completed before its source's group started (inter-group barrier), and
-         * each target is processed exactly once, by one thread.
-         */
-        int appendTo(int targetNewOrd, int[] candSrc, int[] candNode, float[] candScore, int candSize) {
-            int[] b = blocks[targetNewOrd];
-            if (b == null) {
-                return candSize;
-            }
-            int n = b[0];
-            for (int i = 0; i < n; i++) {
-                candSrc[candSize] = b[1 + i];
-                candNode[candSize] = b[1 + slots + i];
-                candScore[candSize] = Float.intBitsToFloat(b[1 + 2 * slots + i]);
-                candSize++;
-            }
-            blocks[targetNewOrd] = null;
-            return candSize;
-        }
-
-        long ramBytesUsed() {
-            // References plus an upper bound on live blocks (16B array header + payload);
-            // consumed and never-touched targets hold no block.
-            long blockBytes = 16 + (long) (1 + 3 * slots) * Integer.BYTES;
-            return (long) blocks.length * 8 + touchedTargets.sum() * blockBytes;
         }
     }
 
