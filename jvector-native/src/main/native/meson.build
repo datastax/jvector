@@ -53,13 +53,24 @@ if cpu == 'x86_64'
     },
   ]
 elif cpu == 'aarch64'
-  # Three tiers in ascending capability order:
-  #   NEON   — baseline AArch64 (all Graviton, all Apple Silicon)
-  #   SVE    — Graviton 3 / Neoverse V1 (256-bit SVE).
-  #            Note: Highway treats SVE as broken on HWY_OS_APPLE; no Apple CPU
-  #            through M4/A18 implements SVE, so this tier is Graviton-only.
-  #   SVE2   — Graviton 4 / Neoverse V2/N2.
-  #            Requires GCC >= 10 or Clang >= 22.  Also Graviton-only (no Apple).
+  # Three tiers in ascending capability order, all compiled to fixed-width
+  # Highway targets so MaxLanes is a compile-time constant and all kernel
+  # fast-paths (Shuffle*, LoadDup256, etc.) work without ISA-specific guards.
+  #
+  #   NEON     — baseline AArch64.  Highway target: HWY_NEON.
+  #              All Graviton generations and all Apple Silicon.
+  #
+  #   SVE_256  — Graviton 3 / Neoverse V1.  Highway target: HWY_SVE_256.
+  #              -msve-vector-bits=256 asserts the physical vector width and
+  #              causes Highway to select the fixed-width HWY_SVE_256 target
+  #              (MaxLanes = 8 floats).  Graviton-only; no Apple Silicon SVE.
+  #
+  #   SVE2_128 — Graviton 4 / Neoverse V2/N2.  Highway target: HWY_SVE2_128.
+  #              -msve-vector-bits=128 selects the fixed-width HWY_SVE2_128
+  #              target (MaxLanes = 4 floats).  At runtime on Graviton 4 the
+  #              hardware executes 256-bit vectors, so Highway's loop unrolling
+  #              gives 256-bit throughput with 128-bit-wide loop bodies.
+  #              Requires GCC >= 10 or Clang >= 21.  Graviton-only (no Apple).
   isa_variants = [
     {
       'name'     : 'neon',
@@ -71,14 +82,14 @@ elif cpu == 'aarch64'
     {
       'name'     : 'sve',
       'namespace': 'SVE',
-      'args'     : ['-march=armv8.4-a+sve',
+      'args'     : ['-march=armv8.4-a+sve', '-msve-vector-bits=256',
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_SVE'],
     },
     {
       'name'     : 'sve2',
       'namespace': 'SVE2',
-      'args'     : ['-march=armv9-a+sve2',
+      'args'     : ['-march=armv9-a+sve2', '-msve-vector-bits=128',
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_SVE2'],
     },

@@ -38,19 +38,21 @@
 
 #elif JV_ARCH_AARCH64
 
-// Each tier is compiled with a fixed -march= flag that pins HWY_STATIC_TARGET
-// to exactly one Highway constant — assert that precisely, matching the x86
-// assertions above.
-//   neon:  -march=armv8-a+crypto  → HWY_NEON  (no BF16/dotprod/I8MM, so never HWY_NEON_BF16)
-//   sve:   -march=armv8.4-a+sve   → HWY_SVE   (no fixed-width hint, so never HWY_SVE_256)
-//   sve2:  -march=armv9-a+sve2    → HWY_SVE2  (no fixed-width hint, so never HWY_SVE2_128)
+// Compiler flags per tier and the Highway target each must produce:
+//   neon:  -march=armv8-a+crypto                            → HWY_NEON
+//          (no BF16/dotprod/I8MM features, so never HWY_NEON_BF16)
+//   sve:   -march=armv8.4-a+sve  -msve-vector-bits=256      → HWY_SVE_256
+//          (pinned 256-bit; Graviton 3 / Neoverse V1)
+//   sve2:  -march=armv9-a+sve2   -msve-vector-bits=128      → HWY_SVE2_128
+//          (fixed-width 128-bit; Graviton 4 / Neoverse V2/N2)
+//          Requires GCC >= 10 or Clang >= 21.
 #if defined(JV_REQUIRE_HWY_SVE2)
-#  if HWY_STATIC_TARGET != HWY_SVE2
-#    error "Highway did not select HWY_SVE2 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2), compiler support (GCC >= 10 or Clang >= 22), and Highway blocklists."
+#  if HWY_STATIC_TARGET != HWY_SVE2_128
+#    error "Highway did not select HWY_SVE2_128 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2 -msve-vector-bits=128), compiler support (GCC >= 10 or Clang >= 21), and Highway blocklists."
 #  endif
 #elif defined(JV_REQUIRE_HWY_SVE)
-#  if HWY_STATIC_TARGET != HWY_SVE
-#    error "Highway did not select HWY_SVE for the SVE build. Check compiler flags (-march=armv8.4-a+sve), compiler support (GCC >= 10 or Clang >= 9), and Highway blocklists."
+#  if HWY_STATIC_TARGET != HWY_SVE_256
+#    error "Highway did not select HWY_SVE_256 for the SVE build. Check compiler flags (-march=armv8.4-a+sve -msve-vector-bits=256), compiler support (GCC >= 10 or Clang >= 9), and Highway blocklists."
 #  endif
 #elif defined(JV_REQUIRE_HWY_NEON)
 #  if HWY_STATIC_TARGET != HWY_NEON
