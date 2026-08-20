@@ -89,7 +89,10 @@ elif cpu == 'aarch64'
     {
       'name'     : 'sve2',
       'namespace': 'SVE2',
-      'args'     : ['-march=armv9-a+sve2', '-msve-vector-bits=128',
+      # HWY_SVE2_128 requires i8mm and bf16 in addition to sve2.
+      # See highway/hwy/ops/set_macros-inl.h:662 ("SVE2_128 implies/requires
+      # I8MM and BF16, see #2973") and the HWY_TARGET_STR definition there.
+      'args'     : ['-march=armv9-a+sve2+i8mm+bf16', '-msve-vector-bits=128',
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_SVE2'],
     },
