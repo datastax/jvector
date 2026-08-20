@@ -29,7 +29,6 @@ import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiskUsageMonitor;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -364,6 +363,19 @@ public class Grid {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Result of {@link #buildOnDisk}: for each feature set built, the graph index re-opened
+     * from the written file and the size in bytes of that file on disk.
+     */
+    private static final class BuildOnDiskResult {
+        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final Map<Set<FeatureId>, Long> fileSizes;
+        BuildOnDiskResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
+            this.indexes = indexes;
+            this.fileSizes = fileSizes;
         }
     }
 
@@ -1157,24 +1169,6 @@ public class Grid {
         if (cp instanceof CompressorParameters.BQParameters) return "BQ";
         // Unknown/unsupported type for quant timing purposes
         return null;
-    }
-
-    /**
-     * Construction/search quantization timing metrics captured while building an index and while encoding
-     * vectors for search-time evaluation.
-     *
-     * <p>Values may be {@code null} when not measured or not applicable (e.g., cache hit).</p>
-     *
-     * <p>Call {@link #appendTo(List)} to emit these as {@link Metric} entries so they can be selected for
-     * console/CSV reporting.</p>
-     */
-    private static final class BuildOnDiskResult {
-        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
-        final Map<Set<FeatureId>, Long> fileSizes;
-        BuildOnDiskResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
-            this.indexes = indexes;
-            this.fileSizes = fileSizes;
-        }
     }
 
     static final class ConstructionMetrics {
