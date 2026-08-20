@@ -1383,6 +1383,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         scratch.gs
                 );
 
+        // Reverse-edge propagation (as in single-graph Vamana insertion): this node offers
+        // itself only to the cross-source neighbors its own selection KEPT, not to everything
+        // its searches surfaced. Each target folds its accumulated reverse edges into its one
+        // diversity pass when its group runs; scores are exact and similarity is symmetric, so
+        // the offer carries the score the target's own search would have computed.
+        if (reverseCandidates != null) {
+            for (int k = 0; k < selected.size; k++) {
+                int ssrc = selected.sourceIdx[k];
+                if (ssrc != sourceIdx && sizeRank[ssrc] > sizeRank[sourceIdx]) {
+                    reverseCandidates.offer(ssrc, remappers.get(ssrc).oldToNew(selected.nodes[k]),
+                                            sourceIdx, node, selected.scores[k]);
+                }
+            }
+        }
+
         // remap
         for (int k = 0; k < selected.size; k++) {
             selected.nodes[k] =
@@ -1883,17 +1898,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
             }
 
-            // Cross-link: each found node in the (larger) target also learns about this node.
-            // Scores here are exact in both scoring modes (fused results were rescored above),
-            // and similarity is symmetric, so the offer carries the score the target's own
-            // search would have computed.
-            if (reverseCandidates != null) {
-                OrdinalMapper targetMapper = remappers.get(sourceIdx);
-                for (int i = prevCandSize; i < candSize; i++) {
-                    reverseCandidates.offer(sourceIdx, targetMapper.oldToNew(scratch.candNode[i]),
-                            nodeSourceIdx, node, scratch.candScore[i]);
-                }
-            }
         } else {
             var entry = searchView.entryNode();
             if (level > entry.level) return candSize;
