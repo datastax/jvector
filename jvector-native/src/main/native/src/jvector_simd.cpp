@@ -17,7 +17,9 @@
 // Runtime SIMD dispatch: selects the best available ISA tier at startup.
 // x86-64 tiers (descending): AVX3_SPR, AVX3_DL, AVX3, AVX2, SSE42.
 //   SSE42 is the x86-64 baseline — assumed always available, no CPUID check.
-// AArch64 tiers (descending): SVE2, SVE, NEON.
+// AArch64 tiers (descending): SVE2_128 (HWY_SVE2_128), SVE_256 (HWY_SVE_256), NEON.
+//   All three are fixed-width Highway targets: MaxLanes is a compile-time
+//   constant, so all kernel fast-paths work identically to x86.
 //   NEON is the AArch64 baseline — always available on any aarch64 CPU.
 // Function pointers are resolved once at static-init time; each public call is
 // a single indirect branch.
