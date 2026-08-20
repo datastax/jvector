@@ -29,7 +29,6 @@ import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiskUsageMonitor;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -230,7 +229,6 @@ public class Grid {
         // Prepare to collect index construction metrics for reporting....
         var constructionMetrics = new ConstructionMetrics();
 
-        // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
             diagnostics.startMonitoring("testDirectory", workDirectory);
@@ -253,6 +251,7 @@ public class Grid {
                     (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
 
             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+            Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
             } else {
@@ -270,6 +269,7 @@ public class Grid {
                     if (cached.isPresent()) {
                         System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                         indexes.put(fs, cached.get());
+                        try { indexFileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
                     } else {
                         missing.add(fs);
                         if (cache.isEnabled()) {
@@ -287,9 +287,10 @@ public class Grid {
                 if (!missing.isEmpty()) {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
-                    var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                    var result = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
                             ds, outputDir, buildCompressorObj, handles, constructionMetrics);
-                    indexes.putAll(newIndexes);
+                    indexes.putAll(result.indexes);
+                    indexFileSizes.putAll(result.fileSizes);
                 }
             }
 
@@ -303,6 +304,7 @@ public class Grid {
             try {
                 for (var cpSupplier : compressionGrid) {
                     indexes.forEach((features, index) -> {
+                        constructionMetrics.indexFileSizeBytes = indexFileSizes.get(features);
                         final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
                         CompressedVectors cv;
@@ -364,7 +366,20 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
+    /**
+     * Result of {@link #buildOnDisk}: for each feature set built, the graph index re-opened
+     * from the written file and the size in bytes of that file on disk.
+     */
+    private static final class BuildOnDiskResult {
+        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final Map<Set<FeatureId>, Long> fileSizes;
+        BuildOnDiskResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
+            this.indexes = indexes;
+            this.fileSizes = fileSizes;
+        }
+    }
+
+    private static BuildOnDiskResult buildOnDisk(List<? extends Set<FeatureId>> featureSets,
                                                                         int M,
                                                                         int efConstruction,
                                                                         float neighborOverflow,
@@ -464,8 +479,9 @@ public class Grid {
             entry.getValue().commit();
         }
 
-        // open indexes
+        // open indexes and capture per-feature-set file sizes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, Long> fileSizes = new HashMap<>();
         n = 0;
         for (var features : featureSets) {
             Path loadPath = handles.containsKey(features)
@@ -473,9 +489,10 @@ public class Grid {
                     : outputDir.resolve("graph" + n++);
 
             indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
+            fileSizes.put(features, Files.size(loadPath));
         }
 
-        return indexes;
+        return new BuildOnDiskResult(indexes, fileSizes);
     }
 
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
@@ -845,6 +862,7 @@ public class Grid {
                                             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+                                            Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
@@ -885,6 +903,7 @@ public class Grid {
                                                 if (cached.isPresent()) {
                                                     System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                                                     indexes.put(fs, cached.get());
+                                                    try { indexFileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
                                                 } else {
                                                     missing.add(fs);
                                                     if (cache.isEnabled()) {
@@ -903,9 +922,10 @@ public class Grid {
                                             if (!missing.isEmpty()) {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
-                                                var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
+                                                var result = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
                                                         ds, outputDir, compressor, handles, null);
-                                                indexes.putAll(newIndexes);
+                                                indexes.putAll(result.indexes);
+                                                indexFileSizes.putAll(result.fileSizes);
                                             }
 
                                             ImmutableGraphIndex index = indexes.get(features);
@@ -914,7 +934,6 @@ public class Grid {
                                             diagnostics.capturePostPhaseSnapshot("Build");
                                             diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
-                                            DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                                 int queryRuns = 2;
@@ -966,10 +985,10 @@ public class Grid {
                                                                 allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
                                                             }
 
-                                                            // Add disk metrics if available
-                                                            if (buildDiskSnapshot != null) {
-                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.getTotalBytes() / 1024.0 / 1024.0);
-                                                                allMetrics.put("File Count", buildDiskSnapshot.getTotalFileCount());
+                                                            // Add per-feature-set index file size
+                                                            Long fileSizeBytes = indexFileSizes.get(features);
+                                                            if (fileSizeBytes != null) {
+                                                                allMetrics.put("Disk Usage (MB)", fileSizeBytes / 1024.0 / 1024.0);
                                                             }
 
                                                             results.add(new BenchResult(ds.getName(), params, allMetrics));
@@ -1164,6 +1183,7 @@ public class Grid {
     static final class ConstructionMetrics {
         // null means “not applicable / not measured”
         public Double indexBuildTimeS;
+        public Long indexFileSizeBytes;
 
         // Index-construction phase (single pass per run)
         private final Map<String, QuantStats> indexByType = new HashMap<>();
@@ -1192,6 +1212,10 @@ public class Grid {
             if (indexBuildTimeS != null) {
                 out.add(Metric.of("construction.index_build_time_s",
                         "Index build time (s)", ".2f", indexBuildTimeS));
+            }
+            if (indexFileSizeBytes != null) {
+                out.add(Metric.of("construction.index_file_size_mb",
+                        "Index file size (MB)", ".2f", indexFileSizeBytes / 1024.0 / 1024.0));
             }
 
             // Index-construction quant timings
