@@ -17,8 +17,7 @@
 # Sanity-checks the libjvector.so that actually ships inside the built
 # jvector-native jar (not the loose copy in src/main/resources): correct
 # architecture, resolvable dynamic dependencies, and presence of the expected
-# exported symbols. Bound to the `verify` phase so it runs as part of
-# `mvn verify`. Non-fatal (warns and skips) for any check whose tool isn't
+# exported symbols. Non-fatal (warns and skips) for any check whose tool isn't
 # available on the current OS (e.g. readelf/ldd on macOS).
 
 set -euo pipefail
@@ -82,7 +81,7 @@ else
 fi
 
 # Note that an exhaustive check of exported symbols is not strictly necessary, because the
-# Java code will fail to load the library if any of the expected symbols are missing. But
+# Java code will load but fail at runtime if any of the expected symbols are missing. But
 # this check is a useful sanity-check to catch any accidental changes to the native code that
 # would break the Java code, and to catch any accidental changes to the build process that
 # would result in a library that doesn't export the expected symbols.
