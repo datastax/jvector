@@ -573,6 +573,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 remappers = buildSimilarityOrdinalMappers(pq);
                 effectiveRemappers = remappers;
                 similarityOrdinalsActive = true;
+                // The strategy snapshotted the caller's remappers at construction; refresh it so
+                // code placement (pre-encode cache, sidecar order) matches the on-disk ordinals.
+                strategy.onRemappersUpdated(buildContext());
             } else {
                 log.info("similarityOrdinals requested but unavailable (requires fused PQ codes); keeping caller remappers");
             }

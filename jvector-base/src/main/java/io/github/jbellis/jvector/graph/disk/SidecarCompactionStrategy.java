@@ -52,7 +52,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     private static final Logger log = LoggerFactory.getLogger(SidecarCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    private final CompactionContext ctx;
+    private CompactionContext ctx;
     private final CompressedVectors formatHandle;
     private final VectorCompressorRetrainer retrainer;
     private VectorCompressor<?> retrainedCompressor;
@@ -63,6 +63,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         this.ctx = ctx;
         this.formatHandle = formatHandle;
         this.retrainer = retrainer;
+    }
+
+    @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
     }
 
     @Override

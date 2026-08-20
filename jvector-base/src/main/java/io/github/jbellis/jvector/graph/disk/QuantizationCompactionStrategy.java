@@ -82,6 +82,16 @@ public abstract class QuantizationCompactionStrategy {
     public abstract VectorCompressor<?> compressor();
 
     /**
+     * Replaces the strategy's context snapshot after the compactor re-assigns output ordinals
+     * (similarity ordinals). Strategies that place codes by output ordinal must adopt the
+     * refreshed remappers, or codes land at the caller-proposed ordinals while the graph is
+     * written at the reassigned ones. No-op for strategies that hold no context.
+     */
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        // no-op by default
+    }
+
+    /**
      * Whether this strategy writes codes inline in the graph file (FusedPQ-style). When true, the
      * compactor passes the compressor to {@link CompactWriter} and the strategy expects to drive
      * per-node code emission via the writer's inline-code path.
