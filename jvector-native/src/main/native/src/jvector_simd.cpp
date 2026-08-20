@@ -82,11 +82,14 @@ static const KernelVTable AVX3_vtable = {
 };
 #undef KERNEL_ENTRY
 
-// AVX3_DL (Ice Lake) inherits all slots from AVX3 unchanged for now.
-// To override a slot: t.kernel_name = AVX3_DL::kernel_name;
-// The implementation must exist in jvector_avx3_dl_kernels.cpp.
+// AVX3_DL (Ice Lake) inherits all slots from AVX3, then overrides the three
+// int8 similarity kernels with VNNI-accelerated versions from
+// jvector_avx3_dl_kernels.cpp.
 static const KernelVTable AVX3_DL_vtable = []() {
     KernelVTable t = AVX3_vtable;
+    t.dot_product_i8 = AVX3_DL::dot_product_i8;
+    t.euclidean_i8   = AVX3_DL::euclidean_i8;
+    t.cosine_i8      = AVX3_DL::cosine_i8;
     return t;
 }();
 

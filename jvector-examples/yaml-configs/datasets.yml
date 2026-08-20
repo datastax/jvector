@@ -1,3 +1,6 @@
+int8-benchmarks:
+  - sift-128-euclidean-int8
+
 jvector-100k:
   - cohere-english-v3-100k
   - ada002-100k

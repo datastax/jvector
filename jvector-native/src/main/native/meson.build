@@ -131,6 +131,7 @@ if gtest_dep.found()
     sources     : [
       'tests/test_helpers.cpp',
       'tests/test_similarity.cpp',
+      'tests/test_similarity_i8.cpp',
       'tests/test_elementwise.cpp',
       'tests/test_cpu_features.cpp',
     ],
@@ -154,7 +155,10 @@ gbench_dep = dependency('benchmark', required: false)
 if gbench_dep.found()
   executable(
     'bench_simd_kernels',
-    sources     : 'benchmarks/bench_similarity_f32.cpp',
+    sources     : [
+      'benchmarks/bench_similarity_f32.cpp',
+      'benchmarks/bench_similarity_i8.cpp',
+    ],
     dependencies: [vectorutil_dep, gbench_dep],
     cpp_args    : ['-O3'],
   )

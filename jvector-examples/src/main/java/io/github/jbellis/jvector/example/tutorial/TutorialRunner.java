@@ -41,6 +41,9 @@ public class TutorialRunner {
             case "nvq":
                 NvqExample.main(forwardArgs);
                 break;
+            case "sq":
+                SQExample.main(forwardArgs);
+                break;
             default:
                 throw new IllegalArgumentException("Unknown example" + args[0]);
         }

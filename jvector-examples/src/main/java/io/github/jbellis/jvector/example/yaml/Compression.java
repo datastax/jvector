@@ -60,6 +60,8 @@ public class Compression {
                 };
             case "BQ":
                 return ds -> new CompressorParameters.BQParameters();
+            case "SQ":
+                return ds -> new CompressorParameters.SQParameters();
             default:
                 throw new IllegalArgumentException("Unsupported compression type: " + type);
 
