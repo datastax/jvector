@@ -175,6 +175,38 @@
 
 namespace hn = hwy::HWY_NAMESPACE;
 
+// Loads 4 floats from ptr and broadcasts them to fill the full vector D.
+// Uses LoadU + Combine instead of hn::LoadDup128 to avoid a GCC 14 internal
+// compiler error (ICE in convert_move/expr.cc:301) triggered by hn::LoadDup128
+// (which emits ld1rq) when compiled with -msve-vector-bits=256.
+//   D = 4 lanes  → plain LoadU (ptr holds exactly one full vector)
+//   D = 8 lanes  → load 4-lane half, Combine to duplicate into both halves
+//   D = 16 lanes → load 4-lane half-of-half, Combine twice (4→8→16 lanes)
+// hn::Quarter<D> does not exist in this Highway version; two applications
+// of hn::Half<> are used instead.
+template <class D>
+HWY_INLINE hn::Vec<D> BroadcastDup128(D d, const float *HWY_RESTRICT ptr)
+{
+    static_assert(hn::MaxLanes(d) <= 16,
+                  "BroadcastDup128 is not implemented for ISAs wider than 512-bit");
+    if constexpr (hn::MaxLanes(d) > 8) {
+        // 16-lane (AVX-512): half-of-half = 4 lanes; combine up twice.
+        const hn::Half<hn::Half<D>> dq;
+        const auto quarter = hn::LoadU(dq, ptr);
+        const hn::Half<D> dh;
+        const auto half = hn::Combine(dh, quarter, quarter);
+        return hn::Combine(d, half, half);
+    } else if constexpr (hn::MaxLanes(d) > 4) {
+        // 8-lane (AVX2, SVE_256): load 4-lane half, combine to full.
+        const hn::Half<D> dh;
+        const auto half = hn::LoadU(dh, ptr);
+        return hn::Combine(d, half, half);
+    } else {
+        // 4-lane (SSE4, NEON, SVE2_128): ptr holds exactly one full vector.
+        return hn::LoadU(d, ptr);
+    }
+}
+
 // Loads 8 floats from ptr and broadcasts them to fill the full vector D.
 // On ISAs where D is exactly 8 lanes (e.g. AVX2) this is a plain LoadU.
 // On wider ISAs (e.g. AVX-512, 16 lanes) the 8 floats are loaded into the
@@ -561,7 +593,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
                              query[queryOffset + 1],
                              query[queryOffset],
                              query[queryOffset + 1]};
-            hn::Vec<FloatTag> queryVec = hn::LoadDup128(tag, qtmp);
+            hn::Vec<FloatTag> queryVec = BroadcastDup128(tag, qtmp);
 
             constexpr size_t kBlock = 2;
             constexpr int centroids_per_iter = kLanes / kBlock;
@@ -586,7 +618,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
         if (size == 4) {
             constexpr int centroids_per_iter = static_cast<int>(kLanes / 4);
             hn::Vec<FloatTag> queryVec
-                    = hn::LoadDup128(tag, query + queryOffset);
+                    = BroadcastDup128(tag, query + queryOffset);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
