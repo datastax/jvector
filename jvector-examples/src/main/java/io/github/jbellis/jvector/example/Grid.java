@@ -1171,6 +1171,15 @@ public class Grid {
         return null;
     }
 
+    /**
+     * Construction/search quantization timing metrics captured while building an index and while encoding
+     * vectors for search-time evaluation.
+     *
+     * <p>Values may be {@code null} when not measured or not applicable (e.g., cache hit).</p>
+     *
+     * <p>Call {@link #appendTo(List)} to emit these as {@link Metric} entries so they can be selected for
+     * console/CSV reporting.</p>
+     */
     static final class ConstructionMetrics {
         // null means “not applicable / not measured”
         public Double indexBuildTimeS;
