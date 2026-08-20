@@ -246,9 +246,15 @@ TEST(IsaDispatch, MaxIsaEnvHonoured)
     }
 
     // Tiers ordered by capability (ascending index = lower capability).
+#if defined(__aarch64__)
+    static const char* kOrder[] = {"neon", "sve", "sve2"};
+    constexpr int kOrderLen = 3;
+#else
     static const char* kOrder[] = {"sse42", "avx2", "avx3", "avx3_dl", "avx3_spr"};
+    constexpr int kOrderLen = 5;
+#endif
     auto tier_idx = [](const char* name) -> int {
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < kOrderLen; ++i)
             if (std::strcmp(kOrder[i], name) == 0) return i;
         return -1;
     };
