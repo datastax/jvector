@@ -79,6 +79,11 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public void retrain(VectorSimilarityFunction vsf) {
         log.info("Retraining fused-quantization compressor on merged sources");
