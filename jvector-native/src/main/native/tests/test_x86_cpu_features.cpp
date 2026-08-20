@@ -14,51 +14,20 @@
  * limitations under the License.
  */
 
-// Validates that the native dispatcher selects the ISA tier that matches the
-// CPU capabilities reported in /proc/cpuinfo, respecting any JVECTOR_MAX_ISA cap.
+// Validates that the native dispatcher selects the correct x86-64 ISA tier,
+// using /proc/cpuinfo as ground truth.  Mirrors DispatcherCpuFlagsTest.java.
 //
-// Logic mirrors DispatcherCpuFlagsTest.java and the C implementation in
-// jvector_cpu_features.h / jvector_simd.cpp exactly.
-//
-// /proc/cpuinfo is the authoritative ground-truth: the kernel only exposes a
-// flag when the OS context-switch support (XCR0) is also in place, so checking
-// it is equivalent to checking CPUID + XCR0 together.
+// /proc/cpuinfo is authoritative: the kernel only exposes a flag when the OS
+// context-switch support (XCR0) is also in place, so checking it is equivalent
+// to checking CPUID + XCR0 together.
 
 #include "test_helpers.h"
 
 #include <algorithm>
-#include <cstring>
-#include <fstream>
 #include <numeric>
-#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
-
-// ---------------------------------------------------------------------------
-// /proc/cpuinfo helpers — mirrors DispatcherCpuFlagsTest.java
-// ---------------------------------------------------------------------------
-
-// Parse the flags line from the first processor entry in /proc/cpuinfo.
-// Returns an empty set if unavailable (non-Linux, non-x86, or unreadable).
-static std::unordered_set<std::string> parse_cpuinfo_flags()
-{
-    std::unordered_set<std::string> flags;
-    std::ifstream f("/proc/cpuinfo");
-    if (!f.is_open()) return flags;
-
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.rfind("flags", 0) != 0) continue;
-        auto colon = line.find(':');
-        if (colon == std::string::npos) continue;
-        std::istringstream iss(line.substr(colon + 1));
-        std::string token;
-        while (iss >> token) flags.insert(token);
-        break;
-    }
-    return flags;
-}
 
 // Tier names in ascending capability order — index is ordinal (mirrors Java).
 static const std::vector<std::string> kIsaTiers = {
@@ -128,7 +97,7 @@ class CpuFeaturesTest : public ::testing::Test
 protected:
     static void SetUpTestSuite()
     {
-        s_flags = parse_cpuinfo_flags();
+        s_flags = parse_cpuinfo_line("flags");
 
         const char* active = jvector_simd_get_active_isa();
         const char* cap_c  = jvector_simd_get_max_isa_env();

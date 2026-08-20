@@ -165,13 +165,18 @@ vectorutil_dep = declare_dependency(
 gtest_dep = dependency('gtest_main', required: false)
 
 if gtest_dep.found()
+  # Select the architecture-specific CPU features test.
+  cpu_features_test_src = cpu == 'x86_64' \
+    ? 'tests/test_x86_cpu_features.cpp' \
+    : 'tests/test_aarch64_cpu_features.cpp'
+
   simd_kernels_test = executable(
     'test_simd_kernels',
     sources     : [
       'tests/test_helpers.cpp',
       'tests/test_similarity.cpp',
       'tests/test_elementwise.cpp',
-      'tests/test_cpu_features.cpp',
+      cpu_features_test_src,
     ],
     dependencies: [vectorutil_dep, gtest_dep],
   )
