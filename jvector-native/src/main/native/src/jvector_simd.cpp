@@ -49,7 +49,7 @@ static_assert(
     && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR
     && (int)MaxIsa::AVX3_SPR < (int)MaxIsa::Unset,
     "MaxIsa values must be in strict ascending capability order with Unset at the top");
-#else // JV_ARCH_AARCH64
+#elif JV_ARCH_AARCH64
 enum class MaxIsa { NEON = 0, SVE = 1, SVE2 = 2,
                     Unset = INT_MAX };
 static_assert(
@@ -74,7 +74,7 @@ static MaxIsa read_max_isa() noexcept
     if (std::strcmp(val, "avx3")     == 0) return MaxIsa::AVX3;
     if (std::strcmp(val, "avx2")     == 0) return MaxIsa::AVX2;
     if (std::strcmp(val, "sse42")    == 0) return MaxIsa::SSE42;
-#else // JV_ARCH_AARCH64
+#elif JV_ARCH_AARCH64
     if (std::strcmp(val, "sve2") == 0) return MaxIsa::SVE2;
     if (std::strcmp(val, "sve")  == 0) return MaxIsa::SVE;
     if (std::strcmp(val, "neon") == 0) return MaxIsa::NEON;
@@ -134,7 +134,7 @@ static const KernelVTable SSE42_vtable = {
 };
 #undef KERNEL_ENTRY
 
-#else // JV_ARCH_AARCH64
+#elif JV_ARCH_AARCH64
 
 #define KERNEL_ENTRY(ret_type, name, params, names) NEON::name,
 static const KernelVTable NEON_vtable = {
@@ -202,7 +202,7 @@ static DispatchResult dispatch_kernels() noexcept
         return { AVX2_vtable, MaxIsa::AVX2, env_str };
     // SSE42 is the x86-64 baseline — assumed always present, no CPUID check.
     return { SSE42_vtable, MaxIsa::SSE42, env_str };
-#else // JV_ARCH_AARCH64
+#elif JV_ARCH_AARCH64
     if (max_isa == MaxIsa::SVE2)      env_str = "sve2";
     else if (max_isa == MaxIsa::SVE)  env_str = "sve";
     else if (max_isa == MaxIsa::NEON) env_str = "neon";
@@ -256,7 +256,7 @@ const char *jvector_simd_get_active_isa()
         case MaxIsa::AVX3:     return "avx3";
         case MaxIsa::AVX2:     return "avx2";
         case MaxIsa::SSE42:    return "sse42";
-#else // JV_ARCH_AARCH64
+#elif JV_ARCH_AARCH64
         case MaxIsa::SVE2:     return "sve2";
         case MaxIsa::SVE:      return "sve";
         case MaxIsa::NEON:     return "neon";
