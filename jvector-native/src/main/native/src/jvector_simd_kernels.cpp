@@ -239,10 +239,10 @@ HWY_INLINE float L2SquareDistanceImpl(Tag tag, const float *a, const float *b, s
     auto acc2 = hn::Zero(tag), acc3 = hn::Zero(tag);
     size_t ii = 0;
     for (; ii + 4 * lanes <= size; ii += 4 * lanes) {
-        auto d0 = hn::LoadU(tag, a + ii + 0*lanes) - hn::LoadU(tag, b + ii + 0*lanes);
-        auto d1 = hn::LoadU(tag, a + ii + 1*lanes) - hn::LoadU(tag, b + ii + 1*lanes);
-        auto d2 = hn::LoadU(tag, a + ii + 2*lanes) - hn::LoadU(tag, b + ii + 2*lanes);
-        auto d3 = hn::LoadU(tag, a + ii + 3*lanes) - hn::LoadU(tag, b + ii + 3*lanes);
+        auto d0 = hn::Sub(hn::LoadU(tag, a + ii + 0*lanes), hn::LoadU(tag, b + ii + 0*lanes));
+        auto d1 = hn::Sub(hn::LoadU(tag, a + ii + 1*lanes), hn::LoadU(tag, b + ii + 1*lanes));
+        auto d2 = hn::Sub(hn::LoadU(tag, a + ii + 2*lanes), hn::LoadU(tag, b + ii + 2*lanes));
+        auto d3 = hn::Sub(hn::LoadU(tag, a + ii + 3*lanes), hn::LoadU(tag, b + ii + 3*lanes));
         acc0 = hn::MulAdd(d0, d0, acc0);
         acc1 = hn::MulAdd(d1, d1, acc1);
         acc2 = hn::MulAdd(d2, d2, acc2);
@@ -250,11 +250,11 @@ HWY_INLINE float L2SquareDistanceImpl(Tag tag, const float *a, const float *b, s
     }
     auto acc = hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3));
     for (; ii + lanes <= size; ii += lanes) {
-        auto d = hn::LoadU(tag, a + ii) - hn::LoadU(tag, b + ii);
+        auto d = hn::Sub(hn::LoadU(tag, a + ii), hn::LoadU(tag, b + ii));
         acc = hn::MulAdd(d, d, acc);
     }
     if (ii < size) {
-        auto d = hn::LoadN(tag, a + ii, size - ii) - hn::LoadN(tag, b + ii, size - ii);
+        auto d = hn::Sub(hn::LoadN(tag, a + ii, size - ii), hn::LoadN(tag, b + ii, size - ii));
         acc = hn::MulAdd(d, d, acc);
     }
     return hn::ReduceSum(tag, acc);
@@ -573,7 +573,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
                 hn::Vec<FloatTag> score = partial_sum_score<DT, FloatTag>(
                         centroidVec, queryVec);
                 hn::Vec<FloatTag> swapped = hn::Shuffle2301(score);
-                hn::Vec<FloatTag> sum = score + swapped;
+                hn::Vec<FloatTag> sum = hn::Add(score, swapped);
                 hn::StoreU(sum, tag, tmp);
 #pragma GCC unroll 8
                 for (int jj = 0; jj < centroids_per_iter; ++jj) {
