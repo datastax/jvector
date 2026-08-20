@@ -19,18 +19,42 @@
 
 #include <array>
 #include <cstdint>
+#include "jvector_arch.h"
 
-#if defined(_MSC_VER)
-#include <intrin.h>
-#elif defined(__GNUC__) || defined(__clang__)
-#include <cpuid.h>
+#if JV_ARCH_X86_64
+#  if defined(_MSC_VER)
+#    include <intrin.h>
+#  elif defined(__GNUC__) || defined(__clang__)
+#    include <cpuid.h>
+#  endif
+#elif JV_ARCH_AARCH64
+#  if defined(__APPLE__)
+#    include <sys/sysctl.h>
+#  else
+#    include <sys/auxv.h>
+#    include <asm/hwcap.h>
+     // Older sysroots may not define these; provide fallbacks matching
+     // the pattern in highway/hwy/targets.cc.
+#    ifndef HWCAP_SVE
+#      define HWCAP_SVE (1 << 22)
+#    endif
+#    ifndef HWCAP2_SVE2
+#      define HWCAP2_SVE2 (1 << 1)
+#    endif
+#    ifndef HWCAP2_SVEAES
+#      define HWCAP2_SVEAES (1 << 2)
+#    endif
+#  endif
 #endif
 
 // Features needed by the ISA dispatch table.  Extend as new targets are added.
 //
-// ICX  = Intel Ice Lake-SP (Xeon Scalable 3rd Gen)
-// SPR  = Intel Sapphire Rapids (Xeon Scalable 4th Gen)
+// x86-64:
+//   ICX  = Intel Ice Lake-SP (Xeon Scalable 3rd Gen)
+//   SPR  = Intel Sapphire Rapids (Xeon Scalable 4th Gen)
+// AArch64 tier flags start at 200 to stay well clear of the x86 entries.
 enum class CpuFeature : uint32_t {
+#if JV_ARCH_X86_64
     // ---- Base AVX2 / AVX-512 foundation (all SKUs) ----------------------
     AVX2 = 0,
     AVX512F = 1,
@@ -59,19 +83,31 @@ enum class CpuFeature : uint32_t {
     AVX3_DL = 101,  // AVX3 + VNNI + VBMI + VBMI2 + IFMA + BITALG + VPOPCNTDQ
                     //      + GFNI + VAES + VPCLMULQDQ (Ice Lake)
     AVX3_SPR = 102, // AVX3_DL + AVX512_FP16 (Sapphire Rapids)
+#elif JV_ARCH_AARCH64
+    // ---- AArch64 ISA tier flags -----------------------------------------
+    // Numbered from 200 to stay clear of the x86 entries above.
+    NEON = 200, // baseline AArch64 NEON + AES (AT_HWCAP: HWCAP_AES, or always
+                // true on Apple where all CPUs support AES)
+    SVE  = 201, // Scalable Vector Extension (AT_HWCAP: HWCAP_SVE).
+                // Never set on Apple Silicon (no SVE through M4/A18).
+    SVE2 = 202, // SVE2 + SVE2-AES (AT_HWCAP2: HWCAP2_SVE2 | HWCAP2_SVEAES).
+                // Never set on Apple Silicon.
+#endif
     COUNT
 };
 
-// Populate `features` by issuing CPUID and XGETBV.
-// All entries are false on non-x86 architectures.
+// Populate `features` by probing CPU capabilities:
+//   x86-64:   CPUID + XGETBV
+//   AArch64:  getauxval(AT_HWCAP/AT_HWCAP2) on Linux; sysctlbyname on macOS
+// All entries default to false; only the flags for the current architecture
+// are ever set to true.
 inline void
 populate_cpu_features(std::array<bool, static_cast<uint32_t>(CpuFeature::COUNT)>
                               &features) noexcept
 {
     features.fill(false);
 
-#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) \
-        || defined(_M_X64)
+#if JV_ARCH_X86_64
 
     // Portable CPUID: GCC/Clang use <cpuid.h>; MSVC uses <intrin.h>.
     auto run_cpuid = [](uint32_t leaf,
@@ -192,7 +228,40 @@ populate_cpu_features(std::array<bool, static_cast<uint32_t>(CpuFeature::COUNT)>
     features[static_cast<uint32_t>(CpuFeature::AVX3_SPR)]
             = f(CpuFeature::AVX3_DL) && f(CpuFeature::AVX512_FP16);
 
-#endif // x86 / x86_64
+#elif JV_ARCH_AARCH64
+
+#if defined(__APPLE__)
+    // macOS: use sysctlbyname for capability queries.
+    // NEON (with AES) — present on every shipping Apple Silicon through M4.
+    {
+        int val = 0; size_t len = sizeof(val);
+        if (sysctlbyname("hw.optional.arm.FEAT_AES", &val, &len, nullptr, 0) == 0 && val)
+            features[static_cast<uint32_t>(CpuFeature::NEON)] = true;
+    }
+    // SVE and SVE2 are never available on Apple Silicon; leave them false.
+
+#else // Linux AArch64
+    {
+        const unsigned long hw = getauxval(AT_HWCAP);
+
+        // NEON: all AArch64 CPUs have NEON; require AES too (matches HWY_NEON).
+#if defined(HWCAP_AES)
+        if (hw & HWCAP_AES)
+            features[static_cast<uint32_t>(CpuFeature::NEON)] = true;
+#endif
+
+        // SVE: Graviton 3 / Neoverse V1 and later.
+        if (hw & HWCAP_SVE)
+            features[static_cast<uint32_t>(CpuFeature::SVE)] = true;
+
+        // SVE2: requires SVE2 *and* SVE2-AES (matches HWY_SVE2 requirement).
+        const unsigned long hw2 = getauxval(AT_HWCAP2);
+        if ((hw2 & (HWCAP2_SVE2 | HWCAP2_SVEAES)) == (HWCAP2_SVE2 | HWCAP2_SVEAES))
+            features[static_cast<uint32_t>(CpuFeature::SVE2)] = true;
+    }
+#endif // __APPLE__
+
+#endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
 }
 
 #endif // CPU_FEATURES_H
