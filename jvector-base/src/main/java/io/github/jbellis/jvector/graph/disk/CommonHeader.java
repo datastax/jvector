@@ -59,13 +59,14 @@ import java.util.stream.IntStream;
 public class CommonHeader {
     private static final Logger logger = LoggerFactory.getLogger(CommonHeader.class);
 
-    private static final int V4_MAX_LAYERS = 32;
+    protected static final int V4_MAX_LAYERS = 32;
 
     public final int version;
     public final int dimension;
     public final int entryNode;
     public final List<LayerInfo> layerInfo;
     public final int idUpperBound;
+    private final GraphIndexFormat graphIndexFormat;
 
     CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
         this.version = version;
@@ -73,93 +74,25 @@ public class CommonHeader {
         this.entryNode = entryNode;
         this.layerInfo = layerInfo;
         this.idUpperBound = idUpperBound;
+        this.graphIndexFormat = GraphIndexFormatFactory.forVersion(version);
     }
 
     void write(IndexWriter out) throws IOException {
         logger.debug("Writing common header at position {}", out.position());
-        if (version >= 3) {
-            out.writeInt(OnDiskGraphIndex.MAGIC);
-            out.writeInt(version);
-        }
-        out.writeInt(layerInfo.get(0).size);
-        out.writeInt(dimension);
-        out.writeInt(entryNode);
-        out.writeInt(layerInfo.get(0).degree);
-        if (version >= 4) {
-            out.writeInt(idUpperBound);
-
-            if (layerInfo.size() > V4_MAX_LAYERS) {
-                var msg = String.format("Number of layers %d exceeds maximum of %d", layerInfo.size(), V4_MAX_LAYERS);
-                throw new IllegalArgumentException(msg);
-            }
-            logger.debug("Writing {} layers", layerInfo.size());
-            out.writeInt(layerInfo.size());
-            // Write actual layer info
-            for (LayerInfo info : layerInfo) {
-                out.writeInt(info.size);
-                out.writeInt(info.degree);
-            }
-            // Pad remaining entries with zeros
-            for (int i = layerInfo.size(); i < V4_MAX_LAYERS; i++) {
-                out.writeInt(0); // size
-                out.writeInt(0); // degree
-            }
-        } else {
-            if (layerInfo.size() > 1) {
-                throw new IllegalArgumentException("Layer info is not supported in version " + version);
-            }
-        }
+        graphIndexFormat.writeCommonHeader(out, layerInfo, dimension, entryNode, idUpperBound);
         logger.debug("Common header finished writing at position {}", out.position());
     }
 
     static CommonHeader load(RandomAccessReader in) throws IOException {
-        logger.debug("Loading common header at position {}", in.getPosition());
-        int maybeMagic = in.readInt();
-        int version;
-        int size;
-        if (maybeMagic == OnDiskGraphIndex.MAGIC) {
-            version = in.readInt();
-            size = in.readInt();
-        } else {
-            version = 2;
-            size = maybeMagic;
-        }
-        int dimension = in.readInt();
-        int entryNode = in.readInt();
-        int maxDegree = in.readInt();
-        int idUpperBound = size;
-        List<LayerInfo> layerInfo;
-        if (version < 4) {
-            layerInfo = List.of(new LayerInfo(size, maxDegree));
-        } else {
-            idUpperBound = in.readInt();
-            int numLayers = in.readInt();
-            logger.debug("{} layers", numLayers);
-            layerInfo = new ArrayList<>();
-            for (int i = 0; i < numLayers; i++) {
-                LayerInfo info = new LayerInfo(in.readInt(), in.readInt());
-                layerInfo.add(info);
-            }
-            // Skip over remaining padding entries
-            for (int i = numLayers; i < V4_MAX_LAYERS; i++) {
-                in.readInt();
-                in.readInt();
-            }
-        }
-        logger.debug("Common header finished reading at position {}", in.getPosition());
-
-        return new CommonHeader(version, dimension, entryNode, layerInfo, idUpperBound);
+        return GraphIndexFormat.loadCommonHeader(in);
     }
 
     int size() {
-        int size = 4;
-        if (version >= 3) {
-            size += 2;
-        }
-        if (version >= 4) {
-            size += 2 + 2 * V4_MAX_LAYERS;
-        }
-        return size * Integer.BYTES;
+        return graphIndexFormat.commonHeaderSize();
+    }
+
+    GraphIndexFormat getGraphIndexFormat() {
+        return graphIndexFormat;
     }
 
     @VisibleForTesting
