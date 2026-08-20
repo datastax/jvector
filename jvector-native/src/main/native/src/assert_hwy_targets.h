@@ -48,7 +48,7 @@
 //          Requires GCC >= 10 or Clang >= 21.
 #if defined(JV_REQUIRE_HWY_SVE2)
 #  if HWY_STATIC_TARGET != HWY_SVE2_128
-#    error "Highway did not select HWY_SVE2_128 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2 -msve-vector-bits=128), compiler support (GCC >= 10 or Clang >= 21), and Highway blocklists."
+#    error "Highway did not select HWY_SVE2_128 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2+i8mm+bf16 -msve-vector-bits=128), compiler support (GCC >= 10 or Clang >= 21), and Highway blocklists."
 #  endif
 #elif defined(JV_REQUIRE_HWY_SVE)
 #  if HWY_STATIC_TARGET != HWY_SVE_256
