@@ -34,8 +34,8 @@ final class FileCompactionDestination implements CompactionDestination {
     }
 
     @Override
-    public Target open() {
-        return new Target() {
+    public OutputReservation reserve() {
+        return new OutputReservation() {
             private boolean committed;
 
             @Override
