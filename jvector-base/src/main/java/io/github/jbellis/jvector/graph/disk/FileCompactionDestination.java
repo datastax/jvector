@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 
 /**
  * {@link CompactionDestination} that writes a standalone graph file at offset 0. Backs
@@ -28,7 +29,7 @@ final class FileCompactionDestination implements CompactionDestination {
     private final Path path;
 
     FileCompactionDestination(Path path) {
-        Objects.requireNonNull(path);
+        Objects.requireNonNull(path, "path");
         this.path = path;
     }
 
