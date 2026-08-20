@@ -25,6 +25,12 @@ import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
+import io.github.jbellis.jvector.quantization.BinaryQuantization;
+import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -70,6 +76,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     @VisibleForTesting
     final MutableGraphIndex graph;
 
+    @VisibleForTesting
+    boolean isRefineFinalGraph() {
+        return refineFinalGraph;
+    }
+
     private final ConcurrentSkipListSet<NodeAtLevel> insertionsInProgress = new ConcurrentSkipListSet<>();
 
     private final BuildScoreProvider scoreProvider;
@@ -95,8 +106,63 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
-     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
+    public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
+                             VectorSimilarityFunction similarityFunction,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha)
+    {
+        this(getBuildScoreProvider(vectorValues, similarityFunction),
+                vectorValues.dimension(),
+                M,
+                beamWidth,
+                neighborOverflow,
+                alpha);
+    }
+
+    private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
+        CompressionType type = resolveJmxBuildCompressionType();
+        switch(type) {
+            case NONE:
+                return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+            case PQ: {
+                var config = GraphIndexBuilderConfig.getInstance();
+                int m = vectorValues.dimension() / config.getPqMFactor();
+                var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
+                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold());
+                PQVectors pqVectors = compressor.encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+            }
+            case BQ: {
+                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues).encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
+            }
+            default:
+                throw new IllegalArgumentException("Unsupported build compression type: " + type);
+        }
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * By default, refineFinalGraph = true.
+     *
+     * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
+     *                         different view over those vectors than the one used to add via addGraphNode.
+     * @param M                – the maximum number of connections a node can have
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @deprecated Use the equivalent constructor without {@code addHierarchy}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
+     */
+    @Deprecated
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
                              int M,
@@ -130,7 +196,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
                              int M,
@@ -165,7 +234,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @deprecated Use the equivalent constructor without {@code addHierarchy}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -175,6 +247,31 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              boolean addHierarchy)
     {
         this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, addHierarchy, true, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * Default executor pools are used.
+     * By default, refineFinalGraph = true.
+     *
+     * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param M                the maximum number of connections a node can have
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha)
+    {
+        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -192,7 +289,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -222,7 +322,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -235,6 +338,34 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              ForkJoinPool parallelExecutor)
     {
         this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor);
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     *
+     * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param M                the maximum number of connections a node can have
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
+     *                         the number of physical cores.
+     * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             ForkJoinPool simdExecutor,
+                             ForkJoinPool parallelExecutor)
+    {
+        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, simdExecutor, parallelExecutor);
     }
 
     /**
@@ -253,7 +384,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
@@ -264,6 +398,31 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              boolean refineFinalGraph)
     {
         this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * Default executor pools are used.
+     *
+     * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
+     *      *                  are specified than the number of layers, the last entry is used for all remaining layers.
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             List<Integer> maxDegrees,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha)
+    {
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -284,7 +443,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
@@ -296,6 +458,55 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
+             logCallerAddHierarchy(addHierarchy),
+             logCallerRefineFinalGraph(refineFinalGraph),
+             simdExecutor, parallelExecutor, null);
+    }
+
+    /**
+     * Reads all the vectors from vector values, builds a graph connecting them by their dense
+     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     *
+     * @param scoreProvider    describes how to determine the similarities between vectors
+     * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
+     *                         are specified than the number of layers, the last entry is used for all remaining layers.
+     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
+     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
+     *                         node. larger values will build more efficiently, but use more memory.
+     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
+     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
+     *                         an HNSW graph will be created, which is usually not what you want.
+     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
+     *                         the number of physical cores.
+     * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     */
+    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                             int dimension,
+                             List<Integer> maxDegrees,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             ForkJoinPool simdExecutor,
+                             ForkJoinPool parallelExecutor) {
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
+             resolveJmxAddHierarchy(maxDegrees),
+             resolveJmxRefineFinalGraph(),
+             simdExecutor, parallelExecutor, null);
+    }
+
+    // Private workhorse — all public constructors funnel here.
+    private GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                              int dimension,
+                              List<Integer> maxDegrees,
+                              int beamWidth,
+                              float neighborOverflow,
+                              float alpha,
+                              boolean addHierarchy,
+                              boolean refineFinalGraph,
+                              ForkJoinPool simdExecutor,
+                              ForkJoinPool parallelExecutor,
+                              @SuppressWarnings("unused") Void disambiguator) {
         if (maxDegrees.stream().anyMatch(i -> i <= 0)) {
             throw new IllegalArgumentException("layer degrees must be positive");
         }
@@ -312,12 +523,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             throw new IllegalArgumentException("alpha must be positive");
         }
 
+        this.addHierarchy = addHierarchy;
+        this.refineFinalGraph = refineFinalGraph;
         this.scoreProvider = scoreProvider;
         this.dimension = dimension;
         this.neighborOverflow = neighborOverflow;
         this.alpha = alpha;
-        this.addHierarchy = addHierarchy;
-        this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
@@ -337,6 +548,39 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.rng = new Random(0);
     }
 
+    // ── Source-logging helpers ────────────────────────────────────────────────
+    // These are evaluated as arguments before this() fires, allowing us to log
+    // the value source before the constructor body runs.
+
+    private static boolean resolveJmxAddHierarchy(List<Integer> maxDegrees) {
+        // if multiple degrees are specified, hierarchy is structurally required
+        boolean v = maxDegrees.size() > 1 || GraphIndexBuilderConfig.getInstance().isAddHierarchy();
+        logger.debug("addHierarchy={} (from GraphIndexBuilderConfig)", v);
+        return v;
+    }
+
+    private static boolean resolveJmxRefineFinalGraph() {
+        boolean v = GraphIndexBuilderConfig.getInstance().isRefineFinalGraph();
+        logger.debug("refineFinalGraph={} (from GraphIndexBuilderConfig)", v);
+        return v;
+    }
+
+    private static CompressionType resolveJmxBuildCompressionType() {
+        String v = GraphIndexBuilderConfig.getInstance().getBuildCompressionType();
+        logger.debug("buildCompressionType={} (from GraphIndexBuilderConfig)", v);
+        return CompressionType.valueOf(v);
+    }
+
+    private static boolean logCallerAddHierarchy(boolean v) {
+        logger.debug("addHierarchy={} (caller-provided via deprecated constructor)", v);
+        return v;
+    }
+
+    private static boolean logCallerRefineFinalGraph(boolean v) {
+        logger.debug("refineFinalGraph={} (caller-provided via deprecated constructor)", v);
+        return v;
+    }
+
     /**
      * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
      * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
@@ -349,9 +593,37 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param refineFinalGraph whether to perform a refinement step on the final graph structure.
      * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
      * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     * @deprecated Use the equivalent constructor without {@code refineFinalGraph}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     @Experimental
     public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+        this(buildScoreProvider, dimension, mutableGraphIndex, beamWidth, neighborOverflow, alpha,
+             logCallerRefineFinalGraph(refineFinalGraph), simdExecutor, parallelExecutor,
+             null);
+    }
+
+    /**
+     * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
+     * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
+     *
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param mutableGraphIndex a mutable graph index.
+     * @param beamWidth the width of the beam used during the graph building process.
+     * @param neighborOverflow the factor determining how many additional neighbors are allowed beyond the configured limit.
+     * @param alpha the weight factor for balancing score computations.
+     * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
+     * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     */
+    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+        this(buildScoreProvider, dimension, mutableGraphIndex, beamWidth, neighborOverflow, alpha,
+             resolveJmxRefineFinalGraph(), simdExecutor, parallelExecutor,
+             null);
+    }
+
+    // Private mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph.
+    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -366,6 +638,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.neighborOverflow = neighborOverflow;
         this.dimension = dimension;
         this.alpha = alpha;
+        // addHierarchy is structural — it must match the existing graph's topology
         this.addHierarchy = mutableGraphIndex.isHierarchical();
         this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
@@ -1063,7 +1336,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     beamWidth,
                     overflowRatio,
                     alpha,
-                    true,
                     simdExecutor,
                     parallelExecutor
             );
