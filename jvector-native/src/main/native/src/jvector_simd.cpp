@@ -15,12 +15,15 @@
  */
 
 // Runtime SIMD dispatch: selects the best available ISA tier at startup.
-// Tiers in descending capability order: AVX3_SPR, AVX3_DL, AVX3, AVX2, SSE42.
-// SSE42 is the baseline and is assumed always available without a CPUID check.
+// x86-64 tiers (descending): AVX3_SPR, AVX3_DL, AVX3, AVX2, SSE42.
+//   SSE42 is the x86-64 baseline — assumed always available, no CPUID check.
+// AArch64 tiers (descending): SVE2, SVE, NEON.
+//   NEON is the AArch64 baseline — always available on any aarch64 CPU.
 // Function pointers are resolved once at static-init time; each public call is
 // a single indirect branch.
 #include "jvector_simd.h"
-#include "jvector_simd_kernels.h" // AVX3_SPR::, AVX3_DL::, AVX3::, AVX2::, SSE42:: kernel declarations
+#include "jvector_arch.h"          // JV_ARCH_X86_64, JV_ARCH_AARCH64
+#include "jvector_simd_kernels.h"  // per-arch namespace declarations
 #include "jvector_cpu_features.h"  // populate_cpu_features(), CpuFeature enum
 
 #include <array>
@@ -36,29 +39,46 @@ namespace {
 // comparisons (e.g. max_isa > MaxIsa::AVX2) correctly gate higher tiers.
 // Unset (INT_MAX) means "no override; use best available CPU capability"
 // and must be greater than every named tier so that all guards pass.
+#if JV_ARCH_X86_64
 enum class MaxIsa { SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4,
                     Unset = INT_MAX };
 static_assert(
-    (int)MaxIsa::SSE42    < (int)MaxIsa::AVX2
-    && (int)MaxIsa::AVX2  < (int)MaxIsa::AVX3
-    && (int)MaxIsa::AVX3  < (int)MaxIsa::AVX3_DL
+    (int)MaxIsa::SSE42      < (int)MaxIsa::AVX2
+    && (int)MaxIsa::AVX2    < (int)MaxIsa::AVX3
+    && (int)MaxIsa::AVX3    < (int)MaxIsa::AVX3_DL
     && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR
     && (int)MaxIsa::AVX3_SPR < (int)MaxIsa::Unset,
     "MaxIsa values must be in strict ascending capability order with Unset at the top");
+#else // JV_ARCH_AARCH64
+enum class MaxIsa { NEON = 0, SVE = 1, SVE2 = 2,
+                    Unset = INT_MAX };
+static_assert(
+    (int)MaxIsa::NEON   < (int)MaxIsa::SVE
+    && (int)MaxIsa::SVE < (int)MaxIsa::SVE2
+    && (int)MaxIsa::SVE2 < (int)MaxIsa::Unset,
+    "MaxIsa values must be in strict ascending capability order with Unset at the top");
+#endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
 
 // Reads the JVECTOR_MAX_ISA environment variable and maps it to a MaxIsa
 // value.  This lets callers cap the ISA at runtime without recompiling —
 // useful for benchmarking or working around CPU errata.
-// Accepted values (case-sensitive): "avx3", "avx2", "sse42".
+// x86-64 values (case-sensitive): "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// AArch64 values (case-sensitive): "sve2", "sve", "neon".
 static MaxIsa read_max_isa() noexcept
 {
     const char *val = std::getenv("JVECTOR_MAX_ISA");
     if (!val) return MaxIsa::Unset;
+#if JV_ARCH_X86_64
     if (std::strcmp(val, "avx3_spr") == 0) return MaxIsa::AVX3_SPR;
     if (std::strcmp(val, "avx3_dl")  == 0) return MaxIsa::AVX3_DL;
-    if (std::strcmp(val, "avx3")  == 0) return MaxIsa::AVX3;
-    if (std::strcmp(val, "avx2")  == 0) return MaxIsa::AVX2;
-    if (std::strcmp(val, "sse42") == 0) return MaxIsa::SSE42;
+    if (std::strcmp(val, "avx3")     == 0) return MaxIsa::AVX3;
+    if (std::strcmp(val, "avx2")     == 0) return MaxIsa::AVX2;
+    if (std::strcmp(val, "sse42")    == 0) return MaxIsa::SSE42;
+#else // JV_ARCH_AARCH64
+    if (std::strcmp(val, "sve2") == 0) return MaxIsa::SVE2;
+    if (std::strcmp(val, "sve")  == 0) return MaxIsa::SVE;
+    if (std::strcmp(val, "neon") == 0) return MaxIsa::NEON;
+#endif
     return MaxIsa::Unset; // unrecognised value: ignore and use CPU detection
 }
 
@@ -74,7 +94,11 @@ struct KernelVTable {
 };
 
 // One pre-filled vtable per ISA.  These are constant data; no heap allocation.
-// Auto-generated from jvector_simd_kernel_list.h
+// Auto-generated from jvector_simd_kernel_list.h.
+// Guarded by JV_ARCH_* so that only the vtables for the current build
+// architecture are instantiated (avoiding references to non-existent symbols).
+
+#if JV_ARCH_X86_64
 
 #define KERNEL_ENTRY(ret_type, name, params, names) AVX3::name,
 static const KernelVTable AVX3_vtable = {
@@ -110,6 +134,28 @@ static const KernelVTable SSE42_vtable = {
 };
 #undef KERNEL_ENTRY
 
+#else // JV_ARCH_AARCH64
+
+#define KERNEL_ENTRY(ret_type, name, params, names) NEON::name,
+static const KernelVTable NEON_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
+
+#define KERNEL_ENTRY(ret_type, name, params, names) SVE::name,
+static const KernelVTable SVE_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
+
+#define KERNEL_ENTRY(ret_type, name, params, names) SVE2::name,
+static const KernelVTable SVE2_vtable = {
+    JVECTOR_SIMD_KERNEL_LIST
+};
+#undef KERNEL_ENTRY
+
+#endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
+
 // Bundles the chosen vtable and the tier that was selected together so that
 // both can be initialised atomically from a single dispatch call.
 struct DispatchResult {
@@ -126,7 +172,7 @@ static DispatchResult dispatch_kernels() noexcept
     // Check whether the caller has capped the ISA via the environment variable.
     const MaxIsa max_isa = read_max_isa();
 
-    // Populate a boolean feature array by issuing CPUID and reading XCR0.
+    // Populate a boolean feature array via CPUID (x86) or getauxval/sysctl (ARM).
     std::array<bool, static_cast<uint32_t>(CpuFeature::COUNT)> features;
     populate_cpu_features(features);
 
@@ -134,18 +180,18 @@ static DispatchResult dispatch_kernels() noexcept
         return features[static_cast<uint32_t>(f)];
     };
 
+    // Capture the recognised env-var string (or nullptr) for later retrieval.
+    const char *env_str = nullptr;
+#if JV_ARCH_X86_64
+    if (max_isa == MaxIsa::AVX3_SPR)     env_str = "avx3_spr";
+    else if (max_isa == MaxIsa::AVX3_DL) env_str = "avx3_dl";
+    else if (max_isa == MaxIsa::AVX3)    env_str = "avx3";
+    else if (max_isa == MaxIsa::AVX2)    env_str = "avx2";
+    else if (max_isa == MaxIsa::SSE42)   env_str = "sse42";
+
     // Select the highest tier the CPU supports and the cap allows.
     // max_isa > MaxIsa::X means "user has not capped at X or below".
     // Adding a new tier above AVX3_SPR only requires one new if at the top.
-
-    // Capture the recognised env-var string (or nullptr) for later retrieval.
-    const char *env_str = nullptr;
-    if (max_isa == MaxIsa::AVX3_SPR) env_str = "avx3_spr";
-    else if (max_isa == MaxIsa::AVX3_DL)  env_str = "avx3_dl";
-    else if (max_isa == MaxIsa::AVX3)     env_str = "avx3";
-    else if (max_isa == MaxIsa::AVX2)     env_str = "avx2";
-    else if (max_isa == MaxIsa::SSE42)    env_str = "sse42";
-
     if (max_isa > MaxIsa::AVX3_DL && has(CpuFeature::AVX3_SPR))
         return { AVX3_SPR_vtable, MaxIsa::AVX3_SPR, env_str };
     if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
@@ -154,8 +200,22 @@ static DispatchResult dispatch_kernels() noexcept
         return { AVX3_vtable, MaxIsa::AVX3, env_str };
     if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
         return { AVX2_vtable, MaxIsa::AVX2, env_str };
-    // SSE42 is the baseline — assumed always present, no CPUID check needed.
+    // SSE42 is the x86-64 baseline — assumed always present, no CPUID check.
     return { SSE42_vtable, MaxIsa::SSE42, env_str };
+#else // JV_ARCH_AARCH64
+    if (max_isa == MaxIsa::SVE2)      env_str = "sve2";
+    else if (max_isa == MaxIsa::SVE)  env_str = "sve";
+    else if (max_isa == MaxIsa::NEON) env_str = "neon";
+
+    // SVE2 and SVE are not available on Apple Silicon (up to and including M4).
+    // populate_cpu_features() will return false for those on HWY_OS_APPLE.
+    if (max_isa > MaxIsa::SVE  && has(CpuFeature::SVE2))
+        return { SVE2_vtable, MaxIsa::SVE2, env_str };
+    if (max_isa > MaxIsa::NEON && has(CpuFeature::SVE))
+        return { SVE_vtable, MaxIsa::SVE, env_str };
+    // NEON is the AArch64 baseline — always available, no auxval check needed.
+    return { NEON_vtable, MaxIsa::NEON, env_str };
+#endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
 }
 
 // Both are initialised once at static-init time from a single dispatch call.
@@ -190,11 +250,18 @@ JVECTOR_SIMD_KERNEL_LIST
 const char *jvector_simd_get_active_isa()
 {
     switch (active_isa) {
+#if JV_ARCH_X86_64
         case MaxIsa::AVX3_SPR: return "avx3_spr";
         case MaxIsa::AVX3_DL:  return "avx3_dl";
         case MaxIsa::AVX3:     return "avx3";
         case MaxIsa::AVX2:     return "avx2";
-        default:               return "sse42";
+        case MaxIsa::SSE42:    return "sse42";
+#else // JV_ARCH_AARCH64
+        case MaxIsa::SVE2:     return "sve2";
+        case MaxIsa::SVE:      return "sve";
+        case MaxIsa::NEON:     return "neon";
+#endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
+        default:               return "unknown";
     }
 }
 
