@@ -27,15 +27,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Generic compaction strategy for any {@link FusedFeature} (PQ today, ASH or other schemes
@@ -206,48 +205,56 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
 
         final int cs = cacheCodeSize;
         final VectorCompressor<ByteSequence<?>> compressor = retrainedCompressor;
-        List<Callable<Long>> tasks = new ArrayList<>();
+        // Chunk descriptors, not Callables: the ParallelExecutor decides how the iteration is
+        // distributed, so the strategy states only what the units of work are. taskWindowSize
+        // picks granularity (enough chunks to load-balance); the in-flight window is the
+        // executor's business.
+        List<int[]> chunks = new ArrayList<>();   // {sourceIdx, startOrdinal, endOrdinal}
         int targetTasks = Math.max(ctx.taskWindowSize * 4, 16);
         for (int s = 0; s < ctx.sources.size(); s++) {
-            final int sIdx = s;
-            final var source = ctx.sources.get(s);
-            final var alive = ctx.liveNodes.get(s);
-            final int upper = alive.length();
+            final int upper = ctx.liveNodes.get(s).length();
             int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
             for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
-                final int cStart = chunkStart;
-                final int cEnd = Math.min(chunkStart + chunkSize, upper);
-                tasks.add(() -> {
-                    // Stream this chunk's records into the page cache before the encode loop;
-                    // the mapping's MADV_RANDOM otherwise faults them one page at a time.
-                    source.prefetchL0Records(cStart, cEnd - 1);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
-                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
-                    long count = 0;
-                    try (var view = source.getView()) {
-                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                            if (!alive.get(oldOrd)) continue;
-                            view.getVectorInto(oldOrd, vec, 0);
-                            code.zero();
-                            compressor.encodeTo(vec, code);
-                            int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                            codeCache.put(newOrd, code);
-                            count++;
-                        }
-                    }
-                    return count;
-                });
+                chunks.add(new int[]{s, chunkStart, Math.min(chunkStart + chunkSize, upper)});
             }
         }
-        try {
-            long total = 0;
-            for (Future<Long> f : ctx.executor.invokeAll(tasks)) {
-                total += f.get();
+
+        AtomicLong encoded = new AtomicLong();
+        rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEach(chunks.stream(), chunk -> {
+            final int sIdx = chunk[0], cStart = chunk[1], cEnd = chunk[2];
+            final var source = ctx.sources.get(sIdx);
+            final var alive = ctx.liveNodes.get(sIdx);
+            // Stream this chunk's records into the page cache before the encode loop;
+            // the mapping's MADV_RANDOM otherwise faults them one page at a time.
+            source.prefetchL0Records(cStart, cEnd - 1);
+            ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
+            long count = 0;
+            try (var view = source.getView()) {
+                for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
+                    if (!alive.get(oldOrd)) continue;
+                    view.getVectorInto(oldOrd, vec, 0);
+                    code.zero();
+                    compressor.encodeTo(vec, code);
+                    int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
+                    codeCache.put(newOrd, code);
+                    count++;
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
             }
-            log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {})",
-                    total, tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Code pre-encode failed", e);
+            encoded.addAndGet(count);
+    }));
+        log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {})",
+                encoded.get(), tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
+    }
+
+    /** Runs {@code body}, restating any {@link UncheckedIOException} a worker threw as checked. */
+    private static void rethrowingIO(String what, Runnable body) throws IOException {
+        try {
+            body.run();
+        } catch (UncheckedIOException e) {
+            throw new IOException(what, e.getCause());
         }
     }
 }

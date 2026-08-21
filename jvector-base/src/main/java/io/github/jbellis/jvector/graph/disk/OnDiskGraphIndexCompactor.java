@@ -25,6 +25,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.*;
@@ -81,7 +83,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
-    private final ForkJoinPool executor;
+    /**
+     * Runs the compactor's internal fan-out to completion. The embedder chooses how that
+     * iteration is distributed — its own bounded pool, the caller's thread, or a ForkJoinPool —
+     * so compaction is bound to the host's thread budget instead of a jvector-owned pool.
+     */
+    private final ParallelExecutor executor;
+    /**
+     * The executor's intended width. Used only to pick task granularity: enough batches that the
+     * executor has something to load-balance. It is NOT an in-flight window — the executor owns
+     * how many units run at once.
+     */
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
@@ -235,6 +247,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
+     * Equivalent to calling the 7-arg constructor with {@code sourceCompressed = null}.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ParallelExecutor executor,
+            int parallelism) {
+        this(sources, null, liveNodes, remappers, similarityFunction, executor, parallelism);
+    }
+
+    /**
      * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
      * Initializes thread pool, validates inputs, and prepares metadata for compaction.
      *
@@ -252,21 +279,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
+        // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
+        // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
+        // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
+        // process-wide and shared with index construction and quantization; the compactor
+        // never owns or shuts it down.
+        this(sources, sourceCompressed, liveNodes, remappers, similarityFunction,
+             ParallelExecutor.forkJoin(executor != null ? executor : PhysicalCoreExecutor.pool()),
+             (executor != null ? executor : PhysicalCoreExecutor.pool()).getParallelism());
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Validates inputs and prepares metadata for compaction.
+     *
+     * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
+     *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
+     *                         that ship alongside each graph. Pass {@code null} when sources carry
+     *                         quantization inline (FUSED_PQ) or have none. Must not be combined
+     *                         with sources that carry the FUSED_PQ feature.
+     * @param executor         runs every internal fan-out to completion; the embedder decides how
+     *                         the iteration is distributed and retains the underlying resource's
+     *                         lifecycle. {@code null} means
+     *                         {@link ParallelExecutor#forkJoin(ForkJoinPool) forkJoin} over the
+     *                         shared physical-core pool.
+     * @param parallelism      the executor's intended width, used only to pick task granularity;
+     *                         values {@code < 1} are clamped to 1. {@code ExecutorService} does not
+     *                         expose its width, so it has to be stated.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ParallelExecutor executor,
+            int parallelism) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
         if (executor != null) {
             this.executor = executor;
+            this.taskWindowSize = max(1, parallelism);
         } else {
-            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
-            // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
-            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
-            // process-wide and shared with index construction and quantization; the compactor
-            // never owns or shuts it down.
-            this.executor = PhysicalCoreExecutor.pool();
+            ForkJoinPool pool = PhysicalCoreExecutor.pool();
+            this.executor = ParallelExecutor.forkJoin(pool);
+            this.taskWindowSize = pool.getParallelism();
         }
-        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
-        // whether the executor is the shared default or a caller-injected pool.
-        this.taskWindowSize = this.executor.getParallelism();
 
         this.sources = sources;
         this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
@@ -677,11 +736,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             final ThreadLocal<RefineScratch> tls = ThreadLocal.withInitial(() ->
                     new RefineScratch(mergedGraph, baseDegree, dimension, searchTopK, pqCodeSize));
 
-            ExecutorCompletionService<Integer> ecs = new ExecutorCompletionService<>(executor);
-
             int total = liveOrdinals.length;
             int targetBatches = Math.max(taskWindowSize * 4, 16);
             int batchSize = Math.max(1, (total + targetBatches - 1) / targetBatches);
+            int batchCount = (total + batchSize - 1) / batchSize;
 
             final int[] ords = liveOrdinals;
             final boolean fpq = hasFusedPQ;
@@ -695,39 +753,30 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             log.info("Refining {} live nodes at level {} (hierarchy maxLevel={}, fusedPQ={}, codeCache={})",
                     total, iterationLevel, mergedGraph.getMaxLevel(), fpq, cache != null);
 
-            int submitted = 0;
-            for (int start = 0; start < total; start += batchSize) {
-                final int s = start;
-                final int e = Math.min(start + batchSize, total);
-                ecs.submit(() -> {
-                    RefineScratch scratch = tls.get();
-                    for (int i = s; i < e; i++) {
-                        int node = ords[i];
-                        refineOneNode(node, scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
-                                graphRef, cache, cacheSz);
-                    }
-                    return e - s;
-                });
-                submitted++;
-            }
-
-            int completed = 0;
-            int nodesDone = 0;
-            int progressStep = Math.max(1, total / 10);
-            int nextProgress = progressStep;
-            while (completed < submitted) {
-                nodesDone += ecs.take().get();
-                completed++;
-                if (nodesDone >= nextProgress) {
-                    log.info("Refinement progress: {}/{} nodes", nodesDone, total);
-                    nextProgress += progressStep;
+            final int step = Math.max(1, total / 10);
+            AtomicLong nodesDone = new AtomicLong();
+            AtomicInteger nextProgress = new AtomicInteger(step);
+            final int bSize = batchSize;
+            executor.forEachInt(batchCount, b -> {
+                final int s = b * bSize;
+                final int e = Math.min(s + bSize, total);
+                RefineScratch scratch = tls.get();
+                for (int i = s; i < e; i++) {
+                    refineOneNode(ords[i], scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
+                            graphRef, cache, cacheSz);
                 }
-            }
+                long done = nodesDone.addAndGet(e - s);
+                // Claim the milestone so exactly one worker logs each one.
+                int next = nextProgress.get();
+                if (done >= next && nextProgress.compareAndSet(next, next + step)) {
+                    log.info("Refinement progress: {}/{} nodes", done, total);
+                }
+            });
 
             // Per-thread scratches live in worker-thread ThreadLocals; closing the supplier in
             // try-with-resources tears down the underlying mapping, so any later access would
             // fail anyway. The references will be GC'd when the worker threads die.
-        } catch (IOException | InterruptedException | ExecutionException e) {
+        } catch (IOException e) {
             throw new RuntimeException("Refinement failed", e);
         }
 
@@ -1067,18 +1116,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (level == 0) {
                 log.info("Compacting level 0 (base layer)");
 
-                ExecutorCompletionService<List<WriteResult>> ecs =
-                        new ExecutorCompletionService<>(executor);
-
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
+                java.util.function.Function<BatchSpec, List<WriteResult>> computeBatch = (bs) -> {
+                    Scratch scratch = threadLocalScratch.get();
+                    try {
                         return computeBaseBatch(writer, bs, scratch, params);
-                    });
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
                 };
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
+                    // Runs on the worker that produced the batch. Safe without a lock: every
+                    // record goes to its own ordinal's offset via a positional write (which does
+                    // not touch the channel's shared position), the ranges are disjoint by
+                    // construction, and doneFlag is an AtomicIntegerArray.
                     java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
                         try {
                             for (WriteResult r : results) {
@@ -1095,7 +1147,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 }
                             }
                         } catch (IOException e) {
-                            throw new RuntimeException(e);
+                            throw new UncheckedIOException(e);
                         }
                     };
 
@@ -1103,7 +1155,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // the barrier that guarantees every reverse-candidate offer into a source has
                     // completed before that source's own nodes read them.
                     for (int s : l0ProcessOrder) {
-                        runBatchesWithBackpressure(buildBatchesForSource(s, 0), ecs, submitOne, writeResults);
+                        runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults);
                     }
                 }
 
@@ -1125,32 +1177,31 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 log.info("Compacting upper layer {}", level);
                 List<BatchSpec> batches = buildBatches(level);
 
-                ExecutorCompletionService<List<UpperLayerWriteResult>> ecs =
-                        new ExecutorCompletionService<>(executor);
-
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
-                        return computeUpperBatchForLevel(bs, lvl, scratch, params);
-                    });
-                };
-
-                runBatchesWithBackpressure(
+                runBatches(
                         batches,
-                        ecs,
-                        submitOne,
+                        (bs) -> {
+                            Scratch scratch = threadLocalScratch.get();
+                            return computeUpperBatchForLevel(bs, lvl, scratch, params);
+                        },
                         (results) -> {
-                            try {
-                                for (UpperLayerWriteResult r : results) {
-                                    writer.writeUpperLayerNode(
-                                            lvl,
-                                            r.ordinal,
-                                            r.neighbors,
-                                            r.pqCode
-                                    );
+                            // writeUpperLayerNode appends through the sequential writer and
+                            // accumulates level-1 feature records in an ArrayList, so unlike the
+                            // L0 path it cannot run concurrently. Upper layers are a tiny
+                            // fraction of the output; serializing the append costs nothing while
+                            // the searches that produced these results still ran in parallel.
+                            synchronized (writer) {
+                                try {
+                                    for (UpperLayerWriteResult r : results) {
+                                        writer.writeUpperLayerNode(
+                                                lvl,
+                                                r.ordinal,
+                                                r.neighbors,
+                                                r.pqCode
+                                        );
+                                    }
+                                } catch (IOException e) {
+                                    throw new UncheckedIOException(e);
                                 }
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
                             }
                         }
                 );
@@ -1209,7 +1260,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 for (int k = 0; k < numNodes; k++) {
                     keyed[k] = ((long) mapper.oldToNew(nodes[k]) << 32) | (nodes[k] & 0xFFFFFFFFL);
                 }
-                Arrays.parallelSort(keyed);
+                CompactionSort.sort(keyed, numNodes, executor, taskWindowSize);
                 for (int k = 0; k < numNodes; k++) {
                     nodes[k] = (int) keyed[k];
                 }
@@ -1244,7 +1295,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                      | ((code[2] & 0xFFL) << 8) | (code[3] & 0xFFL);
                             keyed[k] = (key << 32) | (nodes[segStart + k] & 0xFFFFFFFFL);
                         }
-                        Arrays.parallelSort(keyed);
+                        CompactionSort.sort(keyed, len, executor, taskWindowSize);
                         for (int k = 0; k < len; k++) {
                             nodes[segStart + k] = (int) keyed[k];
                         }
@@ -1990,39 +2041,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * overwhelming memory by limiting the number of in-flight tasks while maintaining high
      * throughput via the completion service.
      */
-    private <T> void runBatchesWithBackpressure(
+    /**
+     * Computes every batch and consumes its results, blocking until the whole list has settled.
+     * <p>
+     * The in-flight window is the {@link ParallelExecutor}'s to choose — the embedder sized its
+     * own execution resource and jvector does not second-guess it — so results are consumed by
+     * {@code onComplete} <em>on the worker that produced them</em>, not on a single orchestrating
+     * thread. {@code onComplete} must therefore be thread-safe: either write through a
+     * positional, disjoint-range channel call (the L0 record path) or hold a lock (the
+     * sequential upper-layer writer path).
+     * <p>
+     * Blocking until the whole list settles is what makes this usable as a barrier, which the L0
+     * caller depends on: draining between source groups is what guarantees every reverse-candidate
+     * offer into a source has completed before that source's own nodes read them.
+     */
+    private <T> void runBatches(
             List<BatchSpec> batches,
-            ExecutorCompletionService<List<T>> ecs,
-            java.util.function.Consumer<BatchSpec> submitOne,
+            java.util.function.Function<BatchSpec, List<T>> compute,
             java.util.function.Consumer<List<T>> onComplete
-    ) throws InterruptedException, ExecutionException {
-
+    ) {
         final int total = batches.size();
-        int nextToSubmit = 0;
-        int inFlight = 0;
-
-        // initial window
-        while (inFlight < taskWindowSize && nextToSubmit < total) {
-            submitOne.accept(batches.get(nextToSubmit++));
-            inFlight++;
-        }
-
-        int completed = 0;
-        while (completed < total) {
-            List<T> results = ecs.take().get();
-            onComplete.accept(results);
-
-            completed++;
-            inFlight--;
-
-            if (nextToSubmit < total) {
-                submitOne.accept(batches.get(nextToSubmit++));
-                inFlight++;
+        AtomicInteger completed = new AtomicInteger();
+        executor.forEach(batches.stream(), bs -> {
+            onComplete.accept(compute.apply(bs));
+            int done = completed.incrementAndGet();
+            if (done % 10 == 0) {
+                log.debug("Compaction I/O progress: {}/{} batches written to disk", done, total);
             }
-            if (completed % 10 == 0) {
-                log.debug("Compaction I/O progress: {}/{} batches written to disk", completed, total);
-            }
-        }
+        });
     }
 
     /**
@@ -2395,7 +2441,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             long[] keyed = new long[liveCount];
             java.util.concurrent.atomic.AtomicInteger fill = new java.util.concurrent.atomic.AtomicInteger();
             int window = 1 << 18;
-            List<java.util.concurrent.Callable<Void>> tasks = new ArrayList<>();
+            List<Runnable> tasks = new ArrayList<>();
             for (int from = 0; from < size; from += window) {
                 final int lo = from;
                 final int hi = Math.min(size, from + window);
@@ -2412,12 +2458,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                      | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
                             keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
                         }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
                     }
-                    return null;
                 });
             }
             joinAll(tasks);
-            Arrays.parallelSort(keyed, 0, fill.get());
+            CompactionSort.sort(keyed, fill.get(), executor, taskWindowSize);
 
             for (int k = 0; k < fill.get(); k++) {
                 int old = (int) keyed[k];
@@ -2452,17 +2499,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return mappers;
     }
 
-    private void joinAll(List<java.util.concurrent.Callable<Void>> tasks) {
-        try {
-            for (var f : executor.invokeAll(tasks)) {
-                f.get();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        } catch (java.util.concurrent.ExecutionException e) {
-            throw new RuntimeException(e.getCause());
-        }
+    /** Runs every task to completion on the {@link ParallelExecutor}, blocking until all settle. */
+    private void joinAll(List<Runnable> tasks) {
+        executor.forEach(tasks.stream(), Runnable::run);
     }
 
     private static final class Scratch implements AutoCloseable {

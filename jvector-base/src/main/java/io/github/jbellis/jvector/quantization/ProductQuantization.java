@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
@@ -32,6 +33,7 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.agrona.collections.IntHashSet;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -139,43 +141,50 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        final IntStream ordinalStream;
+        return extractTrainingVectors(ravv, ParallelExecutor.forkJoin(parallelExecutor));
+    }
+
+    static List<VectorFloat<?>> extractTrainingVectors(RandomAccessVectorValues ravv, ParallelExecutor parallelExecutor) {
+        final int[] ordinals;
 
         if (ravv.size() <= MAX_PQ_TRAINING_SET_SIZE) {
-            ordinalStream = IntStream.range(0, ravv.size());
+            ordinals = IntStream.range(0, ravv.size()).toArray();
         } else {
             // Uses Floyd’s sampling algorithm to select MAX_PQ_TRAINING_SET_SIZE random ordinals from 0 to ravv.size()
             // while only iterating MAX_PQ_TRAINING_SET_SIZE times.
             SplittableRandom rng = new SplittableRandom(1);
-            IntHashSet ordinals = new IntHashSet(MAX_PQ_TRAINING_SET_SIZE);
+            IntHashSet sampled = new IntHashSet(MAX_PQ_TRAINING_SET_SIZE);
             // j runs from (ravv.size() - MAX_PQ_TRAINING_SET_SIZE) to ravv.size() (exclusive)
             for (int j = ravv.size() - MAX_PQ_TRAINING_SET_SIZE; j < ravv.size(); j++) {
                 int t = rng.nextInt(j + 1); // uniform in [0, j]
-                if (ordinals.contains(t)) {
-                    ordinals.add(j);
+                if (sampled.contains(t)) {
+                    sampled.add(j);
                 } else {
-                    ordinals.add(t);
+                    sampled.add(t);
                 }
             }
-            int[] ordinalArray = new int[ordinals.size()];
-            IntHashSet.IntIterator it = ordinals.iterator();
-            for (int i = 0; i < ordinals.size(); i++) {
+            int[] ordinalArray = new int[sampled.size()];
+            IntHashSet.IntIterator it = sampled.iterator();
+            for (int i = 0; i < sampled.size(); i++) {
                 assert it.hasNext();
                 ordinalArray[i] = it.next();
             }
             assert !it.hasNext();
-            ordinalStream = IntStream.of(ordinalArray);
+            ordinals = ordinalArray;
         }
 
         var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> ordinalStream.parallel()
-                        .mapToObj(targetOrd -> {
-                            var localRavv = ravvCopy.get();
-                            VectorFloat<?> v = localRavv.getVector(targetOrd);
-                            return localRavv.isValueShared() ? v.copy() : v;
-                        })
-                        .collect(Collectors.toList()))
-                .join();
+        // Written into a pre-sized array rather than collected from a parallel stream: the result
+        // must stay in encounter order (as Collectors.toList() gave), and ParallelExecutor
+        // deliberately exposes only "run this body for each element" so the embedder — not
+        // jvector — decides how the iteration is distributed.
+        VectorFloat<?>[] extracted = new VectorFloat<?>[ordinals.length];
+        parallelExecutor.forEachInt(ordinals.length, i -> {
+            var localRavv = ravvCopy.get();
+            VectorFloat<?> v = localRavv.getVector(ordinals[i]);
+            extracted[i] = localRavv.isValueShared() ? v.copy() : v;
+        });
+        return new ArrayList<>(Arrays.asList(extracted));
     }
 
     /**
@@ -197,6 +206,38 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
                                       ForkJoinPool simdExecutor,
                                       ForkJoinPool parallelExecutor)
     {
+        return refine(ravv, lloydsRounds, anisotropicThreshold,
+                      ParallelExecutor.forkJoin(simdExecutor), ParallelExecutor.forkJoin(parallelExecutor));
+    }
+
+    /**
+     * Create a new PQ by fine-tuning this one with the data in `ravv`, running every internal
+     * iteration on {@code executor}.
+     * <p>
+     * The {@link ForkJoinPool} overload decomposes onto pools jvector picks, which an embedder
+     * that has bounded an operation to its own thread budget cannot override — compaction's
+     * codebook retrain would fan out across every core regardless. Passing a
+     * {@link ParallelExecutor} hands that choice back to the caller; graph structure and the
+     * resulting codebooks are unaffected, only how the work is distributed.
+     *
+     * @param lloydsRounds number of Lloyd's iterations to run against the new data.
+     *                     Suggested values are 1 or 2.
+     * @param executor     runs both the training-vector extraction and the per-subspace clustering
+     */
+    public ProductQuantization refine(RandomAccessVectorValues ravv,
+                                      int lloydsRounds,
+                                      float anisotropicThreshold,
+                                      ParallelExecutor executor)
+    {
+        return refine(ravv, lloydsRounds, anisotropicThreshold, executor, executor);
+    }
+
+    private ProductQuantization refine(RandomAccessVectorValues ravv,
+                                       int lloydsRounds,
+                                       float anisotropicThreshold,
+                                       ParallelExecutor simdExecutor,
+                                       ParallelExecutor parallelExecutor)
+    {
         if (lloydsRounds < 0) {
             throw new IllegalArgumentException("lloydsRounds must be non-negative");
         }
@@ -204,18 +245,20 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectorsMutable = extractTrainingVectors(ravv, parallelExecutor);
         if (globalCentroid != null) {
-            var vectors = vectorsMutable;
-            vectorsMutable = simdExecutor.submit(() -> vectors.stream().parallel().map(v -> VectorUtil.sub(v, globalCentroid)).collect(Collectors.<VectorFloat<?>>toList())).join();
+            var source = vectorsMutable;
+            VectorFloat<?>[] centered = new VectorFloat<?>[source.size()];
+            simdExecutor.forEachInt(centered.length, i -> centered[i] = VectorUtil.sub(source.get(i), globalCentroid));
+            vectorsMutable = new ArrayList<>(Arrays.asList(centered));
         }
         var vectors = vectorsMutable; // "effectively final" to make the closure happy
 
-        Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
+        VectorFloat<?>[] refinedCodebooks = new VectorFloat<?>[M];
+        simdExecutor.forEachInt(M, m -> {
             VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, codebooks[m], anisotropicThreshold);
-            return clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
-                                     anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
-        }).toArray(VectorFloat<?>[]::new);
-        var refinedCodebooks = simdExecutor.submit(callable).join();
+            refinedCodebooks[m] = clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
+                                                    anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
+        });
 
         return new ProductQuantization(refinedCodebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }

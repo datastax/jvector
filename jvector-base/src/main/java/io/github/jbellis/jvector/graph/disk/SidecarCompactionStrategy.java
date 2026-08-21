@@ -28,11 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 
 /**
  * Generic compaction strategy for any non-fused {@link CompressedVectors} sidecar. Parameterized
@@ -106,18 +103,27 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             int parallelism = Math.max(ctx.taskWindowSize, 1);
             for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
                 int batchEnd = Math.min(batchStart + parallelism, chunkCount);
-                List<Callable<ByteSequence<?>>> tasks = new ArrayList<>(batchEnd - batchStart);
-                for (int c = batchStart; c < batchEnd; c++) {
-                    final int chunkStart = c * vectorsPerChunk;
-                    final int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
-                    tasks.add(() -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor));
-                }
-                for (var f : ctx.executor.invokeAll(tasks)) {
-                    vectorTypeSupport.writeByteSequence(out, f.get());
+                final int base = batchStart;
+                // Results land in slot order rather than completion order: the sidecar is a
+                // sequential format, so chunk c must be written before chunk c+1 no matter which
+                // finishes first. forEachInt blocks until the whole batch is encoded, then the
+                // calling thread appends them in order.
+                ByteSequence<?>[] encodedChunks = new ByteSequence<?>[batchEnd - batchStart];
+                ctx.executor.forEachInt(encodedChunks.length, i -> {
+                    int chunkStart = (base + i) * vectorsPerChunk;
+                    int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
+                    try {
+                        encodedChunks[i] = encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor);
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                });
+                for (ByteSequence<?> encoded : encodedChunks) {
+                    vectorTypeSupport.writeByteSequence(out, encoded);
                 }
             }
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
+        } catch (UncheckedIOException e) {
+            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e.getCause());
         }
         log.info("Wrote compacted compressed sidecar to {}", compressedPath);
     }

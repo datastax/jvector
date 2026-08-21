@@ -21,8 +21,8 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.util.FixedBitSet;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -33,7 +33,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -55,11 +54,22 @@ public class PQRetrainer {
     private final List<Integer> numLiveNodesPerSource;
     private final int dimension;
     private final int numTotalNodes;
+    /**
+     * Runs the codebook refinement. Supplied by the compactor so retraining stays inside the
+     * embedder's thread budget rather than fanning out onto jvector-chosen pools.
+     */
+    private final ParallelExecutor executor;
 
     public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension) {
+        this(sources, liveNodes, dimension, ParallelExecutor.callerRuns());
+    }
+
+    public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension,
+                       ParallelExecutor executor) {
         this.sources = sources;
         this.liveNodes = liveNodes;
         this.dimension = dimension;
+        this.executor = executor == null ? ParallelExecutor.callerRuns() : executor;
 
         this.numLiveNodesPerSource = new ArrayList<>(sources.size());
         int total = 0;
@@ -114,8 +124,7 @@ public class PQRetrainer {
         ProductQuantization result = basePQ.refine(ravv,
                                                    ProductQuantization.K_MEANS_ITERATIONS,
                                                    -1.0f, // UNWEIGHTED / isotropic
-                                                   PhysicalCoreExecutor.pool(),
-                                                   ForkJoinPool.commonPool());
+                                                   executor);
         log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
         return result;
     }

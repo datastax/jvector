@@ -49,6 +49,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
@@ -534,6 +535,132 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                   compactRecall >= 0.2);
 
         searcher.close();
+    }
+
+    /**
+     * Builds identity remappers with every node live, the setup every compaction test here shares.
+     */
+    private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
+                map.put(i, globalOrdinal++);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+    }
+
+    private List<OnDiskGraphIndex> loadSources(List<ReaderSupplier> rss) throws IOException {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        for (int i = 0; i < numSources; ++i) {
+            var sourcePath = testDirectory.resolve("test_graph_" + i);
+            rss.add(ReaderSupplierFactory.open(sourcePath.toAbsolutePath()));
+            graphs.add(OnDiskGraphIndex.load(rss.get(i)));
+        }
+        return graphs;
+    }
+
+    /**
+     * callerRuns() bounds a compaction to the calling thread. The merged graph must be equivalent
+     * to the pool-backed one — the executor decides only how the iteration is distributed, never
+     * what gets written.
+     */
+    @Test
+    public void testCallerRunsExecutorProducesEquivalentGraph() throws Exception {
+        List<ReaderSupplier> poolRss = new ArrayList<>();
+        List<FixedBitSet> poolLive = new ArrayList<>();
+        List<OrdinalMapper> poolRemap = new ArrayList<>();
+        var poolGraphs = loadSources(poolRss);
+        identityRemappers(poolLive, poolRemap);
+        Path poolOut = testDirectory.resolve("compact_pool");
+        new OnDiskGraphIndexCompactor(poolGraphs, poolLive, poolRemap, similarityFunction, (ForkJoinPool) null)
+                .compact(poolOut);
+
+        List<ReaderSupplier> serialRss = new ArrayList<>();
+        List<FixedBitSet> serialLive = new ArrayList<>();
+        List<OrdinalMapper> serialRemap = new ArrayList<>();
+        var serialGraphs = loadSources(serialRss);
+        identityRemappers(serialLive, serialRemap);
+        Path serialOut = testDirectory.resolve("compact_caller_runs");
+        Thread compactionThread = Thread.currentThread();
+        // callerRuns must genuinely run on the calling thread, not merely produce the same output.
+        AtomicInteger offThread = new AtomicInteger();
+        ParallelExecutor watched = new ParallelExecutor() {
+            private final ParallelExecutor delegate = ParallelExecutor.callerRuns();
+
+            private Runnable check() {
+                return () -> {
+                    if (Thread.currentThread() != compactionThread) {
+                        offThread.incrementAndGet();
+                    }
+                };
+            }
+
+            @Override
+            public void forEachInt(int upperBound, java.util.function.IntConsumer body) {
+                delegate.forEachInt(upperBound, i -> {
+                    check().run();
+                    body.accept(i);
+                });
+            }
+
+            @Override
+            public void forEach(java.util.stream.IntStream source, java.util.function.IntConsumer body) {
+                delegate.forEach(source, i -> {
+                    check().run();
+                    body.accept(i);
+                });
+            }
+
+            @Override
+            public <T> void forEach(java.util.stream.Stream<T> source, java.util.function.Consumer<T> body) {
+                delegate.forEach(source, t -> {
+                    check().run();
+                    body.accept(t);
+                });
+            }
+        };
+        new OnDiskGraphIndexCompactor(serialGraphs, serialLive, serialRemap, similarityFunction, watched, 1)
+                .compact(serialOut);
+
+        assertEquals("callerRuns must never leave the calling thread", 0, offThread.get());
+
+        try (ReaderSupplier a = ReaderSupplierFactory.open(poolOut);
+             ReaderSupplier b = ReaderSupplierFactory.open(serialOut)) {
+            var poolGraph = OnDiskGraphIndex.load(a);
+            var serialGraph = OnDiskGraphIndex.load(b);
+            assertEquals("same node count", poolGraph.size(0), serialGraph.size(0));
+            assertEquals("same max level", poolGraph.getMaxLevel(), serialGraph.getMaxLevel());
+            assertEquals("same max degree", poolGraph.maxDegree(), serialGraph.maxDegree());
+
+            int topK = 10;
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < numQueries; ++i) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> groundTruth = buildGT(queries, topK);
+            double poolRecall = recallOf(poolGraph, queries, groundTruth, topK);
+            double serialRecall = recallOf(serialGraph, queries, groundTruth, topK);
+            assertTrue(String.format("caller-runs recall (%.4f) should match pool recall (%.4f)",
+                            serialRecall, poolRecall),
+                    Math.abs(poolRecall - serialRecall) < 0.15);
+        }
+    }
+
+    private double recallOf(OnDiskGraphIndex graph, List<VectorFloat<?>> queries,
+                            List<List<Integer>> groundTruth, int topK) throws IOException {
+        List<SearchResult> results = new ArrayList<>();
+        try (GraphSearcher searcher = new GraphSearcher(graph)) {
+            for (VectorFloat<?> q : queries) {
+                results.add(searcher.search(
+                        DefaultSearchScoreProvider.exact(q, similarityFunction, allravv), topK, Bits.ALL));
+            }
+        }
+        return AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
     }
 
     /**
