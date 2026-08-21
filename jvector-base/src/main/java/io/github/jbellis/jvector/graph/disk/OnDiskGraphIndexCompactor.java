@@ -180,6 +180,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     final java.util.concurrent.atomic.AtomicLong clusterResumes = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong clusterCertified = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong clusterAnchors = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong anchorRelCertified = new java.util.concurrent.atomic.AtomicLong();
 
     // Similarity-assigned merged ordinals: the compactor replaces the caller's remappers with a
     // mapping that numbers each source's live nodes in PQ-code order (sources in ascending-size
@@ -1111,9 +1112,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         reverseCandidates.offered(), reverseCandidates.touchedTargets(),
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
                 if (clusterCertified.get() + clusterAnchors.get() > 0) {
-                    log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
-                            clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
-                            clusterCertified.get() + clusterAnchors.get());
+                    log.info("Cluster search: {} certified ({} anchor-relative fast-accepts) from {} anchor searches, {} resumes ({} total)",
+                            clusterCertified.get(), anchorRelCertified.get(), clusterAnchors.get(),
+                            clusterResumes.get(), clusterCertified.get() + clusterAnchors.get());
                 }
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
@@ -1461,6 +1462,73 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * Certifies a member using only the anchor's exact entry scores and the member's exact
+     * distance to the anchor: by the triangle inequality every member-to-entry distance lies
+     * within +-delta of the anchor's, so when the anchor's k-th best entry sits at least
+     * 2*delta inside thetaD, the member's true top-k provably lies in the anchor list -
+     * decided by comparisons alone, with no reads. Adoption then rescores exactly only the
+     * entries whose optimistic bound reaches the member's k-th pessimistic bound (typically
+     * exactly k of them), and adopts the exact top-k. Returns the new candSize, or -1 when
+     * unprovable at this bound - the exact incremental path below is tighter and may still
+     * certify, so recall is unaffected either way.
+     */
+    private int tryAnchorRelativeCertify(int targetIdx, OnDiskGraphIndex.View searchView,
+                                         FixedBitSet indexAlive, VectorFloat<?> baseVec, Scratch scratch,
+                                         int candSize, CompactionParams params, double delta) {
+        int n = scratch.clusterCount[targetIdx];
+        int k = params.searchTopK;
+        if (n < k) {
+            return -1;
+        }
+        double thetaD = metricDistance(scratch.clusterWorstSim[targetIdx]);
+        if (delta >= thetaD) {
+            return -1;
+        }
+        int[] nodes = scratch.clusterNodes[targetIdx];
+        float[] ascore = scratch.clusterAnchorScores[targetIdx];
+        Integer[] ord = scratch.clusterOrder;
+        for (int i = 0; i < n; i++) ord[i] = i;
+        Arrays.sort(ord, 0, n, (a, b) -> {
+            float sa = indexAlive.get(nodes[a]) ? ascore[a] : Float.NEGATIVE_INFINITY;
+            float sb = indexAlive.get(nodes[b]) ? ascore[b] : Float.NEGATIVE_INFINITY;
+            return Float.compare(sb, sa);
+        });
+        if (!indexAlive.get(nodes[ord[k - 1]])) {
+            return -1; // fewer than k live entries
+        }
+        double kthAnchorDist = metricDistance(ascore[ord[k - 1]]);
+        if (kthAnchorDist + 2 * delta > thetaD) {
+            return -1;
+        }
+        anchorRelCertified.incrementAndGet();
+        clusterCertified.incrementAndGet();
+        double adoptBound = kthAnchorDist + 2 * delta;
+        float[] ms = scratch.clusterMemberScores;
+        for (int i = 0; i < n; i++) {
+            int idx2 = ord[i];
+            if (!indexAlive.get(nodes[idx2])) {
+                ms[idx2] = Float.NEGATIVE_INFINITY;
+                continue;
+            }
+            if (i < k || metricDistance(ascore[idx2]) - delta <= adoptBound) {
+                ms[idx2] = rescoreAgainst(searchView, nodes[idx2], baseVec, scratch.tmpVec);
+            } else {
+                ms[idx2] = Float.NEGATIVE_INFINITY; // provably outside the member top-k
+            }
+        }
+        for (int i = 0; i < n; i++) ord[i] = i;
+        Arrays.sort(ord, 0, n, (a, b) -> Float.compare(ms[b], ms[a]));
+        for (int j = 0; j < k; j++) {
+            int idx2 = ord[j];
+            scratch.candSrc[candSize] = targetIdx;
+            scratch.candNode[candSize] = nodes[idx2];
+            scratch.candScore[candSize] = ms[idx2];
+            candSize++;
+        }
+        return candSize;
+    }
+
+    /**
      * Bounded cluster search for one (node, target) pair. If a valid anchor exists and the
      * triangle-inequality certificate passes — the member's k-th best rescored distance is at
      * most the anchor's worst kept distance minus the query-to-anchor distance — the member's
@@ -1476,6 +1544,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (scratch.clusterAnchorValid[targetIdx]) {
             float qaSim = similarityFunction.compare(baseVec, scratch.clusterAnchorQuery[targetIdx]);
             double delta = metricDistance(qaSim);
+            {
+                int r = tryAnchorRelativeCertify(targetIdx, searchView, indexAlive, baseVec, scratch,
+                                                 candSize, params, delta);
+                if (r >= 0) {
+                    return r;
+                }
+                // unprovable at 2*delta: fall through to the tighter exact incremental path
+            }
             int verified = 0;   // prefix of the anchor list already scored against this member
             while (true) {
                 int n = scratch.clusterCount[targetIdx];

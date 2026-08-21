@@ -1282,4 +1282,137 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             assertEquals("first-source live count", firstSourceCount, n / 2);
         }
     }
+    /** Builds a FusedPQ source graph from the given vectors (mirrors {@link #buildFusedPQ}). */
+    private Path buildFusedSourceGraph(List<VectorFloat<?>> vecs, String name) throws IOException {
+        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
+        ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv = (PQVectors) pq.encodeAll(ravv, simdExecutor);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
+        var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, false, true, simdExecutor, parallelExecutor);
+        var graph = builder.getGraph();
+        var outputPath = testDirectory.resolve(name);
+        Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+        writeSuppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+        var identityMapper = new OrdinalMapper.IdentityMapper(ravv.size() - 1);
+        var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
+        writerBuilder.withMapper(identityMapper);
+        writerBuilder.with(new InlineVectors(dimension));
+        writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+        var writer = writerBuilder.build();
+        for (var node = 0; node < ravv.size(); node++) {
+            var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+            stateMap.put(FeatureId.INLINE_VECTORS, writeSuppliers.get(FeatureId.INLINE_VECTORS).apply(node));
+            writer.writeInline(node, stateMap);
+            builder.addGraphNode(node, ravv.getVector(node));
+        }
+        builder.cleanup();
+        writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
+        writer.write(writeSuppliers);
+        return outputPath;
+    }
+
+    /**
+     * Cluster certification needs consecutive similarity-ordered queries to be near-twins; the
+     * random-vector fixtures never certify, leaving the certificate paths untested. This merge
+     * of jittered copies of a small vector pool certifies heavily, and validates recall of the
+     * certified output against brute-force ground truth. When run with
+     * {@code -Djvector.compaction.intervalCertify=true}, additionally asserts the RAM-interval
+     * certificate path engaged.
+     */
+    @Test
+    public void testClusterCertificationWithNearDuplicates() throws Exception {
+        int poolSize = 64;
+        int perSource = 320;
+        int nSrc = 3;
+        List<VectorFloat<?>> pool = createRandomVectors(poolSize, dimension);
+        var rnd = new java.util.Random(12345);
+
+        List<VectorFloat<?>> all = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        int base = 0;
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            List<VectorFloat<?>> vecs = new ArrayList<>(perSource);
+            for (int i = 0; i < perSource; i++) {
+                VectorFloat<?> b = pool.get(i % poolSize);
+                VectorFloat<?> v = vectorTypeSupport.createFloatVector(dimension);
+                for (int d = 0; d < dimension; d++) {
+                    v.set(d, b.get(d) + (float) (rnd.nextGaussian() * 1e-3));
+                }
+                vecs.add(v);
+            }
+            Path path = buildFusedSourceGraph(vecs, "certify_src_" + sIdx);
+            rss.add(ReaderSupplierFactory.open(path));
+            graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
+            var lv = new FixedBitSet(perSource);
+            lv.set(0, perSource);
+            live.add(lv);
+            remappers.add(new OrdinalMapper.OffsetMapper(base, perSource));
+            base += perSource;
+            all.addAll(vecs);
+        }
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, similarityFunction, null);
+        compactor.setSimilarityOrdinals(true);
+        var outputPath = testDirectory.resolve("certify_compacted");
+        compactor.compact(outputPath);
+
+        assertTrue("near-duplicate merge should certify members, got "
+                        + compactor.clusterCertified.get(),
+                compactor.clusterCertified.get() > 0);
+        assertTrue("anchor-relative certificates should engage on near-duplicate data, got "
+                        + compactor.anchorRelCertified.get(),
+                compactor.anchorRelCertified.get() > 0);
+
+        // recall of the certified output vs brute force over the union
+        int total = nSrc * perSource;
+        var effective = compactor.effectiveRemappers();
+        int[] newToDataset = new int[total];
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            for (int i = 0; i < perSource; i++) {
+                int newOrd = effective.get(sIdx).oldToNew(i);
+                newToDataset[newOrd] = sIdx * perSource + i;
+            }
+        }
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            queries.add(all.get(rnd.nextInt(all.size())));
+        }
+        List<List<Integer>> gt = new ArrayList<>();
+        for (var q : queries) {
+            List<Integer> idx = new ArrayList<>();
+            for (int i = 0; i < total; i++) idx.add(i);
+            idx.sort((a, b) -> Float.compare(
+                    similarityFunction.compare(q, all.get(b)),
+                    similarityFunction.compare(q, all.get(a))));
+            gt.add(new ArrayList<>(idx.subList(0, topK)));
+        }
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs);
+            List<VectorFloat<?>> reordered = new ArrayList<>(total);
+            for (int n = 0; n < total; n++) {
+                reordered.add(all.get(newToDataset[n]));
+            }
+            var reorderedRavv = new ListRandomAccessVectorValues(reordered, dimension);
+            try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
+                int hits = 0;
+                for (int qi = 0; qi < queries.size(); qi++) {
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
+                    SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+                    for (var ns : sr.getNodes()) {
+                        if (gt.get(qi).contains(newToDataset[ns.node])) hits++;
+                    }
+                }
+                double recall = (double) hits / (queries.size() * topK);
+                System.out.printf("Certification-merge recall: %.4f (certified %d, anchor-relative %d)%n",
+                        recall, compactor.clusterCertified.get(), compactor.anchorRelCertified.get());
+                // near-duplicate pools make GT ties common; the bar is deliberately moderate
+                assertTrue("certified-merge recall should be >= 0.5, got " + recall, recall >= 0.5);
+            }
+        }
+        for (var r : rss) r.close();
+    }
 }
