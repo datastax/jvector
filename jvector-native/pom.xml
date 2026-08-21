@@ -93,7 +93,6 @@
             <activation>
                 <os>
                     <family>unix</family>
-                    <arch>amd64</arch>
                 </os>
             </activation>
             <build>
