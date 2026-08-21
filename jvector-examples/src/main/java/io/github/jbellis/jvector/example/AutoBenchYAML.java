@@ -148,15 +148,16 @@ public class AutoBenchYAML {
 
                     List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
                             config.construction.useSavedIndexIfExists,
-                            config.construction.outDegree, 
+                            config.construction.isParallelGraphConstruction(),
+                            config.construction.outDegree,
                             config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
+                            config.construction.neighborOverflow,
                             config.construction.addHierarchy,
                             config.construction.refineFinalGraph,
-                            config.construction.getFeatureSets(), 
+                            config.construction.getFeatureSets(),
                             config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
+                            config.search.getCompressorParameters(),
+                            config.search.topKOverquery,
                             config.search.useSearchPruning);
                     results.addAll(datasetResults);
 
