@@ -37,6 +37,9 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -97,6 +100,54 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
+    /**
+     * Observes phases and throttles output. Defaults to
+     * {@link ProgressLimiter#UNLIMITED}, which behaves exactly as if no SPI were installed.
+     */
+    private ProgressLimiter progress = ProgressLimiter.UNLIMITED;
+
+    /**
+     * Installs the embedder's progress + throttle surface. A compaction is long enough that a host
+     * needs to show it moving, and heavy enough on write bandwidth that a host may need to pace it
+     * against foreground traffic; both facets are optional and default to no-ops.
+     *
+     * @param progress the control surface, or {@code null} for {@link ProgressLimiter#UNLIMITED}
+     */
+    @Experimental
+    public void setProgressLimiter(ProgressLimiter progress) {
+        this.progress = progress == null ? ProgressLimiter.UNLIMITED : progress;
+    }
+
+    /**
+     * Advances {@code counter} by {@code delta} and delivers the new total to {@code scope}.
+     * <p>
+     * {@link ProgressTracker.PhaseScope} specifies reports that are monotonically non-decreasing
+     * within a phase, and is written for a single orchestrating caller. During a fan-out there is
+     * no orchestrating thread, and an unguarded {@code addAndGet}-then-report lets a worker that
+     * counted 200 deliver before the worker that counted 150 — a decreasing report, and
+     * concurrent entry into a consumer that never expected it. Advancing and reporting under one
+     * lock keeps both guarantees, for one lock per batch (~128 nodes).
+     */
+    private static void report(ProgressTracker.PhaseScope scope, AtomicLong counter, long delta, long total) {
+        synchronized (scope) {
+            scope.onProgress(counter.addAndGet(delta), total);
+        }
+    }
+
+    /**
+     * Blocks until {@code bytes} of output may be written, in the units the embedder's limiter
+     * defines (bytes, for this consumer). An interrupt while throttled aborts the compaction
+     * rather than writing through the limit, and the interrupt flag is restored so the embedder's
+     * own cancellation still observes it.
+     */
+    private WorkLimiter.Grant admit(long bytes) {
+        try {
+            return progress.acquire(bytes);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Compaction interrupted while throttled", e);
+        }
+    }
 
     /**
      * Whether to run the second-pass neighbor refinement after the merged graph is written
@@ -661,7 +712,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize);
+                dimension, maxOrdinal, executor, taskWindowSize, progress);
     }
 
     /**
@@ -677,7 +728,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy)
             throws FileNotFoundException {
         this.spillParent = outputPath.toAbsolutePath().getParent();
-        strategy.retrain(similarityFunction);
+        // Codebook retraining is one indivisible unit of work from the outside: no intermediate
+        // count is meaningful, so the phase opens and closes without a progress report.
+        try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
+            strategy.retrain(similarityFunction);
+        }
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
         ProductQuantization pq = strategy.compressorAsPQ();
@@ -688,7 +743,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         if (similarityOrdinals) {
             if (fusedPQEnabled && pq != null && pq.getSubspaceCount() >= 4) {
-                remappers = buildSimilarityOrdinalMappers(pq);
+                try (var scope = progress.startPhase(CompactionStage.SIMILARITY_ORDINALS)) {
+                    remappers = buildSimilarityOrdinalMappers(pq);
+                }
                 effectiveRemappers = remappers;
                 similarityOrdinalsActive = true;
                 // The strategy snapshotted the caller's remappers at construction; refresh it so
@@ -816,21 +873,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             AtomicLong nodesDone = new AtomicLong();
             AtomicInteger nextProgress = new AtomicInteger(step);
             final int bSize = batchSize;
-            executor.forEachInt(batchCount, b -> {
-                final int s = b * bSize;
-                final int e = Math.min(s + bSize, total);
-                RefineScratch scratch = tls.get();
-                for (int i = s; i < e; i++) {
-                    refineOneNode(ords[i], scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
-                            graphRef, cache, cacheSz);
-                }
-                long done = nodesDone.addAndGet(e - s);
-                // Claim the milestone so exactly one worker logs each one.
-                int next = nextProgress.get();
-                if (done >= next && nextProgress.compareAndSet(next, next + step)) {
-                    log.info("Refinement progress: {}/{} nodes", done, total);
-                }
-            });
+            try (var scope = progress.startPhase(CompactionStage.REFINE)) {
+                executor.forEachInt(batchCount, b -> {
+                    final int s = b * bSize;
+                    final int e = Math.min(s + bSize, total);
+                    RefineScratch scratch = tls.get();
+                    for (int i = s; i < e; i++) {
+                        refineOneNode(ords[i], scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
+                                graphRef, cache, cacheSz);
+                    }
+                    report(scope, nodesDone, e - s, total);
+                    long done = nodesDone.get();
+                    // Claim the milestone so exactly one worker logs each one.
+                    int next = nextProgress.get();
+                    if (done >= next && nextProgress.compareAndSet(next, next + step)) {
+                        log.info("Refinement progress: {}/{} nodes", done, total);
+                    }
+                });
+            }
 
             // Per-thread scratches live in worker-thread ThreadLocals; closing the supplier in
             // try-with-resources tears down the underlying mapping, so any later access would
@@ -1191,7 +1251,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // not touch the channel's shared position), the ranges are disjoint by
                     // construction, and doneFlag is an AtomicIntegerArray.
                     java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
-                        try {
+                        long bytes = 0;
+                        for (WriteResult r : results) {
+                            bytes += r.data.remaining();
+                        }
+                        // The base layer is the bulk of the output, so this is where a host that
+                        // paces compaction against foreground traffic actually wants the brake.
+                        // Admission is per batch, not per record: one blocking call amortized over
+                        // ~128 nodes rather than a limiter round-trip per record write.
+                        try (WorkLimiter.Grant grant = admit(bytes)) {
                             for (WriteResult r : results) {
                                 ByteBuffer b = r.data;
                                 long pos = r.fileOffset;
@@ -1213,8 +1281,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // Sources run smallest-first, one group at a time: the drain between groups is
                     // the barrier that guarantees every reverse-candidate offer into a source has
                     // completed before that source's own nodes read them.
-                    for (int s : l0ProcessOrder) {
-                        runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults);
+                    AtomicLong l0Done = new AtomicLong();
+                    try (var scope = progress.startPhase(CompactionStage.BASE_LAYER)) {
+                        for (int s : l0ProcessOrder) {
+                            runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults,
+                                       scope, l0Done, numTotalNodes);
+                        }
                     }
                 }
 
@@ -1236,34 +1308,43 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 log.info("Compacting upper layer {}", level);
                 List<BatchSpec> batches = buildBatches(level);
 
-                runBatches(
-                        batches,
-                        (bs) -> {
-                            Scratch scratch = threadLocalScratch.get();
-                            return computeUpperBatchForLevel(bs, lvl, scratch, params);
-                        },
-                        (results) -> {
-                            // writeUpperLayerNode appends through the sequential writer and
-                            // accumulates level-1 feature records in an ArrayList, so unlike the
-                            // L0 path it cannot run concurrently. Upper layers are a tiny
-                            // fraction of the output; serializing the append costs nothing while
-                            // the searches that produced these results still ran in parallel.
-                            synchronized (writer) {
-                                try {
-                                    for (UpperLayerWriteResult r : results) {
-                                        writer.writeUpperLayerNode(
-                                                lvl,
-                                                r.ordinal,
-                                                r.neighbors,
-                                                r.pqCode
-                                        );
+                long upperTotal = 0;
+                for (BatchSpec bs : batches) {
+                    upperTotal += bs.end - bs.start;
+                }
+                AtomicLong upperDone = new AtomicLong();
+                try (var scope = progress.startPhase(CompactionStage.UPPER_LAYERS)) {
+                    runBatches(
+                            batches,
+                            (bs) -> {
+                                Scratch scratch = threadLocalScratch.get();
+                                return computeUpperBatchForLevel(bs, lvl, scratch, params);
+                            },
+                            (results) -> {
+                                // writeUpperLayerNode appends through the sequential writer and
+                                // accumulates level-1 feature records in an ArrayList, so unlike
+                                // the L0 path it cannot run concurrently. Upper layers are a tiny
+                                // fraction of the output; serializing the append costs nothing
+                                // while the searches that produced these results still ran in
+                                // parallel.
+                                synchronized (writer) {
+                                    try {
+                                        for (UpperLayerWriteResult r : results) {
+                                            writer.writeUpperLayerNode(
+                                                    lvl,
+                                                    r.ordinal,
+                                                    r.neighbors,
+                                                    r.pqCode
+                                            );
+                                        }
+                                    } catch (IOException e) {
+                                        throw new UncheckedIOException(e);
                                     }
-                                } catch (IOException e) {
-                                    throw new UncheckedIOException(e);
                                 }
-                            }
-                        }
-                );
+                            },
+                            scope, upperDone, upperTotal
+                    );
+                }
             }
         }
 
@@ -2117,12 +2198,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private <T> void runBatches(
             List<BatchSpec> batches,
             java.util.function.Function<BatchSpec, List<T>> compute,
-            java.util.function.Consumer<List<T>> onComplete
+            java.util.function.Consumer<List<T>> onComplete,
+            ProgressTracker.PhaseScope scope,
+            AtomicLong nodesDone,
+            long nodesTotal
     ) {
         final int total = batches.size();
         AtomicInteger completed = new AtomicInteger();
         executor.forEach(batches.stream(), bs -> {
             onComplete.accept(compute.apply(bs));
+            // Reported from the worker, so a phase spanning several runBatches calls (L0 runs one
+            // per source group) still counts up monotonically across the whole phase.
+            report(scope, nodesDone, bs.end - bs.start, nodesTotal);
             int done = completed.incrementAndGet();
             if (done % 10 == 0) {
                 log.debug("Compaction I/O progress: {}/{} batches written to disk", done, total);

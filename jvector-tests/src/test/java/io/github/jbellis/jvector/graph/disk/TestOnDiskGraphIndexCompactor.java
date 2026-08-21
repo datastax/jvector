@@ -36,6 +36,9 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
+import io.github.jbellis.jvector.util.work.WorkStage;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -793,6 +796,83 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
 
+    /**
+     * Every phase that fans out must do so through the injected executor, not a pool jvector
+     * picked. This is asserted per phase rather than by watching threads, because an escape (the
+     * codebook retrain used to call ProductQuantization.refine with PhysicalCoreExecutor.pool()
+     * and the common pool) bypasses the injected executor entirely — no thread it observes ever
+     * misbehaves, it simply never gets asked to do the work.
+     */
+    @Test
+    public void testFanOutPhasesUseTheInjectedExecutor() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        // callerRuns keeps every body on this thread, so the phase that is open when the executor
+        // is entered is unambiguous.
+        final String[] activePhase = new String[1];
+        Set<String> phasesThatFannedOut = new LinkedHashSet<>();
+
+        ParallelExecutor watched = new ParallelExecutor() {
+            private final ParallelExecutor delegate = ParallelExecutor.callerRuns();
+
+            private void note() {
+                if (activePhase[0] != null) {
+                    phasesThatFannedOut.add(activePhase[0]);
+                }
+            }
+
+            @Override
+            public void forEachInt(int upperBound, java.util.function.IntConsumer body) {
+                note();
+                delegate.forEachInt(upperBound, body);
+            }
+
+            @Override
+            public void forEach(java.util.stream.IntStream source, java.util.function.IntConsumer body) {
+                note();
+                delegate.forEach(source, body);
+            }
+
+            @Override
+            public <T> void forEach(java.util.stream.Stream<T> source, java.util.function.Consumer<T> body) {
+                note();
+                delegate.forEach(source, body);
+            }
+        };
+
+        ProgressLimiter limiter = new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                activePhase[0] = stage.name();
+                return new PhaseScope() {
+                    @Override
+                    public void onProgress(long completed, long total) {
+                    }
+
+                    @Override
+                    public void close() {
+                        activePhase[0] = null;
+                    }
+                };
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, watched, 1);
+        compactor.setProgressLimiter(limiter);
+        compactor.compact(testDirectory.resolve("compact_executor_per_phase"));
+
+        assertTrue("codebook retrain must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.PQ_RETRAIN.name()));
+        assertTrue("code pre-encode must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.CODE_PRE_ENCODE.name()));
+        assertTrue("base layer must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.BASE_LAYER.name()));
+    }
+
     private double recallOf(OnDiskGraphIndex graph, List<VectorFloat<?>> queries,
                             List<List<Integer>> groundTruth, int topK) throws IOException {
         List<SearchResult> results = new ArrayList<>();
@@ -803,6 +883,77 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             }
         }
         return AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
+    }
+
+    /**
+     * The compactor must drive the embedder's ProgressLimiter: named phases, non-decreasing
+     * progress within each, and byte admission before output is written.
+     */
+    @Test
+    public void testProgressLimiterObservesPhasesAndThrottlesBytes() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        List<String> startedPhases = Collections.synchronizedList(new ArrayList<>());
+        Set<String> closedPhases = Collections.synchronizedSet(new LinkedHashSet<>());
+        AtomicLong admittedBytes = new AtomicLong();
+        AtomicInteger monotonicViolations = new AtomicInteger();
+        Map<String, Long> lastCompleted = new HashMap<>();
+
+        ProgressLimiter limiter = new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                startedPhases.add(stage.name());
+                return new PhaseScope() {
+                    @Override
+                    public void onProgress(long completed, long total) {
+                        synchronized (lastCompleted) {
+                            Long prev = lastCompleted.get(stage.name());
+                            if (prev != null && completed < prev) {
+                                monotonicViolations.incrementAndGet();
+                            }
+                            lastCompleted.put(stage.name(), completed);
+                        }
+                    }
+
+                    @Override
+                    public void close() {
+                        closedPhases.add(stage.name());
+                    }
+                };
+            }
+
+            @Override
+            public WorkLimiter.Grant acquire(long amount) {
+                admittedBytes.addAndGet(amount);
+                return WorkLimiter.Grant.NOOP;
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setProgressLimiter(limiter);
+        Path outputPath = testDirectory.resolve("compact_with_progress");
+        compactor.compact(outputPath);
+
+        assertTrue("base layer phase should be reported, saw " + startedPhases,
+                startedPhases.contains(CompactionStage.BASE_LAYER.name()));
+        assertEquals("every started phase must be closed",
+                new LinkedHashSet<>(startedPhases), closedPhases);
+        assertEquals("progress within a phase must never decrease", 0, monotonicViolations.get());
+
+        Long baseLayerNodes = lastCompleted.get(CompactionStage.BASE_LAYER.name());
+        assertEquals("base layer progress should reach every merged node",
+                Long.valueOf(numSources * numVectorsPerGraph), baseLayerNodes);
+
+        // Admission is in bytes, and the compactor must ask before it writes.
+        assertTrue("compactor should admit output bytes through the limiter, got " + admittedBytes.get(),
+                admittedBytes.get() > 0);
+        assertTrue("admitted bytes should not exceed the written graph, got " + admittedBytes.get()
+                        + " vs " + Files.size(outputPath),
+                admittedBytes.get() <= Files.size(outputPath));
     }
 
     /**

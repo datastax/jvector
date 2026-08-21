@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -101,27 +103,41 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             formatHandle.writeSidecarHeader(out, retrainedCompressor, count);
 
             int parallelism = Math.max(ctx.taskWindowSize, 1);
-            for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
-                int batchEnd = Math.min(batchStart + parallelism, chunkCount);
-                final int base = batchStart;
-                // Results land in slot order rather than completion order: the sidecar is a
-                // sequential format, so chunk c must be written before chunk c+1 no matter which
-                // finishes first. forEachInt blocks until the whole batch is encoded, then the
-                // calling thread appends them in order.
-                ByteSequence<?>[] encodedChunks = new ByteSequence<?>[batchEnd - batchStart];
-                ctx.executor.forEachInt(encodedChunks.length, i -> {
-                    int chunkStart = (base + i) * vectorsPerChunk;
-                    int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
-                    try {
-                        encodedChunks[i] = encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
+            try (ProgressTracker.PhaseScope scope = ctx.progress.startPhase(CompactionStage.SIDECAR)) {
+                for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
+                    int batchEnd = Math.min(batchStart + parallelism, chunkCount);
+                    final int base = batchStart;
+                    // Results land in slot order rather than completion order: the sidecar is a
+                    // sequential format, so chunk c must be written before chunk c+1 no matter which
+                    // finishes first. forEachInt blocks until the whole batch is encoded, then the
+                    // calling thread appends them in order.
+                    ByteSequence<?>[] encodedChunks = new ByteSequence<?>[batchEnd - batchStart];
+                    ctx.executor.forEachInt(encodedChunks.length, i -> {
+                        int chunkStart = (base + i) * vectorsPerChunk;
+                        int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
+                        try {
+                            encodedChunks[i] = encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                    long bytes = 0;
+                    for (ByteSequence<?> encoded : encodedChunks) {
+                        bytes += (long) encoded.length();
                     }
-                });
-                for (ByteSequence<?> encoded : encodedChunks) {
-                    vectorTypeSupport.writeByteSequence(out, encoded);
+                    // Paced on the same terms as the graph body: one admission per batch, then the
+                    // sequential append.
+                    try (WorkLimiter.Grant grant = ctx.progress.acquire(bytes)) {
+                        for (ByteSequence<?> encoded : encodedChunks) {
+                            vectorTypeSupport.writeByteSequence(out, encoded);
+                        }
+                    }
+                    scope.onProgress(Math.min((long) batchEnd * vectorsPerChunk, count), count);
                 }
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while throttled writing sidecar to " + compressedPath, e);
         } catch (UncheckedIOException e) {
             throw new IOException("Failed to write compressed sidecar to " + compressedPath, e.getCause());
         }

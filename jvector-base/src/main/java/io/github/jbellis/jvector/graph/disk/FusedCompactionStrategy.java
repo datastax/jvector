@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -220,31 +221,38 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
         }
 
         AtomicLong encoded = new AtomicLong();
-        rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEach(chunks.stream(), chunk -> {
-            final int sIdx = chunk[0], cStart = chunk[1], cEnd = chunk[2];
-            final var source = ctx.sources.get(sIdx);
-            final var alive = ctx.liveNodes.get(sIdx);
-            // Stream this chunk's records into the page cache before the encode loop;
-            // the mapping's MADV_RANDOM otherwise faults them one page at a time.
-            source.prefetchL0Records(cStart, cEnd - 1);
-            ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
-            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
-            long count = 0;
-            try (var view = source.getView()) {
-                for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                    if (!alive.get(oldOrd)) continue;
-                    view.getVectorInto(oldOrd, vec, 0);
-                    code.zero();
-                    compressor.encodeTo(vec, code);
-                    int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                    codeCache.put(newOrd, code);
-                    count++;
+        final long liveTotal = ctx.liveNodes.stream().mapToLong(b -> b.cardinality()).sum();
+        try (ProgressTracker.PhaseScope scope = ctx.progress.startPhase(CompactionStage.CODE_PRE_ENCODE)) {
+            rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEach(chunks.stream(), chunk -> {
+                final int sIdx = chunk[0], cStart = chunk[1], cEnd = chunk[2];
+                final var source = ctx.sources.get(sIdx);
+                final var alive = ctx.liveNodes.get(sIdx);
+                // Stream this chunk's records into the page cache before the encode loop;
+                // the mapping's MADV_RANDOM otherwise faults them one page at a time.
+                source.prefetchL0Records(cStart, cEnd - 1);
+                ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
+                VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
+                long count = 0;
+                try (var view = source.getView()) {
+                    for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
+                        if (!alive.get(oldOrd)) continue;
+                        view.getVectorInto(oldOrd, vec, 0);
+                        code.zero();
+                        compressor.encodeTo(vec, code);
+                        int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
+                        codeCache.put(newOrd, code);
+                        count++;
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
                 }
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-            encoded.addAndGet(count);
-    }));
+                // Serialized: PhaseScope specifies non-decreasing reports, which an unguarded
+                // addAndGet-then-report cannot honour across concurrent workers.
+                synchronized (scope) {
+                    scope.onProgress(encoded.addAndGet(count), liveTotal);
+                }
+            }));
+        }
         log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {})",
                 encoded.get(), tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
     }
