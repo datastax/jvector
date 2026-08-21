@@ -505,18 +505,57 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
+        compact(CompactionDestination.toFile(outputPath));
+    }
+
+    /**
+     * Main compaction entry point. Merges all source indexes into a region the embedder reserves
+     * from {@code destination}, so the merged graph lands directly inside the embedder's container
+     * — after whatever header it reserved — instead of a standalone file it then has to copy.
+     * <p>
+     * The reservation is committed once the body is written and forced; any failure leaves it
+     * uncommitted, and closing it un-committed is what tells the embedder to discard the partial
+     * output. {@link CompactionDestination#toFile(Path)} recovers the standalone-file behaviour of
+     * {@link #compact(Path)}.
+     */
+    @Experimental
+    public void compact(CompactionDestination destination) throws FileNotFoundException {
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
-        try {
-            compactGraphImpl(outputPath, strategy);
-            releaseSourcesBeforeRefine(strategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(outputPath, strategy);
+        try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
+            Path outputPath = reservation.file();
+            long startOffset = reservation.startOffset();
+            try {
+                compactGraphImpl(outputPath, startOffset, strategy);
+                releaseSourcesBeforeRefine(strategy);
+                if (refineAfterCompaction) {
+                    refineCompactedGraph(outputPath, startOffset, strategy);
+                }
+            } finally {
+                // Delayed until after refinement so refineCompactedGraph can read from the
+                // pre-encoded code cache appended past the projected EOF; onAfterClose unmaps it
+                // and truncates the section away. It has to run before the body length is
+                // measured, or the commit would report the cache section as part of the graph.
+                strategy.onAfterClose(outputPath);
             }
-        } finally {
-            // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
-            // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
-            strategy.onAfterClose(outputPath);
+            commit(reservation, outputPath, startOffset);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Compaction failed", e);
         }
+    }
+
+    /**
+     * Forces the written body to durable storage and fulfills the reservation. Forcing is the
+     * compactor's job, not the embedder's: {@code commit} is specified to be signalled after the
+     * body is durable, and only the compactor knows when the last write landed.
+     */
+    private void commit(CompactionDestination.OutputReservation reservation, Path outputPath, long startOffset)
+            throws IOException {
+        long bodyLength;
+        try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
+            fc.force(true);
+            bodyLength = fc.size() - startOffset;
+        }
+        reservation.commit(bodyLength);
     }
 
     /**
@@ -530,6 +569,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        compact(CompactionDestination.toFile(graphPath), compressedPath);
+    }
+
+    /**
+     * Compaction entry point for graphs that ship a non-fused compressed sidecar, writing the
+     * merged graph into a region reserved from {@code destination} (see
+     * {@link #compact(CompactionDestination)}) and the merged compressed vectors to
+     * {@code compressedPath}.
+     * <p>
+     * The sidecar is written before the reservation is committed, so a sidecar failure aborts the
+     * whole compaction rather than committing a graph whose companion file is missing.
+     */
+    @Experimental
+    public void compact(CompactionDestination destination, Path compressedPath) throws FileNotFoundException {
         if (sourceCompressed == null) {
             throw new IllegalStateException(
                     "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
@@ -540,17 +593,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
         QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
         QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
-        try {
-            sidecarStrategy.retrain(similarityFunction);
-            compactGraphImpl(graphPath, inlineStrategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(graphPath, inlineStrategy);
+        try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
+            Path graphPath = reservation.file();
+            long startOffset = reservation.startOffset();
+            try {
+                sidecarStrategy.retrain(similarityFunction);
+                compactGraphImpl(graphPath, startOffset, inlineStrategy);
+                if (refineAfterCompaction) {
+                    refineCompactedGraph(graphPath, startOffset, inlineStrategy);
+                }
+                sidecarStrategy.writeSidecar(compressedPath);
+            } finally {
+                inlineStrategy.onAfterClose(graphPath);
             }
-            sidecarStrategy.writeSidecar(compressedPath);
+            commit(reservation, graphPath, startOffset);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
-        } finally {
-            inlineStrategy.onAfterClose(graphPath);
         }
     }
 
@@ -616,7 +674,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
-    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+    private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy)
+            throws FileNotFoundException {
         this.spillParent = outputPath.toAbsolutePath().getParent();
         strategy.retrain(similarityFunction);
 
@@ -646,7 +705,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, startOffset, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
@@ -691,7 +750,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Only L0 records are written. Upper-layer neighbor lists live in an in-memory map after
      * load and have no addressable file offset, so they're left as written by compactLevels.
      */
-    private void refineCompactedGraph(Path outputPath, QuantizationCompactionStrategy strategy) {
+    private void refineCompactedGraph(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy) {
         log.info("Refining compacted graph: {}", outputPath);
         long t0 = System.nanoTime();
 
@@ -718,7 +777,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // useFooter=false because the file's logical EOF (where the v6 footer trailer sits) is
             // before the still-attached pre-encode cache section. loadFromFooter() would seek to
             // the actual file length and read garbage as the magic.
-            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, 0, false);
+            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, startOffset, false);
 
             // Pick the iteration set: when there's a hierarchy, refine only L1 nodes (each also
             // lives in L0, so their L0 record is what we rewrite). Mirrors GraphIndexBuilder's

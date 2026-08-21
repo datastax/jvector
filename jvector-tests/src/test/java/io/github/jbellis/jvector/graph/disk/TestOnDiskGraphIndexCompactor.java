@@ -45,11 +45,15 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
@@ -562,6 +566,144 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             graphs.add(OnDiskGraphIndex.load(rss.get(i)));
         }
         return graphs;
+    }
+
+    /**
+     * Compaction into an embedder's container: the graph body must land at the reserved offset,
+     * leave the embedder's preamble untouched, report its own length to commit(), and load and
+     * search correctly from that offset.
+     */
+    @Test
+    public void testCompactToDestinationAtOffset() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        // An embedder's container: a preamble it reserved, then the graph body.
+        final int preambleSize = 4096;
+        byte[] preamble = new byte[preambleSize];
+        new Random(42).nextBytes(preamble);
+        Path container = testDirectory.resolve("container_with_graph");
+        try (FileChannel fc = FileChannel.open(container,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+            fc.write(ByteBuffer.wrap(preamble), 0);
+        }
+
+        AtomicLong committedLength = new AtomicLong(-1);
+        AtomicInteger closes = new AtomicInteger();
+        CompactionDestination destination = () -> new CompactionDestination.OutputReservation() {
+            @Override
+            public Path file() {
+                return container;
+            }
+
+            @Override
+            public long startOffset() {
+                return preambleSize;
+            }
+
+            @Override
+            public void commit(long bodyLength) {
+                committedLength.set(bodyLength);
+            }
+
+            @Override
+            public void close() {
+                closes.incrementAndGet();
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.compact(destination);
+
+        assertEquals("reservation must be closed exactly once", 1, closes.get());
+        assertTrue("commit() must report a positive body length", committedLength.get() > 0);
+        assertEquals("body length must be the container size past the reserved offset",
+                Files.size(container) - preambleSize, committedLength.get());
+
+        // The embedder's preamble must be exactly as it was.
+        byte[] readBack = new byte[preambleSize];
+        try (FileChannel fc = FileChannel.open(container, StandardOpenOption.READ)) {
+            fc.read(ByteBuffer.wrap(readBack), 0);
+        }
+        assertTrue("compaction must not disturb the embedder's reserved preamble",
+                Arrays.equals(preamble, readBack));
+
+        // The body must load and search from its offset.
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(container)) {
+            var compactGraph = OnDiskGraphIndex.load(rs, preambleSize);
+            assertEquals("Compacted graph should have all nodes",
+                    numSources * numVectorsPerGraph, compactGraph.size(0));
+
+            int topK = 10;
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < numQueries; ++i) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> groundTruth = buildGT(queries, topK);
+            List<SearchResult> results = new ArrayList<>();
+            try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
+                for (VectorFloat<?> q : queries) {
+                    results.add(searcher.search(
+                            DefaultSearchScoreProvider.exact(q, similarityFunction, allravv), topK, Bits.ALL));
+                }
+            }
+            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
+            assertTrue(String.format("Recall from an offset graph should be at least 0.2, got %.4f", recall),
+                    recall >= 0.2);
+        }
+    }
+
+    /**
+     * A failed compaction must leave the reservation uncommitted, which is the signal the embedder
+     * uses to discard the partial output.
+     */
+    @Test
+    public void testFailedCompactionDoesNotCommit() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        AtomicInteger commits = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        // A directory can be neither created nor written as a file, so the compactor fails partway.
+        Path undirectable = testDirectory.resolve("not_a_file");
+        Files.createDirectory(undirectable);
+        CompactionDestination destination = () -> new CompactionDestination.OutputReservation() {
+            @Override
+            public Path file() {
+                return undirectable;
+            }
+
+            @Override
+            public long startOffset() {
+                return 0;
+            }
+
+            @Override
+            public void commit(long bodyLength) {
+                commits.incrementAndGet();
+            }
+
+            @Override
+            public void close() {
+                closes.incrementAndGet();
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        try {
+            compactor.compact(destination);
+            throw new AssertionError("compaction into an unwritable destination should have failed");
+        } catch (RuntimeException | java.io.FileNotFoundException expected) {
+            // expected
+        }
+        assertEquals("a failed compaction must not commit", 0, commits.get());
+        assertEquals("the reservation must still be closed", 1, closes.get());
     }
 
     /**
