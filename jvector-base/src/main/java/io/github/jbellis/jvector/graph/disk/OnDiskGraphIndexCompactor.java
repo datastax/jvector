@@ -240,6 +240,42 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // falls back to its own search. Exact duplicates certify with no extension at all.
     private static final int CLUSTER_MARGIN = 32;
     private static final int CLUSTER_EXT_STEP = 16;
+    // Batch-prefetch accounting. The own-record prefetch below is gated on the batch's
+    // ordinals forming a dense range; under similarity ordering they often do not, and a
+    // silently-declined prefetch is indistinguishable from one that ran. Count both so an
+    // above-RAM run can say which happened.
+    /** Whether to asynchronously hint the cross-source seed records before the beam search
+     * that reads them. On by default; set {@code jvector.compaction.crossSourceSeedPrefetch=false}
+     * for a baseline arm. */
+    static final boolean CROSS_SOURCE_SEED_PREFETCH = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.crossSourceSeedPrefetch", "true"));
+
+    /** Cross-source seed records hinted. */
+    final java.util.concurrent.atomic.AtomicLong seedHints = new java.util.concurrent.atomic.AtomicLong();
+
+    final java.util.concurrent.atomic.AtomicLong batchPrefetchIssued = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong batchPrefetchDeclined = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Density factor for the own-record batch prefetch: warm [lo,hi] when the span is no wider
+     * than this multiple of the batch size. The 8 was chosen against a cache-resident working
+     * set, where a sparse warm is pure waste; above RAM a sparse warm still converts 4 KB
+     * demand faults into one sequential stream, so the useful factor is larger. Override with
+     * {@code jvector.compaction.batchPrefetchDensity}; 0 disables the prefetch entirely
+     * (baseline arm), a negative value makes it unconditional. */
+    static final long BATCH_PREFETCH_DENSITY = resolveBatchPrefetchDensity();
+
+    private static long resolveBatchPrefetchDensity() {
+        try {
+            String raw = System.getProperty("jvector.compaction.batchPrefetchDensity");
+            if (raw != null && !raw.isBlank()) {
+                return Long.parseLong(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // Malformed tuning must not fail a compaction.
+        }
+        return 8L;
+    }
+
     final java.util.concurrent.atomic.AtomicLong clusterResumes = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong clusterCertified = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong clusterAnchors = new java.util.concurrent.atomic.AtomicLong();
@@ -1491,8 +1527,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 lo = Math.min(lo, bs.nodes[i]);
                 hi = Math.max(hi, bs.nodes[i]);
             }
-            if ((long) hi - lo <= 8L * (bs.end - bs.start)) {
+            boolean dense = BATCH_PREFETCH_DENSITY < 0
+                    || (BATCH_PREFETCH_DENSITY > 0
+                        && (long) hi - lo <= BATCH_PREFETCH_DENSITY * (bs.end - bs.start));
+            if (dense) {
                 sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+                batchPrefetchIssued.incrementAndGet();
+            } else {
+                batchPrefetchDeclined.incrementAndGet();
             }
         }
 
@@ -2064,6 +2106,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         : 0;
                 if (seedCount > 0) {
                     seededSearches.incrementAndGet();
+                    // The seed set is the one part of a cross-source search that is known
+                    // BEFORE any read: these are the exact entry points the beam will expand
+                    // first. Everything after them is data-dependent and stays demand-faulted
+                    // (see the batch-prefetch note in computeBaseBatch), so this is the only
+                    // place in this path where a batch hint is possible at all. Hints are
+                    // asynchronous and advisory: issuing them back-to-back puts several reads
+                    // in flight before initializeWithSeeds blocks on the first one.
+                    if (CROSS_SOURCE_SEED_PREFETCH) {
+                        var otherSource = sources.get(sourceIdx);
+                        for (int si = 0; si < seedCount; si++) {
+                            otherSource.willNeedL0Record(scratch.seedNodes[si]);
+                        }
+                        seedHints.addAndGet(seedCount);
+                    }
                     scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
                             scratch.seedNodes, scratch.seedScores, seedCount);
                     scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);

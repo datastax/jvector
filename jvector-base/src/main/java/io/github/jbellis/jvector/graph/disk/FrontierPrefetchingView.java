@@ -38,13 +38,39 @@ import java.util.Arrays;
  * property {@code jvector.compaction.frontierPrefetch} to the per-expansion hint width.
  */
 final class FrontierPrefetchingView extends OnDiskGraphIndex.View {
-    /** Number of top-scored shadow-queue entries hinted per expansion. 3 is the measured knee:
-     * deeper ranks are displaced before expansion, so wider hinting buys waste, not overlap. */
-    static final int WIDTH = 3;
-
     /** Shadow queue capacity. Must comfortably exceed WIDTH; 32 tracks the searcher's queue
      * top closely while keeping per-neighbor maintenance a few-element shift. */
     private static final int SHADOW_CAP = 32;
+
+    /** Number of top-scored shadow-queue entries hinted per expansion.
+     *
+     * <p>3 was the measured knee ON A CACHE-RESIDENT WORKING SET, where deeper ranks are
+     * displaced before expansion and wider hinting buys waste rather than overlap. That
+     * measurement does not transfer above RAM: when the expansion that a hint covers would
+     * otherwise be a cold ~100us device read, a hint that is displaced before use costs one
+     * wasted record-sized readahead, while a hint that lands removes a full stall. The knee
+     * moves out with the miss rate, and the device wants queue depth that a 3-deep hint per
+     * thread cannot supply.
+     *
+     * <p>Now honours {@code jvector.compaction.frontierPrefetch}, the property this class's
+     * javadoc has always documented but never read. Default remains 3, so unset behaviour is
+     * unchanged; 0 disables hinting entirely, which is the clean A/B baseline. Clamped to
+     * {@link #SHADOW_CAP} because a hint beyond the shadow queue has nothing to name. */
+    static final int WIDTH = resolveWidth();
+
+    private static int resolveWidth() {
+        int w = 3;
+        try {
+            String raw = System.getProperty("jvector.compaction.frontierPrefetch");
+            if (raw != null && !raw.isBlank()) {
+                w = Integer.parseInt(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // A malformed width must not fail a compaction; keep the default.
+        }
+        return Math.max(0, Math.min(w, SHADOW_CAP));
+    }
+
 
     private final OnDiskGraphIndex index;
     // Approximate dedup of recent hints: direct-mapped by low ordinal bits. A collision only

@@ -146,6 +146,12 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     public static class Supplier implements ReaderSupplier {
+        /** Whether to advise MADV_RANDOM on the mapping. See the rationale at the advice
+         * call site. Default true (unchanged behaviour); {@code jvector.disk.adviseRandom=false}
+         * leaves kernel readahead enabled, for above-RAM compaction measurement. */
+        private static final boolean ADVISE_RANDOM = !"false".equalsIgnoreCase(
+                System.getProperty("jvector.disk.adviseRandom", "true"));
+
         private static final int POSIX_FADV_WILLNEED = 3; // Value for Linux
         // fd-side advice handles; unlike MADV_WILLNEED (a no-op on some platforms), fadvise
         // WILLNEED reliably initiates async readahead into the (shared) page cache
@@ -195,8 +201,29 @@ public class MemorySegmentReader implements RandomAccessReader {
                 // readahead extrapolates from file adjacency, which a diversity-pruned graph's
                 // edges deliberately avoid — wider speculative reads are wasted bandwidth.
                 // Targeted asynchronous warming goes through willNeed() instead.
+                //
+                // The cost of this advice is that there is NO FALLBACK: with readahead off,
+                // every uncached touch is exactly one page-sized read, so any access the
+                // targeted warming fails to cover costs a full device round trip and coalesces
+                // with nothing. That trade is right for search (a point lookup reads one record
+                // and stops) and questionable for compaction, whose base-layer phase will touch
+                // essentially every page of both sources -- measured 2026-08-23 on a 1B-row
+                // merge: 113k reads/s at a 4.00 KB mean request size, device 99% util, 50%
+                // iowait, 0.000 MiB/s of actual merge byte progress.
+                //
+                // `jvector.disk.adviseRandom=false` leaves the mapping on the kernel default so
+                // readahead can absorb what the hints miss. EXPERIMENTAL and process-wide: it
+                // affects search mappings too, so it is an A/B knob for above-RAM compaction
+                // measurement, not a production default. The principled fix is per-reader
+                // advice -- a compaction-time supplier that declines this while search keeps it.
                 var linker = Linker.nativeLinker();
-                var maybeMadvise = linker.defaultLookup().find("posix_madvise");
+                var maybeMadvise = ADVISE_RANDOM
+                        ? linker.defaultLookup().find("posix_madvise")
+                        : java.util.Optional.<java.lang.foreign.MemorySegment>empty();
+                if (!ADVISE_RANDOM) {
+                    logger.info("jvector.disk.adviseRandom=false: mapping left on the kernel "
+                            + "default, readahead enabled");
+                }
                 if (maybeMadvise.isPresent()) {
                     var madvise = linker.downcallHandle(maybeMadvise.get(),
                             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
@@ -204,7 +231,7 @@ public class MemorySegmentReader implements RandomAccessReader {
                     if (result != 0) {
                         throw new IOException("posix_madvise failed with error code: " + result);
                     }
-                } else if (maybeMadvise.isEmpty()) {
+                } else if (ADVISE_RANDOM) {
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
                 }
             } catch (Throwable e) {
