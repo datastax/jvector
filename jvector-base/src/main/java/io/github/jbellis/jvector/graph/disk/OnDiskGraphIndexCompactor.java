@@ -244,6 +244,47 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // ordinals forming a dense range; under similarity ordering they often do not, and a
     // silently-declined prefetch is indistinguishable from one that ran. Count both so an
     // above-RAM run can say which happened.
+    /** Window size, in node ordinals, for the source pretouch below. Bounds how much of a
+     * source is streamed per call, so transient page-cache demand stays proportional to the
+     * window rather than the whole file -- the shape {@link
+     * io.github.jbellis.jvector.disk.ReaderSupplier#prefetch(long, long)} documents. Override
+     * with {@code jvector.compaction.sourcePretouchWindowNodes}. */
+    static final int SOURCE_PRETOUCH_WINDOW_NODES =
+            (int) resolveLongProperty("jvector.compaction.sourcePretouchWindowNodes", 1 << 20);
+
+    /** Per-source cap on pretouched ordinals. 0 (default) disables the pretouch entirely;
+     * -1 warms the whole source.
+     *
+     * <p>This is the "windowed guard", and it is deliberately NOT 670f5588's
+     * skip-when-sources-exceed-MemAvailable rule. That rule self-disables in exactly the
+     * above-RAM regime that motivates the pretouch: on a 1B-row merge the sources are hundreds
+     * of GB against a few hundred GB of cache, so the whole-file test fails and the pass never
+     * runs. A cap lets an operator warm the leading N ordinals of each source -- as much as the
+     * cache can actually hold -- instead of choosing between everything and nothing.
+     *
+     * <p>Default off because whether it pays depends on the consuming phase's ACCESS ORDER, not
+     * just on size. CODE_PRE_ENCODE sweeps every live node in order and a warm window is still
+     * resident when it arrives; PQ_RETRAIN samples randomly across the source, so on an
+     * over-capacity source the head is evicted before it is sampled and the pass is pure cost.
+     * Measure per phase before turning this on. */
+    static final long SOURCE_PRETOUCH_MAX_NODES =
+            resolveLongProperty("jvector.compaction.sourcePretouchMaxNodes", 0L);
+
+    /** Ordinals streamed by the source pretouch. */
+    final java.util.concurrent.atomic.AtomicLong pretouchedNodes = new java.util.concurrent.atomic.AtomicLong();
+
+    private static long resolveLongProperty(String key, long fallback) {
+        try {
+            String raw = System.getProperty(key);
+            if (raw != null && !raw.isBlank()) {
+                return Long.parseLong(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // Malformed tuning must not fail a compaction.
+        }
+        return fallback;
+    }
+
     /** Whether to asynchronously hint the cross-source seed records before the beam search
      * that reads them. On by default; set {@code jvector.compaction.crossSourceSeedPrefetch=false}
      * for a baseline arm. */
@@ -761,12 +802,66 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
+    /**
+     * Streams each source's L0 records into the page cache, in bounded windows, before the bulk
+     * phases read them.
+     *
+     * <p>Source readers advise {@code MADV_RANDOM}, which is right for search but disables
+     * kernel readahead, so a bulk phase that touches every node faults one page-sized read at a
+     * time and coalesces with nothing. Measured 2026-08-23 on a 1B-row merge: 113k reads/s at a
+     * 4.00 KB mean request size with the device at 99% util and 0.000 MiB/s of merge byte
+     * progress. A sequential warm reads the same bytes at streaming rate instead.
+     *
+     * <p>Windows are streamed one at a time rather than fanned out across sources: {@link
+     * OnDiskGraphIndex#prefetchL0Records} is synchronous, and overlapping several streams on one
+     * device turns the sequential access this exists to create back into something the elevator
+     * has to sort. Whether per-source parallelism wins on a wide array is worth measuring, and
+     * is why the window is a knob.
+     *
+     * <p>Best-effort throughout: {@code prefetchL0Records} is a no-op on suppliers that cannot
+     * warm, and a failure here must never fail a compaction.
+     */
+    private void pretouchSources() {
+        if (SOURCE_PRETOUCH_MAX_NODES == 0 || SOURCE_PRETOUCH_WINDOW_NODES <= 0) {
+            return;
+        }
+        long cap = SOURCE_PRETOUCH_MAX_NODES < 0 ? Long.MAX_VALUE : SOURCE_PRETOUCH_MAX_NODES;
+        long warmed = 0;
+        long start = System.nanoTime();
+        for (int s = 0; s < sources.size(); s++) {
+            // liveNodes.length() == source.getIdUpperBound(), validated at construction.
+            int upper = liveNodes.get(s).length();
+            long limit = Math.min(cap, upper);
+            for (long lo = 0; lo < limit; lo += SOURCE_PRETOUCH_WINDOW_NODES) {
+                int hi = (int) Math.min(lo + SOURCE_PRETOUCH_WINDOW_NODES - 1, limit - 1);
+                try {
+                    sources.get(s).prefetchL0Records((int) lo, hi);
+                } catch (RuntimeException e) {
+                    log.warn("source pretouch failed for source {} window [{},{}]; continuing",
+                             s, lo, hi, e);
+                    break;
+                }
+                warmed += hi - lo + 1;
+            }
+        }
+        pretouchedNodes.addAndGet(warmed);
+        log.info("Source pretouch: warmed {} ordinals across {} sources in {} ms "
+                 + "(window={}, cap={})",
+                 warmed, sources.size(), (System.nanoTime() - start) / 1_000_000,
+                 SOURCE_PRETOUCH_WINDOW_NODES, SOURCE_PRETOUCH_MAX_NODES);
+    }
+
     private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy)
             throws FileNotFoundException {
         this.spillParent = outputPath.toAbsolutePath().getParent();
         // Codebook retraining is one indivisible unit of work from the outside: no intermediate
         // count is meaningful, so the phase opens and closes without a progress report.
         try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
+            // Accounted to PQ_RETRAIN rather than given its own CompactionStage: the enum is
+            // part of the host-visible phase surface (Cassandra reports it as
+            // sai_vector_compaction_phase), and a new constant there would change what hosts
+            // see for a pass that is off by default.
+            pretouchSources();
             strategy.retrain(similarityFunction);
         }
 
