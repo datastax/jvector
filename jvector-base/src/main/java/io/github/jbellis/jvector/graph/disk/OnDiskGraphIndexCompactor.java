@@ -294,6 +294,30 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Cross-source seed records hinted. */
     final java.util.concurrent.atomic.AtomicLong seedHints = new java.util.concurrent.atomic.AtomicLong();
 
+    /**
+     * Whether to asynchronously hint the cluster-path rescore lists before reading them.
+     *
+     * <p>{@code gatherFromOtherSource}'s clusterMode branch is the one cross-source path with no
+     * batch hint at all: the seed hint covers only the SEEDED branch, and
+     * {@link FrontierPrefetchingView} hints the searcher's frontier, not the exact-rescore reads
+     * that follow. Two loops in that branch do have their candidate list in hand before the first
+     * read — the member-rescore loop in {@link #clusterSearchL0} and the resume-rescore loop in
+     * {@link #extendAnchor} — which is exactly the shape {@code gatherFromSameSource} already
+     * batch-hints.
+     *
+     * <p>Measured 2026-08-24 on a 1B-row table: 38 of 94 RUNNABLE compaction threads were in
+     * {@code clusterSearchL0} and 1 was in {@code gatherFromSameSource}, i.e. the existing batch
+     * hint covers the branch carrying 1 of 39 threads.
+     *
+     * <p>OFF by default so enabling it is the single variable in an A/B against the prior arm.
+     * Set {@code jvector.compaction.clusterRescorePrefetch=true}.
+     */
+    static final boolean CLUSTER_RESCORE_PREFETCH = "true".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.clusterRescorePrefetch", "false"));
+
+    /** Cluster-path rescore records hinted. */
+    final java.util.concurrent.atomic.AtomicLong clusterRescoreHints = new java.util.concurrent.atomic.AtomicLong();
+
     final java.util.concurrent.atomic.AtomicLong batchPrefetchIssued = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong batchPrefetchDeclined = new java.util.concurrent.atomic.AtomicLong();
 
@@ -1428,6 +1452,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
                             clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
                             clusterCertified.get() + clusterAnchors.get());
+                    // Report the hint count unconditionally when the cluster path ran, so a zero
+                    // here is visible evidence the gate is off or the hints are not reaching the
+                    // device -- rather than silence, which is what hid the ReaderSupplier no-op.
+                    log.info("Cluster rescore prefetch: enabled={} hints={}",
+                            CLUSTER_RESCORE_PREFETCH, clusterRescoreHints.get());
                 }
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
@@ -1812,6 +1841,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // score any anchor-list entries this member hasn't scored yet
                     int[] nodes = scratch.clusterNodes[targetIdx];
                     float[] ms = scratch.clusterMemberScores;
+                    // The anchor list is fully known before the first vector is read, so hint the
+                    // whole unscored suffix and let the reads below overlap in the device queue
+                    // instead of paying one fault of latency each, serially. Same argument as
+                    // gatherFromSameSource; this branch simply never had it.
+                    if (CLUSTER_RESCORE_PREFETCH && n > verified) {
+                        var target = sources.get(targetIdx);
+                        int hinted = 0;
+                        for (int i = verified; i < n; i++) {
+                            if (indexAlive.get(nodes[i])) {
+                                target.willNeedL0Record(nodes[i]);
+                                hinted++;
+                            }
+                        }
+                        clusterRescoreHints.addAndGet(hinted);
+                    }
                     for (int i = verified; i < n; i++) {
                         ms[i] = indexAlive.get(nodes[i])
                                 ? rescore(searchView, nodes[i], baseVec, scratch.tmpVec)
@@ -1871,6 +1915,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int got = 0;
         float worst = scratch.clusterWorstSim[targetIdx];
         VectorFloat<?> anchorQuery = scratch.clusterAnchorQuery[targetIdx];
+        // resume() has already produced the complete result set, so every record the rescore
+        // below reads is known now. Hint them all before blocking on the first.
+        if (CLUSTER_RESCORE_PREFETCH && params.fusedPQEnabled) {
+            var target = sources.get(targetIdx);
+            int hinted = 0;
+            for (var r : more.getNodes()) {
+                target.willNeedL0Record(r.node);
+                hinted++;
+            }
+            clusterRescoreHints.addAndGet(hinted);
+        }
         for (var r : more.getNodes()) {
             float ex = params.fusedPQEnabled
                     ? rescoreAgainst(searchView, r.node, anchorQuery, scratch.tmpVec)
