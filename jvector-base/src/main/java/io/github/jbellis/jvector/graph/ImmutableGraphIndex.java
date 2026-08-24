@@ -78,6 +78,17 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     View getView();
 
     /**
+     * Returns a new {@link Searcher} (currently always a {@link GraphSearcher}) over a fresh
+     * {@link #getView()} of this graph.
+     * <p>
+     * For in-memory graphs it is generally better to call this once per search rather than reusing
+     * an instance across concurrent searches, since {@link Searcher} implementations are not thread-safe.
+     */
+    default Searcher searcher() {
+        return new GraphSearcher(this);
+    }
+
+    /**
      * @return the maximum number of edges per node across any layer
      */
     int maxDegree();
