@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
@@ -386,6 +387,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             int dimension;
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
                 dimension = ((InlineVectors) features.get(FeatureId.INLINE_VECTORS)).dimension();
+            } else if (features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
+                dimension = ((InlineByteVectors) features.get(FeatureId.INLINE_BYTE_VECTORS)).dimension();
             } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
                 dimension = ((NVQ) features.get(FeatureId.NVQ_VECTORS)).dimension();
             } else if (features.containsKey(FeatureId.SEPARATED_VECTORS)) {
