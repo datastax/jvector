@@ -433,7 +433,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+    public PersistableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -537,7 +537,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    public ImmutableGraphIndex getGraph() {
+    public PersistableGraphIndex getGraph() {
         return graph;
     }
 
@@ -1007,7 +1007,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+    public static PersistableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
@@ -1036,7 +1036,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+    public static PersistableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
                                                             RemappedRandomAccessVectorValues newVectors,
                                                             BuildScoreProvider buildScoreProvider,
                                                             int startingNodeOffset,
