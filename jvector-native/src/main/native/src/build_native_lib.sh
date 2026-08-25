@@ -26,14 +26,12 @@ set -x
 # anywhere inside the repo).
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-SCRIPT_DIR="${REPO_ROOT}/jvector-native/src/main/native/src"
 NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
 MODULE_ROOT="${REPO_ROOT}/jvector-native"
 
 HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
 BUILD_DIR="${MODULE_ROOT}/target/meson-build"
 RESOURCES_DIR="${MODULE_ROOT}/src/main/resources"
-JAVA_OUT_DIR="${MODULE_ROOT}/src/main/java"
 
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
 printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
@@ -115,23 +113,3 @@ if [ -z "${SOFILE}" ]; then
     exit 1
 fi
 cp "${SOFILE}" "${RESOURCES_DIR}/libjvector.so"
-
-# Generate Java source code
-# Should only be run when c header changes
-# Check if jextract is available before running
-if ! command -v jextract &> /dev/null
-then
-    echo "WARNING: jextract could not be found, please install it if you need to update bindings."
-    exit 0
-fi
-
-jextract \
-  --output "${JAVA_OUT_DIR}" \
-  -t io.github.jbellis.jvector.vector.cnative \
-  -I "${SCRIPT_DIR}" \
-  --header-class-name NativeSimdOps \
-  "${SCRIPT_DIR}/jvector_simd.h"
-
-# Set critical linker option with heap-based segments for all generated methods
-sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' \
-  "${JAVA_OUT_DIR}/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java"

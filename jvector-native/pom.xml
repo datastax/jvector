@@ -13,6 +13,7 @@
     <name>Native</name>
     <properties>
         <native.buildtype>release</native.buildtype>
+        <native.jextract.skip>true</native.jextract.skip>
     </properties>
     <build>
         <plugins>
@@ -130,14 +131,31 @@
                         <artifactId>exec-maven-plugin</artifactId>
                         <executions>
                             <execution>
-                                <id>execute-jextract-compile-script</id>
+                                <id>jextract-generate</id>
+                                <!-- Note that jextract in the generate-sources phase runs before the .so is built in the generate-resources phase -->
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>bash</executable>
+                                    <arguments>
+                                        <argument>jextract_generate_bindings.sh</argument>
+                                    </arguments>
+                                    <skip>${native.jextract.skip}</skip>
+                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>execute-native-compile-script</id>
                                 <phase>generate-resources</phase>
                                 <goals>
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>./jextract_vector_simd.sh</executable>
+                                    <executable>bash</executable>
                                     <arguments>
+                                        <argument>build_native_lib.sh</argument>
                                         <argument>${native.buildtype}</argument>
                                     </arguments>
                                     <skip>false</skip>
