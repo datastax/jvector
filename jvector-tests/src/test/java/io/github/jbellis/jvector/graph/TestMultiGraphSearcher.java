@@ -31,6 +31,11 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -164,6 +169,109 @@ public class TestMultiGraphSearcher extends LuceneTestCase {
         try (var searcher = new MultiGraphSearcher(List.of(shardA, shardB))) {
             List<SearchScoreProvider> onlyOneProvider = List.of(DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsA));
             assertThrows(IllegalArgumentException.class, () -> searcher.search(onlyOneProvider, 5, 20));
+        }
+    }
+
+    @Test
+    public void testParallelExecutorMatchesSequentialResult() throws Exception {
+        // Three shards so fan-out actually has something to parallelize.
+        var vectorsA = new TestVectorGraph.CircularFloatVectorValues(20);
+        var vectorsB = new TestVectorGraph.CircularFloatVectorValues(15);
+        var vectorsC = new TestVectorGraph.CircularFloatVectorValues(12);
+        var shardA = buildShard(vectorsA);
+        var shardB = buildShard(vectorsB);
+        var shardC = buildShard(vectorsC);
+        var q = query();
+        int topK = 5;
+
+        List<SearchScoreProvider> providers = List.of(
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsA),
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsB),
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsC));
+
+        ShardedSearchResult sequential;
+        try (var searcher = new MultiGraphSearcher(List.of(shardA, shardB, shardC))) {
+            sequential = searcher.search(providers, topK, 20);
+        }
+
+        var counting = new CountingExecutor(Executors.newFixedThreadPool(2));
+        try {
+            try (var searcher = MultiGraphSearcher.builder(List.of(shardA, shardB, shardC))
+                    .withExecutor(counting)
+                    .build())
+            {
+                var parallel = searcher.search(providers, topK, 20);
+                assertEquals("parallel fan-out must merge to the same result as sequential search",
+                        sequential, parallel);
+            }
+            assertEquals("expected one task submitted per shard", 3, counting.tasksExecuted.get());
+        } finally {
+            counting.shutdown();
+            assertTrue(counting.awaitTermination(10, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void testBuilderWithoutExecutorBehavesLikeConstructor() throws Exception {
+        var vectorsA = new TestVectorGraph.CircularFloatVectorValues(20);
+        var vectorsB = new TestVectorGraph.CircularFloatVectorValues(15);
+        var shardA = buildShard(vectorsA);
+        var shardB = buildShard(vectorsB);
+        var q = query();
+
+        List<SearchScoreProvider> providers = List.of(
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsA),
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsB));
+
+        try (var viaConstructor = new MultiGraphSearcher(List.of(shardA, shardB));
+             var viaBuilder = MultiGraphSearcher.builder(List.of(shardA, shardB)).build())
+        {
+            assertEquals(viaConstructor.search(providers, 5, 20), viaBuilder.search(providers, 5, 20));
+        }
+    }
+
+    /**
+     * Delegating {@link ExecutorService} that counts how many tasks were actually submitted to it,
+     * so tests can confirm the parallel fan-out path was exercised rather than silently falling
+     * back to sequential execution.
+     */
+    private static final class CountingExecutor extends AbstractExecutorService {
+        private final ExecutorService delegate;
+        final AtomicInteger tasksExecuted = new AtomicInteger();
+
+        CountingExecutor(ExecutorService delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            tasksExecuted.incrementAndGet();
+            delegate.execute(command);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
         }
     }
 }
