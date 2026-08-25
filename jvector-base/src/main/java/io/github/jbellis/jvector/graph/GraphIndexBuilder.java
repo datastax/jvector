@@ -35,6 +35,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ForkJoinPool;
@@ -435,16 +436,30 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
-        int size = ravv.size();
+        try {
+            int size = ravv.size();
 
-        simdExecutor.submit(() -> {
-            IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
+            simdExecutor.submit(() -> {
+                IntStream.range(0, size).parallel().forEach(node -> {
+                    addGraphNode(node, vv.get().getVector(node));
+                });
+            }).join();
+        } finally {
+            closeThreadLocalSupplier(vv);
+        }
 
         cleanup();
         return graph;
+    }
+
+    private static void closeThreadLocalSupplier(Supplier<RandomAccessVectorValues> supplier) {
+        if (supplier instanceof AutoCloseable) {
+            try {
+                ((AutoCloseable) supplier).close();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
     /**
      * Validates that the current entry node has been completely added.
@@ -1069,11 +1084,14 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             );
 
             var vv = newVectors.threadLocalSupplier();
-
-            // parallel graph construction from the merge documents Ids
-            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(ord));
-            })).join();
+            try {
+                // parallel graph construction from the merge documents Ids
+                simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
+                    builder.addGraphNode(ord, vv.get().getVector(ord));
+                })).join();
+            } finally {
+                closeThreadLocalSupplier(vv);
+            }
 
             builder.cleanup();
             return builder.getGraph();
