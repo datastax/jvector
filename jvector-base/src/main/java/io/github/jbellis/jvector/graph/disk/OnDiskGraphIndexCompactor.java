@@ -318,6 +318,26 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Cluster-path rescore records hinted. */
     final java.util.concurrent.atomic.AtomicLong clusterRescoreHints = new java.util.concurrent.atomic.AtomicLong();
 
+    /**
+     * Whether the cluster-certification fast path in {@link #clusterSearchL0} may run at all.
+     *
+     * <p>Measured 2026-08-21..24 over <b>1.18 billion</b> anchor searches on a 1B-row table: the
+     * fast path certified <b>0.0032%</b> of nodes, and every node spent exactly <b>1.98</b>
+     * {@link #extendAnchor} resumes -- i.e. it always exhausts {@link #CLUSTER_MARGIN} /
+     * {@link #CLUSTER_EXT_STEP} = 2 resumes, fails to certify, and runs the full fallback search
+     * anyway. Each resume exact-rescores up to CLUSTER_EXT_STEP results, and every exact rescore
+     * is a full vector read. The rate was uniform across healthy and collapsed merges and across
+     * merge sizes, so this is deterministic overhead rather than a mistuning.
+     *
+     * <p>Set {@code jvector.compaction.clusterSearch=false} to skip it. Defaults to true so the
+     * flag is the single variable in an A/B.
+     */
+    static final boolean CLUSTER_SEARCH_ENABLED = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.clusterSearch", "true"));
+
+    /** Exact rescores performed inside the cluster path; each is a full vector read. */
+    final java.util.concurrent.atomic.AtomicLong clusterRescoreReads = new java.util.concurrent.atomic.AtomicLong();
+
     final java.util.concurrent.atomic.AtomicLong batchPrefetchIssued = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong batchPrefetchDeclined = new java.util.concurrent.atomic.AtomicLong();
 
@@ -1457,6 +1477,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // device -- rather than silence, which is what hid the ReaderSupplier no-op.
                     log.info("Cluster rescore prefetch: enabled={} hints={}",
                             CLUSTER_RESCORE_PREFETCH, clusterRescoreHints.get());
+                    long certs = clusterCertified.get(), anch = clusterAnchors.get();
+                    log.info("Cluster path cost: enabled={} certified {}/{} ({}%), {} exact rescores (full vector reads)",
+                            CLUSTER_SEARCH_ENABLED, certs, certs + anch,
+                            String.format("%.4f", 100.0 * certs / Math.max(1, certs + anch)),
+                            clusterRescoreReads.get());
                 }
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
@@ -1856,11 +1881,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         }
                         clusterRescoreHints.addAndGet(hinted);
                     }
+                    int reads = 0;
                     for (int i = verified; i < n; i++) {
-                        ms[i] = indexAlive.get(nodes[i])
+                        boolean live = indexAlive.get(nodes[i]);
+                        ms[i] = live
                                 ? rescore(searchView, nodes[i], baseVec, scratch.tmpVec)
                                 : Float.NEGATIVE_INFINITY;
+                        if (live) reads++;
                     }
+                    clusterRescoreReads.addAndGet(reads);
                     verified = n;
                     int live = 0;
                     for (int i = 0; i < n; i++) {
@@ -1939,6 +1968,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         scratch.clusterCount[targetIdx] = at;
         scratch.clusterWorstSim[targetIdx] = worst;
         scratch.clusterExtended[targetIdx] += got;
+        if (params.fusedPQEnabled) clusterRescoreReads.addAndGet(got);
         return got;
     }
 
@@ -2360,6 +2390,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     private boolean clusterSearchUsable() {
+        if (!CLUSTER_SEARCH_ENABLED) {
+            return false;
+        }
         switch (similarityFunction) {
             case DOT_PRODUCT:
             case COSINE:
@@ -2418,7 +2451,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             report(scope, nodesDone, bs.end - bs.start, nodesTotal);
             int done = completed.incrementAndGet();
             if (done % 10 == 0) {
-                log.debug("Compaction I/O progress: {}/{} batches written to disk", done, total);
+                // Ordinals as well as batches: ordinals-per-batch varies from ~125 to 4,096
+                // between merges, so a batch count alone is not comparable across them. Reading
+                // rates in batches cost this investigation an 8x error in its headline figure.
+                log.debug("Compaction I/O progress: {}/{} batches written to disk ({}/{} ordinals)",
+                          done, total, nodesDone.get(), nodesTotal);
             }
         });
     }
