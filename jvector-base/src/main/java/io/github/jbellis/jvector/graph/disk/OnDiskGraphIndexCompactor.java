@@ -2832,7 +2832,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int liveCount = numLiveNodesPerSource.get(s);
             long[] keyed = new long[liveCount];
             java.util.concurrent.atomic.AtomicInteger fill = new java.util.concurrent.atomic.AtomicInteger();
-            int window = 1 << 18;
+            // Window sized to the pool, not fixed. A fixed quarter-million-node window gives a
+            // ~1M-node source four tasks, and four tasks can occupy four workers no matter how the
+            // executor splits them: measured at 380s across 7 sources on a 40-thread pool, with
+            // sources running one after another on 4 threads each. Aim for several tasks per
+            // worker so the whole pool is busy on every source; the floor keeps tasks big enough
+            // that the per-task view open and prefetch call stay amortized.
+            int window = Math.max(4096, (size + 4 * taskWindowSize - 1) / (4 * taskWindowSize));
             List<Runnable> tasks = new ArrayList<>();
             for (int from = 0; from < size; from += window) {
                 final int lo = from;
