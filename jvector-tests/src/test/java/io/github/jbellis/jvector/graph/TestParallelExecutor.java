@@ -209,6 +209,112 @@ public class TestParallelExecutor {
         }
     }
 
+    /**
+     * The drain guarantee on the fork/join path. A parallel stream propagates a body failure up
+     * through join() as soon as one branch throws, so the naive implementation let the caller
+     * resume while sibling bodies were still running on pool workers — and an embedder that frees
+     * the memory those bodies are reading (unmapping a file once the call returns) gets a SIGSEGV
+     * rather than an exception. Bodies must therefore all be finished when the call returns.
+     */
+    @Test(timeout = 30_000)
+    public void forkJoinBodyFailurePropagatesWithNothingLeftRunning() {
+        ForkJoinPool pool = new ForkJoinPool(4);
+        try {
+            ParallelExecutor pe = ParallelExecutor.forkJoin(pool);
+            RuntimeException marker = new RuntimeException("marker");
+            AtomicInteger active = new AtomicInteger();
+            AtomicInteger peakActive = new AtomicInteger();
+            try {
+                pe.forEachInt(100, i -> {
+                    int now = active.incrementAndGet();
+                    peakActive.accumulateAndGet(now, Math::max);
+                    try {
+                        if (i == 41) {
+                            throw marker;
+                        }
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        active.decrementAndGet();
+                    }
+                });
+                fail("expected the body failure to propagate");
+            } catch (RuntimeException e) {
+                assertSame("the first observed failure must propagate as-is", marker, e);
+            }
+            assertEquals("no body may still be running once the failure unwinds", 0, active.get());
+            // Without real concurrency the assertion above would hold trivially.
+            assertTrue("bodies should have run concurrently, peak was " + peakActive.get(),
+                       peakActive.get() > 1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** Same guarantee on the generic-stream path. */
+    @Test(timeout = 30_000)
+    public void forkJoinStreamBodyFailurePropagatesWithNothingLeftRunning() {
+        ForkJoinPool pool = new ForkJoinPool(4);
+        try {
+            ParallelExecutor pe = ParallelExecutor.forkJoin(pool);
+            RuntimeException marker = new RuntimeException("marker");
+            AtomicInteger active = new AtomicInteger();
+            AtomicInteger peakActive = new AtomicInteger();
+            List<Integer> items = IntStream.range(0, 100).boxed().collect(Collectors.toList());
+            try {
+                pe.forEach(items.stream(), i -> {
+                    int now = active.incrementAndGet();
+                    peakActive.accumulateAndGet(now, Math::max);
+                    try {
+                        if (i == 41) {
+                            throw marker;
+                        }
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        active.decrementAndGet();
+                    }
+                });
+                fail("expected the body failure to propagate");
+            } catch (RuntimeException e) {
+                assertSame("the first observed failure must propagate as-is", marker, e);
+            }
+            assertEquals("no body may still be running once the failure unwinds", 0, active.get());
+            assertTrue("bodies should have run concurrently, peak was " + peakActive.get(),
+                       peakActive.get() > 1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** A failure must not stop the iteration from settling every element that had already begun. */
+    @Test(timeout = 30_000)
+    public void forkJoinSkipsRemainingElementsAfterAFailure() {
+        ForkJoinPool pool = new ForkJoinPool(4);
+        try {
+            ParallelExecutor pe = ParallelExecutor.forkJoin(pool);
+            AtomicInteger completed = new AtomicInteger();
+            try {
+                pe.forEachInt(10_000, i -> {
+                    if (i == 0) {
+                        throw new IllegalStateException("boom");
+                    }
+                    completed.incrementAndGet();
+                });
+                fail("expected the body failure to propagate");
+            } catch (IllegalStateException expected) {
+                // expected
+            }
+            assertTrue("elements after the failure should be skipped, not all 10000 run, saw "
+                               + completed.get(),
+                       completed.get() < 10_000);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     @Test(timeout = 10_000)
     public void chunkingInterruptDrainsStartedWorkAndRestoresFlag() throws Exception {
         ExecutorService es = Executors.newFixedThreadPool(2);

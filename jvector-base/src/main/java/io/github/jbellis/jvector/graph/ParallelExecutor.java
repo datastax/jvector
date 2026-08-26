@@ -33,32 +33,40 @@ import java.util.stream.Stream;
  * e.g. one thread per compaction — instead of a jvector-owned all-core pool. It is the build/finalize
  * counterpart to the caller-runs executor injection already available on the compaction merge path.
  *
+ * <h2>The drain guarantee</h2>
+ * Every implementation here holds the same contract, in success <em>and</em> in failure: when the
+ * call returns, no body invocation is still running. The calling thread blocks until the iteration
+ * settles, elements after the first failure are skipped rather than started, and that first failure
+ * is rethrown to the caller.
+ *
+ * <p>This is load-bearing, not a nicety. An embedder that hands jvector a graph backed by memory it
+ * owns — a mapped file it can unmap — releases that resource once the call returns. If a body were
+ * still reading when the call unwound, the release would pull the mapping out from under it, and
+ * the process would take a SIGSEGV rather than an exception it could catch. So "returned" has to
+ * mean "nothing of mine is still running."
+ *
  * <h2>Choosing a factory</h2>
- * The provided implementations trade off differently; the caveats below are relative to each other:
+ * The implementations differ in how they distribute work, not in the guarantee above:
  * <ul>
- *   <li>{@link #forkJoin(ForkJoinPool)} — the historical behavior: each iteration is hosted as a
- *   parallel stream inside the pool, so the <em>whole</em> pipeline is decomposed — upstream stages
- *   of a stream source parallelize along with the body. Nested use from a body is safe (fork/join
- *   absorbs it). Caveats: requires a {@code ForkJoinPool} specifically; the blocking join does not
- *   respond to interruption; and parallel-stream semantics do not strictly guarantee that no body
- *   invocation is still running when a failure unwinds.</li>
+ *   <li>{@link #forkJoin(ForkJoinPool)} — each iteration is hosted as a parallel stream inside the
+ *   pool, so the <em>whole</em> pipeline is decomposed: upstream stages of a stream source
+ *   parallelize along with the body. Nested use from a body is safe (fork/join absorbs it).
+ *   Caveats: requires a {@code ForkJoinPool} specifically, and the blocking join does not respond
+ *   to interruption.</li>
  *   <li>{@link #callerRuns()} — zero threads, no pool: everything runs sequentially on the calling
- *   thread in encounter order, stopping at the first failure with nothing left running. Cannot
- *   deadlock and cannot leave work behind after unwind. Caveat: wall-clock scales with a single
- *   core.</li>
+ *   thread in encounter order. Cannot deadlock. Caveat: wall-clock scales with a single core.</li>
  *   <li>{@link #over(ExecutorService, int)} — for embedders holding a plain
  *   {@link ExecutorService}: elements are chunked and submitted while the calling thread
  *   orchestrates with a bounded in-flight window. Only the <em>body</em> is distributed — the
  *   source stream is traversed on the calling thread, so expensive upstream stages serialize
  *   (unlike {@code forkJoin}). Nested use from a body degrades to inline execution rather than
- *   deadlocking a bounded pool. On failure or interrupt it stops issuing chunks, waits out every
- *   started chunk — never unwinding beneath a still-running body — then rethrows the first failure
- *   and restores the interrupt flag. The executor's lifecycle stays with the caller; it is never
- *   shut down here.</li>
+ *   deadlocking a bounded pool. On interrupt it stops issuing chunks, waits out every started
+ *   chunk, then restores the interrupt flag. The executor's lifecycle stays with the caller; it is
+ *   never shut down here.</li>
  * </ul>
- * Common to all three: the calling thread blocks until the iteration settles, and the first
- * observed body failure is rethrown to the caller; whether other elements still run after a
- * failure differs per the caveats above.
+ * Prefer naming the one you want. {@code over} dispatches on the runtime type of what it is handed
+ * — a {@code ForkJoinPool} silently becomes {@code forkJoin} — which reads as a choice the caller
+ * made when it is not one.
  */
 public interface ParallelExecutor {
     /**
@@ -90,37 +98,23 @@ public interface ParallelExecutor {
 
     /**
      * Returns an executor backed by {@code pool}: each iteration is hosted as a parallel stream on
-     * that pool and the calling thread blocks on the result. This reproduces the behavior of the
-     * {@code ForkJoinPool}-based {@link GraphIndexBuilder} constructors. See the class javadoc for
-     * how its caveats compare with the other factories.
+     * that pool and the calling thread blocks on the result. This reproduces the work distribution
+     * of the {@code ForkJoinPool}-based {@link GraphIndexBuilder} constructors, and holds the drain
+     * guarantee described in the class javadoc.
      *
      * @param pool the pool that hosts the parallel iterations
      * @return a pool-backed {@code ParallelExecutor}
      */
     static ParallelExecutor forkJoin(ForkJoinPool pool) {
-        return new ParallelExecutor() {
-            @Override
-            public void forEachInt(int upperBound, IntConsumer body) {
-                pool.submit(() -> IntStream.range(0, upperBound).parallel().forEach(body)).join();
-            }
-
-            @Override
-            public void forEach(IntStream source, IntConsumer body) {
-                pool.submit(() -> source.parallel().forEach(body)).join();
-            }
-
-            @Override
-            public <T> void forEach(Stream<T> source, Consumer<T> body) {
-                pool.submit(() -> source.parallel().forEach(body)).join();
-            }
-        };
+        Objects.requireNonNull(pool, "pool");
+        return new ForkJoinParallelExecutor(pool);
     }
 
     /**
      * Returns an executor that runs every iteration sequentially on the calling thread — no worker
      * threads, no pool, and the common pool is left untouched. Graph structure and recall are
      * equivalent to the {@link #forkJoin(ForkJoinPool)} path; only wall-clock and thread usage differ.
-     * See the class javadoc for how its caveats compare with the other factories.
+     * Trivially holds the drain guarantee: there is nowhere else for a body to be running.
      *
      * @return a caller-runs {@code ParallelExecutor}
      */
@@ -150,8 +144,8 @@ public interface ParallelExecutor {
      * into chunks submitted to {@code executor} while the calling thread traverses the source and
      * bounds the in-flight window. Parallel streams cannot be hosted on a generic
      * {@code ExecutorService} (inside its workers they would silently run on the common pool), so
-     * this adapter distributes only the <em>body</em>; see the class javadoc for the full caveat
-     * comparison with {@link #forkJoin(ForkJoinPool)} and {@link #callerRuns()}.
+     * this adapter distributes only the <em>body</em>; see the class javadoc for how it compares
+     * with {@link #forkJoin(ForkJoinPool)} and {@link #callerRuns()}.
      * <p>
      * {@code parallelism} must be stated explicitly because {@code ExecutorService} does not expose
      * its width: state the executor's actual thread count — a larger value merely queues, a smaller
