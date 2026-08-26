@@ -2444,7 +2444,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     ) {
         final int total = batches.size();
         AtomicInteger completed = new AtomicInteger();
-        executor.forEach(batches.stream(), bs -> {
+        // By index, not as a stream, for the same reason as joinAll: the executor can only split
+        // evenly if it knows how many units there are.
+        executor.forEachInt(total, i -> {
+            BatchSpec bs = batches.get(i);
             onComplete.accept(compute.apply(bs));
             // Reported from the worker, so a phase spanning several runBatches calls (L0 runs one
             // per source group) still counts up monotonically across the whole phase.
@@ -2888,9 +2891,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return mappers;
     }
 
-    /** Runs every task to completion on the {@link ParallelExecutor}, blocking until all settle. */
+    /**
+     * Runs every task to completion on the {@link ParallelExecutor}, blocking until all settle.
+     * <p>
+     * Dispatched by index, never as a stream. These tasks are coarse — a quarter-million nodes
+     * each, a handful per source — and {@code forEach(Stream)} gives the executor no way to know
+     * that: an executor that batches stream elements for the fine-grained case will fold a
+     * four-task list onto a single worker, which turned this pass into a 55-minute
+     * single-threaded encode on a 16M-node merge. {@code forEachInt} hands over the count, which
+     * is exactly what an executor needs to split the work evenly.
+     */
     private void joinAll(List<Runnable> tasks) {
-        executor.forEach(tasks.stream(), Runnable::run);
+        executor.forEachInt(tasks.size(), i -> tasks.get(i).run());
     }
 
     private static final class Scratch implements AutoCloseable {

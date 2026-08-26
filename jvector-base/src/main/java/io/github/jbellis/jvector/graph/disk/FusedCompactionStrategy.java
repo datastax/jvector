@@ -223,7 +223,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
         AtomicLong encoded = new AtomicLong();
         final long liveTotal = ctx.liveNodes.stream().mapToLong(b -> b.cardinality()).sum();
         try (ProgressTracker.PhaseScope scope = ctx.progress.startPhase(CompactionStage.CODE_PRE_ENCODE)) {
-            rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEach(chunks.stream(), chunk -> {
+            // Dispatched by index so the executor knows the chunk count and splits evenly; as a
+            // stream, an element-batching executor ran these 640 chunks on half the pool.
+            rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEachInt(chunks.size(), ci -> {
+                final int[] chunk = chunks.get(ci);
                 final int sIdx = chunk[0], cStart = chunk[1], cEnd = chunk[2];
                 final var source = ctx.sources.get(sIdx);
                 final var alive = ctx.liveNodes.get(sIdx);
