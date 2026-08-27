@@ -784,6 +784,77 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 recall[1] >= recall[0] - 0.15);
     }
 
+    /**
+     * Step 5: the band barrier hints writeback once per band when the native advisor is present,
+     * and the band pretouch warms a target's key blocks only when the target is key-clustered —
+     * arrival-ordered sources are skipped as unclustered, a merge output (piecewise key-sorted)
+     * is warmed in the second generation.
+     */
+    @Test
+    public void testBandBarrierAndPretouch() throws Exception {
+        boolean advisor;
+        {
+            Path probe = testDirectory.resolve("advisor-probe");
+            Files.write(probe, new byte[16]);
+            var a = io.github.jbellis.jvector.disk.WritebackAdvisor.open(probe);
+            advisor = a != null;
+            if (a != null) a.close();
+        }
+        // First generation: three arrival-ordered sources. Every key block spans the whole range.
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+        var first = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        first.setSimilarityOrdinals(true);
+        Path gen1 = testDirectory.resolve("compact_gen1");
+        first.compact(gen1);
+        assertTrue("arrival-ordered targets are skipped as unclustered", first.bandPretouchSkippedUnclustered.get() > 0);
+        assertEquals(0, first.bandPretouchNodes.get());
+        if (advisor) {
+            assertTrue("each band hints its output range once", first.bandWritebackHints.get() >= 3);
+        }
+        for (var rs : rss) rs.close();
+
+        // Second generation: the merge output (768 nodes, key-sorted per source run) is the large
+        // target; a fresh arrival-ordered source searches into it band by band.
+        List<ReaderSupplier> rss2 = new ArrayList<>();
+        var big = ReaderSupplierFactory.open(gen1);
+        var small = ReaderSupplierFactory.open(testDirectory.resolve("test_graph_0"));
+        rss2.add(big);
+        rss2.add(small);
+        List<OnDiskGraphIndex> sources2 = List.of(OnDiskGraphIndex.load(big), OnDiskGraphIndex.load(small));
+        assertTrue(sources2.get(0).tokenStreamSection().isPresent());
+        List<FixedBitSet> live2 = new ArrayList<>();
+        List<OrdinalMapper> maps2 = new ArrayList<>();
+        int global = 0;
+        for (var g : sources2) {
+            Map<Integer, Integer> map = new HashMap<>();
+            for (int i = 0; i < g.size(0); i++) map.put(i, global++);
+            maps2.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(g.size(0));
+            lives.set(0, g.size(0));
+            live2.add(lives);
+        }
+        var second = new OnDiskGraphIndexCompactor(sources2, live2, maps2, similarityFunction, null);
+        second.setSimilarityOrdinals(true);
+        second.bandNodes = 64;        // four bands for the 256-node searching source
+        second.keyBlockNodes = 64;    // twelve key blocks over the 768-node target
+        Path gen2 = testDirectory.resolve("compact_gen2");
+        second.compact(gen2);
+        assertTrue("bands of the searching source warmed the clustered target: " + second.bandPretouchBands.get(),
+                second.bandPretouchBands.get() >= 1);
+        assertTrue("some target ordinals were warmed", second.bandPretouchNodes.get() > 0);
+        assertTrue("the warm was a window, not the whole target",
+                second.bandPretouchNodes.get() < (long) second.bandPretouchBands.get() * sources2.get(0).size(0));
+        try (var rs = ReaderSupplierFactory.open(gen2); var g = OnDiskGraphIndex.load(rs)) {
+            assertEquals(768 + 256, g.size(0));
+            TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+        }
+        for (var rs : rss2) rs.close();
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {

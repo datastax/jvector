@@ -216,6 +216,15 @@ final class CompactWriter implements AutoCloseable {
      * from the output file — which already holds them — rather than mirroring them in memory.
      * Valid only after the record has been written.
      */
+    /** File offset of the base-layer record of {@code ordinal}. */
+    public long recordFileOffset(int ordinal) {
+        return startOffset + headerSize + (long) ordinal * recordSize;
+    }
+
+    public int recordSize() {
+        return recordSize;
+    }
+
     public long neighborCountFileOffset(int ordinal) {
         return startOffset + headerSize + (long) ordinal * recordSize + neighborCountOffsetInRecord;
     }

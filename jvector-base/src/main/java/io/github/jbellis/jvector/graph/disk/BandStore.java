@@ -98,9 +98,8 @@ final class BandStore implements AutoCloseable {
         this.liveCount = liveCount;
         this.dimension = dimension;
         this.degree = degree;
-        this.recordBytes = Integer.BYTES + dimension * Float.BYTES + Integer.BYTES + degree * Integer.BYTES;
-        int maxNodesPerBand = (int) Math.max(1, Math.min(Integer.MAX_VALUE, MAX_BAND_BYTES / recordBytes));
-        this.bandNodes = Math.max(1, Math.min(bandNodesRequested, maxNodesPerBand));
+        this.recordBytes = recordBytes(dimension, degree);
+        this.bandNodes = clampBandNodes(bandNodesRequested, dimension, degree);
         this.numBands = liveCount == 0 ? 0 : (liveCount + bandNodes - 1) / bandNodes;
         this.oldToNew = oldToNew;
         this.slotOf = new int[liveCount];
@@ -114,6 +113,16 @@ final class BandStore implements AutoCloseable {
             locks[b] = new Object();
         }
         this.dir = Files.createTempDirectory(spillParent, "bands-src" + sourceIdx + "-");
+    }
+
+    static int recordBytes(int dimension, int degree) {
+        return Integer.BYTES + dimension * Float.BYTES + Integer.BYTES + degree * Integer.BYTES;
+    }
+
+    /** The band width actually used for a record shape: the request, clamped so a band file stays under {@link #MAX_BAND_BYTES}. */
+    static int clampBandNodes(int requested, int dimension, int degree) {
+        int maxNodesPerBand = (int) Math.max(1, Math.min(Integer.MAX_VALUE, MAX_BAND_BYTES / recordBytes(dimension, degree)));
+        return Math.max(1, Math.min(requested, maxNodesPerBand));
     }
 
     private Path bandFile(int band) {

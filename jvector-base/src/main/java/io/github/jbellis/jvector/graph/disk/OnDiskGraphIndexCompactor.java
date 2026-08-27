@@ -44,6 +44,7 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.disk.SimpleReader;
+import io.github.jbellis.jvector.disk.WritebackAdvisor;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.AdcScorer;
@@ -437,6 +438,94 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     final AtomicLong adcScores = new AtomicLong();
     /** Candidate vectors decoded from codes for the diversity pass instead of read. */
     final AtomicLong adcDecodes = new AtomicLong();
+    /**
+     * Per-band durability barrier: when the last batch of a band has written its records, start
+     * writeback of exactly that band's output range ({@link WritebackAdvisor}, {@code
+     * sync_file_range} where available) so the band's dirty pages do not wait for the next band's
+     * scattered reads to evict them one at a time. Without a native advisor the byte-cadence
+     * {@code fdatasync} above is the only barrier. {@code jvector.compaction.bandWriteback}.
+     */
+    static final boolean BAND_WRITEBACK = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.bandWriteback", "true"));
+    boolean bandWriteback = BAND_WRITEBACK;
+    /**
+     * Per-band target-window pretouch: a band is a similarity cluster, and its searches into a
+     * target that is itself similarity-ordered on disk (a previous merge's output) land in the
+     * few blocks of the target whose key extent overlaps the band's key range. The first batch of
+     * each band warms those blocks of every larger source before searching, up to this many
+     * ordinals per target; targets where more than {@link #BAND_PRETOUCH_MAX_OVERLAP} of the blocks
+     * overlap (arrival-ordered sources) are skipped as unclustered. 0 disables.
+     * {@code jvector.compaction.bandPretouchMaxNodes}, {@code jvector.compaction.bandPretouchMaxOverlap}.
+     */
+    static final int BAND_PRETOUCH_MAX_NODES = (int) Math.max(0, resolveLongProperty("jvector.compaction.bandPretouchMaxNodes", 1L << 20));
+    static final double BAND_PRETOUCH_MAX_OVERLAP = resolveDoubleProperty("jvector.compaction.bandPretouchMaxOverlap", 0.5);
+    /** Ordinals per key block of {@link KeyBlockIndex}; {@code jvector.compaction.keyBlockNodes}. */
+    static final int KEY_BLOCK_NODES = (int) Math.max(1, resolveLongProperty("jvector.compaction.keyBlockNodes", 4096));
+    int bandPretouchMaxNodes = BAND_PRETOUCH_MAX_NODES;
+    int keyBlockNodes = KEY_BLOCK_NODES;
+    int bandNodes = BAND_NODES;
+    /** Per-source key-block extents, from stream keys; null where the source carried none. */
+    private KeyBlockIndex[] keyBlocks;
+    /** Per source, per band: the band's key range (unsigned), from the sorted plan. */
+    private long[][] bandKeyMin;
+    private long[][] bandKeyMax;
+    private int[] bandWidth;
+    /** Per-band batch accounting of the source being processed. */
+    private volatile BandTracker currentTracker;
+    private volatile WritebackAdvisor outputWriteback;
+    boolean writebackAdvisorAvailable;
+    final AtomicLong bandWritebackHints = new AtomicLong();
+    final AtomicLong bandPretouchBands = new AtomicLong();
+    final AtomicLong bandPretouchNodes = new AtomicLong();
+    final AtomicLong bandPretouchSkippedUnclustered = new AtomicLong();
+
+    private static double resolveDoubleProperty(String key, double fallback) {
+        try {
+            String raw = System.getProperty(key);
+            if (raw != null && !raw.isBlank()) {
+                return Double.parseDouble(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // keep the default
+        }
+        return fallback;
+    }
+
+    /** Batches per band of one source, and how many have written; the last one hints writeback and the first one warms targets. */
+    private static final class BandTracker {
+        final int sourceIdx;
+        final int start;
+        final int width;
+        final int[] total;
+        final java.util.concurrent.atomic.AtomicIntegerArray done;
+        final java.util.concurrent.atomic.AtomicIntegerArray claimed;
+
+        BandTracker(int sourceIdx, int start, int width, int bands) {
+            this.sourceIdx = sourceIdx;
+            this.start = start;
+            this.width = width;
+            this.total = new int[bands];
+            this.done = new java.util.concurrent.atomic.AtomicIntegerArray(bands);
+            this.claimed = new java.util.concurrent.atomic.AtomicIntegerArray(bands);
+        }
+
+        int bandOf(int newOrdinal) {
+            return (newOrdinal - start) / width;
+        }
+
+        /** The band's first and last new ordinal. */
+        int bandStart(int band) {
+            return start + band * width;
+        }
+
+        int bandEnd(int band, int liveCount) {
+            return Math.min(start + liveCount, start + (band + 1) * width) - 1;
+        }
+
+        boolean claim(int band) {
+            return claimed.compareAndSet(band, 0, 1);
+        }
+    }
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -1008,6 +1097,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         planNewToOld = null;
         planNewToSrc = null;
         planSourceStart = null;
+        keyBlocks = null;
+        bandKeyMin = null;
+        bandKeyMax = null;
     }
 
     /**
@@ -1641,6 +1733,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 };
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+                outputWriteback = bandWriteback ? WritebackAdvisor.open(writer.getOutputPath()) : null;
+                writebackAdvisorAvailable = outputWriteback != null;
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
                     // Runs on the worker that produced the batch. Safe without a lock: every
                     // record goes to its own ordinal's offset via a positional write (which does
@@ -1669,9 +1763,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                     doneFlag.set(r.newOrdinal, 1);
                                 }
                             }
-                            // Durability barrier on a byte cadence (see OUTPUT_SYNC_BYTES). Two
-                            // workers crossing the threshold together both force; harmless.
-                            if (OUTPUT_SYNC_BYTES > 0
+                            // Per-band barrier: the batch that completes a band starts writeback of
+                            // the band's output range, and only that range, without waiting.
+                            BandTracker tracker = currentTracker;
+                            if (tracker != null && outputWriteback != null && !results.isEmpty()) {
+                                int first = tracker.bandOf(results.get(0).newOrdinal);
+                                int last = tracker.bandOf(results.get(results.size() - 1).newOrdinal);
+                                for (int band = first; band <= last; band++) {
+                                    if (tracker.done.incrementAndGet(band) == tracker.total[band]) {
+                                        int bandStart = tracker.bandStart(band);
+                                        int bandEnd = tracker.bandEnd(band, numLiveNodesPerSource.get(tracker.sourceIdx));
+                                        outputWriteback.hint(writer.recordFileOffset(bandStart),
+                                                             (long) (bandEnd - bandStart + 1) * writer.recordSize());
+                                        bandWritebackHints.incrementAndGet();
+                                    }
+                                }
+                            }
+                            // Durability barrier on a byte cadence (see OUTPUT_SYNC_BYTES) — the
+                            // whole-file, blocking fallback, used only when no ranged advisor is
+                            // there to do it per band. Two workers crossing the threshold together
+                            // both force; harmless.
+                            if (OUTPUT_SYNC_BYTES > 0 && outputWriteback == null
                                     && outputBytesSinceSync.addAndGet(bytes) >= OUTPUT_SYNC_BYTES) {
                                 outputBytesSinceSync.set(0);
                                 fc.force(false);
@@ -1701,9 +1813,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 currentBands = store;
                             }
                             try {
-                                runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults,
+                                List<BatchSpec> batches = buildBatchesForSource(s, 0);
+                                currentTracker = similarityOrdinalsActive ? trackerFor(s, batches) : null;
+                                runBatches(batches, computeBatch, writeResults,
                                            scope, l0Done, numTotalNodes);
                             } finally {
+                                currentTracker = null;
                                 currentBands = null;
                                 if (store != null) {
                                     log.info("Bands for source {} released: {} bands mapped, {} vectors and {} edge lists served, {} bytes of scratch freed",
@@ -1742,6 +1857,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             String.format("%.4f", 100.0 * certs / Math.max(1, certs + anch)),
                             clusterRescoreReads.get());
                 }
+                if (outputWriteback != null) {
+                    outputWriteback.close();
+                    outputWriteback = null;
+                }
+                log.info("Band barriers: writebackHints={} (advisor={}); band pretouch: bands={} nodes={} skippedUnclustered={} (budget={} nodes/target, maxOverlap={})",
+                        bandWritebackHints.get(), bandWriteback ? (writebackAdvisorAvailable ? "native" : "none") : "off",
+                        bandPretouchBands.get(), bandPretouchNodes.get(), bandPretouchSkippedUnclustered.get(),
+                        bandPretouchMaxNodes, BAND_PRETOUCH_MAX_OVERLAP);
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
                 orderingCache = null;
@@ -1944,6 +2067,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         scratch.resetChainSeeds();
         BandStore bands = currentBands;
         boolean ownFromBands = bands != null && bands.sourceIdx == bs.sourceIdx;
+        BandTracker tracker = currentTracker;
+        if (tracker != null && tracker.sourceIdx == bs.sourceIdx && bs.end > bs.start) {
+            int band = tracker.bandOf(remappers.get(bs.sourceIdx).oldToNew(bs.nodes[bs.start]));
+            if (band < tracker.total.length && tracker.claim(band)) {
+                pretouchBandTargets(tracker, band);
+            }
+        }
         if (bs.end > bs.start && !ownFromBands) {
             // Stream this batch's own records into the page cache before processing. Search
             // reads into other sources are data-dependent and stay demand-faulted, but each
@@ -3142,6 +3272,59 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * same order writes records sequentially and places similar vectors in adjacent records.
      * Dead nodes are numbered after all live nodes, preserving a total bijection.
      */
+    /** Batches per band for one source's base-layer batches (a batch straddling two bands counts for both). */
+    private BandTracker trackerFor(int s, List<BatchSpec> batches) {
+        int width = bandWidth != null && bandWidth[s] > 0 ? bandWidth[s]
+                  : BandStore.clampBandNodes(bandNodes, dimension, sources.get(s).getDegree(0));
+        int live = numLiveNodesPerSource.get(s);
+        int bands = live == 0 ? 0 : (live + width - 1) / width;
+        BandTracker t = new BandTracker(s, planSourceStart[s], width, bands);
+        OrdinalMapper mapper = remappers.get(s);
+        for (BatchSpec bs : batches) {
+            if (bs.end <= bs.start) continue;
+            int first = t.bandOf(mapper.oldToNew(bs.nodes[bs.start]));
+            int last = t.bandOf(mapper.oldToNew(bs.nodes[bs.end - 1]));
+            for (int band = first; band <= last; band++) {
+                t.total[band]++;
+            }
+        }
+        return t;
+    }
+
+    /**
+     * Warms, in every larger source that carries key blocks, the blocks whose key extent overlaps
+     * this band's key range — the window the band's searches will land in when that source is
+     * similarity-ordered on disk. Runs once per band, on the worker that claims it.
+     */
+    private void pretouchBandTargets(BandTracker tracker, int band) {
+        if (bandPretouchMaxNodes <= 0 || keyBlocks == null || bandKeyMin == null) {
+            return;
+        }
+        int s = tracker.sourceIdx;
+        if (bandKeyMin[s] == null || band >= bandKeyMin[s].length) {
+            return;
+        }
+        long kmin = bandKeyMin[s][band];
+        long kmax = bandKeyMax[s][band];
+        long warmed = 0;
+        for (int t = 0; t < sources.size(); t++) {
+            if (t == s || sizeRank[t] < sizeRank[s] || keyBlocks[t] == null) {
+                continue; // searches only go into larger sources
+            }
+            KeyBlockIndex blocks = keyBlocks[t];
+            if (blocks.overlapFraction(kmin, kmax) > BAND_PRETOUCH_MAX_OVERLAP) {
+                bandPretouchSkippedUnclustered.incrementAndGet();
+                continue;
+            }
+            for (int[] run : blocks.runsFor(kmin, kmax, sources.get(t).size(0), bandPretouchMaxNodes)) {
+                sources.get(t).prefetchL0Records(run[0], run[1]);
+                warmed += run[1] - run[0] + 1;
+            }
+        }
+        bandPretouchBands.incrementAndGet();
+        bandPretouchNodes.addAndGet(warmed);
+    }
+
     /**
      * The distribute stage for one source: sweep it once in its own ordinal order, in prefetched
      * windows across the pool, appending every live node's vector and base-layer edges to the
@@ -3155,7 +3338,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int live = numLiveNodesPerSource.get(s);
         long t0 = System.nanoTime();
         BandStore store = new BandStore(spillParent, s, planSourceStart[s], live, dimension, source.getDegree(0),
-                                        BAND_NODES, mapper::oldToNew);
+                                        bandNodes, mapper::oldToNew);
         try (var scope = progress.startPhase(CompactionStage.DISTRIBUTE)) {
             scope.onProgress(0, live);
             AtomicLong done = new AtomicLong();
@@ -3221,6 +3404,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int numSources = sources.size();
         final SimilarityKey keyFn = PQ_SIMILARITY_KEYS ? null : SimilarityKey.randomProjection(dimension);
         streamKeyedSources.set(0);
+        keyBlocks = new KeyBlockIndex[numSources];
+        bandKeyMin = new long[numSources][];
+        bandKeyMax = new long[numSources][];
+        bandWidth = new int[numSources];
         long totalOrdinals = 0;
         for (OnDiskGraphIndex src : sources) {
             totalOrdinals += src.size(0);
@@ -3268,12 +3455,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 try (var ts = source.openTokenStream()) {
                     if (ts.keyFunction == keyFn.id() && ts.nodeCount == size) {
                         int streamLive = 0;
+                        KeyBlockIndex blocks = new KeyBlockIndex(size, keyBlockNodes);
                         while (ts.next()) {
                             int node = ts.ordinal();
                             if (!alive.get(node)) continue;
                             keyed[fill.getAndIncrement()] = ((ts.key() & 0xFFFFFFFFL) << 32) | (node & 0xFFFFFFFFL);
+                            blocks.add(node, ts.key());
                             streamLive++;
                         }
+                        keyBlocks[s] = blocks;
                         fromStream = true;
                         streamKeyedSources.incrementAndGet();
                         report(scope, encodedNodes, streamLive, liveTotal);
@@ -3321,6 +3511,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             joinAll(tasks);
             CompactionSort.sort(keyed, fill.get(), executor, taskWindowSize);
+
+            // The band key ranges fall straight out of the sorted plan: a band is a run of
+            // width consecutive entries, its range the keys at the run's ends.
+            int width = BandStore.clampBandNodes(bandNodes, dimension, source.getDegree(0));
+            int liveHere = fill.get();
+            int bands = liveHere == 0 ? 0 : (liveHere + width - 1) / width;
+            bandWidth[s] = width;
+            bandKeyMin[s] = new long[bands];
+            bandKeyMax[s] = new long[bands];
+            for (int b = 0; b < bands; b++) {
+                bandKeyMin[s][b] = keyed[b * width] >>> 32;
+                bandKeyMax[s][b] = keyed[Math.min(liveHere, (b + 1) * width) - 1] >>> 32;
+            }
 
             for (int k = 0; k < fill.get(); k++) {
                 int old = (int) keyed[k];
