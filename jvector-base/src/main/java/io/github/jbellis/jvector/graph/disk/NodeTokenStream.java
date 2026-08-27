@@ -39,6 +39,11 @@ import java.util.Arrays;
  * token with the live bit clear and no NB tokens. Upper-level adjacency is not in the stream: it is
  * already stored sequentially and loaded whole at open; the NODE level bits give membership.
  *
+ * <p>Version 2 adds a {@link SimilarityKey} per node: when the header names a key function, every
+ * NODE token carries a 4-byte key right after its ordinal. That is what lets a merge derive its
+ * similarity-ordinal plan from the streams alone — no vector reads, no encoding — provided every
+ * source carries keys of the same function. Version 1 streams have no keys and still load.
+ *
  * <p>Layout in the file: {@code [graph body][section][trailer][footer]}. The section starts with
  * {@link #SECTION_MAGIC}, version, encoding, node count, base degree and max level, then the
  * tokens. The trailer — the section's length and {@link #TRAILER_MAGIC} — sits immediately before
@@ -58,10 +63,15 @@ import java.util.Arrays;
 public final class NodeTokenStream {
     public static final int SECTION_MAGIC = 0x544B5354; // "TKST"
     public static final int TRAILER_MAGIC = 0x544B5345; // "TKSE"
-    public static final int VERSION = 1;
+    public static final int VERSION_1 = 1;
+    public static final int VERSION = 2;
     public static final int TRAILER_SIZE = Long.BYTES + Integer.BYTES;
-    /** magic, version, encoding, nodeCount, degree, maxLevel */
-    public static final int HEADER_SIZE = Integer.BYTES + Integer.BYTES + 1 + Integer.BYTES + Integer.BYTES + 1;
+    /** v1: magic, version, encoding, nodeCount, degree, maxLevel */
+    public static final int HEADER_SIZE_V1 = Integer.BYTES + Integer.BYTES + 1 + Integer.BYTES + Integer.BYTES + 1;
+    /** v2: v1 plus the key function byte */
+    public static final int HEADER_SIZE = HEADER_SIZE_V1 + 1;
+    /** The smallest section a locator will accept. */
+    static final int MIN_SECTION = HEADER_SIZE_V1;
     public static final byte ENCODING_RAW = 0;
     public static final byte ENCODING_DELTA = 1;
     public static final String ENABLED_PROPERTY = "jvector.tokenStream";
@@ -124,7 +134,7 @@ public final class NodeTokenStream {
         in.seek(trailerOffset);
         long length = in.readLong();
         int magic = in.readInt();
-        if (magic != TRAILER_MAGIC || length < HEADER_SIZE) {
+        if (magic != TRAILER_MAGIC || length < MIN_SECTION) {
             return null;
         }
         long start = trailerOffset - length;
@@ -146,6 +156,7 @@ public final class NodeTokenStream {
     public static final class Encoder {
         private final IndexWriter out;
         private final byte encoding;
+        private final byte keyFunction;
         private final int nodeCount;
         private final byte[] buf = new byte[1 << 16];
         private int pos;
@@ -157,6 +168,11 @@ public final class NodeTokenStream {
         private int currentNode = -1;
 
         public Encoder(IndexWriter out, byte encoding, int nodeCount, int degree, int maxLevel) throws IOException {
+            this(out, encoding, nodeCount, degree, maxLevel, SimilarityKey.NONE);
+        }
+
+        /** {@code keyFunction} is {@link SimilarityKey#NONE} or the id of the function every node's key was computed with. */
+        public Encoder(IndexWriter out, byte encoding, int nodeCount, int degree, int maxLevel, byte keyFunction) throws IOException {
             if (encoding != ENCODING_RAW && encoding != ENCODING_DELTA) {
                 throw new IllegalArgumentException("unknown encoding " + encoding);
             }
@@ -165,6 +181,7 @@ public final class NodeTokenStream {
             }
             this.out = out;
             this.encoding = encoding;
+            this.keyFunction = keyFunction;
             this.nodeCount = nodeCount;
             out.writeInt(SECTION_MAGIC);
             out.writeInt(VERSION);
@@ -172,10 +189,23 @@ public final class NodeTokenStream {
             out.writeInt(nodeCount);
             out.writeInt(degree);
             out.writeByte(maxLevel);
+            out.writeByte(keyFunction);
             bytes = HEADER_SIZE;
         }
 
+        public byte keyFunction() {
+            return keyFunction;
+        }
+
+        /** A node without a key; only for streams whose key function is {@link SimilarityKey#NONE}. */
         public void node(int ordinal, boolean live, int level) throws IOException {
+            if (keyFunction != SimilarityKey.NONE) {
+                throw new IllegalStateException("this stream carries keys; use node(ordinal, live, level, key)");
+            }
+            node(ordinal, live, level, 0);
+        }
+
+        public void node(int ordinal, boolean live, int level, int key) throws IOException {
             if (ordinal != prevNode + 1) {
                 throw new IllegalStateException("ordinals must be contiguous and ascending: got " + ordinal + " after " + prevNode);
             }
@@ -185,12 +215,15 @@ public final class NodeTokenStream {
             if (level < 0 || level > MAX_LEVEL) {
                 throw new IllegalArgumentException("level out of range: " + level);
             }
-            ensure(6);
+            ensure(10);
             buf[pos++] = (byte) (NODE_TOKEN | (live ? NODE_LIVE : 0) | (level & NODE_LEVEL_MASK));
             if (encoding == ENCODING_RAW) {
                 putInt(ordinal);
             } else {
                 putUnsignedVarint((long) ordinal - prevNode);
+            }
+            if (keyFunction != SimilarityKey.NONE) {
+                putInt(key);
             }
             prevNode = ordinal;
             currentNode = ordinal;
@@ -288,15 +321,19 @@ public final class NodeTokenStream {
         private int bufPos;
         private int bufLen;
 
+        public final int version;
         public final byte encoding;
         public final int nodeCount;
         public final int degree;
         public final int maxLevel;
+        /** {@link SimilarityKey#NONE} when the stream carries no keys. */
+        public final byte keyFunction;
 
         private int prevNode = -1;
         private int ordinal = -1;
         private boolean live;
         private int level;
+        private int key;
         private int[] neighbors;
         private int neighborCount;
         private long nodesRead;
@@ -308,8 +345,8 @@ public final class NodeTokenStream {
             if (magic != SECTION_MAGIC) {
                 throw new IOException("not a token stream section at " + section.offset + ": magic " + Integer.toHexString(magic));
             }
-            int version = in.readInt();
-            if (version != VERSION) {
+            version = in.readInt();
+            if (version != VERSION_1 && version != VERSION) {
                 throw new IOException("unsupported token stream version " + version);
             }
             byte[] b1 = new byte[1];
@@ -322,8 +359,15 @@ public final class NodeTokenStream {
             degree = in.readInt();
             in.readFully(b1);
             maxLevel = b1[0];
+            if (version >= 2) {
+                in.readFully(b1);
+                keyFunction = b1[0];
+                filePos = section.offset + HEADER_SIZE;
+            } else {
+                keyFunction = SimilarityKey.NONE;
+                filePos = section.offset + HEADER_SIZE_V1;
+            }
             neighbors = new int[Math.max(degree, 1)];
-            filePos = section.offset + HEADER_SIZE;
             end = section.offset + section.length;
         }
 
@@ -345,6 +389,7 @@ public final class NodeTokenStream {
             if (o != prevNode + 1) {
                 throw new IOException("non-contiguous ordinal " + o + " after " + prevNode);
             }
+            key = keyFunction != SimilarityKey.NONE ? readInt() : 0;
             prevNode = o;
             ordinal = o;
             nodesRead++;
@@ -370,6 +415,11 @@ public final class NodeTokenStream {
 
         public int level() {
             return level;
+        }
+
+        /** The current node's {@link SimilarityKey}; 0 when the stream carries none. */
+        public int key() {
+            return key;
         }
 
         public int neighborCount() {

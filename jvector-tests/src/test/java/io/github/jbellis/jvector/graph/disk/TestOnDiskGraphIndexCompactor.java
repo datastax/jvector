@@ -575,6 +575,85 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
 
+    /**
+     * Step 2 parity: the similarity-ordinal plan derived from the sources' token-stream keys must
+     * equal the plan derived by reading every source vector and computing the same key.
+     */
+    @Test
+    public void testPlanFromStreamMatchesPlanFromVectors() throws Exception {
+        List<List<OrdinalMapper>> plans = new ArrayList<>();
+        for (boolean fromStream : new boolean[] {true, false}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            for (var g : graphs) {
+                assertTrue("test sources must carry keyed token streams", g.tokenStreamSection().isPresent());
+            }
+            identityRemappers(liveNodes, remappers);
+            // a few dead nodes, so liveness from the caller is honoured on both paths
+            liveNodes.get(0).clear(3);
+            liveNodes.get(1).clear(numVectorsPerGraph - 1);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.setSimilarityOrdinals(true);
+            compactor.streamKeys = fromStream;
+            compactor.compact(testDirectory.resolve("compact_plan_source_" + fromStream));
+            assertEquals(fromStream ? numSources : 0, compactor.streamKeyedSources.get());
+            plans.add(compactor.effectiveRemappers());
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        var a = plans.get(0);
+        var b = plans.get(1);
+        for (int src = 0; src < numSources; src++) {
+            assertEquals(a.get(src).maxOrdinal(), b.get(src).maxOrdinal());
+            for (int old = 0; old < numVectorsPerGraph; old++) {
+                assertEquals("source " + src + " old " + old, a.get(src).oldToNew(old), b.get(src).oldToNew(old));
+            }
+            for (int n = 0; n <= a.get(src).maxOrdinal(); n++) {
+                assertEquals("new " + n, a.get(src).newToOld(n), b.get(src).newToOld(n));
+            }
+        }
+    }
+
+    /** The plan window is exactly what sorting (new, old) pairs produced: live old ordinals ascending by new ordinal. */
+    @Test
+    public void testPlanWindowEqualsSortedPairs() {
+        var rnd = new java.util.Random(11);
+        int n = 5000;
+        int[] newToOld = new int[n];
+        int[] newToSrc = new int[n];
+        List<int[]> pairs = new ArrayList<>();
+        for (int src = 0; src < 3; src++) {
+            for (int old = 0; old < n / 3 + (src == 0 ? n % 3 : 0); old++) {
+                pairs.add(new int[] {src, old});
+            }
+        }
+        java.util.Collections.shuffle(pairs, rnd);
+        for (int i = 0; i < n; i++) {
+            newToSrc[i] = pairs.get(i)[0];
+            newToOld[i] = pairs.get(i)[1];
+        }
+        for (int src = 0; src < 3; src++) {
+            int size = n / 3 + (src == 0 ? n % 3 : 0);
+            var alive = new FixedBitSet(size);
+            for (int old = 0; old < size; old++) {
+                if (rnd.nextInt(8) != 0) alive.set(old);
+            }
+            // the sort-based construction this replaced
+            List<long[]> keyed = new ArrayList<>();
+            for (int old = alive.nextSetBit(0); old != io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS; old = alive.nextSetBit(old + 1)) {
+                int nw = -1;
+                for (int i = 0; i < n; i++) if (newToSrc[i] == src && newToOld[i] == old) { nw = i; break; }
+                keyed.add(new long[] {nw, old});
+            }
+            keyed.sort(java.util.Comparator.comparingLong(k -> k[0]));
+            int[] expected = keyed.stream().mapToInt(k -> (int) k[1]).toArray();
+            org.junit.Assert.assertArrayEquals(expected, OnDiskGraphIndexCompactor.planWindow(newToSrc, newToOld, src, alive));
+        }
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {

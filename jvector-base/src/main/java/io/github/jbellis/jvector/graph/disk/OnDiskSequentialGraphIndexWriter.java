@@ -157,7 +157,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
         writeSeparatedFeatures(featureStateSuppliers);
 
         // Write the footer with all the metadata info about the graph
-        writeFooter(view, out.position());
+        writeFooter(view, out.position(), featureStateSuppliers);
         // Note: flushing the data output is the responsibility of the caller we are not going to make assumptions about further uses of the data outputs
 
         view.close();

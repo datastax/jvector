@@ -59,6 +59,7 @@ public class TestNodeTokenStream extends RandomizedTest {
         final int maxLevel;
         final boolean[] live;
         final int[] level;
+        final int[] key;
         final int[][] neighbors;
 
         Synthetic(int n, int degree, int maxLevel, Random rnd) {
@@ -67,10 +68,12 @@ public class TestNodeTokenStream extends RandomizedTest {
             this.maxLevel = maxLevel;
             live = new boolean[n];
             level = new int[n];
+            key = new int[n];
             neighbors = new int[n][];
             for (int i = 0; i < n; i++) {
                 live[i] = rnd.nextInt(10) != 0;
                 level[i] = live[i] ? rnd.nextInt(maxLevel + 1) : 0;
+                key[i] = live[i] ? rnd.nextInt() : 0;
                 if (!live[i]) {
                     neighbors[i] = new int[0];
                     continue;
@@ -87,11 +90,15 @@ public class TestNodeTokenStream extends RandomizedTest {
     }
 
     private Path write(Synthetic s, byte encoding) throws IOException {
-        Path path = dir.resolve("stream_" + encoding);
+        return write(s, encoding, SimilarityKey.NONE);
+    }
+
+    private Path write(Synthetic s, byte encoding, byte keyFunction) throws IOException {
+        Path path = dir.resolve("stream_" + encoding + "_" + keyFunction);
         try (var out = new SimpleWriter(path)) {
-            var enc = new NodeTokenStream.Encoder(out, encoding, s.n, s.degree, s.maxLevel);
+            var enc = new NodeTokenStream.Encoder(out, encoding, s.n, s.degree, s.maxLevel, keyFunction);
             for (int i = 0; i < s.n; i++) {
-                enc.node(i, s.live[i], s.level[i]);
+                enc.node(i, s.live[i], s.level[i], keyFunction == SimilarityKey.NONE ? 0 : s.key[i]);
                 for (int nb : s.neighbors[i]) {
                     enc.neighbor(nb);
                 }
@@ -104,6 +111,10 @@ public class TestNodeTokenStream extends RandomizedTest {
     }
 
     private void verify(Synthetic s, Path path, byte encoding) throws IOException {
+        verify(s, path, encoding, SimilarityKey.NONE);
+    }
+
+    private void verify(Synthetic s, Path path, byte encoding, byte keyFunction) throws IOException {
         try (var supplier = new SimpleMappedReader.Supplier(path)) {
             NodeTokenStream.Section section;
             try (var in = supplier.get()) {
@@ -118,11 +129,14 @@ public class TestNodeTokenStream extends RandomizedTest {
                 assertEquals(s.n, r.nodeCount);
                 assertEquals(s.degree, r.degree);
                 assertEquals(s.maxLevel, r.maxLevel);
+                assertEquals(keyFunction, r.keyFunction);
+                assertEquals(NodeTokenStream.VERSION, r.version);
                 int i = 0;
                 while (r.next()) {
                     assertEquals(i, r.ordinal());
                     assertEquals(s.live[i], r.live());
                     assertEquals(s.level[i], r.level());
+                    assertEquals(keyFunction == SimilarityKey.NONE ? 0 : s.key[i], r.key());
                     assertArrayEquals("node " + i, s.neighbors[i], Arrays.copyOf(r.neighbors(), r.neighborCount()));
                     i++;
                 }
@@ -141,6 +155,58 @@ public class TestNodeTokenStream extends RandomizedTest {
         verify(s, raw, NodeTokenStream.ENCODING_RAW);
         assertTrue("delta form must be smaller than raw: " + Files.size(delta) + " vs " + Files.size(raw),
                 Files.size(delta) < Files.size(raw));
+    }
+
+    @Test
+    public void testRoundTripWithKeys() throws IOException {
+        var s = new Synthetic(20_000, 8, 2, new Random(42));
+        for (byte enc : new byte[] {NodeTokenStream.ENCODING_DELTA, NodeTokenStream.ENCODING_RAW}) {
+            Path p = write(s, enc, SimilarityKey.RANDOM_PROJECTION);
+            verify(s, p, enc, SimilarityKey.RANDOM_PROJECTION);
+        }
+    }
+
+    /** A version-1 section (no key function byte, no keys) written by hand must still decode. */
+    @Test
+    public void testReadsVersionOne() throws IOException {
+        Path p = dir.resolve("v1");
+        try (var out = new SimpleWriter(p)) {
+            long start = out.position();
+            out.writeInt(NodeTokenStream.SECTION_MAGIC);
+            out.writeInt(NodeTokenStream.VERSION_1);
+            out.writeByte(NodeTokenStream.ENCODING_RAW);
+            out.writeInt(2);   // nodes
+            out.writeInt(4);   // degree
+            out.writeByte(1);  // max level
+            out.writeByte(0x80 | 0x40 | 1); out.writeInt(0);   // node 0: live, level 1
+            out.writeByte(0x01); out.writeInt(1);              //   edge to 1
+            out.writeByte(0x80 | 0x40);      out.writeInt(1);  // node 1: live, level 0
+            out.writeByte(0x01); out.writeInt(0);              //   edge to 0
+            long length = out.position() - start;
+            out.writeLong(length);
+            out.writeInt(NodeTokenStream.TRAILER_MAGIC);
+        }
+        try (var supplier = new SimpleMappedReader.Supplier(p)) {
+            NodeTokenStream.Section section;
+            try (var in = supplier.get()) {
+                section = NodeTokenStream.locate(in, in.length(), 0);
+            }
+            assertNotNull(section);
+            try (var r = new NodeTokenStream.Reader(supplier.get(), section)) {
+                assertEquals(NodeTokenStream.VERSION_1, r.version);
+                assertEquals(SimilarityKey.NONE, r.keyFunction);
+                assertTrue(r.next());
+                assertEquals(0, r.ordinal());
+                assertEquals(1, r.level());
+                assertEquals(1, r.neighborCount());
+                assertEquals(1, r.neighbors()[0]);
+                assertEquals(0, r.key());
+                assertTrue(r.next());
+                assertEquals(1, r.ordinal());
+                assertEquals(0, r.neighbors()[0]);
+                assertFalse(r.next());
+            }
+        }
     }
 
     @Test

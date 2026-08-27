@@ -380,6 +380,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     static final boolean TOKEN_STREAM = !"false".equalsIgnoreCase(
             System.getProperty("jvector.compaction.tokenStream", "true"));
+    /**
+     * Which {@link SimilarityKey} orders the similarity ordinals: {@code lsh} (default) is the
+     * codebook-free random-projection key that the {@link NodeTokenStream} carries, so the ordinal
+     * pass can take keys from the sources' streams; {@code pq} is the previous key — the leading
+     * bytes of the PQ code under this merge's retrained codebook — which exists only at merge
+     * time and always reads every source vector. {@code jvector.compaction.similarityKey}.
+     */
+    static final boolean PQ_SIMILARITY_KEYS = "pq".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.similarityKey", "lsh"));
+    /** Test hook: when false the ordinal pass ignores stream keys and computes them from vectors. */
+    boolean streamKeys = true;
+    /** The plan, once similarity ordinals are assigned: new ordinal -> (source, old ordinal). */
+    private int[] planNewToOld;
+    private int[] planNewToSrc;
+    /** Sources whose keys came from their token stream in the last ordinal pass. */
+    final AtomicLong streamKeyedSources = new AtomicLong();
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -813,10 +829,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             final int window = 1 << 20;
             scope.onProgress(0, n);
+            // Keys from the output's own vectors; the record is being read for its edges anyway.
+            SimilarityKey keyFn = SimilarityKey.randomProjection(merged.getDimension());
+            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(merged.getDimension());
             try (var writer = new BufferedRandomAccessWriter(outputPath);
                  var view = merged.getView()) {
                 writer.seek(headerOffset);
-                var enc = new NodeTokenStream.Encoder(writer, NodeTokenStream.encodingByDefault(), n, merged.getDegree(0), maxLevel);
+                var enc = new NodeTokenStream.Encoder(writer, NodeTokenStream.encodingByDefault(), n, merged.getDegree(0), maxLevel,
+                                                      keyFn.id());
                 for (int node = 0; node < n; node++) {
                     if ((node & (window - 1)) == 0) {
                         // Stream the coming window into the page cache; the mapping is MADV_RANDOM.
@@ -825,7 +845,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                     var it = view.getNeighborsIterator(0, node);
                     boolean live = it.size() > 0;
-                    enc.node(node, live, live && levelOf != null ? levelOf[node] : 0);
+                    int key = 0;
+                    if (live) {
+                        view.getVectorInto(node, vec, 0);
+                        key = keyFn.keyOf(vec);
+                    }
+                    enc.node(node, live, live && levelOf != null ? levelOf[node] : 0, key);
                     while (it.hasNext()) {
                         enc.neighbor(it.nextInt());
                     }
@@ -939,6 +964,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         sources = null;
         liveNodes = null;
         remappers = null;
+        planNewToOld = null;
+        planNewToSrc = null;
     }
 
     /**
@@ -1742,15 +1769,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (similarityOrdinalsActive && numNodes > 1) {
                 // Merged ordinals were assigned in similarity order, so ordering processing by
                 // new ordinal gives similarity locality AND sequential record writes at once.
-                OrdinalMapper mapper = remappers.get(s);
-                long[] keyed = new long[numNodes];
-                for (int k = 0; k < numNodes; k++) {
-                    keyed[k] = ((long) mapper.oldToNew(nodes[k]) << 32) | (nodes[k] & 0xFFFFFFFFL);
+                // The order is this source's window of the plan, read off by one forward scan
+                // of the plan arrays — the same sequence a sort of (new, old) pairs produced,
+                // without the sort.
+                int[] window = planWindow(planNewToSrc, planNewToOld, s, alive);
+                if (window.length != numNodes) {
+                    throw new IllegalStateException("plan window for source " + s + " has " + window.length
+                                                    + " nodes, live bitset has " + numNodes);
                 }
-                CompactionSort.sort(keyed, numNodes, executor, taskWindowSize);
-                for (int k = 0; k < numNodes; k++) {
-                    nodes[k] = (int) keyed[k];
-                }
+                nodes = window;
                 log.info("L0 source {}: {} nodes in similarity-ordinal order", s, numNodes);
             }
             // Similarity-ordered scheduling: sort searching sources' nodes by the leading bytes
@@ -2975,9 +3002,32 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * same order writes records sequentially and places similar vectors in adjacent records.
      * Dead nodes are numbered after all live nodes, preserving a total bijection.
      */
+    /**
+     * This source's slice of the plan in new-ordinal order: the old ordinals of its live nodes,
+     * ascending by the new ordinal they were assigned. One forward scan of the plan arrays.
+     */
+    static int[] planWindow(int[] newToSrc, int[] newToOld, int src, FixedBitSet alive) {
+        int count = 0;
+        for (int n = 0; n < newToSrc.length; n++) {
+            if (newToSrc[n] == src && alive.get(newToOld[n])) {
+                count++;
+            }
+        }
+        int[] out = new int[count];
+        int k = 0;
+        for (int n = 0; n < newToSrc.length; n++) {
+            if (newToSrc[n] == src && alive.get(newToOld[n])) {
+                out[k++] = newToOld[n];
+            }
+        }
+        return out;
+    }
+
     private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq, ProgressTracker.PhaseScope scope) {
         long t0 = System.nanoTime();
         int numSources = sources.size();
+        final SimilarityKey keyFn = PQ_SIMILARITY_KEYS ? null : SimilarityKey.randomProjection(dimension);
+        streamKeyedSources.set(0);
         long totalOrdinals = 0;
         for (OnDiskGraphIndex src : sources) {
             totalOrdinals += src.size(0);
@@ -3012,10 +3062,31 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int[] oldToNew = new int[size];
             oldToNewPerSource[s] = oldToNew;
 
-            // one streaming pass: 4-byte code prefix per live node, packed with the ordinal
+            // one pass: a 4-byte similarity key per live node, packed with the ordinal
             int liveCount = numLiveNodesPerSource.get(s);
             long[] keyed = new long[liveCount];
             java.util.concurrent.atomic.AtomicInteger fill = new java.util.concurrent.atomic.AtomicInteger();
+            // Keys straight from the source's token stream when it carries this key function:
+            // a sequential read of a few bytes per node, no record touched, no encoding.
+            boolean fromStream = false;
+            if (keyFn != null && streamKeys && source.tokenStreamSection().isPresent()) {
+                try (var ts = source.openTokenStream()) {
+                    if (ts.keyFunction == keyFn.id() && ts.nodeCount == size) {
+                        int streamLive = 0;
+                        while (ts.next()) {
+                            int node = ts.ordinal();
+                            if (!alive.get(node)) continue;
+                            keyed[fill.getAndIncrement()] = ((ts.key() & 0xFFFFFFFFL) << 32) | (node & 0xFFFFFFFFL);
+                            streamLive++;
+                        }
+                        fromStream = true;
+                        streamKeyedSources.incrementAndGet();
+                        report(scope, encodedNodes, streamLive, liveTotal);
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
             // Window sized to the pool, not fixed. A fixed quarter-million-node window gives a
             // ~1M-node source four tasks, and four tasks can occupy four workers no matter how the
             // executor splits them: measured at 380s across 7 sources on a 40-thread pool, with
@@ -3024,7 +3095,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // that the per-task view open and prefetch call stay amortized.
             int window = Math.max(4096, (size + 4 * taskWindowSize - 1) / (4 * taskWindowSize));
             List<Runnable> tasks = new ArrayList<>();
-            for (int from = 0; from < size; from += window) {
+            for (int from = 0; from < size && !fromStream; from += window) {
                 final int lo = from;
                 final int hi = Math.min(size, from + window);
                 tasks.add(() -> {
@@ -3036,9 +3107,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         for (int node = lo; node < hi; node++) {
                             if (!alive.get(node)) continue;
                             view.getVectorInto(node, vec, 0);
-                            pq.encodeTo(vec, code);
-                            long key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
-                                     | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
+                            long key;
+                            if (keyFn != null) {
+                                key = keyFn.keyOf(vec) & 0xFFFFFFFFL;
+                            } else {
+                                pq.encodeTo(vec, code);
+                                key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
+                                    | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
+                            }
                             keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
                             windowLive++;
                         }
@@ -3075,12 +3151,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         this.maxOrdinal = next - 1;
+        this.planNewToOld = newToOldAll;
+        this.planNewToSrc = newToSrcAll;
         List<OrdinalMapper> mappers = new ArrayList<>(numSources);
         for (int s = 0; s < numSources; s++) {
             mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
         }
-        log.info("Similarity ordinals assigned: {} ordinals across {} sources in {} ms",
-                next, numSources, (System.nanoTime() - t0) / 1_000_000);
+        log.info("Similarity ordinals assigned: {} ordinals across {} sources in {} ms (key function {}; keys from stream for {} of {} sources)",
+                next, numSources, (System.nanoTime() - t0) / 1_000_000,
+                keyFn == null ? "pq" : "lsh", streamKeyedSources.get(), numSources);
         return mappers;
     }
 

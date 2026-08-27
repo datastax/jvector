@@ -174,11 +174,12 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
+    void writeFooter(ImmutableGraphIndex.View view, long headerOffset,
+                     Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         if (tokenStreamEnabled) {
             // The section and its trailer go between the graph body and the footer, so the
             // footer stays last and every byte before the section is where it was.
-            writeTokenStream(view);
+            writeTokenStream(view, featureStateSuppliers);
             headerOffset = out.position();
         }
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
@@ -201,8 +202,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * highest level. Cheap here — the adjacency is in memory — which is why construction is where
      * the stream is born and the compactor only has to carry it forward.
      */
-    void writeTokenStream(ImmutableGraphIndex.View view) throws IOException {
+    void writeTokenStream(ImmutableGraphIndex.View view,
+                          Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         int maxOrdinal = ordinalMapper.maxOrdinal();
+        // Keys need the vector; the inline-vector supplier hands it over per node. Without one
+        // (separated or NVQ-only graphs) the stream carries no keys and a merge falls back to
+        // reading vectors.
+        IntFunction<Feature.State> vectors = featureStateSuppliers == null ? null : featureStateSuppliers.get(FeatureId.INLINE_VECTORS);
+        SimilarityKey keyFn = vectors == null ? null : SimilarityKey.randomProjection(dimension);
         int maxLevel = Math.min(graph.getMaxLevel(), NodeTokenStream.MAX_LEVEL);
         byte[] levelOf = null;
         if (maxLevel > 0) {
@@ -217,11 +224,16 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
         }
         long t0 = System.nanoTime();
-        var enc = new NodeTokenStream.Encoder(out, tokenStreamEncoding, maxOrdinal + 1, graph.getDegree(0), maxLevel);
+        var enc = new NodeTokenStream.Encoder(out, tokenStreamEncoding, maxOrdinal + 1, graph.getDegree(0), maxLevel,
+                                              keyFn == null ? SimilarityKey.NONE : keyFn.id());
         for (int newOrdinal = 0; newOrdinal <= maxOrdinal; newOrdinal++) {
             int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
             boolean live = originalOrdinal != OrdinalMapper.OMITTED && graph.containsNode(originalOrdinal);
-            enc.node(newOrdinal, live, live && levelOf != null ? levelOf[newOrdinal] : 0);
+            int key = 0;
+            if (live && keyFn != null) {
+                key = keyFn.keyOf(((io.github.jbellis.jvector.graph.disk.feature.InlineVectors.State) vectors.apply(originalOrdinal)).vector);
+            }
+            enc.node(newOrdinal, live, live && levelOf != null ? levelOf[newOrdinal] : 0, key);
             if (live) {
                 var neighbors = view.getNeighborsIterator(0, originalOrdinal);
                 while (neighbors.hasNext()) {
@@ -230,8 +242,9 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
         }
         long sectionBytes = enc.finish();
-        tokenStreamLog.info("Token stream: {} nodes ({} live), {} edges, {} bytes ({} encoding, {} B/edge; raw-equivalent {} bytes) in {} ms",
+        tokenStreamLog.info("Token stream: {} nodes ({} live), {} edges, {} bytes ({} encoding, keys={}, {} B/edge; raw-equivalent {} bytes) in {} ms",
                 enc.nodes(), enc.liveNodes(), enc.edges(), sectionBytes, NodeTokenStream.encodingName(enc.encoding()),
+                keyFn != null,
                 String.format("%.2f", enc.edges() == 0 ? 0.0 : (double) sectionBytes / enc.edges()),
                 NodeTokenStream.rawEquivalentBytes(enc.nodes(), enc.edges()), (System.nanoTime() - t0) / 1_000_000L);
     }

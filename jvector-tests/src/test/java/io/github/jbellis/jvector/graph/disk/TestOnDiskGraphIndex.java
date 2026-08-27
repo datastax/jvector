@@ -402,10 +402,18 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             assertEquals(n, ts.nodeCount);
             assertEquals(g.getDegree(0), ts.degree);
             assertEquals(g.getMaxLevel(), ts.maxLevel);
+            SimilarityKey keyFn = ts.keyFunction == SimilarityKey.RANDOM_PROJECTION
+                                  ? SimilarityKey.randomProjection(g.getDimension()) : null;
+            var vec = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorTypeSupport()
+                    .createFloatVector(g.getDimension());
             int count = 0;
             while (ts.next()) {
                 int node = ts.ordinal();
                 assertEquals(count, node);
+                if (keyFn != null && ts.live()) {
+                    view.getVectorInto(node, vec, 0);
+                    assertEquals("key of " + node, keyFn.keyOf(vec), ts.key());
+                }
                 var it = view.getNeighborsIterator(0, node);
                 int[] expected = new int[it.size()];
                 for (int k = 0; k < expected.length; k++) {
