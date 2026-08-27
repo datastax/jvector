@@ -396,6 +396,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int[] planNewToSrc;
     /** Sources whose keys came from their token stream in the last ordinal pass. */
     final AtomicLong streamKeyedSources = new AtomicLong();
+    /**
+     * Band-staged base layer: before a source's base-layer batches run, the source is swept once
+     * in its own ordinal order and every live node's vector and edges are spilled into bands of
+     * the merged ordinal space ({@link BandStore}); the batches then read each node's own record
+     * from its band instead of seeking into the source. Requires similarity ordinals (the plan);
+     * without them the direct path runs. {@code jvector.compaction.bandStaged=false} disables.
+     */
+    static final boolean BAND_STAGED = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.bandStaged", "true"));
+    /** Band width in new ordinals; {@code jvector.compaction.bandNodes}. */
+    static final int BAND_NODES = (int) Math.max(1, resolveLongProperty("jvector.compaction.bandNodes", 1L << 18));
+    /** Instance override of {@link #BAND_STAGED}, for parity tests. */
+    boolean bandStaged = BAND_STAGED;
+    /** The band store of the source whose base-layer batches are running, or null on the direct path. */
+    private volatile BandStore currentBands;
+    /** First new ordinal of each source's live range, from the similarity-ordinal plan. */
+    private int[] planSourceStart;
+    /** Own records served from bands instead of source seeks. */
+    final AtomicLong bandOwnRecords = new AtomicLong();
+    /** Bytes spilled into bands across the run. */
+    final AtomicLong distributeBytes = new AtomicLong();
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -966,6 +987,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         remappers = null;
         planNewToOld = null;
         planNewToSrc = null;
+        planSourceStart = null;
     }
 
     /**
@@ -1642,8 +1664,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     AtomicLong l0Done = new AtomicLong();
                     try (var scope = progress.startPhase(CompactionStage.BASE_LAYER)) {
                         for (int s : l0ProcessOrder) {
-                            runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults,
-                                       scope, l0Done, numTotalNodes);
+                            // Band-staged: one sequential sweep of this source into its bands, then
+                            // its batches read own records from the bands. Scratch is this source's
+                            // records and goes away with it; the inter-source barrier is untouched.
+                            BandStore store = null;
+                            if (bandStaged && similarityOrdinalsActive) {
+                                try {
+                                    store = distributeSource(s);
+                                } catch (IOException e) {
+                                    throw new UncheckedIOException(e);
+                                }
+                                currentBands = store;
+                            }
+                            try {
+                                runBatches(buildBatchesForSource(s, 0), computeBatch, writeResults,
+                                           scope, l0Done, numTotalNodes);
+                            } finally {
+                                currentBands = null;
+                                if (store != null) {
+                                    log.info("Bands for source {} released: {} bands mapped, {} vectors and {} edge lists served, {} bytes of scratch freed",
+                                            s, store.bandsMapped(), store.vectorsServed(), store.neighborsServed(), store.bytes());
+                                    store.close();
+                                }
+                            }
                         }
                     }
                 }
@@ -1653,10 +1696,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
                 // Reported unconditionally: these counters existed before but were never logged,
                 // so a hint path that silently stopped reaching the device was invisible.
-                log.info("Base-layer IO hints: pretouched={} batchPrefetch issued={} declined={} ownRecordHints={} (enabled={}) seedHints={} outputSyncs={} (every {} MiB)",
+                log.info("Base-layer IO hints: pretouched={} batchPrefetch issued={} declined={} ownRecordHints={} (enabled={}) seedHints={} outputSyncs={} (every {} MiB); bands: enabled={} ownRecordsFromBands={} spilled={} bytes",
                         pretouchedNodes.get(), batchPrefetchIssued.get(), batchPrefetchDeclined.get(),
                         batchOwnRecordHints.get(), BATCH_OWN_RECORD_HINTS, seedHints.get(),
-                        outputSyncs.get(), OUTPUT_SYNC_BYTES >> 20);
+                        outputSyncs.get(), OUTPUT_SYNC_BYTES >> 20,
+                        bandStaged && similarityOrdinalsActive, bandOwnRecords.get(), distributeBytes.get());
                 if (clusterCertified.get() + clusterAnchors.get() > 0) {
                     log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
                             clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
@@ -1853,7 +1897,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
         scratch.resetChainSeeds();
-        if (bs.end > bs.start) {
+        BandStore bands = currentBands;
+        boolean ownFromBands = bands != null && bands.sourceIdx == bs.sourceIdx;
+        if (bs.end > bs.start && !ownFromBands) {
             // Stream this batch's own records into the page cache before processing. Search
             // reads into other sources are data-dependent and stay demand-faulted, but each
             // node's own record read (adjacency + vector) is fully predictable. Under
@@ -1950,8 +1996,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
-        var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
-        sourceView.getVectorInto(node, scratch.baseVec, 0);
+        BandStore bands = currentBands;
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            bands.vectorInto(node, scratch.baseVec);
+            bandOwnRecords.incrementAndGet();
+        } else {
+            var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+            sourceView.getVectorInto(node, scratch.baseVec, 0);
+        }
 
         int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -2018,14 +2070,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private WriteResult writeRetainedOnlyRecord(int node, int sourceIdx, int newOrdinal,
                                                 Scratch scratch, CompactWriter writer) throws IOException {
         var view = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
-        view.getVectorInto(node, scratch.baseVec, 0);
+        BandStore bands = currentBands;
+        NodesIterator it;
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            bands.vectorInto(node, scratch.baseVec);
+            it = new NodesIterator.ArrayNodesIterator(scratch.ownNeighbors, bands.neighbors(node, scratch.ownNeighbors));
+            bandOwnRecords.incrementAndGet();
+        } else {
+            view.getVectorInto(node, scratch.baseVec, 0);
+            it = view.getNeighborsIterator(0, node);
+        }
         FixedBitSet alive = liveNodes.get(sourceIdx);
         OrdinalMapper mapper = remappers.get(sourceIdx);
         var selected = scratch.selectedCache;
         selected.reset();
         boolean needVecs = writer.needsNeighborVectors();
 
-        var it = view.getNeighborsIterator(0, node);
         while (it.hasNext()) {
             int nb = it.nextInt();
             if (!alive.get(nb)) continue;
@@ -2435,15 +2495,28 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // record and let the reads below overlap in the device queue instead of paying one
         // fault of latency each, serially. (The extra iterator pass re-reads adjacency the
         // first pass just faulted in — RAM-cheap.)
-        var hintIt = searchView.getNeighborsIterator(level, node);
         var source = sources.get(sourceIdx);
-        while (hintIt.hasNext()) {
-            int nb = hintIt.nextInt();
-            if (indexAlive.get(nb)) {
-                source.willNeedL0Record(nb);
+        BandStore bands = level == 0 ? currentBands : null;
+        NodesIterator it;
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            // Own edges from the band; the neighbours' vectors below are still source reads.
+            int count = bands.neighbors(node, scratch.ownNeighbors);
+            for (int k = 0; k < count; k++) {
+                if (indexAlive.get(scratch.ownNeighbors[k])) {
+                    source.willNeedL0Record(scratch.ownNeighbors[k]);
+                }
             }
+            it = new NodesIterator.ArrayNodesIterator(scratch.ownNeighbors, count);
+        } else {
+            var hintIt = searchView.getNeighborsIterator(level, node);
+            while (hintIt.hasNext()) {
+                int nb = hintIt.nextInt();
+                if (indexAlive.get(nb)) {
+                    source.willNeedL0Record(nb);
+                }
+            }
+            it = searchView.getNeighborsIterator(level, node);
         }
-        var it = searchView.getNeighborsIterator(level, node);
         while (it.hasNext()) {
             int nb = it.nextInt();
             if (!indexAlive.get(nb)) continue;
@@ -3003,6 +3076,59 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Dead nodes are numbered after all live nodes, preserving a total bijection.
      */
     /**
+     * The distribute stage for one source: sweep it once in its own ordinal order, in prefetched
+     * windows across the pool, appending every live node's vector and base-layer edges to the
+     * band of its new ordinal. Returns the store ready for reads.
+     */
+    private BandStore distributeSource(int s) throws IOException {
+        OnDiskGraphIndex source = sources.get(s);
+        FixedBitSet alive = liveNodes.get(s);
+        OrdinalMapper mapper = remappers.get(s);
+        int size = source.size(0);
+        int live = numLiveNodesPerSource.get(s);
+        long t0 = System.nanoTime();
+        BandStore store = new BandStore(spillParent, s, planSourceStart[s], live, dimension, source.getDegree(0),
+                                        BAND_NODES, mapper::oldToNew);
+        try (var scope = progress.startPhase(CompactionStage.DISTRIBUTE)) {
+            scope.onProgress(0, live);
+            AtomicLong done = new AtomicLong();
+            int window = Math.max(4096, (size + 4 * taskWindowSize - 1) / (4 * taskWindowSize));
+            List<Runnable> tasks = new ArrayList<>();
+            for (int from = 0; from < size; from += window) {
+                final int lo = from;
+                final int hi = Math.min(size, from + window);
+                tasks.add(() -> {
+                    source.prefetchL0Records(lo, hi - 1);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    int windowLive = 0;
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int node = lo; node < hi; node++) {
+                            if (!alive.get(node)) continue;
+                            view.getVectorInto(node, vec, 0);
+                            store.put(node, vec, view.getNeighborsIterator(0, node));
+                            windowLive++;
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                    report(scope, done, windowLive, live);
+                });
+            }
+            joinAll(tasks);
+            store.finishDistribute();
+        } catch (RuntimeException | IOException e) {
+            store.close();
+            throw e;
+        }
+        distributeBytes.addAndGet(store.bytes());
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        log.info("Distribute source {}: {} records ({} bytes) into {} bands of {} nodes ({} bytes/record) in {} ms ({} MB/s spilled)",
+                s, store.records(), store.bytes(), store.numBands, store.bandNodes, store.recordBytes, ms,
+                ms == 0 ? "-" : String.format("%.0f", store.bytes() / 1048576.0 / (ms / 1000.0)));
+        return store;
+    }
+
+    /**
      * This source's slice of the plan in new-ordinal order: the old ordinals of its live nodes,
      * ascending by the new ordinal they were assigned. One forward scan of the plan arrays.
      */
@@ -3052,6 +3178,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] newToOldAll = new int[(int) totalOrdinals];
         int[] newToSrcAll = new int[(int) totalOrdinals];
         int[][] oldToNewPerSource = new int[numSources][];
+        int[] sourceStart = new int[numSources];
         int next = 0;
 
         for (int oi = 0; oi < numSources; oi++) {
@@ -3061,6 +3188,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             FixedBitSet alive = liveNodes.get(s);
             int[] oldToNew = new int[size];
             oldToNewPerSource[s] = oldToNew;
+            sourceStart[s] = next;
 
             // one pass: a 4-byte similarity key per live node, packed with the ordinal
             int liveCount = numLiveNodesPerSource.get(s);
@@ -3153,6 +3281,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.maxOrdinal = next - 1;
         this.planNewToOld = newToOldAll;
         this.planNewToSrc = newToSrcAll;
+        this.planSourceStart = sourceStart;
         List<OrdinalMapper> mappers = new ArrayList<>(numSources);
         for (int s = 0; s < numSources; s++) {
             mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
@@ -3185,6 +3314,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final VectorFloat<?> tmpVec, baseVec;
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
+        /** A node's own base-layer edges when they come from its band (sized to the widest source). */
+        final int[] ownNeighbors;
         // Seeding scratch: candidate seed pool (old ordinals in the target source), the chosen top
         // seeds with their exact scores, a per-thread read channel on the output file, and a buffer
         // sized for one record's neighbor-count + list.
@@ -3217,6 +3348,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
             this.baseVec = vectorTypeSupport.createFloatVector(dimension);
             this.pqCode = (pq == null) ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+            int widest = 1;
+            for (OnDiskGraphIndex src : sources) {
+                widest = Math.max(widest, src.getDegree(0));
+            }
+            this.ownNeighbors = new int[widest];
 
             this.gs = new GraphSearcher[sources.size()];
             for (int i = 0; i < sources.size(); i++) {

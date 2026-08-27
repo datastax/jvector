@@ -42,6 +42,8 @@ public enum CompactionStage implements WorkStage {
     PQ_RETRAIN,
     /** Encoding every live node against the retrained codebook into the pre-encode cache. */
     CODE_PRE_ENCODE,
+    /** Sweeping one source once and spilling its records into bands of the merged ordinal space; runs inside BASE_LAYER, per source. */
+    DISTRIBUTE,
     /** Merging and writing the base layer: the bulk of both the reads and the output. */
     BASE_LAYER,
     /** Merging and writing the upper layers. */

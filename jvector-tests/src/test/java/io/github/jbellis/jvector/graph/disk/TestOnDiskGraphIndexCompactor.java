@@ -61,6 +61,7 @@ import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
@@ -654,6 +655,45 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
 
+    /**
+     * Step 3 parity: with own records served from bands instead of source seeks, the merged
+     * output is byte-identical to the direct path (single-threaded executor, so both runs make
+     * the same decisions in the same order), and no spill is left behind.
+     */
+    @Test
+    public void testBandStagedOutputMatchesDirect() throws Exception {
+        List<byte[]> outputs = new ArrayList<>();
+        for (boolean banded : new boolean[] {true, false}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            liveNodes.get(2).clear(5);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction,
+                                                          ParallelExecutor.callerRuns(), 1);
+            compactor.setSimilarityOrdinals(true);
+            compactor.bandStaged = banded;
+            Path out = testDirectory.resolve("compact_bands_" + banded);
+            compactor.compact(out);
+            if (banded) {
+                assertEquals("every live node's own record comes from its band",
+                        (long) numSources * numVectorsPerGraph - 1, compactor.bandOwnRecords.get());
+                assertTrue(compactor.distributeBytes.get() > 0);
+            } else {
+                assertEquals(0, compactor.bandOwnRecords.get());
+            }
+            outputs.add(Files.readAllBytes(out));
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        assertArrayEquals("band-staged output must equal the direct output byte for byte", outputs.get(1), outputs.get(0));
+        try (var left = Files.list(testDirectory)) {
+            assertEquals("no band spill left behind", 0, left.filter(pp -> pp.getFileName().toString().startsWith("bands-src")).count());
+        }
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {
@@ -1201,11 +1241,17 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         // Every base-layer batch must have warmed its own records one way or the other: as a
         // range when dense, per record when not. A declined batch that issues nothing is the
         // demand-fault path measured on 2026-08-23 and must not come back silently.
-        assertTrue("some own-record warming must have run",
-                compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get() > 0);
-        if (compactor.batchPrefetchDeclined.get() > 0) {
-            assertTrue("sparse batches must fall back to per-record hints",
-                    compactor.batchOwnRecordHints.get() > 0);
+        if (compactor.bandStaged) {
+            // Band-staged: own records come from the bands, so no own-record warming is issued.
+            assertTrue("own records must be served from bands", compactor.bandOwnRecords.get() > 0);
+            assertEquals(0, compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get());
+        } else {
+            assertTrue("some own-record warming must have run",
+                    compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get() > 0);
+            if (compactor.batchPrefetchDeclined.get() > 0) {
+                assertTrue("sparse batches must fall back to per-record hints",
+                        compactor.batchOwnRecordHints.get() > 0);
+            }
         }
         searcher.close();
     }
