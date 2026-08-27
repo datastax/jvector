@@ -86,8 +86,14 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     @Override
     @SuppressWarnings("unchecked")
     public void retrain(VectorSimilarityFunction vsf) {
+        retrain(vsf, ProgressTracker.PhaseScope.NOOP);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void retrain(VectorSimilarityFunction vsf, ProgressTracker.PhaseScope scope) {
         log.info("Retraining fused-quantization compressor on merged sources");
-        this.retrainedCompressor = (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) retrainer.retrain(vsf);
+        this.retrainedCompressor = (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) retrainer.retrain(vsf, scope);
     }
 
     @Override

@@ -101,10 +101,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
     /**
-     * Observes phases and throttles output. Defaults to
-     * {@link ProgressLimiter#UNLIMITED}, which behaves exactly as if no SPI were installed.
+     * Observes phases and throttles output, instrumented: every stage's start, progress, and
+     * completion is logged and timed at this one point, and {@link StageInstrumentation#summary()}
+     * closes the run with the per-stage breakdown. Defaults to wrapping
+     * {@link ProgressLimiter#UNLIMITED}, which behaves exactly as if no SPI were installed apart
+     * from the logging.
      */
-    private ProgressLimiter progress = ProgressLimiter.UNLIMITED;
+    private StageInstrumentation progress = new StageInstrumentation(ProgressLimiter.UNLIMITED, log::info);
 
     /**
      * Installs the embedder's progress + throttle surface. A compaction is long enough that a host
@@ -115,7 +118,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void setProgressLimiter(ProgressLimiter progress) {
-        this.progress = progress == null ? ProgressLimiter.UNLIMITED : progress;
+        this.progress = new StageInstrumentation(progress == null ? ProgressLimiter.UNLIMITED : progress, log::info);
     }
 
     /**
@@ -721,6 +724,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(CompactionDestination destination) throws FileNotFoundException {
+        progress.beginRun();
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
         try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
             Path outputPath = reservation.file();
@@ -742,6 +746,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } catch (IOException e) {
             throw new UncheckedIOException("Compaction failed", e);
         }
+        log.info(progress.summary());
     }
 
     /**
@@ -752,11 +757,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void commit(CompactionDestination.OutputReservation reservation, Path outputPath, long startOffset)
             throws IOException {
         long bodyLength;
+        long t0 = System.nanoTime();
         try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
             fc.force(true);
             bodyLength = fc.size() - startOffset;
         }
         reservation.commit(bodyLength);
+        log.info("Output forced and committed: {} bytes in {} ms", bodyLength, (System.nanoTime() - t0) / 1_000_000L);
     }
 
     /**
@@ -792,13 +799,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
         // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+        progress.beginRun();
         QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
         QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
         try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
             Path graphPath = reservation.file();
             long startOffset = reservation.startOffset();
             try {
-                sidecarStrategy.retrain(similarityFunction);
+                // The sidecar's retrain ran under no stage at all before this; it is the same
+                // work as the inline path's PQ_RETRAIN and is reported as such.
+                try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
+                    sidecarStrategy.retrain(similarityFunction, scope);
+                }
                 compactGraphImpl(graphPath, startOffset, inlineStrategy);
                 if (refineAfterCompaction) {
                     refineCompactedGraph(graphPath, startOffset, inlineStrategy);
@@ -811,6 +823,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
         }
+        log.info(progress.summary());
     }
 
     /**
@@ -899,22 +912,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             return;
         }
         long cap = SOURCE_PRETOUCH_MAX_NODES < 0 ? Long.MAX_VALUE : SOURCE_PRETOUCH_MAX_NODES;
-        long warmed = 0;
-        long start = System.nanoTime();
+        long total = 0;
         for (int s = 0; s < sources.size(); s++) {
             // liveNodes.length() == source.getIdUpperBound(), validated at construction.
-            int upper = liveNodes.get(s).length();
-            long limit = Math.min(cap, upper);
-            for (long lo = 0; lo < limit; lo += SOURCE_PRETOUCH_WINDOW_NODES) {
-                int hi = (int) Math.min(lo + SOURCE_PRETOUCH_WINDOW_NODES - 1, limit - 1);
-                try {
-                    sources.get(s).prefetchL0Records((int) lo, hi);
-                } catch (RuntimeException e) {
-                    log.warn("source pretouch failed for source {} window [{},{}]; continuing",
-                             s, lo, hi, e);
-                    break;
+            total += Math.min(cap, liveNodes.get(s).length());
+        }
+        long warmed = 0;
+        long start = System.nanoTime();
+        // Its own stage rather than a share of PQ_RETRAIN's: at the 1B tier the warm is minutes,
+        // and a host that shows phases needs to see which one it is in. The stage name is one
+        // more tag value on the host's phase metric, nothing else.
+        try (var scope = progress.startPhase(CompactionStage.SOURCE_PRETOUCH)) {
+            scope.onProgress(0, total);
+            for (int s = 0; s < sources.size(); s++) {
+                int upper = liveNodes.get(s).length();
+                long limit = Math.min(cap, upper);
+                for (long lo = 0; lo < limit; lo += SOURCE_PRETOUCH_WINDOW_NODES) {
+                    int hi = (int) Math.min(lo + SOURCE_PRETOUCH_WINDOW_NODES - 1, limit - 1);
+                    try {
+                        sources.get(s).prefetchL0Records((int) lo, hi);
+                    } catch (RuntimeException e) {
+                        log.warn("source pretouch failed for source {} window [{},{}]; continuing",
+                                 s, lo, hi, e);
+                        break;
+                    }
+                    warmed += hi - lo + 1;
+                    scope.onProgress(warmed, total);
                 }
-                warmed += hi - lo + 1;
             }
         }
         pretouchedNodes.addAndGet(warmed);
@@ -927,15 +951,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy)
             throws FileNotFoundException {
         this.spillParent = outputPath.toAbsolutePath().getParent();
-        // Codebook retraining is one indivisible unit of work from the outside: no intermediate
-        // count is meaningful, so the phase opens and closes without a progress report.
+        pretouchSources();
+        // The strategy reports into the scope: sample extraction as the first half, refinement
+        // as the second (see PQRetrainer.retrain). Each report is the host's cancellation point.
         try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
-            // Accounted to PQ_RETRAIN rather than given its own CompactionStage: the enum is
-            // part of the host-visible phase surface (Cassandra reports it as
-            // sai_vector_compaction_phase), and a new constant there would change what hosts
-            // see for a pass that is off by default.
-            pretouchSources();
-            strategy.retrain(similarityFunction);
+            strategy.retrain(similarityFunction, scope);
         }
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
@@ -948,7 +968,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (similarityOrdinals) {
             if (fusedPQEnabled && pq != null && pq.getSubspaceCount() >= 4) {
                 try (var scope = progress.startPhase(CompactionStage.SIMILARITY_ORDINALS)) {
-                    remappers = buildSimilarityOrdinalMappers(pq);
+                    remappers = buildSimilarityOrdinalMappers(pq, scope);
                 }
                 effectiveRemappers = remappers;
                 similarityOrdinalsActive = true;
@@ -979,9 +999,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         seeded, cold, cold + seeded == 0 ? 0 : 100 * seeded / (seeded + cold));
             }
 
-            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
-
-            writer.writeFooter();
+            try (var scope = progress.startPhase(CompactionStage.FINALIZE)) {
+                strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
+                writer.writeFooter();
+                scope.onProgress(1, 1);
+            }
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -2856,13 +2878,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * same order writes records sequentially and places similar vectors in adjacent records.
      * Dead nodes are numbered after all live nodes, preserving a total bijection.
      */
-    private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq) {
+    private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq, ProgressTracker.PhaseScope scope) {
         long t0 = System.nanoTime();
         int numSources = sources.size();
         long totalOrdinals = 0;
         for (OnDiskGraphIndex src : sources) {
             totalOrdinals += src.size(0);
         }
+        // Progress is live nodes encoded; the per-source sort and the assignment that follow
+        // each source's windows are short next to the encode sweep and are not counted.
+        final long liveTotal = numTotalNodes;
+        AtomicLong encodedNodes = new AtomicLong();
+        log.info("Assigning similarity ordinals: {} live nodes across {} sources", liveTotal, numSources);
+        scope.onProgress(0, liveTotal);
         if (totalOrdinals > Integer.MAX_VALUE) {
             throw new IllegalStateException("merged ordinal space exceeds int range: " + totalOrdinals);
         }
@@ -2906,6 +2934,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     source.prefetchL0Records(lo, hi - 1);
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
                     ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    int windowLive = 0;
                     try (var view = (OnDiskGraphIndex.View) source.getView()) {
                         for (int node = lo; node < hi; node++) {
                             if (!alive.get(node)) continue;
@@ -2914,10 +2943,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             long key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
                                      | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
                             keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
+                            windowLive++;
                         }
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
+                    report(scope, encodedNodes, windowLive, liveTotal);
                 });
             }
             joinAll(tasks);

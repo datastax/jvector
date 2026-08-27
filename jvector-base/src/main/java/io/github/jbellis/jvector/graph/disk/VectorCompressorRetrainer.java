@@ -30,4 +30,14 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 @FunctionalInterface
 public interface VectorCompressorRetrainer {
     VectorCompressor<?> retrain(VectorSimilarityFunction vsf);
+
+    /**
+     * {@link #retrain} reporting into the retrain phase's progress scope, so the host sees the
+     * phase move (and can cancel at each report) instead of one indivisible unit. Lambdas keep the
+     * scope-less form and this default, which discards the scope.
+     */
+    default VectorCompressor<?> retrain(VectorSimilarityFunction vsf,
+                                        io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope scope) {
+        return retrain(vsf);
+    }
 }

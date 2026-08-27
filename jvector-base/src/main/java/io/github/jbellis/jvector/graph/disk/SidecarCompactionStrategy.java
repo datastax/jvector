@@ -71,9 +71,14 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public void retrain(VectorSimilarityFunction vsf) {
+        retrain(vsf, ProgressTracker.PhaseScope.NOOP);
+    }
+
+    @Override
+    public void retrain(VectorSimilarityFunction vsf, ProgressTracker.PhaseScope scope) {
         log.info("Retraining sidecar compressor ({}) on merged sources",
                 formatHandle.getClass().getSimpleName());
-        this.retrainedCompressor = retrainer.retrain(vsf);
+        this.retrainedCompressor = retrainer.retrain(vsf, scope);
     }
 
     @Override

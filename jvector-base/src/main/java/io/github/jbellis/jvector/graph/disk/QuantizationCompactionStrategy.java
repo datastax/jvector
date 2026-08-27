@@ -78,6 +78,16 @@ public abstract class QuantizationCompactionStrategy {
      */
     public abstract void retrain(VectorSimilarityFunction vsf);
 
+    /**
+     * {@link #retrain(VectorSimilarityFunction)} with the phase's progress scope. Strategies whose
+     * retrainer can report — sample extraction, then refinement — override this so the phase is
+     * observable and cancellable; the default discards the scope.
+     */
+    public void retrain(VectorSimilarityFunction vsf,
+                        io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope scope) {
+        retrain(vsf);
+    }
+
     /** The retrained compressor produced by {@link #retrain}. {@code null} before retrain or for NONE. */
     public abstract VectorCompressor<?> compressor();
 

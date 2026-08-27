@@ -129,9 +129,20 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
         ProductQuantization basePQ = this.pq;
-        VectorCompressorRetrainer retrainer =
-                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension, ctx.executor)
-                        .retrain(vsf, basePQ);
+        // Not a lambda: the scope-aware overload is what lets the retrain phase report progress.
+        VectorCompressorRetrainer retrainer = new VectorCompressorRetrainer() {
+            @Override
+            public io.github.jbellis.jvector.quantization.VectorCompressor<?> retrain(VectorSimilarityFunction vsf) {
+                return retrain(vsf, io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope.NOOP);
+            }
+
+            @Override
+            public io.github.jbellis.jvector.quantization.VectorCompressor<?> retrain(
+                    VectorSimilarityFunction vsf, io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope scope) {
+                return new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension, ctx.executor)
+                        .retrain(vsf, basePQ, scope);
+            }
+        };
         return new FusedCompactionStrategy(ctx, this, retrainer);
     }
 

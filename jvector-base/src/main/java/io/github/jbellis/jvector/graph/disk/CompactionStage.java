@@ -34,6 +34,8 @@ import io.github.jbellis.jvector.util.work.WorkStage;
  */
 @Experimental
 public enum CompactionStage implements WorkStage {
+    /** Streaming a window of each source's base-layer records into the page cache, when enabled. */
+    SOURCE_PRETOUCH,
     /** Assigning similarity-clustered output ordinals, when enabled. */
     SIMILARITY_ORDINALS,
     /** Retraining the quantization codebook on a balanced sample of the merged sources. */
@@ -44,6 +46,8 @@ public enum CompactionStage implements WorkStage {
     BASE_LAYER,
     /** Merging and writing the upper layers. */
     UPPER_LAYERS,
+    /** Writing the trailing feature records and the footer after every layer is written. */
+    FINALIZE,
     /** Second-pass neighbor refinement over the written graph. */
     REFINE,
     /** Writing the merged non-fused compressed sidecar. */

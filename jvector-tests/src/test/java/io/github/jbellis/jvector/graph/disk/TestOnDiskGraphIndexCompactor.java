@@ -64,6 +64,7 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
@@ -902,6 +903,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         AtomicLong admittedBytes = new AtomicLong();
         AtomicInteger monotonicViolations = new AtomicInteger();
         Map<String, Long> lastCompleted = new HashMap<>();
+        Map<String, Long> lastTotal = new HashMap<>();
 
         ProgressLimiter limiter = new ProgressLimiter() {
             @Override
@@ -916,6 +918,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                                 monotonicViolations.incrementAndGet();
                             }
                             lastCompleted.put(stage.name(), completed);
+                            lastTotal.put(stage.name(), total);
                         }
                     }
 
@@ -947,6 +950,24 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         Long baseLayerNodes = lastCompleted.get(CompactionStage.BASE_LAYER.name());
         assertEquals("base layer progress should reach every merged node",
                 Long.valueOf(numSources * numVectorsPerGraph), baseLayerNodes);
+        // Every stage of the run is a phase, and every phase reports: the host's onProgress is
+        // its cancellation checkpoint, so a phase that never reports is one it cannot stop.
+        // (UPPER_LAYERS runs once per level above 0; these single-level sources have none.)
+        for (CompactionStage stage : new CompactionStage[] {
+                CompactionStage.PQ_RETRAIN, CompactionStage.CODE_PRE_ENCODE,
+                CompactionStage.BASE_LAYER, CompactionStage.FINALIZE }) {
+            assertTrue(stage + " must be started, saw " + startedPhases, startedPhases.contains(stage.name()));
+            assertTrue(stage + " must report progress", lastCompleted.containsKey(stage.name()));
+        }
+        // ...and every phase that stated a total reaches it before it closes.
+        synchronized (lastCompleted) {
+            for (Map.Entry<String, Long> e : lastTotal.entrySet()) {
+                if (e.getValue() > 0) {
+                    assertEquals("phase " + e.getKey() + " must complete its stated total",
+                            e.getValue(), lastCompleted.get(e.getKey()));
+                }
+            }
+        }
 
         // Admission is in bytes, and the compactor must ask before it writes.
         assertTrue("compactor should admit output bytes through the limiter, got " + admittedBytes.get(),
@@ -987,6 +1008,20 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
         compactor.setSimilarityOrdinals(true);
+        Map<String, long[]> ordinalPhase = new HashMap<>(); // name -> {reports, lastCompleted, lastTotal}
+        compactor.setProgressLimiter(new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                long[] v = ordinalPhase.computeIfAbsent(stage.name(), k -> new long[3]);
+                return (completed, total) -> {
+                    synchronized (v) {
+                        v[0]++;
+                        v[1] = completed;
+                        v[2] = total;
+                    }
+                };
+            }
+        });
         int topK = 10;
 
         var outputPath = testDirectory.resolve("test_compact_simord_graph");
@@ -1048,6 +1083,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 Math.abs(goldenRecall - compactRecall) < 0.2);
         assertTrue("similarity-ordinal recall should be at least 0.2, got " + compactRecall,
                 compactRecall >= 0.2);
+
+        // The ordinal pass is a stage of its own that reports live nodes encoded and reaches its
+        // total: before this it opened and closed a phase with nothing in between.
+        long[] ord = ordinalPhase.get(CompactionStage.SIMILARITY_ORDINALS.name());
+        assertNotNull("SIMILARITY_ORDINALS phase must be started", ord);
+        assertTrue("SIMILARITY_ORDINALS must report progress", ord[0] >= 2);
+        assertEquals("SIMILARITY_ORDINALS must complete its total", ord[2], ord[1]);
+        assertEquals("SIMILARITY_ORDINALS total is the live node count", (long) total, ord[2]);
 
         // Every base-layer batch must have warmed its own records one way or the other: as a
         // range when dense, per record when not. A declined batch that issues nothing is the
