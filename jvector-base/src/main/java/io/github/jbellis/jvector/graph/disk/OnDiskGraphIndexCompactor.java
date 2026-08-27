@@ -526,6 +526,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             return claimed.compareAndSet(band, 0, 1);
         }
     }
+    /**
+     * Resident cross-source search: each searched source's base-layer adjacency is loaded from
+     * its token stream into memory ({@link ResidentGraph}) and the beam search scores every
+     * visited node from the pre-encode cache ({@link AdcScorer}), so the search reads no record.
+     * The results are then rescored per {@code candidateScoring} — exactly (one record read per
+     * result, not per hop) or from codes (none). Sources go resident largest-first within
+     * {@code residentGraphMaxBytes}; the rest are searched on disk as before. Requires fused PQ
+     * and sources that carry a token stream. Default off: like {@code adc} it scores the search
+     * with the retrained codebook, and the recall experiment decides.
+     * {@code jvector.compaction.residentSearch}, {@code jvector.compaction.residentGraphMaxBytes}.
+     */
+    static final boolean RESIDENT_SEARCH = "true".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.residentSearch", "false"));
+    static final long RESIDENT_GRAPH_MAX_BYTES = resolveLongProperty("jvector.compaction.residentGraphMaxBytes", 8L << 30);
+    boolean residentSearch = RESIDENT_SEARCH;
+    long residentGraphMaxBytes = RESIDENT_GRAPH_MAX_BYTES;
+    /** Per source: its resident adjacency, or null when it is searched on disk. */
+    private volatile ResidentGraph[] residentGraphs;
+    private volatile PreEncodedCodeCache residentCache;
+    final AtomicLong residentSearches = new AtomicLong();
+    final AtomicLong residentGraphBytes = new AtomicLong();
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -1692,8 +1713,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // When seeding, each thread reads finished nodes' edges from the output file — give Scratch
         // the path so it can open its own read channel.
         Path seedOutputPath = !fusedPQEnabled ? writer.getOutputPath() : null;
+        residentGraphs = null;
+        residentCache = null;
+        if (residentSearch) {
+            if (!fusedPQEnabled || writer.pqCodeCache() == null) {
+                log.info("Resident search requested but there is no pre-encode cache (fused PQ off); searching on disk");
+            } else {
+                residentCache = writer.pqCodeCache();
+                residentGraphs = buildResidentGraphs();
+            }
+        }
+        final ResidentGraph[] residentForScratch = residentGraphs;
         final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() ->
-            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath, similarityFunction)
+            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath, similarityFunction, residentForScratch)
         );
 
         // Seeding only helps the full-precision cross-source search (fused already scores hops via
@@ -1916,9 +1948,64 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         scoringCache = null;
+        if (residentGraphs != null) {
+            log.info("Resident search: {} searches over {} resident sources ({} bytes of adjacency)",
+                    residentSearches.get(), java.util.Arrays.stream(residentGraphs).filter(java.util.Objects::nonNull).count(),
+                    residentGraphBytes.get());
+        }
+        residentGraphs = null;
+        residentCache = null;
         Scratch s = threadLocalScratch.get();
         s.close();
         threadLocalScratch.remove();
+    }
+
+    /** Loads sources' base-layer adjacency from their token streams, largest first, within the byte budget. */
+    private ResidentGraph[] buildResidentGraphs() {
+        ResidentGraph[] out = new ResidentGraph[sources.size()];
+        Integer[] order = new Integer[sources.size()];
+        for (int i = 0; i < order.length; i++) order[i] = i;
+        Arrays.sort(order, Comparator.comparingInt((Integer i) -> -numLiveNodesPerSource.get(i)).thenComparingInt(i -> i));
+        long used = 0;
+        for (int s : order) {
+            OnDiskGraphIndex source = sources.get(s);
+            if (source.tokenStreamSection().isEmpty()) {
+                log.info("Resident search: source {} carries no token stream; searched on disk", s);
+                continue;
+            }
+            long bytes = ResidentGraph.bytesFor(source.size(0), source.getDegree(0));
+            if (used + bytes > residentGraphMaxBytes) {
+                log.info("Resident search: source {} ({} bytes) exceeds the remaining budget ({} of {} used); searched on disk",
+                        s, bytes, used, residentGraphMaxBytes);
+                continue;
+            }
+            long t0 = System.nanoTime();
+            try {
+                out[s] = ResidentGraph.fromStream(source);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            used += bytes;
+            log.info("Resident search: source {} adjacency resident, {} nodes x degree {} = {} bytes, in {} ms",
+                    s, source.size(0), source.getDegree(0), bytes, (System.nanoTime() - t0) / 1_000_000L);
+        }
+        residentGraphBytes.set(used);
+        return out;
+    }
+
+    private boolean residentActive() {
+        return residentGraphs != null;
+    }
+
+    /** The search's score function over a resident source: the node's query against each visited node's cached code. */
+    private SearchScoreProvider residentProvider(Scratch scratch, int sourceIdx) {
+        final PreEncodedCodeCache cache = residentCache;
+        final OrdinalMapper mapper = remappers.get(sourceIdx);
+        ScoreFunction.ApproximateScoreFunction asf = node -> {
+            cache.get(mapper.oldToNew(node), scratch.codeBuf);
+            return scratch.adc.similarityTo(scratch.codeSeq);
+        };
+        return new DefaultSearchScoreProvider(asf);
     }
 
     private boolean adcActive() {
@@ -2179,7 +2266,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
             sourceView.getVectorInto(node, scratch.baseVec, 0);
         }
-        if (adcActive()) {
+        if (adcActive() || residentActive()) {
             scratch.adc.setQuery(scratch.baseVec);
         }
 
@@ -2572,7 +2659,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     ) {
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
-        if (adcActive()) {
+        if (adcActive() || residentActive()) {
             scratch.adc.setQuery(scratch.baseVec);
         }
 
@@ -2741,11 +2828,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 scratch.tmpVec,
                 similarityFunction
         );
+        // Resident: walk the source's adjacency in memory and score visited nodes from the
+        // cache; the searcher below never touches a record. Rescoring of the results is per
+        // candidateScoring, as for the on-disk search.
+        GraphSearcher searcher = scratch.gs[sourceIdx];
+        final boolean resident = residentActive() && scratch.rgs != null && scratch.rgs[sourceIdx] != null;
+        if (resident) {
+            searcher = scratch.rgs[sourceIdx];
+            ssp = residentProvider(scratch, sourceIdx);
+            residentSearches.incrementAndGet();
+        }
 
         if (level == 0) {
             int prevCandSize = candSize;
             boolean clusterMode = !seedingActive && orderingCache != null
-                    && clusterSearchUsable() && params.fusedPQEnabled
+                    && clusterSearchUsable() && params.fusedPQEnabled && !resident
                     // Code-scored candidates: the cluster path rescores against the anchor's query
                     // and certifies on exact distances; under adc every cross-source candidate
                     // comes from the cold search and is scored from its code.
@@ -2777,11 +2874,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         }
                         seedHints.addAndGet(seedCount);
                     }
-                    scratch.gs[sourceIdx].initializeWithSeeds(ssp, indexAlive,
+                    searcher.initializeWithSeeds(ssp, indexAlive,
                             scratch.seedNodes, scratch.seedScores, seedCount);
-                    scratch.gs[sourceIdx].searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
+                    searcher.searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
                     candSize = appendApproximateResults(
-                            scratch.gs[sourceIdx].approximateResults(), sourceIdx, scratch, candSize);
+                            searcher.approximateResults(), sourceIdx, scratch, candSize);
                 } else {
                     if (seedingActive) {
                         coldSearches.incrementAndGet();
@@ -2789,7 +2886,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are
                     // largely pruned by diversity selection, so the doubled approximate-phase cost
                     // buys almost no recall.
-                    SearchResult results = scratch.gs[sourceIdx].search(
+                    SearchResult results = searcher.search(
                             ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
                     );
 
@@ -2809,23 +2906,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } else {
             var entry = searchView.entryNode();
             if (level > entry.level) return candSize;
-            scratch.gs[sourceIdx].initializeInternal(ssp, entry, Bits.ALL);
+            searcher.initializeInternal(ssp, entry, Bits.ALL);
 
             // Descend greedily through levels above the target level, so the search at
             // `level` starts from the best-known region rather than the global entry node.
             // This mirrors how GraphSearcher.searchInternal navigates the hierarchy.
             for (int l = entry.level; l > level; l--) {
-                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
-                scratch.gs[sourceIdx].setEntryPointsFromPreviousLayer();
+                searcher.searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
+                searcher.setEntryPointsFromPreviousLayer();
             }
 
-            scratch.gs[sourceIdx].searchOneLayer(
+            searcher.searchOneLayer(
                     ssp, params.searchTopK, 0f, level, indexAlive
             );
 
             int prev_candSize = candSize;
             candSize = appendApproximateResults(
-                    scratch.gs[sourceIdx].approximateResults(),
+                    searcher.approximateResults(),
                     sourceIdx,
                     scratch,
                     candSize
@@ -3586,6 +3683,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final ByteSequence<?> pqCode;
         /** A node's own base-layer edges when they come from its band (sized to the widest source). */
         final int[] ownNeighbors;
+        /** Searchers over resident adjacency, per source; null entries search on disk. */
+        final GraphSearcher[] rgs;
         /** Code-based candidate scoring; null without a PQ. */
         final AdcScorer adc;
         final byte[] codeBuf;
@@ -3614,7 +3713,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
          */
         Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources,
-                ProductQuantization pq, Path seedOutputPath, VectorSimilarityFunction vsf) {
+                ProductQuantization pq, Path seedOutputPath, VectorSimilarityFunction vsf, ResidentGraph[] resident) {
             this.candSrc = new int[maxCandidateSize];
             this.candNode = new int[maxCandidateSize];
             this.candScore = new float[maxCandidateSize];
@@ -3641,6 +3740,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             for (int i = 0; i < sources.size(); i++) {
                 gs[i] = new GraphSearcher.Builder(FrontierPrefetchingView.wrap(sources.get(i))).build();
                 gs[i].usePruning(false);
+            }
+            if (resident != null) {
+                this.rgs = new GraphSearcher[sources.size()];
+                for (int i = 0; i < sources.size(); i++) {
+                    if (resident[i] != null) {
+                        var view = resident[i].view((OnDiskGraphIndex.View) sources.get(i).getView());
+                        rgs[i] = new GraphSearcher.Builder(view).build();
+                        rgs[i].usePruning(false);
+                    }
+                }
+            } else {
+                this.rgs = null;
             }
             int clusterCap = maxCandidateSize; // >= searchTopK + CLUSTER_MARGIN
             this.clusterAnchorQuery = new VectorFloat<?>[sources.size()];
@@ -3684,6 +3795,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         @Override
         public void close() throws IOException {
             for (var s : gs) s.close();
+            if (rgs != null) {
+                for (var r : rgs) {
+                    if (r != null) r.close();
+                }
+            }
             selectedCache.reset();
             if (outputChannel != null) outputChannel.close();
         }

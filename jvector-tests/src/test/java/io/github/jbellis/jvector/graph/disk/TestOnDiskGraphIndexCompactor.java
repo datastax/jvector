@@ -855,6 +855,51 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for (var rs : rss2) rs.close();
     }
 
+    /**
+     * Step 6: cross-source searches over resident adjacency scored from the cache, against the
+     * on-disk search, as recall of the merged graph on the same sources and queries.
+     */
+    @Test
+    public void testResidentSearchRecallAgainstOnDisk() throws Exception {
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+        double[] recall = new double[2];
+        for (int arm = 0; arm < 2; arm++) {
+            boolean resident = arm == 1;
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.residentSearch = resident;
+            Path out = testDirectory.resolve("compact_resident_" + resident);
+            compactor.compact(out);
+            if (resident) {
+                assertTrue("searches must have run over resident adjacency", compactor.residentSearches.get() > 0);
+                assertEquals("every source is resident within the default budget",
+                        (long) numSources * ResidentGraph.bytesFor(numVectorsPerGraph, graphs.get(0).getDegree(0)),
+                        compactor.residentGraphBytes.get());
+            } else {
+                assertEquals(0, compactor.residentSearches.get());
+            }
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                recall[arm] = recallOf(g, queries, groundTruth, topK);
+                TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        System.out.printf("Resident search recall@%d: on-disk=%.4f resident=%.4f%n", topK, recall[0], recall[1]);
+        assertTrue(String.format("resident recall %.4f must not fall more than 0.15 below on-disk %.4f", recall[1], recall[0]),
+                recall[1] >= recall[0] - 0.15);
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {
