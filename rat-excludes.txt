@@ -3,6 +3,7 @@ CONTRIBUTIONS.md
 .github/workflows/checklist_comment_on_new_pr.yml
 .github/workflows/pr_checklist.md
 .github/workflows/unit-tests.yaml
+.github/workflows/unit-tests-arm64.yaml
 .github/workflows/generate-changelog.yaml
 .github/workflows/generate-release-notes.yml
 package.json
