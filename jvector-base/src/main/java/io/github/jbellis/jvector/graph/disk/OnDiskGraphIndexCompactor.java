@@ -340,6 +340,35 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     final java.util.concurrent.atomic.AtomicLong batchPrefetchIssued = new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.atomic.AtomicLong batchPrefetchDeclined = new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Whether a batch whose own-record ordinals are too sparse for one range prefetch hints each
+     * record individually instead of issuing nothing. Before this, a declined batch left every
+     * own-record read to demand-fault one page against a {@code MADV_RANDOM} mapping, serially —
+     * the 4.00 KB mean request size and 50% iowait measured on 2026-08-23. Per-record hints are
+     * asynchronous, so a 128-node batch puts up to 128 reads in flight before the first
+     * {@code processBaseNode} blocks on one. The I/O model this follows
+     * ({@code vector_merge_splat_design.md} §8): above RAM the merge is concurrency-bound before
+     * it is device-bound, and depth is the lever. {@code jvector.compaction.batchOwnRecordHints=false}
+     * restores the decline, for a baseline arm.
+     */
+    static final boolean BATCH_OWN_RECORD_HINTS = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.batchOwnRecordHints", "true"));
+    /** Own records hinted individually in sparse batches. */
+    final java.util.concurrent.atomic.AtomicLong batchOwnRecordHints = new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Bytes of base-layer output written between {@code fdatasync} barriers on the output channel
+     * (the host-interface {@code durability_barrier}). The base layer's reads are scattered across
+     * the sources while its writes accumulate as dirty pages; a scattered read that needs a frame
+     * holding an unflushed output page forces that page out on the allocation path, one page at
+     * a time, instead of through the flusher in order. Bounding the dirty debt keeps the merge's
+     * writeback sequential and off its own read path. 64 MiB by default — at base-layer write
+     * rates that is a barrier every second or so, each a few tens of ms on one worker.
+     * {@code jvector.compaction.outputSyncBytes=0} disables.
+     */
+    static final long OUTPUT_SYNC_BYTES = resolveLongProperty("jvector.compaction.outputSyncBytes", 64L << 20);
+    /** Durability barriers issued on the base-layer output. */
+    final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
 
     /** Density factor for the own-record batch prefetch: warm [lo,hi] when the span is no wider
      * than this multiple of the batch size. The 8 was chosen against a cache-resident working
@@ -1448,6 +1477,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                     doneFlag.set(r.newOrdinal, 1);
                                 }
                             }
+                            // Durability barrier on a byte cadence (see OUTPUT_SYNC_BYTES). Two
+                            // workers crossing the threshold together both force; harmless.
+                            if (OUTPUT_SYNC_BYTES > 0
+                                    && outputBytesSinceSync.addAndGet(bytes) >= OUTPUT_SYNC_BYTES) {
+                                outputBytesSinceSync.set(0);
+                                fc.force(false);
+                                outputSyncs.incrementAndGet();
+                            }
                         } catch (IOException e) {
                             throw new UncheckedIOException(e);
                         }
@@ -1468,6 +1505,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 log.info("Cross-link reverse propagation: {} offers onto {} touched of {} nodes ({} slots/node), {} retained-only fast-path nodes",
                         reverseCandidates.offered(), reverseCandidates.touchedTargets(),
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
+                // Reported unconditionally: these counters existed before but were never logged,
+                // so a hint path that silently stopped reaching the device was invisible.
+                log.info("Base-layer IO hints: pretouched={} batchPrefetch issued={} declined={} ownRecordHints={} (enabled={}) seedHints={} outputSyncs={} (every {} MiB)",
+                        pretouchedNodes.get(), batchPrefetchIssued.get(), batchPrefetchDeclined.get(),
+                        batchOwnRecordHints.get(), BATCH_OWN_RECORD_HINTS, seedHints.get(),
+                        outputSyncs.get(), OUTPUT_SYNC_BYTES >> 20);
                 if (clusterCertified.get() + clusterAnchors.get() > 0) {
                     log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
                             clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
@@ -1684,6 +1727,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 batchPrefetchIssued.incrementAndGet();
             } else {
                 batchPrefetchDeclined.incrementAndGet();
+                if (BATCH_OWN_RECORD_HINTS) {
+                    // Too sparse to stream as one range, but every record is still known up
+                    // front: hint each asynchronously so the reads below overlap in the device
+                    // queue rather than faulting one page at a time.
+                    var source = sources.get(bs.sourceIdx);
+                    FixedBitSet alive = liveNodes.get(bs.sourceIdx);
+                    int hinted = 0;
+                    for (int i = bs.start; i < bs.end; i++) {
+                        int node = bs.nodes[i];
+                        if (alive.get(node)) {
+                            source.willNeedL0Record(node);
+                            hinted++;
+                        }
+                    }
+                    batchOwnRecordHints.addAndGet(hinted);
+                }
             }
         }
 

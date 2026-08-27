@@ -72,6 +72,39 @@ public class MemorySegmentReaderTest extends RandomizedTest {
     }
 
 
+    /**
+     * The prefetch lead advises ahead of the read cursor in 1 MiB steps and clamps at both ends
+     * of the file; none of it may change what a reader sees, and out-of-range windows must be
+     * harmless. Uses a file large enough (3 MiB) that the lead path takes several steps.
+     */
+    @Test
+    public void testPrefetchLeadClampsAndLeavesReadsUnchanged() throws Exception {
+        Path big = Files.createTempFile(getClass().getSimpleName(), ".big");
+        try {
+            byte[] data = new byte[3 << 20];
+            for (int i = 0; i < data.length; i++) {
+                data[i] = (byte) (i * 31);
+            }
+            Files.write(big, data);
+            try (var supplier = new MemorySegmentReader.Supplier(big)) {
+                supplier.prefetch(0, data.length);            // whole file, several advise steps
+                supplier.prefetch(data.length - 100, 1000);   // clamps at EOF
+                supplier.prefetch(-50, 100);                  // clamps at 0
+                supplier.prefetch(10, 0);                     // empty window: no-op
+                supplier.willNeed(data.length + 5, 100);      // past EOF: no-op
+                var r = supplier.get();
+                r.seek(1 << 20);
+                byte[] buf = new byte[16];
+                r.readFully(buf);
+                for (int i = 0; i < buf.length; i++) {
+                    assertEquals(data[(1 << 20) + i], buf[i]);
+                }
+            }
+        } finally {
+            Files.deleteIfExists(big);
+        }
+    }
+
     @Test
     public void testSupplierClose() throws Exception {
         var s = new MemorySegmentReader.Supplier(tempFile);

@@ -1048,6 +1048,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 Math.abs(goldenRecall - compactRecall) < 0.2);
         assertTrue("similarity-ordinal recall should be at least 0.2, got " + compactRecall,
                 compactRecall >= 0.2);
+
+        // Every base-layer batch must have warmed its own records one way or the other: as a
+        // range when dense, per record when not. A declined batch that issues nothing is the
+        // demand-fault path measured on 2026-08-23 and must not come back silently.
+        assertTrue("some own-record warming must have run",
+                compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get() > 0);
+        if (compactor.batchPrefetchDeclined.get() > 0) {
+            assertTrue("sparse batches must fall back to per-record hints",
+                    compactor.batchOwnRecordHints.get() > 0);
+        }
         searcher.close();
     }
 

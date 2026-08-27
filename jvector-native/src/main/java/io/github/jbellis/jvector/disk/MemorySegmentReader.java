@@ -284,6 +284,33 @@ public class MemorySegmentReader implements RandomAccessReader {
         private static final ThreadLocal<java.nio.ByteBuffer> PREFETCH_BUF =
                 ThreadLocal.withInitial(() -> java.nio.ByteBuffer.wrap(new byte[64 << 10]));
 
+        /**
+         * Bytes of asynchronous {@code WILLNEED} advice kept in flight ahead of the synchronous
+         * read cursor in {@link #prefetch}. The read loop alone is one 64 KB request at a time on
+         * one thread, throttled by the kernel's sequential readahead ramp (128 KB window): a
+         * 16M-node pretouch measured 42–52 s for ~64 GB, about a quarter of what four NVMe drives
+         * stream. Advising a lead window through the fd turns the cursor into a consumer of
+         * reads already issued, at whatever depth the lead allows. The alternative — {@code
+         * POSIX_FADV_SEQUENTIAL} on the channel — only doubles the window to 256 KB and needs a
+         * descriptor the channel does not expose. {@code jvector.disk.prefetchLeadBytes}; 0
+         * disables and restores the plain read loop.
+         */
+        private static final long PREFETCH_LEAD_BYTES = resolveLeadBytes();
+        /** Advice is issued in steps of this size so it is not one syscall per 64 KB read. */
+        private static final long PREFETCH_ADVISE_STEP = 1L << 20;
+
+        private static long resolveLeadBytes() {
+            try {
+                String raw = System.getProperty("jvector.disk.prefetchLeadBytes");
+                if (raw != null && !raw.isBlank()) {
+                    return Math.max(0L, Long.parseLong(raw.trim()));
+                }
+            } catch (NumberFormatException e) {
+                // keep the default; a malformed knob must not disable warming
+            }
+            return 16L << 20;
+        }
+
         @Override
         public void prefetch(long offset, long length) {
             if (length <= 0) {
@@ -293,7 +320,15 @@ public class MemorySegmentReader implements RandomAccessReader {
             long end = Math.min(offset + length, memory.byteSize());
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 long pos = Math.max(0, offset);
+                long advised = pos;
                 while (pos < end) {
+                    if (PREFETCH_LEAD_BYTES > 0) {
+                        long want = Math.min(end, pos + PREFETCH_LEAD_BYTES);
+                        if (want - advised >= PREFETCH_ADVISE_STEP || (want == end && advised < end)) {
+                            willNeed(advised, want - advised); // no-op when advice is unavailable
+                            advised = want;
+                        }
+                    }
                     buf.clear().limit((int) Math.min(buf.capacity(), end - pos));
                     int n = ch.read(buf, pos);
                     if (n < 0) {
