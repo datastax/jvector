@@ -876,6 +876,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.similarityOrdinals = enabled;
     }
 
+    /** Candidate scoring from PQ codes ({@code adc}) instead of candidate vector reads; see {@link #ADC_SCORING}. */
+    @Experimental
+    public void setCandidateScoringFromCodes(boolean adc) {
+        this.adcScoring = adc;
+    }
+
+    /** Cross-source searches over resident adjacency from the sources' token streams; see {@link #RESIDENT_SEARCH}. */
+    @Experimental
+    public void setResidentSearch(boolean enabled) {
+        this.residentSearch = enabled;
+    }
+
+    /** Own records from a per-source band spill instead of source seeks; see {@link #BAND_STAGED}. */
+    @Experimental
+    public void setBandStaged(boolean enabled) {
+        this.bandStaged = enabled;
+    }
+
     /** The ordinal mappers in effect (the caller's, or the compactor-assigned similarity mapping). */
     public List<OrdinalMapper> effectiveRemappers() {
         return effectiveRemappers != null ? effectiveRemappers : remappers;
@@ -940,83 +958,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (!TOKEN_STREAM) {
             return;
         }
-        long t0 = System.nanoTime();
-        try (var scope = progress.startPhase(CompactionStage.TOKEN_STREAM);
-             var supplier = new SimpleReader.Supplier(outputPath);
-             var merged = OnDiskGraphIndex.load(supplier, startOffset)) {
-            if (merged.tokenStreamSection().isPresent()) {
-                log.info("Token stream: output already carries a section {}; not rewriting", merged.tokenStreamSection().get());
-                return;
-            }
-            // Footer geometry: [header copy @ headerOffset][headerOffset long][magic int] at the end.
-            long headerOffset;
-            byte[] headerBytes;
-            try (var in = supplier.get()) {
-                long len = in.length();
-                in.seek(len - AbstractGraphIndexWriter.FOOTER_MAGIC_SIZE);
-                int magic = in.readInt();
-                if (magic != AbstractGraphIndexWriter.FOOTER_MAGIC) {
-                    throw new IllegalStateException("compaction output does not end in a footer: magic " + Integer.toHexString(magic));
-                }
-                in.seek(len - AbstractGraphIndexWriter.FOOTER_SIZE);
-                headerOffset = in.readLong();
-                headerBytes = new byte[(int) (len - AbstractGraphIndexWriter.FOOTER_SIZE - headerOffset)];
-                in.seek(headerOffset);
-                in.readFully(headerBytes);
-            }
-            int n = merged.getIdUpperBound();
-            int maxLevel = Math.min(merged.getMaxLevel(), NodeTokenStream.MAX_LEVEL);
-            byte[] levelOf = null;
-            if (maxLevel > 0) {
-                levelOf = new byte[n];
-                for (int level = 1; level <= maxLevel; level++) {
-                    for (var it = merged.getNodes(level); it.hasNext(); ) {
-                        int node = it.nextInt();
-                        if (node >= 0 && node < n && levelOf[node] < level) {
-                            levelOf[node] = (byte) level;
-                        }
-                    }
-                }
-            }
-            final int window = 1 << 20;
-            scope.onProgress(0, n);
-            // Keys from the output's own vectors; the record is being read for its edges anyway.
-            SimilarityKey keyFn = SimilarityKey.randomProjection(merged.getDimension());
-            VectorFloat<?> vec = vectorTypeSupport.createFloatVector(merged.getDimension());
-            try (var writer = new BufferedRandomAccessWriter(outputPath);
-                 var view = merged.getView()) {
-                writer.seek(headerOffset);
-                var enc = new NodeTokenStream.Encoder(writer, NodeTokenStream.encodingByDefault(), n, merged.getDegree(0), maxLevel,
-                                                      keyFn.id());
-                for (int node = 0; node < n; node++) {
-                    if ((node & (window - 1)) == 0) {
-                        // Stream the coming window into the page cache; the mapping is MADV_RANDOM.
-                        merged.prefetchL0Records(node, Math.min(n - 1, node + window - 1));
-                        scope.onProgress(node, n);
-                    }
-                    var it = view.getNeighborsIterator(0, node);
-                    boolean live = it.size() > 0;
-                    int key = 0;
-                    if (live) {
-                        view.getVectorInto(node, vec, 0);
-                        key = keyFn.keyOf(vec);
-                    }
-                    enc.node(node, live, live && levelOf != null ? levelOf[node] : 0, key);
-                    while (it.hasNext()) {
-                        enc.neighbor(it.nextInt());
-                    }
-                }
-                long sectionBytes = enc.finish();
-                long newHeaderOffset = writer.position();
-                writer.write(headerBytes);
-                writer.writeLong(newHeaderOffset);
-                writer.writeInt(AbstractGraphIndexWriter.FOOTER_MAGIC);
-                writer.flush();
-                scope.onProgress(n, n);
-                log.info("Token stream: {} nodes ({} live), {} edges, {} bytes ({} encoding, {} B/edge; raw-equivalent {} bytes) in {} ms",
-                        enc.nodes(), enc.liveNodes(), enc.edges(), sectionBytes, NodeTokenStream.encodingName(enc.encoding()),
-                        String.format("%.2f", enc.edges() == 0 ? 0.0 : (double) sectionBytes / enc.edges()),
-                        NodeTokenStream.rawEquivalentBytes(enc.nodes(), enc.edges()), (System.nanoTime() - t0) / 1_000_000L);
+        try (var scope = progress.startPhase(CompactionStage.TOKEN_STREAM)) {
+            var r = TokenStreamRetrofit.append(outputPath, startOffset, scope);
+            if (r.alreadyPresent) {
+                log.info("Token stream: output already carries a section of {} bytes; not rewriting", r.sectionBytes);
             }
         }
     }

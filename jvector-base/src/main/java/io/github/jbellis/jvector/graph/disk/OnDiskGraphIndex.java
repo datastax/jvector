@@ -337,6 +337,24 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
+    /**
+     * For an index loaded by header offset rather than through its footer — one embedded in a
+     * container that has its own trailer after the graph's footer — finds the token stream
+     * section given where the graph's footer ends. Returns whether a section was found.
+     */
+    public boolean discoverTokenStream(long footerEnd) throws IOException {
+        try (var in = readerSupplier.get()) {
+            in.seek(footerEnd - FOOTER_MAGIC_SIZE);
+            if (in.readInt() != FOOTER_MAGIC) {
+                return false;
+            }
+            in.seek(footerEnd - FOOTER_MAGIC_SIZE - FOOTER_OFFSET_SIZE);
+            long headerOffset = in.readLong();
+            tokenSection = NodeTokenStream.locate(in, headerOffset, neighborsOffset);
+            return tokenSection != null;
+        }
+    }
+
     /** The {@link NodeTokenStream} section this index carries, if it was written with one and loaded through its footer. */
     public java.util.Optional<NodeTokenStream.Section> tokenStreamSection() {
         return java.util.Optional.ofNullable(tokenSection);
