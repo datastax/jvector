@@ -657,12 +657,15 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /**
      * Step 3 parity: with own records served from bands instead of source seeks, the merged
-     * output is byte-identical to the direct path (single-threaded executor, so both runs make
-     * the same decisions in the same order), and no spill is left behind.
+     * output decodes to the same graph as the direct path — every node's base-layer edges,
+     * vector, similarity key, and upper-layer edges — and no spill is left behind. Compared on
+     * decoded content rather than bytes: the retrained PQ codebook in the header is not
+     * byte-deterministic between two runs of the direct path itself (float summation order in
+     * refinement), while nothing the band path touches is affected by it.
      */
     @Test
     public void testBandStagedOutputMatchesDirect() throws Exception {
-        List<byte[]> outputs = new ArrayList<>();
+        List<Path> outputs = new ArrayList<>();
         for (boolean banded : new boolean[] {true, false}) {
             List<ReaderSupplier> rss = new ArrayList<>();
             List<FixedBitSet> liveNodes = new ArrayList<>();
@@ -683,12 +686,51 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             } else {
                 assertEquals(0, compactor.bandOwnRecords.get());
             }
-            outputs.add(Files.readAllBytes(out));
+            outputs.add(out);
             for (var rs : rss) {
                 rs.close();
             }
         }
-        assertArrayEquals("band-staged output must equal the direct output byte for byte", outputs.get(1), outputs.get(0));
+        try (var rsA = ReaderSupplierFactory.open(outputs.get(0)); var rsB = ReaderSupplierFactory.open(outputs.get(1));
+             var ga = OnDiskGraphIndex.load(rsA); var gb = OnDiskGraphIndex.load(rsB)) {
+            assertEquals(gb.getIdUpperBound(), ga.getIdUpperBound());
+            assertEquals(gb.getMaxLevel(), ga.getMaxLevel());
+            var vts = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorTypeSupport();
+            var va = vts.createFloatVector(ga.getDimension());
+            var vb = vts.createFloatVector(gb.getDimension());
+            try (var ta = ga.openTokenStream(); var tb = gb.openTokenStream();
+                 var viewA = ga.getView(); var viewB = gb.getView()) {
+                int n = 0;
+                while (ta.next()) {
+                    assertTrue(tb.next());
+                    assertEquals(ta.live(), tb.live());
+                    assertEquals("key of " + n, tb.key(), ta.key());
+                    assertArrayEquals("edges of " + n, java.util.Arrays.copyOf(tb.neighbors(), tb.neighborCount()),
+                            java.util.Arrays.copyOf(ta.neighbors(), ta.neighborCount()));
+                    if (ta.live()) {
+                        viewA.getVectorInto(n, va, 0);
+                        viewB.getVectorInto(n, vb, 0);
+                        for (int d = 0; d < ga.getDimension(); d++) {
+                            assertEquals("vector of " + n + " dim " + d, vb.get(d), va.get(d), 0f);
+                        }
+                    }
+                    n++;
+                }
+                assertEquals(ga.getIdUpperBound(), n);
+                for (int level = 1; level <= ga.getMaxLevel(); level++) {
+                    for (var it = ga.getNodes(level); it.hasNext(); ) {
+                        int node = it.nextInt();
+                        var ia = viewA.getNeighborsIterator(level, node);
+                        var ib = viewB.getNeighborsIterator(level, node);
+                        int[] ea = new int[ia.size()];
+                        for (int k = 0; k < ea.length; k++) ea[k] = ia.nextInt();
+                        int[] eb = new int[ib.size()];
+                        for (int k = 0; k < eb.length; k++) eb[k] = ib.nextInt();
+                        assertArrayEquals("level " + level + " edges of " + node, eb, ea);
+                    }
+                }
+            }
+        }
         try (var left = Files.list(testDirectory)) {
             assertEquals("no band spill left behind", 0, left.filter(pp -> pp.getFileName().toString().startsWith("bands-src")).count());
         }
