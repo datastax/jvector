@@ -736,6 +736,54 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
 
+    /**
+     * Step 4's experiment: candidate scoring from PQ codes (no candidate record reads) against
+     * exact scoring, on the same sources and queries, measured as recall of the merged graph.
+     * The threshold here is a floor against regressions on random test vectors; the number that
+     * decides the default is the same experiment on real data.
+     */
+    @Test
+    public void testAdcScoringRecallAgainstExact() throws Exception {
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+        double[] recall = new double[2];
+        long[] codeScores = new long[2];
+        for (int arm = 0; arm < 2; arm++) {
+            boolean adc = arm == 1;
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.adcScoring = adc;
+            Path out = testDirectory.resolve("compact_scoring_" + (adc ? "adc" : "exact"));
+            compactor.compact(out);
+            codeScores[arm] = compactor.adcScores.get();
+            if (adc) {
+                assertTrue("adc must score from codes", compactor.adcScores.get() > 0);
+                assertTrue("adc must decode candidates for diversity", compactor.adcDecodes.get() > 0);
+            } else {
+                assertEquals(0, compactor.adcScores.get());
+                assertEquals(0, compactor.adcDecodes.get());
+            }
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                recall[arm] = recallOf(g, queries, groundTruth, topK);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        System.out.printf("Candidate scoring recall@%d: exact=%.4f adc=%.4f (adc code scores=%d)%n",
+                topK, recall[0], recall[1], codeScores[1]);
+        assertTrue(String.format("adc recall %.4f must not fall more than 0.15 below exact %.4f", recall[1], recall[0]),
+                recall[1] >= recall[0] - 0.15);
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {

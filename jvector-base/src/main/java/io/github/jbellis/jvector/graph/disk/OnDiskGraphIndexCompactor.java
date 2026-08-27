@@ -46,6 +46,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.disk.SimpleReader;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.AdcScorer;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -417,6 +418,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     final AtomicLong bandOwnRecords = new AtomicLong();
     /** Bytes spilled into bands across the run. */
     final AtomicLong distributeBytes = new AtomicLong();
+    /**
+     * Candidate scoring: {@code exact} (default) reads each candidate's vector from its source
+     * record and compares it to the node's; {@code adc} scores the node's exact vector against the
+     * candidate's PQ code from the pre-encode cache ({@link AdcScorer}) and runs diversity on
+     * decoded codes, so no candidate record is read at all — same-source neighbours, the
+     * cross-source rescoring after each search, and the diversity pass. Requires fused PQ (the
+     * cache). {@code jvector.compaction.candidateScoring}. Step 4 of the design: the recall
+     * experiment decides the default.
+     */
+    static final boolean ADC_SCORING = "adc".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.candidateScoring", "exact"));
+    /** Instance override of {@link #ADC_SCORING}, for the recall experiment. */
+    boolean adcScoring = ADC_SCORING;
+    /** The pre-encode cache while the layers are being written and {@link #adcScoring} can use it. */
+    private volatile PreEncodedCodeCache scoringCache;
+    /** Candidate scores computed from codes instead of vector reads. */
+    final AtomicLong adcScores = new AtomicLong();
+    /** Candidate vectors decoded from codes for the diversity pass instead of read. */
+    final AtomicLong adcDecodes = new AtomicLong();
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -1581,7 +1601,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // the path so it can open its own read channel.
         Path seedOutputPath = !fusedPQEnabled ? writer.getOutputPath() : null;
         final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() ->
-            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath)
+            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath, similarityFunction)
         );
 
         // Seeding only helps the full-precision cross-source search (fused already scores hops via
@@ -1597,6 +1617,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         setupCrossLink();
         orderingCache = fusedPQEnabled ? writer.pqCodeCache() : null;
+        scoringCache = fusedPQEnabled && adcScoring ? writer.pqCodeCache() : null;
+        if (adcScoring && scoringCache == null) {
+            log.info("ADC candidate scoring requested but there is no pre-encode cache (fused PQ off); scoring exactly");
+        }
 
         for (int level = 0; level < maxDegrees.size(); level++) {
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
@@ -1701,6 +1725,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         batchOwnRecordHints.get(), BATCH_OWN_RECORD_HINTS, seedHints.get(),
                         outputSyncs.get(), OUTPUT_SYNC_BYTES >> 20,
                         bandStaged && similarityOrdinalsActive, bandOwnRecords.get(), distributeBytes.get());
+                log.info("Candidate scoring: {} (codeScores={} decodes={})",
+                        adcActive() ? "adc" : "exact", adcScores.get(), adcDecodes.get());
                 if (clusterCertified.get() + clusterAnchors.get() > 0) {
                     log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
                             clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
@@ -1766,9 +1792,28 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        scoringCache = null;
         Scratch s = threadLocalScratch.get();
         s.close();
         threadLocalScratch.remove();
+    }
+
+    private boolean adcActive() {
+        return scoringCache != null;
+    }
+
+    /** The node's similarity to a candidate, from the candidate's cached code; no record read. */
+    private float codeScore(Scratch scratch, int candSrc, int candOld) {
+        scoringCache.get(remappers.get(candSrc).oldToNew(candOld), scratch.codeBuf);
+        adcScores.incrementAndGet();
+        return scratch.adc.similarityTo(scratch.codeSeq);
+    }
+
+    /** The approximate vector a candidate's cached code stands for, for the diversity pass. */
+    private void decodeCandidate(Scratch scratch, int candSrc, int candOld, VectorFloat<?> dst) {
+        scoringCache.get(remappers.get(candSrc).oldToNew(candOld), scratch.codeBuf);
+        adcDecodes.incrementAndGet();
+        scratch.adc.decode(scratch.codeSeq, dst);
     }
 
     /**
@@ -2004,6 +2049,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
             sourceView.getVectorInto(node, scratch.baseVec, 0);
         }
+        if (adcActive()) {
+            scratch.adc.setQuery(scratch.baseVec);
+        }
 
         int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -2022,7 +2070,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxDegrees.get(0),
                         selected,
                         scratch.tmpVec,
-                        scratch.gs
+                        scratch.gs,
+                        adcActive() ? (src, n, dst) -> decodeCandidate(scratch, src, n, dst) : null
                 );
 
         // Reverse-edge propagation (as in single-graph Vamana insertion): this node offers
@@ -2393,6 +2442,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     ) {
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
+        if (adcActive()) {
+            scratch.adc.setQuery(scratch.baseVec);
+        }
 
         int candSize = gatherCandidates(node, level, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -2411,7 +2463,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxDegrees.get(level),
                         selected,
                         scratch.tmpVec,
-                        scratch.gs
+                        scratch.gs,
+                        adcActive() ? (src, n, dst) -> decodeCandidate(scratch, src, n, dst) : null
                 );
 
         // remap
@@ -2498,21 +2551,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         var source = sources.get(sourceIdx);
         BandStore bands = level == 0 ? currentBands : null;
         NodesIterator it;
+        final boolean adc = adcActive();
         if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
-            // Own edges from the band; the neighbours' vectors below are still source reads.
+            // Own edges from the band; the neighbours' vectors below are source reads unless
+            // scores come from codes, in which case nothing below reads at all.
             int count = bands.neighbors(node, scratch.ownNeighbors);
-            for (int k = 0; k < count; k++) {
-                if (indexAlive.get(scratch.ownNeighbors[k])) {
-                    source.willNeedL0Record(scratch.ownNeighbors[k]);
+            if (!adc) {
+                for (int k = 0; k < count; k++) {
+                    if (indexAlive.get(scratch.ownNeighbors[k])) {
+                        source.willNeedL0Record(scratch.ownNeighbors[k]);
+                    }
                 }
             }
             it = new NodesIterator.ArrayNodesIterator(scratch.ownNeighbors, count);
         } else {
-            var hintIt = searchView.getNeighborsIterator(level, node);
-            while (hintIt.hasNext()) {
-                int nb = hintIt.nextInt();
-                if (indexAlive.get(nb)) {
-                    source.willNeedL0Record(nb);
+            if (!adc) {
+                var hintIt = searchView.getNeighborsIterator(level, node);
+                while (hintIt.hasNext()) {
+                    int nb = hintIt.nextInt();
+                    if (indexAlive.get(nb)) {
+                        source.willNeedL0Record(nb);
+                    }
                 }
             }
             it = searchView.getNeighborsIterator(level, node);
@@ -2521,11 +2580,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int nb = it.nextInt();
             if (!indexAlive.get(nb)) continue;
 
-            searchView.getVectorInto(nb, scratch.tmpVec, 0);
+            float score;
+            if (adc) {
+                score = codeScore(scratch, sourceIdx, nb);
+            } else {
+                searchView.getVectorInto(nb, scratch.tmpVec, 0);
+                score = similarityFunction.compare(baseVec, scratch.tmpVec);
+            }
 
             scratch.candSrc[candSize] = sourceIdx;
             scratch.candNode[candSize] = nb;
-            scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            scratch.candScore[candSize] = score;
             candSize++;
         }
         return candSize;
@@ -2550,7 +2615,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (level == 0) {
             int prevCandSize = candSize;
             boolean clusterMode = !seedingActive && orderingCache != null
-                    && clusterSearchUsable() && params.fusedPQEnabled;
+                    && clusterSearchUsable() && params.fusedPQEnabled
+                    // Code-scored candidates: the cluster path rescores against the anchor's query
+                    // and certifies on exact distances; under adc every cross-source candidate
+                    // comes from the cold search and is scored from its code.
+                    && !adcActive();
             if (clusterMode) {
                 candSize = clusterSearchL0(node, sourceIdx, searchView, indexAlive, baseVec,
                                            scratch, candSize, params, ssp);
@@ -2599,7 +2668,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         scratch.candNode[candSize] = r.node;
                         scratch.candScore[candSize] =
                                 params.fusedPQEnabled
-                                        ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                        ? (adcActive() ? codeScore(scratch, sourceIdx, r.node)
+                                                       : rescore(searchView, r.node, baseVec, scratch.tmpVec))
                                         : r.score;
                         candSize++;
                     }
@@ -2633,12 +2703,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             if (params.fusedPQEnabled) {
                 for (int i = prev_candSize; i < candSize; i++) {
-                    scratch.candScore[i] = rescore(
-                            searchView,
-                            scratch.candNode[i],
-                            baseVec,
-                            scratch.tmpVec
-                    );
+                    scratch.candScore[i] = adcActive()
+                            ? codeScore(scratch, sourceIdx, scratch.candNode[i])
+                            : rescore(searchView, scratch.candNode[i], baseVec, scratch.tmpVec);
                 }
             }
         }
@@ -3316,6 +3383,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final ByteSequence<?> pqCode;
         /** A node's own base-layer edges when they come from its band (sized to the widest source). */
         final int[] ownNeighbors;
+        /** Code-based candidate scoring; null without a PQ. */
+        final AdcScorer adc;
+        final byte[] codeBuf;
+        final ByteSequence<?> codeSeq;
         // Seeding scratch: candidate seed pool (old ordinals in the target source), the chosen top
         // seeds with their exact scores, a per-thread read channel on the output file, and a buffer
         // sized for one record's neighbor-count + list.
@@ -3340,7 +3411,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
          */
         Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources,
-                ProductQuantization pq, Path seedOutputPath) {
+                ProductQuantization pq, Path seedOutputPath, VectorSimilarityFunction vsf) {
             this.candSrc = new int[maxCandidateSize];
             this.candNode = new int[maxCandidateSize];
             this.candScore = new float[maxCandidateSize];
@@ -3353,6 +3424,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 widest = Math.max(widest, src.getDegree(0));
             }
             this.ownNeighbors = new int[widest];
+            if (pq != null) {
+                this.adc = new AdcScorer(pq, vsf);
+                this.codeBuf = new byte[pq.getSubspaceCount()];
+                this.codeSeq = vectorTypeSupport.createByteSequence(codeBuf);
+            } else {
+                this.adc = null;
+                this.codeBuf = null;
+                this.codeSeq = null;
+            }
 
             this.gs = new GraphSearcher[sources.size()];
             for (int i = 0; i < sources.size(); i++) {
@@ -3450,7 +3530,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * Update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
          */
-        public void retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs) {
+        public void retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs,
+                                  CandidateVectors candidateVectors) {
             selectedCache.reset();
             if (orderSize == 0) return;
             int nSelected = 0;
@@ -3466,7 +3547,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     float cScore = candScore[ci];
 
                     OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) gs[cSrc].getView();
-                    cView.getVectorInto(cNode, tmp, 0);
+                    if (candidateVectors != null) {
+                        candidateVectors.into(cSrc, cNode, tmp);
+                    } else {
+                        cView.getVectorInto(cNode, tmp, 0);
+                    }
                     if (isDiverse(cView, cNode, tmp, cScore, currentAlpha, selectedCache)) {
                         selectedCache.add(cSrc, cView, cNode, cScore, tmp);
                         nSelected++;
@@ -3498,6 +3583,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Cache for storing selected diverse neighbors along with their metadata and vector copies.
      */
+    /** Where the diversity pass gets a candidate's vector: the record, or a decoded code. */
+    interface CandidateVectors {
+        void into(int src, int node, VectorFloat<?> dst);
+    }
+
     static final class SelectedVecCache {
         int[] sourceIdx;
         OnDiskGraphIndex.View[] views;
