@@ -59,6 +59,9 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final T out; /* output for graph nodes and inline features */
     final int headerSize;
     volatile int maxOrdinalWritten = -1;
+    /** Whether {@link #writeFooter} emits the {@link NodeTokenStream} section before the footer. */
+    volatile boolean tokenStreamEnabled = NodeTokenStream.enabledByDefault();
+    volatile byte tokenStreamEncoding = NodeTokenStream.encodingByDefault();
     final List<Feature> inlineFeatures;
 
     AbstractGraphIndexWriter(T out,
@@ -172,6 +175,12 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @throws IOException IOException
      */
     void writeFooter(ImmutableGraphIndex.View view, long headerOffset) throws IOException {
+        if (tokenStreamEnabled) {
+            // The section and its trailer go between the graph body and the footer, so the
+            // footer stays last and every byte before the section is where it was.
+            writeTokenStream(view);
+            headerOffset = out.position();
+        }
         var layerInfo = CommonHeader.LayerInfo.fromGraph(graph, ordinalMapper);
         var commonHeader = new CommonHeader(version,
                 dimension,
@@ -185,6 +194,49 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         final long expectedPosition = headerOffset + headerSize + FOOTER_SIZE;
         assert out.position() == expectedPosition : String.format("%d != %d", out.position(), expectedPosition);
     }
+
+    /**
+     * Emits the {@link NodeTokenStream} section from the in-memory graph, in new-ordinal order:
+     * every ordinal the mapper covers, live or not, with its base-layer neighbours remapped and its
+     * highest level. Cheap here — the adjacency is in memory — which is why construction is where
+     * the stream is born and the compactor only has to carry it forward.
+     */
+    void writeTokenStream(ImmutableGraphIndex.View view) throws IOException {
+        int maxOrdinal = ordinalMapper.maxOrdinal();
+        int maxLevel = Math.min(graph.getMaxLevel(), NodeTokenStream.MAX_LEVEL);
+        byte[] levelOf = null;
+        if (maxLevel > 0) {
+            levelOf = new byte[maxOrdinal + 1];
+            for (int level = 1; level <= maxLevel; level++) {
+                for (var it = graph.getNodes(level); it.hasNext(); ) {
+                    int newOrdinal = ordinalMapper.oldToNew(it.nextInt());
+                    if (newOrdinal >= 0 && newOrdinal <= maxOrdinal && levelOf[newOrdinal] < level) {
+                        levelOf[newOrdinal] = (byte) level;
+                    }
+                }
+            }
+        }
+        long t0 = System.nanoTime();
+        var enc = new NodeTokenStream.Encoder(out, tokenStreamEncoding, maxOrdinal + 1, graph.getDegree(0), maxLevel);
+        for (int newOrdinal = 0; newOrdinal <= maxOrdinal; newOrdinal++) {
+            int originalOrdinal = ordinalMapper.newToOld(newOrdinal);
+            boolean live = originalOrdinal != OrdinalMapper.OMITTED && graph.containsNode(originalOrdinal);
+            enc.node(newOrdinal, live, live && levelOf != null ? levelOf[newOrdinal] : 0);
+            if (live) {
+                var neighbors = view.getNeighborsIterator(0, originalOrdinal);
+                while (neighbors.hasNext()) {
+                    enc.neighbor(ordinalMapper.oldToNew(neighbors.nextInt()));
+                }
+            }
+        }
+        long sectionBytes = enc.finish();
+        tokenStreamLog.info("Token stream: {} nodes ({} live), {} edges, {} bytes ({} encoding, {} B/edge; raw-equivalent {} bytes) in {} ms",
+                enc.nodes(), enc.liveNodes(), enc.edges(), sectionBytes, NodeTokenStream.encodingName(enc.encoding()),
+                String.format("%.2f", enc.edges() == 0 ? 0.0 : (double) sectionBytes / enc.edges()),
+                NodeTokenStream.rawEquivalentBytes(enc.nodes(), enc.edges()), (System.nanoTime() - t0) / 1_000_000L);
+    }
+
+    private static final org.slf4j.Logger tokenStreamLog = org.slf4j.LoggerFactory.getLogger(AbstractGraphIndexWriter.class);
 
     /**
      * Writes the index header, including the graph size, so that OnDiskGraphIndex can open it.
@@ -326,6 +378,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         final T out;
         OrdinalMapper ordinalMapper;
         int version;
+        boolean tokenStream = NodeTokenStream.enabledByDefault();
+        byte tokenStreamEncoding = NodeTokenStream.encodingByDefault();
 
         /**
          * Constructs a Builder.
@@ -373,6 +427,18 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             return this;
         }
 
+        /** Whether to emit the {@link NodeTokenStream} section; defaults to {@code jvector.tokenStream}. */
+        public Builder<K, T> withTokenStream(boolean enabled) {
+            this.tokenStream = enabled;
+            return this;
+        }
+
+        /** {@link NodeTokenStream#ENCODING_DELTA} or {@link NodeTokenStream#ENCODING_RAW}; defaults to {@code jvector.tokenStream.encoding}. */
+        public Builder<K, T> withTokenStreamEncoding(byte encoding) {
+            this.tokenStreamEncoding = encoding;
+            return this;
+        }
+
         /**
          * Builds the writer.
          * @return the writer
@@ -399,7 +465,10 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
-            return reallyBuild(dimension);
+            K writer = reallyBuild(dimension);
+            writer.tokenStreamEnabled = tokenStream;
+            writer.tokenStreamEncoding = tokenStreamEncoding;
+            return writer;
         }
 
         /**

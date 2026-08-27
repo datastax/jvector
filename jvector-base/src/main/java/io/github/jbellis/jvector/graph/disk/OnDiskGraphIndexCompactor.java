@@ -44,6 +44,7 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.disk.SimpleReader;
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
@@ -369,6 +370,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * {@code jvector.compaction.outputSyncBytes=0} disables.
      */
     static final long OUTPUT_SYNC_BYTES = resolveLongProperty("jvector.compaction.outputSyncBytes", 64L << 20);
+    /**
+     * Whether the merge ends by writing the {@link NodeTokenStream} section of its output. The
+     * compactor has no in-memory graph, and refinement rewrites base-layer adjacency after the
+     * footer is written, so the only correct source is the finished output: one sequential pass
+     * over the written base layer, after the pre-encode cache section has been truncated away,
+     * with the footer rewritten behind the section. {@code jvector.compaction.tokenStream=false}
+     * skips it.
+     */
+    static final boolean TOKEN_STREAM = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.tokenStream", "true"));
     /** Durability barriers issued on the base-layer output. */
     final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
@@ -742,11 +753,96 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 // measured, or the commit would report the cache section as part of the graph.
                 strategy.onAfterClose(outputPath);
             }
+            emitTokenStream(outputPath, startOffset);
             commit(reservation, outputPath, startOffset);
         } catch (IOException e) {
             throw new UncheckedIOException("Compaction failed", e);
         }
         log.info(progress.summary());
+    }
+
+    /**
+     * Reads the finished base layer back in ordinal order and appends its {@link NodeTokenStream}
+     * section, then rewrites the footer behind it. Runs after refinement and after the strategy has
+     * truncated its cache section, so the file ends at the footer and the adjacency is final. A
+     * node is emitted live when its record carries at least one edge: a compaction output slot
+     * that was never written reads as zero edges, and an isolated live node — indistinguishable
+     * from it here — contributes nothing to a plan either way.
+     */
+    private void emitTokenStream(Path outputPath, long startOffset) throws IOException {
+        if (!TOKEN_STREAM) {
+            return;
+        }
+        long t0 = System.nanoTime();
+        try (var scope = progress.startPhase(CompactionStage.TOKEN_STREAM);
+             var supplier = new SimpleReader.Supplier(outputPath);
+             var merged = OnDiskGraphIndex.load(supplier, startOffset)) {
+            if (merged.tokenStreamSection().isPresent()) {
+                log.info("Token stream: output already carries a section {}; not rewriting", merged.tokenStreamSection().get());
+                return;
+            }
+            // Footer geometry: [header copy @ headerOffset][headerOffset long][magic int] at the end.
+            long headerOffset;
+            byte[] headerBytes;
+            try (var in = supplier.get()) {
+                long len = in.length();
+                in.seek(len - AbstractGraphIndexWriter.FOOTER_MAGIC_SIZE);
+                int magic = in.readInt();
+                if (magic != AbstractGraphIndexWriter.FOOTER_MAGIC) {
+                    throw new IllegalStateException("compaction output does not end in a footer: magic " + Integer.toHexString(magic));
+                }
+                in.seek(len - AbstractGraphIndexWriter.FOOTER_SIZE);
+                headerOffset = in.readLong();
+                headerBytes = new byte[(int) (len - AbstractGraphIndexWriter.FOOTER_SIZE - headerOffset)];
+                in.seek(headerOffset);
+                in.readFully(headerBytes);
+            }
+            int n = merged.getIdUpperBound();
+            int maxLevel = Math.min(merged.getMaxLevel(), NodeTokenStream.MAX_LEVEL);
+            byte[] levelOf = null;
+            if (maxLevel > 0) {
+                levelOf = new byte[n];
+                for (int level = 1; level <= maxLevel; level++) {
+                    for (var it = merged.getNodes(level); it.hasNext(); ) {
+                        int node = it.nextInt();
+                        if (node >= 0 && node < n && levelOf[node] < level) {
+                            levelOf[node] = (byte) level;
+                        }
+                    }
+                }
+            }
+            final int window = 1 << 20;
+            scope.onProgress(0, n);
+            try (var writer = new BufferedRandomAccessWriter(outputPath);
+                 var view = merged.getView()) {
+                writer.seek(headerOffset);
+                var enc = new NodeTokenStream.Encoder(writer, NodeTokenStream.encodingByDefault(), n, merged.getDegree(0), maxLevel);
+                for (int node = 0; node < n; node++) {
+                    if ((node & (window - 1)) == 0) {
+                        // Stream the coming window into the page cache; the mapping is MADV_RANDOM.
+                        merged.prefetchL0Records(node, Math.min(n - 1, node + window - 1));
+                        scope.onProgress(node, n);
+                    }
+                    var it = view.getNeighborsIterator(0, node);
+                    boolean live = it.size() > 0;
+                    enc.node(node, live, live && levelOf != null ? levelOf[node] : 0);
+                    while (it.hasNext()) {
+                        enc.neighbor(it.nextInt());
+                    }
+                }
+                long sectionBytes = enc.finish();
+                long newHeaderOffset = writer.position();
+                writer.write(headerBytes);
+                writer.writeLong(newHeaderOffset);
+                writer.writeInt(AbstractGraphIndexWriter.FOOTER_MAGIC);
+                writer.flush();
+                scope.onProgress(n, n);
+                log.info("Token stream: {} nodes ({} live), {} edges, {} bytes ({} encoding, {} B/edge; raw-equivalent {} bytes) in {} ms",
+                        enc.nodes(), enc.liveNodes(), enc.edges(), sectionBytes, NodeTokenStream.encodingName(enc.encoding()),
+                        String.format("%.2f", enc.edges() == 0 ? 0.0 : (double) sectionBytes / enc.edges()),
+                        NodeTokenStream.rawEquivalentBytes(enc.nodes(), enc.edges()), (System.nanoTime() - t0) / 1_000_000L);
+            }
+        }
     }
 
     /**
@@ -819,6 +915,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             } finally {
                 inlineStrategy.onAfterClose(graphPath);
             }
+            emitTokenStream(graphPath, startOffset);
             commit(reservation, graphPath, startOffset);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);

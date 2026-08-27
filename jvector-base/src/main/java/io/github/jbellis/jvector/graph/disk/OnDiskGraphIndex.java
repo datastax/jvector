@@ -87,6 +87,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
     // When using fused features, store the features fully in memory for layers > 0
     private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
+    /** The {@link NodeTokenStream} section, when the file carries one; discovered from the footer. */
+    private volatile NodeTokenStream.Section tokenSection;
 
     private OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
@@ -323,6 +325,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     header.common.layerInfo.size(),
                     in.getPosition());
             var odgi = new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+            // The token stream section, if any, ends TRAILER_SIZE bytes before the footer's header
+            // copy. A file written without one has body bytes there; the magic check rejects them.
+            odgi.tokenSection = NodeTokenStream.locate(in, headerOffset, neighborsOffset);
             odgi.getInMemoryLayers(in);
             odgi.getInMemoryFeatures(in);
             return odgi;
@@ -330,6 +335,20 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
         }
+    }
+
+    /** The {@link NodeTokenStream} section this index carries, if it was written with one and loaded through its footer. */
+    public java.util.Optional<NodeTokenStream.Section> tokenStreamSection() {
+        return java.util.Optional.ofNullable(tokenSection);
+    }
+
+    /** Opens a sequential decoder over the token stream section; the caller closes it. */
+    public NodeTokenStream.Reader openTokenStream() throws IOException {
+        NodeTokenStream.Section s = tokenSection;
+        if (s == null) {
+            throw new IllegalStateException("this index carries no token stream section");
+        }
+        return new NodeTokenStream.Reader(readerSupplier.get(), s);
     }
 
     public Set<FeatureId> getFeatureSet() {

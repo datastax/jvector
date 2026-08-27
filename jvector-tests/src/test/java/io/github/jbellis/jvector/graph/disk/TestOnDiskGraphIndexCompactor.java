@@ -548,6 +548,33 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     /**
      * Builds identity remappers with every node live, the setup every compaction test here shares.
      */
+    /**
+     * The merged output carries a token stream that decodes to its own base layer, written after
+     * refinement (which rewrites adjacency) and after the pre-encode cache is truncated, with the
+     * footer rewritten behind it so the output still loads through its footer.
+     */
+    @Test
+    public void testTokenStreamEmittedForCompactedGraph() throws Exception {
+        for (boolean refine : new boolean[] {false, true}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.setRefineAfterCompaction(refine);
+            Path out = testDirectory.resolve("compact_token_stream_refine_" + refine);
+            compactor.compact(out);
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+                TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+    }
+
     private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
         int globalOrdinal = 0;
         for (int n = 0; n < numSources; n++) {

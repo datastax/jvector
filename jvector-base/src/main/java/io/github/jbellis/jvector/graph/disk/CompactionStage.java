@@ -48,6 +48,8 @@ public enum CompactionStage implements WorkStage {
     UPPER_LAYERS,
     /** Writing the trailing feature records and the footer after every layer is written. */
     FINALIZE,
+    /** Reading the finished base layer back and writing it as the node token stream section. */
+    TOKEN_STREAM,
     /** Second-pass neighbor refinement over the written graph. */
     REFINE,
     /** Writing the merged non-fused compressed sidecar. */
