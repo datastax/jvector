@@ -27,6 +27,7 @@ logging/
 ### JVM crashes
 hs_err_pid*
 replay_pid*
+java_pid*.hprof
 
 ### IntelliJ IDEA ###
 .idea
