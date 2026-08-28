@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetInfo;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
@@ -118,9 +119,17 @@ public class BenchYAML {
         for (var config : allConfigs) {
 
             String datasetName = config.dataset;
-            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+            DataSetInfo dsInfo = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
-            ).getDataSet();
+            );
+            DataSet ds;
+            if (Boolean.getBoolean("jvector.bench.dataset.mmap.enable")) {
+                // Memory-maps index vectors instead of loading them
+                ds = dsInfo.getMappedDataSet();
+            } else {
+                // Loads all index vectors into memory
+                ds = dsInfo.getDataSet();
+            }
             // Register dataset info the first time we actually load the dataset for benchmarking
             artifacts.registerDataset(datasetName, ds);
 

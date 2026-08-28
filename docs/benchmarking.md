@@ -115,3 +115,22 @@ To add a custom fvecs/ivecs dataset:
     ```
 
 For remote datasets, use `base_url` to specify where files should be downloaded from. The `${VAR}` and `${VAR:-default}` syntax is supported for environment variable expansion. See the example config for details.
+
+## BenchYAML configuration through system properties
+
+- `jvector.bench.index_cache_dir`: Set the directory to which the index is saved. It is recommended that this is a low-latency NVMe SSD. Defaults to `index_cache` (relative to the working directory).
+- `jvector.bench.work_dir_root_path`: Sets the directory to which the index is saved when not using the cache. A low-latency NVMe SSD is preferred. Defaults to the system temp directory.
+- `jvector.bench.dataset.mmap.enable`: Allow the dataset to be memory-mapped. See [Benchmarking in memory-constrained environments](#benchmarking-in-memory-constrained-environments). Defaults to `false`
+
+## Benchmarking in memory-constrained environments
+
+You may want to benchmark datasets that are too large to fit entirely in memory. This is the case if the system itself doesn't have enough memory, or if you want to measure the behaviour by artificially constraining the amount of memory available. By default, `BenchYAML` loads the entire dataset into memory, so this will cause an OOM. To avoid this, you can set the system property `jvector.bench.dataset.mmap.enable` to `true` which causes bench to read the dataset from a memory-mapped file instead of loading it upfront.
+
+Example:
+```sh
+java -cp ... -Xmx10g ... -Djvector.bench.dataset.mmap.enable=true io.github.jbellis.jvector.example.BenchYAML cohere-english-v3-10M
+
+# on Linux you can use cgroups to constrain total memory available to the program
+systemd-run --scope --user -p MemoryHigh=18G -p MemoryMax=20G -- \
+    java -cp ... -Xmx10g ... -Djvector.bench.dataset.mmap.enable=true io.github.jbellis.jvector.example.BenchYAML cohere-english-v3-10M
+```
