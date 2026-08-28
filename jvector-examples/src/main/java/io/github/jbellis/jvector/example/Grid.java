@@ -57,6 +57,7 @@ import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import me.tongfei.progressbar.ProgressBar;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -331,7 +332,7 @@ public class Grid {
                                             "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
                                                     "Aborting to prevent false recall results.", compressor, ds.getName()));
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
+                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseRavv().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -424,6 +425,7 @@ public class Grid {
             }
         }
         if (scoringWriter == null) {
+            builder.close();
             throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
         }
 
@@ -431,20 +433,23 @@ public class Grid {
         long startTime = System.nanoTime();
         var vv = floatVectors.threadLocalSupplier();
         PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                        suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
-                        });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
+            try (ProgressBar pb = new ProgressBar("build onDiskGraph", floatVectors.size())) {
+                IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+                    writers.forEach((features, writer) -> {
+                        try {
+                            var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+                            suppliers.get(features).forEach((featureId, supplier) -> {
+                                stateMap.put(featureId, supplier.apply(node));
+                            });
+                            writer.writeFeaturesInline(node, stateMap);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                    builder.addGraphNode(node, vv.get().getVector(node));
+                    pb.step();
                 });
-                builder.addGraphNode(node, vv.get().getVector(node));
-            });
+            }
         }).join();
         builder.cleanup();
 
@@ -530,7 +535,8 @@ public class Grid {
                     builder.with(new NVQ(nvq));
                     suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
                     break;
-
+                default:
+                    break;
             }
         }
         return new BuilderWithSuppliers(builder, suppliers);
@@ -622,6 +628,7 @@ public class Grid {
             indexes.put(features, index);
         }
         indexBuildTimes.put(ds.getName(), buildTimeS);
+        builder.close();
         return indexes;
     }
 
@@ -885,7 +892,7 @@ public class Grid {
                                                                 searchCompressorObj, ds.getName()));
                                                     }
                                                     System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
-                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            ds.getName(), searchCompressorObj, ds.getBaseRavv().size(),
                                                             (cvArg.ramBytesUsed() / 1024f / 1024f));
                                                 }
                                             }
