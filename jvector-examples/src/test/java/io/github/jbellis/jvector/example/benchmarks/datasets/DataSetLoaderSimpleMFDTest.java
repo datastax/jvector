@@ -1490,7 +1490,7 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     /// Writes vectors in the standard fvecs format.
-    private static void writeTestFvecs(Path path, int dimension, float[][] vectors) throws IOException {
+    static void writeTestFvecs(Path path, int dimension, float[][] vectors) throws IOException {
         int bytesPerVector = Integer.BYTES + dimension * Float.BYTES;
         var buf = ByteBuffer.allocate(vectors.length * bytesPerVector).order(ByteOrder.LITTLE_ENDIAN);
         for (float[] vec : vectors) {
