@@ -199,11 +199,14 @@ public class GraphSearcher implements Closeable {
 
     /**
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
+     * @param topK            the number of results to look for. With threshold=Float.NEGATIVE_INFINITY, the search will
+     *                        continue until at least `topK` results have been found, or until the entire graph has been
+     *                        searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param rerankFloor     (Experimental!) Candidates whose approximate similarity is at least this value
@@ -251,8 +254,10 @@ public class GraphSearcher implements Closeable {
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -290,8 +295,10 @@ public class GraphSearcher implements Closeable {
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -322,7 +329,7 @@ public class GraphSearcher implements Closeable {
                                int topK,
                                Bits acceptOrds)
     {
-        return search(scoreProvider, topK, 0.0f, acceptOrds);
+        return search(scoreProvider, topK, Float.NEGATIVE_INFINITY, acceptOrds);
     }
 
     @Experimental
