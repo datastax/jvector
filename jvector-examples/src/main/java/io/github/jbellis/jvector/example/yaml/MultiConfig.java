@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.constructor.Constructor;
 import org.yaml.snakeyaml.Yaml;

@@ -17,19 +17,16 @@
 package io.github.jbellis.jvector;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.CommonHeader;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.index.graph.*;
+import io.github.jbellis.jvector.index.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.index.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.index.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.index.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.index.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.Bits;
@@ -56,7 +53,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -151,16 +147,16 @@ public class TestUtil {
         return IntStream.range(0, count).mapToObj(i -> TestUtil.normalRandomVector(getRandom(), dimension)).collect(Collectors.toList());
     }
 
-    public static void writeGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, Path outputPath) throws IOException {
+    public static void writeGraph(GraphIndex graph, RandomAccessVectorValues ravv, Path outputPath) throws IOException {
         OnDiskGraphIndex.write(graph, ravv, outputPath);
     }
 
 
-    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
+    public static void writeFusedGraph(GraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv, FeatureId featureId, Path outputPath) throws IOException {
         writeFusedGraph(graph, ravv, pqv, featureId, null, outputPath);
     }
 
-    public static void writeFusedGraph(ImmutableGraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
+    public static void writeFusedGraph(GraphIndex graph, RandomAccessVectorValues ravv, PQVectors pqv,
                                        FeatureId featureId, Map<Integer, Integer> oldToNewOrdinals,
                                        Path outputPath) throws IOException {
         var builder = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
@@ -190,7 +186,7 @@ public class TestUtil {
         }
     }
 
-    public static Set<Integer> getNeighborNodes(ImmutableGraphIndex.View g, int level, int node) {
+    public static Set<Integer> getNeighborNodes(GraphIndex.View g, int level, int node) {
       Set<Integer> neighbors = new HashSet<>();
       for (var it = g.getNeighborsIterator(level, node); it.hasNext(); ) {
         int n = it.nextInt();
@@ -199,7 +195,7 @@ public class TestUtil {
       return neighbors;
     }
 
-    static List<Integer> sortedNodes(ImmutableGraphIndex h, int level) {
+    static List<Integer> sortedNodes(GraphIndex h, int level) {
           var graphNodes = h.getNodes(level); // TODO
           List<Integer> nodes = new ArrayList<>();
           while (graphNodes.hasNext()) {
@@ -209,10 +205,10 @@ public class TestUtil {
           return nodes;
       }
 
-    public static void assertGraphEquals(ImmutableGraphIndex g, ImmutableGraphIndex h) {
+    public static void assertGraphEquals(GraphIndex g, GraphIndex h) {
         // construct these up front since they call seek which will mess up our test loop
-        String prettyG = ImmutableGraphIndex.prettyPrint(g);
-        String prettyH = ImmutableGraphIndex.prettyPrint(h);
+        String prettyG = GraphIndex.prettyPrint(g);
+        String prettyH = GraphIndex.prettyPrint(h);
         assertEquals(String.format("the number of nodes in the graphs are different:%n%s%n%s",
                                    prettyG,
                                    prettyH),
@@ -255,7 +251,7 @@ public class TestUtil {
         }
     }
 
-    public static ImmutableGraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorValues vectors) {
+    public static GraphIndex buildSequentially(GraphIndexBuilder builder, RandomAccessVectorValues vectors) {
         for (var i = 0; i < vectors.size(); i++) {
             builder.addGraphNode(i, vectors.getVector(i));
         }
@@ -263,7 +259,7 @@ public class TestUtil {
         return builder.getGraph();
     }
 
-    public static class FullyConnectedGraphIndex implements ImmutableGraphIndex {
+    public static class FullyConnectedGraphIndex implements GraphIndex {
         private final int entryNode;
         private final List<Integer> layerSizes;
 
@@ -303,12 +299,12 @@ public class TestUtil {
 
         @Override
         public int getIdUpperBound() {
-            return ImmutableGraphIndex.super.getIdUpperBound();
+            return GraphIndex.super.getIdUpperBound();
         }
 
         @Override
         public boolean containsNode(int nodeId) {
-            return ImmutableGraphIndex.super.containsNode(nodeId);
+            return GraphIndex.super.containsNode(nodeId);
         }
 
         @Override
@@ -390,7 +386,7 @@ public class TestUtil {
         }
     }
 
-    public static class RandomlyConnectedGraphIndex implements ImmutableGraphIndex {
+    public static class RandomlyConnectedGraphIndex implements GraphIndex {
         private final List<CommonHeader.LayerInfo> layerInfo;
         private final List<Map<Integer, int[]>> layerAdjacency;
         private final int entryNode;
@@ -484,12 +480,12 @@ public class TestUtil {
 
         @Override
         public int getIdUpperBound() {
-            return ImmutableGraphIndex.super.getIdUpperBound();
+            return GraphIndex.super.getIdUpperBound();
         }
 
         @Override
         public boolean containsNode(int nodeId) {
-            return ImmutableGraphIndex.super.containsNode(nodeId);
+            return GraphIndex.super.containsNode(nodeId);
         }
 
         @Override
@@ -544,7 +540,7 @@ public class TestUtil {
         }
     }
 
-    public static class EmptyGraphIndex implements ImmutableGraphIndex {
+    public static class EmptyGraphIndex implements GraphIndex {
             private final int dimension;
             private final List<CommonHeader.LayerInfo> layerInfo;
             

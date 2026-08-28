@@ -16,17 +16,13 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.*;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.index.graph.*;
+import io.github.jbellis.jvector.index.graph.disk.*;
+import io.github.jbellis.jvector.index.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.index.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -82,7 +78,7 @@ public class ParallelWriteBenchmark {
     // Dataset and index state
     private RandomAccessVectorValues floatVectors;
     private PQVectors pqVectors;
-    private ImmutableGraphIndex graph;
+    private GraphIndex graph;
 
     // Feature state reused between iterations
     private NVQ nvqFeature;
@@ -184,7 +180,7 @@ public class ParallelWriteBenchmark {
         Files.deleteIfExists(parallelPath);
     }
 
-    private void writeGraph(ImmutableGraphIndex graph,
+    private void writeGraph(GraphIndex graph,
                             Path path,
                             boolean parallel) throws IOException {
         try (RandomAccessOnDiskGraphIndexWriter writer = parallel ?

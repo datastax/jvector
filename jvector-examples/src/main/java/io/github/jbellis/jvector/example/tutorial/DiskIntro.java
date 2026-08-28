@@ -28,19 +28,19 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.GraphIndexWriterTypes;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.index.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.index.graph.GraphSearcher;
+import io.github.jbellis.jvector.index.graph.GraphIndex;
+import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.index.graph.disk.GraphIndexWriter;
+import io.github.jbellis.jvector.index.graph.disk.GraphIndexWriterTypes;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.index.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.index.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -71,7 +71,7 @@ public class DiskIntro {
         System.out.println("Building the graph, may take a few minutes");
 
         // nothing new here
-        ImmutableGraphIndex heapGraph;
+        GraphIndex heapGraph;
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy)) {
             heapGraph = builder.build(ravv);
         }

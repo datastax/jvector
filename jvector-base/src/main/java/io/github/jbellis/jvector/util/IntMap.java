@@ -16,10 +16,6 @@
 
 package io.github.jbellis.jvector.util;
 
-import io.github.jbellis.jvector.graph.NodesIterator;
-
-import java.util.stream.IntStream;
-
 public interface IntMap<T> {
     /**
      * @param key ordinal

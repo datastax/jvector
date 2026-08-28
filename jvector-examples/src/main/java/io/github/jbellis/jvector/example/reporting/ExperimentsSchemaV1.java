@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
 
 import java.util.HashMap;
 import java.util.List;

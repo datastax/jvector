@@ -19,15 +19,19 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.index.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.index.graph.GraphIndex;
+import io.github.jbellis.jvector.index.graph.NodesIterator;
+import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.index.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.index.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.index.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -226,11 +230,11 @@ public class ParallelWriteExample {
      * Benchmark comparison between sequential and parallel writes using NVQ + FUSED_ADC features.
      * This matches the configuration used in Grid.buildOnDisk for realistic performance testing.
      */
-    public static void benchmarkComparison(ImmutableGraphIndex graph,
-                                          Path sequentialPath,
-                                          Path parallelPath,
-                                          RandomAccessVectorValues floatVectors,
-                                          PQVectors pqVectors) throws IOException {
+    public static void benchmarkComparison(GraphIndex graph,
+                                           Path sequentialPath,
+                                           Path parallelPath,
+                                           RandomAccessVectorValues floatVectors,
+                                           PQVectors pqVectors) throws IOException {
 
         int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
         var nvq = NVQuantization.compute(floatVectors, nSubVectors);

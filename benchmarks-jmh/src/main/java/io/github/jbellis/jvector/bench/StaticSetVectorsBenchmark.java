@@ -17,8 +17,8 @@ package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.SiftSmall;
 import io.github.jbellis.jvector.example.util.SiftLoader;
-import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.index.graph.*;
+import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -45,7 +45,7 @@ public class StaticSetVectorsBenchmark {
     private List<VectorFloat<?>> queryVectors;
     private List<List<Integer>> groundTruth;
     private GraphIndexBuilder graphIndexBuilder;
-    private ImmutableGraphIndex graphIndex;
+    private GraphIndex graphIndex;
     int originalDimension;
 
     @Setup

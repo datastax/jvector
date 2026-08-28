@@ -20,18 +20,13 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.MockVectorValues;
-import io.github.jbellis.jvector.graph.NodeQueue;
-import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.index.graph.*;
+import io.github.jbellis.jvector.index.graph.MockVectorValues;
+import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.index.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.index.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.index.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -50,7 +45,7 @@ import java.util.Map;
 import java.util.Random;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
-import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
+import static io.github.jbellis.jvector.index.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -341,8 +336,8 @@ public class TestFusedGraphIndex extends RandomizedTest {
         Files.deleteIfExists(outputPath);
     }
 
-    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex.View view, CompressedVectors cv) {
-        var scoringView = (ImmutableGraphIndex.ScoringView) view;
+    public SearchScoreProvider scoreProviderFor(boolean fused, VectorFloat<?> queryVector, VectorSimilarityFunction similarityFunction, GraphIndex.View view, CompressedVectors cv) {
+        var scoringView = (GraphIndex.ScoringView) view;
         ScoreFunction.ApproximateScoreFunction asf;
         if (fused) {
             asf = scoringView.approximateScoreFunctionFor(queryVector, similarityFunction);

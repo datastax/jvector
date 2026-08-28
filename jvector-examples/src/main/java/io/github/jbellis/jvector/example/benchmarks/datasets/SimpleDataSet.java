@@ -16,8 +16,8 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.index.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
