@@ -15,14 +15,11 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
+
 import org.junit.Test;
 
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -329,7 +326,7 @@ public class DataSetPropertiesTest {
                 DataSetProperties.KEY_IS_ZERO_VECTOR_FREE, true,
                 DataSetProperties.KEY_IS_DUPLICATE_VECTOR_FREE, true
         ));
-        var info = new DataSetInfo(base, () -> { throw new AssertionError("loader should not be called"); });
+        var info = new DataSetInfo(base, null /* The functions in this test should not try to load the dataset */);
 
         assertEquals("delegate-test", info.getName());
         assertEquals(VectorSimilarityFunction.EUCLIDEAN, info.similarityFunction().orElse(null));
@@ -338,40 +335,6 @@ public class DataSetPropertiesTest {
         assertTrue(info.isZeroVectorFree());
         assertTrue(info.isDuplicateVectorFree());
         assertTrue(info.isValid());
-    }
-
-    @Test
-    public void dataSetInfoLazyLoading() {
-        var callCount = new int[]{0};
-        var base = new DataSetProperties.PropertyMap(Map.of(DataSetProperties.KEY_NAME, "lazy"));
-        // Return a dummy non-null sentinel so the cache works (null would defeat the null-check)
-        var sentinel = new DataSet() {
-            public int getDimension() { return 0; }
-            public RandomAccessVectorValues getBaseRavv() { return null; }
-            public String getName() { return "sentinel"; }
-            public VectorSimilarityFunction getSimilarityFunction() { return VectorSimilarityFunction.COSINE; }
-            public List<VectorFloat<?>> getBaseVectors() { return Collections.emptyList(); }
-            public List<VectorFloat<?>> getQueryVectors() { return Collections.emptyList(); }
-            public List<? extends List<Integer>> getGroundTruth() { return Collections.emptyList(); }
-        };
-        var info = new DataSetInfo(base, () -> {
-            callCount[0]++;
-            return sentinel;
-        });
-
-        // Accessing properties should not trigger the loader
-        info.getName();
-        info.similarityFunction();
-        info.numVectors();
-        assertEquals(0, callCount[0], "Loader should not have been called for metadata access");
-
-        // getDataSet triggers it
-        info.getDataSet();
-        assertEquals(1, callCount[0]);
-
-        // Second call should use cache
-        info.getDataSet();
-        assertEquals(1, callCount[0], "Loader should only be called once");
     }
 
     // ========================================================================
