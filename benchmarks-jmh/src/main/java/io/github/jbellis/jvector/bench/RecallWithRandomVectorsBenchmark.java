@@ -15,11 +15,12 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.index.graph.*;
-import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.index.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.index.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.index.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;

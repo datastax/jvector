@@ -18,10 +18,11 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.MMapRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.UpdatableRandomAccessVectorValues;
-import io.github.jbellis.jvector.index.graph.*;
-import io.github.jbellis.jvector.index.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.index.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.index.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;

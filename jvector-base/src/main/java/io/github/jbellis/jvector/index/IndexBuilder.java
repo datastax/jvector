@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.index;
 
-import io.github.jbellis.jvector.index.graph.HnswIndexBuilder;
+import io.github.jbellis.jvector.graph.HnswIndexBuilder;
 import io.github.jbellis.jvector.util.Accountable;
 
 import java.io.Closeable;

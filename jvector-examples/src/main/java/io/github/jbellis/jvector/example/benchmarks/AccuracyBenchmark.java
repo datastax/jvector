@@ -23,7 +23,7 @@ import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
-import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
  * Measures average recall and/or the mean average precision.

@@ -15,7 +15,7 @@
  */
 package io.github.jbellis.jvector.util;
 
-import io.github.jbellis.jvector.index.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 
 import java.io.Closeable;

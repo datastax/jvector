@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 import java.util.List;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
-import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
  * Measures average execution time over N runs through all queries in parallel.

@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import com.indeed.util.mmap.MMapBuffer;
-import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;

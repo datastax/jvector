@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
-import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
  * Measures average node‐visit and node‐expand counts over N runs.

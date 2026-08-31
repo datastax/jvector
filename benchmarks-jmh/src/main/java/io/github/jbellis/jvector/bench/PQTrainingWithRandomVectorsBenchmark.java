@@ -15,8 +15,8 @@
  */
 package io.github.jbellis.jvector.bench;
 
-import io.github.jbellis.jvector.index.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;

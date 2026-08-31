@@ -15,7 +15,7 @@
  */
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 import java.util.List;
 

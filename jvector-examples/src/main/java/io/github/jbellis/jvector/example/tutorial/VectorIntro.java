@@ -19,11 +19,12 @@ package io.github.jbellis.jvector.example.tutorial;
 import java.io.IOException;
 import java.util.List;
 
-import io.github.jbellis.jvector.index.graph.*;
-import io.github.jbellis.jvector.index.graph.SearchResult.NodeScore;
-import io.github.jbellis.jvector.index.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.index.graph.similarity.DefaultSearchScoreProvider;
-import io.github.jbellis.jvector.index.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;

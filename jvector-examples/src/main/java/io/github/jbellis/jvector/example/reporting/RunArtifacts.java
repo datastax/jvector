@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
-import io.github.jbellis.jvector.index.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

@@ -18,10 +18,10 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.index.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.index.graph.disk.CompactionContext;
-import io.github.jbellis.jvector.index.graph.disk.*;
-import io.github.jbellis.jvector.index.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.*;
+import io.github.jbellis.jvector.graph.disk.*;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;

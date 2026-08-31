@@ -21,7 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
-import io.github.jbellis.jvector.index.graph.SearchResult;
+import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
  * Measures per‐query latency (mean and standard deviation) over N runs,
