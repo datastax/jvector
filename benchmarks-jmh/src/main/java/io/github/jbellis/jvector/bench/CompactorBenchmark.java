@@ -31,7 +31,6 @@ import io.github.jbellis.jvector.example.util.DataSetPartitioner;
 import io.github.jbellis.jvector.example.util.storage.CloudStorageLayoutUtil;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition;
 import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;

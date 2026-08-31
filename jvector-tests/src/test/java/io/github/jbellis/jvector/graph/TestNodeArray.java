@@ -25,11 +25,12 @@
 package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
-import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.util.ArrayUtil;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import org.junit.Assert;
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.HashSet;
 
 import static org.junit.Assert.assertArrayEquals;

@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.util.List;
 
 import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;

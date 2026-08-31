@@ -15,10 +15,13 @@
  */
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.graph.NodesIterator;
+
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.IntStream;
 
 /**
  * A map (but not a Map) of int -> T where the int keys are dense-ish and start at zero,

@@ -17,7 +17,10 @@
 package io.github.jbellis.jvector.graph.diversity;
 
 import io.github.jbellis.jvector.graph.NodeArray;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.BitSet;
+import io.github.jbellis.jvector.util.DocIdSetIterator;
 
 import static java.lang.Math.min;
 

@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;

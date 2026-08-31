@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.graph.NodesIterator;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 

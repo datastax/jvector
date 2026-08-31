@@ -28,8 +28,7 @@ import java.util.concurrent.*;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.*;
-import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
@@ -425,7 +424,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         ProductQuantization pq = strategy.compressorAsPQ();
         boolean compressedPrecision = fusedPQEnabled;
         int maxBaseDegree = java.util.Collections.max(maxDegrees);
-        FusedFeature outputFusedFeature =
+        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
                 strategy.outputFusedFeature(maxBaseDegree);
 
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
@@ -455,7 +454,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Second pass over the just-written compacted graph. Mirrors
-     * {@link GraphIndexBuilder}'s {@code cleanup()} refinement
+     * {@link io.github.jbellis.jvector.graph.GraphIndexBuilder}'s {@code cleanup()} refinement
      * step: when the merged graph has a hierarchy, iterates only level-1 nodes (which are also
      * in L0); for each node, descends greedily through upper layers and beam-searches level 0
      * carrying entry points layer-to-layer, then rewrites the L0 neighbor list (and the inline

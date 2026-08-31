@@ -19,8 +19,8 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.*;
-import io.github.jbellis.jvector.graph.disk.*;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -422,10 +422,10 @@ public abstract class PQVectors implements CompressedVectors {
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
         ProductQuantization basePQ = this.pq;
-        VectorCompressorRetrainer retrainer =
-                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+        io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
+                vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
                         .retrain(vsf, basePQ);
-        return new SidecarCompactionStrategy(ctx, this, retrainer);
+        return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 
     /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
@@ -437,7 +437,7 @@ public abstract class PQVectors implements CompressedVectors {
                             + mergedCompressor.getClass().getSimpleName());
         }
         ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
-        mergedPQ.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
         out.writeInt(count);
         out.writeInt(mergedPQ.getSubspaceCount());
     }

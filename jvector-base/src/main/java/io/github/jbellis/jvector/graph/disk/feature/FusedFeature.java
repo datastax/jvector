@@ -20,7 +20,6 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -47,7 +46,7 @@ public interface FusedFeature extends Feature {
     /**
      * For compaction use: bytes occupied on disk by a single stored code (one neighbor's payload).
      * For fused features {@code featureSize() == codeSize() * maxDegree}. Called by the compactor
-     * (and {@link OnDiskGraphIndexCompactor#ramBytesUsed}) to
+     * (and {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor#ramBytesUsed}) to
      * size per-thread scratch buffers and by {@code FusedCompactionStrategy} to size the streaming
      * pre-encode cache.
      */
