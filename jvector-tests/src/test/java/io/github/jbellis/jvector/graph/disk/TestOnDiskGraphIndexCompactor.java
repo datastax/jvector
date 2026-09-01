@@ -1416,6 +1416,24 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for (var r : rss) r.close();
     }
 
+    /** Inline-vectors-only source graph with the same build parameters as
+     *  {@link #buildFusedSourceGraph}, so sidecar-vs-fused comparisons share source quality. */
+    private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, String name) throws IOException {
+        var ravv = new ListRandomAccessVectorValues(vecs, dimension);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+        var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, false, true, simdExecutor, parallelExecutor);
+        var graph = builder.build(ravv);
+        Path path = testDirectory.resolve(name);
+        var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, path);
+        writerBuilder.with(new InlineVectors(dimension));
+        try (var writer = writerBuilder.build()) {
+            var writeSuppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            writeSuppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+            writer.write(writeSuppliers);
+        }
+        return path;
+    }
+
     /**
      * Sidecar-parity counterpart of {@link #testClusterCertificationWithNearDuplicates}: sources
      * are plain graphs with separate PQVectors sidecars (the SAI layout). With parity, similarity
@@ -1447,7 +1465,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 }
                 vecs.add(v);
             }
-            Path path = buildSimpleSourceGraph(vecs, dimension, similarityFunction, "sc_certify_src_" + sIdx);
+            Path path = buildPlainSourceGraph(vecs, "sc_certify_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var ravv = new ListRandomAccessVectorValues(vecs, dimension);
@@ -1486,14 +1504,18 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         for (int i = 0; i < 30; i++) {
             queries.add(all.get(rnd.nextInt(all.size())));
         }
-        List<List<Integer>> gt = new ArrayList<>();
-        for (var q : queries) {
-            List<Integer> idx = new ArrayList<>();
-            for (int i = 0; i < total; i++) idx.add(i);
-            idx.sort((a, b) -> Float.compare(
-                    similarityFunction.compare(q, all.get(b)),
-                    similarityFunction.compare(q, all.get(a))));
-            gt.add(new ArrayList<>(idx.subList(0, topK)));
+        // Tie-aware ground truth: near-duplicate pools make top-K membership arbitrary among
+        // equal-distance twins, so a result counts if its exact similarity clears the query's
+        // kth-best similarity (minus float slack) rather than matching set identity.
+        float[] kthSim = new float[queries.size()];
+        for (int qi = 0; qi < queries.size(); qi++) {
+            var q = queries.get(qi);
+            float[] sims = new float[total];
+            for (int i = 0; i < total; i++) {
+                sims[i] = similarityFunction.compare(q, all.get(i));
+            }
+            java.util.Arrays.sort(sims);
+            kthSim[qi] = sims[total - topK];
         }
         try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
             var compactGraph = OnDiskGraphIndex.load(rs);
@@ -1508,13 +1530,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
                     SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
                     for (var ns : sr.getNodes()) {
-                        if (gt.get(qi).contains(newToDataset[ns.node])) hits++;
+                        float sim = similarityFunction.compare(queries.get(qi), all.get(newToDataset[ns.node]));
+                        if (sim >= kthSim[qi] - 1e-6f) hits++;
                     }
                 }
                 double recall = (double) hits / (queries.size() * topK);
-                System.out.printf("Sidecar-parity merge recall: %.4f (certified %d)%n",
+                System.out.printf("Sidecar-parity merge recall (tie-aware): %.4f (certified %d)%n",
                         recall, compactor.clusterCertified.get());
-                assertTrue("sidecar-parity merge recall should be >= 0.5, got " + recall, recall >= 0.5);
+                assertTrue("sidecar-parity merge tie-aware recall should be >= 0.8, got " + recall, recall >= 0.8);
             }
         }
         // The merged sidecar must decode consistently under the retrained codebook.
