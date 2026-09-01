@@ -53,24 +53,19 @@ if cpu == 'x86_64'
     },
   ]
 elif cpu == 'aarch64'
-  # Three tiers in ascending capability order, all compiled to fixed-width
-  # Highway targets so MaxLanes is a compile-time constant and all kernel
-  # fast-paths (Shuffle*, LoadDup256, etc.) work without ISA-specific guards.
+  # Three tiers in ascending capability order.  SVE and SVE2 use scalable
+  # Highway targets (HWY_HAVE_SCALABLE=1): Lanes() is a runtime value and
+  # all loop counters are vector-length agnostic.  The fixed-width fast-paths
+  # in calculate_partial_sums_* are gated behind #if !HWY_HAVE_SCALABLE.
   #
-  #   NEON     — baseline AArch64.  Highway target: HWY_NEON.
-  #              All Graviton generations and all Apple Silicon.
+  #   NEON  — baseline AArch64.  Highway target: HWY_NEON.
+  #           All Graviton generations and all Apple Silicon.
   #
-  #   SVE_256  — Graviton 3 / Neoverse V1.  Highway target: HWY_SVE_256.
-  #              -msve-vector-bits=256 asserts the physical vector width and
-  #              causes Highway to select the fixed-width HWY_SVE_256 target
-  #              (MaxLanes = 8 floats).  Graviton-only; no Apple Silicon SVE.
+  #   SVE   — Graviton 3 / Neoverse V1 and later.  Highway target: HWY_SVE.
+  #           No -msve-vector-bits flag; Highway queries the VL at runtime.
   #
-  #   SVE2_128 — Graviton 4 / Neoverse V2/N2.  Highway target: HWY_SVE2_128.
-  #              -msve-vector-bits=128 selects the fixed-width HWY_SVE2_128
-  #              target (MaxLanes = 4 floats).  At runtime on Graviton 4 the
-  #              hardware executes 256-bit vectors, so Highway's loop unrolling
-  #              gives 256-bit throughput with 128-bit-wide loop bodies.
-  #              Requires GCC >= 10 or Clang >= 21.  Graviton-only (no Apple).
+  #   SVE2  — Graviton 4 / Neoverse V2/N2 and later.  Highway target: HWY_SVE2.
+  #           No -msve-vector-bits flag; Highway queries the VL at runtime.
   isa_variants = [
     {
       'name'     : 'neon',
@@ -82,17 +77,14 @@ elif cpu == 'aarch64'
     {
       'name'     : 'sve',
       'namespace': 'SVE',
-      'args'     : ['-march=armv8.4-a+sve', '-msve-vector-bits=256',
+      'args'     : ['-march=armv8.4-a+sve',
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_SVE'],
     },
     {
       'name'     : 'sve2',
       'namespace': 'SVE2',
-      # HWY_SVE2_128 requires i8mm and bf16 in addition to sve2.
-      # See highway/hwy/ops/set_macros-inl.h:662 ("SVE2_128 implies/requires
-      # I8MM and BF16, see #2973") and the HWY_TARGET_STR definition there.
-      'args'     : ['-march=armv9-a+sve2+i8mm+bf16', '-msve-vector-bits=128',
+      'args'     : ['-march=armv9-a+sve2',
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_SVE2'],
     },

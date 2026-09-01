@@ -39,20 +39,19 @@
 #elif JV_ARCH_AARCH64
 
 // Compiler flags per tier and the Highway target each must produce:
-//   neon:  -march=armv8-a+crypto                            → HWY_NEON
+//   neon:  -march=armv8-a+crypto   → HWY_NEON
 //          (no BF16/dotprod/I8MM features, so never HWY_NEON_BF16)
-//   sve:   -march=armv8.4-a+sve  -msve-vector-bits=256      → HWY_SVE_256
-//          (pinned 256-bit; Graviton 3 / Neoverse V1)
-//   sve2:  -march=armv9-a+sve2   -msve-vector-bits=128      → HWY_SVE2_128
-//          (fixed-width 128-bit; Graviton 4 / Neoverse V2/N2)
-//          Requires GCC >= 10 or Clang >= 21.
+//   sve:   -march=armv8.4-a+sve    → HWY_SVE  (scalable, VL-agnostic)
+//          (Graviton 3 / Neoverse V1 and later)
+//   sve2:  -march=armv9-a+sve2     → HWY_SVE2 (scalable, VL-agnostic)
+//          (Graviton 4 / Neoverse V2/N2 and later)
 #if defined(JV_REQUIRE_HWY_SVE2)
-#  if HWY_STATIC_TARGET != HWY_SVE2_128
-#    error "Highway did not select HWY_SVE2_128 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2+i8mm+bf16 -msve-vector-bits=128), compiler support (GCC >= 10 or Clang >= 21), and Highway blocklists."
+#  if HWY_STATIC_TARGET != HWY_SVE2
+#    error "Highway did not select HWY_SVE2 for the SVE2 build. Check compiler flags (-march=armv9-a+sve2) and Highway blocklists."
 #  endif
 #elif defined(JV_REQUIRE_HWY_SVE)
-#  if HWY_STATIC_TARGET != HWY_SVE_256
-#    error "Highway did not select HWY_SVE_256 for the SVE build. Check compiler flags (-march=armv8.4-a+sve -msve-vector-bits=256), compiler support (GCC >= 10 or Clang >= 9), and Highway blocklists."
+#  if HWY_STATIC_TARGET != HWY_SVE
+#    error "Highway did not select HWY_SVE for the SVE build. Check compiler flags (-march=armv8.4-a+sve) and Highway blocklists."
 #  endif
 #elif defined(JV_REQUIRE_HWY_NEON)
 #  if HWY_STATIC_TARGET != HWY_NEON
