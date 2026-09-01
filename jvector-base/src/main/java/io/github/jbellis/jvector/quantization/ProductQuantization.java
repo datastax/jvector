@@ -220,6 +220,21 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return new ProductQuantization(refinedCodebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
 
+    /** Width of subspace {@code m}'s subvectors. */
+    public int getSubvectorSize(int m) {
+        return subvectorSizesAndOffsets[m][0];
+    }
+
+    /** Subspace {@code m}'s codebook: {@code clusterCount} contiguous subvectors. Read-only use. */
+    public VectorFloat<?> getCodebookVector(int m) {
+        return codebooks[m];
+    }
+
+    /** The global centroid subtracted before encoding, or {@code null} when not center-adjusted. */
+    public VectorFloat<?> getGlobalCentroid() {
+        return globalCentroid;
+    }
+
     ProductQuantization(VectorFloat<?>[] codebooks, int clusterCount, int[][] subvectorSizesAndOffsets, VectorFloat<?> globalCentroid, float anisotropicThreshold) {
         checkClusterCount(clusterCount);
 
