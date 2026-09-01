@@ -1418,9 +1418,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /** Inline-vectors-only source graph with the same build parameters as
      *  {@link #buildFusedSourceGraph}, so sidecar-vs-fused comparisons share source quality. */
-    private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, String name) throws IOException {
+    private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, String name) throws IOException {
         var ravv = new ListRandomAccessVectorValues(vecs, dimension);
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, similarityFunction);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
         var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, false, true, simdExecutor, parallelExecutor);
         var graph = builder.build(ravv);
         Path path = testDirectory.resolve(name);
@@ -1442,6 +1442,19 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
      */
     @Test
     public void testSidecarParityCertificationWithNearDuplicates() throws Exception {
+        // COSINE: the LUT declines unsupported metrics, so this exercises the exact-scoring
+        // fallback with the full parity stack (ordinals, cache, cluster search).
+        sidecarParityCertification(VectorSimilarityFunction.COSINE);
+    }
+
+    @Test
+    public void testSidecarParityCertificationLutScoring() throws Exception {
+        // EUCLIDEAN: traversal scores through the cache-LUT (center-adjusted PQ), the path
+        // production DOT/EUCLIDEAN merges take.
+        sidecarParityCertification(VectorSimilarityFunction.EUCLIDEAN);
+    }
+
+    private void sidecarParityCertification(VectorSimilarityFunction vsf) throws Exception {
         int poolSize = 64;
         int perSource = 320;
         int nSrc = 3;
@@ -1465,7 +1478,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 }
                 vecs.add(v);
             }
-            Path path = buildPlainSourceGraph(vecs, "sc_certify_src_" + sIdx);
+            Path path = buildPlainSourceGraph(vecs, vsf, "sc_certify_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var ravv = new ListRandomAccessVectorValues(vecs, dimension);
@@ -1479,10 +1492,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             all.addAll(vecs);
         }
 
-        var compactor = new OnDiskGraphIndexCompactor(graphs, compressed, live, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, compressed, live, remappers, vsf, null);
         compactor.setSimilarityOrdinals(true);
-        var outputPath = testDirectory.resolve("sc_certify_compacted");
-        var pqOutPath = testDirectory.resolve("sc_certify_pq");
+        var outputPath = testDirectory.resolve("sc_certify_compacted_" + vsf);
+        var pqOutPath = testDirectory.resolve("sc_certify_pq_" + vsf);
         compactor.compact(outputPath, pqOutPath);
 
         assertTrue("sidecar-parity near-duplicate merge should certify members, got "
@@ -1512,7 +1525,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             var q = queries.get(qi);
             float[] sims = new float[total];
             for (int i = 0; i < total; i++) {
-                sims[i] = similarityFunction.compare(q, all.get(i));
+                sims[i] = vsf.compare(q, all.get(i));
             }
             java.util.Arrays.sort(sims);
             kthSim[qi] = sims[total - topK];
@@ -1527,10 +1540,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
                 int hits = 0;
                 for (int qi = 0; qi < queries.size(); qi++) {
-                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), vsf, reorderedRavv);
                     SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
                     for (var ns : sr.getNodes()) {
-                        float sim = similarityFunction.compare(queries.get(qi), all.get(newToDataset[ns.node]));
+                        float sim = vsf.compare(queries.get(qi), all.get(newToDataset[ns.node]));
                         if (sim >= kthSim[qi] - 1e-6f) hits++;
                     }
                 }
