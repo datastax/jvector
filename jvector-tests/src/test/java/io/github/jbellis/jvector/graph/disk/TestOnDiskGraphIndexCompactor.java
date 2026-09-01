@@ -1415,4 +1415,113 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
         for (var r : rss) r.close();
     }
+
+    /**
+     * Sidecar-parity counterpart of {@link #testClusterCertificationWithNearDuplicates}: sources
+     * are plain graphs with separate PQVectors sidecars (the SAI layout). With parity, similarity
+     * ordinals derive from the retrained sidecar PQ, the strategy pre-encode cache backs
+     * approximate traversal scoring, and cluster certification must engage just as in fused mode.
+     */
+    @Test
+    public void testSidecarParityCertificationWithNearDuplicates() throws Exception {
+        int poolSize = 64;
+        int perSource = 320;
+        int nSrc = 3;
+        List<VectorFloat<?>> pool = createRandomVectors(poolSize, dimension);
+        var rnd = new java.util.Random(54321);
+
+        List<VectorFloat<?>> all = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<io.github.jbellis.jvector.quantization.CompressedVectors> compressed = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        int base = 0;
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            List<VectorFloat<?>> vecs = new ArrayList<>(perSource);
+            for (int i = 0; i < perSource; i++) {
+                VectorFloat<?> b = pool.get(i % poolSize);
+                VectorFloat<?> v = vectorTypeSupport.createFloatVector(dimension);
+                for (int d = 0; d < dimension; d++) {
+                    v.set(d, b.get(d) + (float) (rnd.nextGaussian() * 1e-3));
+                }
+                vecs.add(v);
+            }
+            Path path = buildSimpleSourceGraph(vecs, dimension, similarityFunction, "sc_certify_src_" + sIdx);
+            rss.add(ReaderSupplierFactory.open(path));
+            graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
+            var ravv = new ListRandomAccessVectorValues(vecs, dimension);
+            ProductQuantization pq = ProductQuantization.compute(ravv, dimension / 2, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+            compressed.add(pq.encodeAll(ravv, simdExecutor));
+            var lv = new FixedBitSet(perSource);
+            lv.set(0, perSource);
+            live.add(lv);
+            remappers.add(new OrdinalMapper.OffsetMapper(base, perSource));
+            base += perSource;
+            all.addAll(vecs);
+        }
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, compressed, live, remappers, similarityFunction, null);
+        compactor.setSimilarityOrdinals(true);
+        var outputPath = testDirectory.resolve("sc_certify_compacted");
+        var pqOutPath = testDirectory.resolve("sc_certify_pq");
+        compactor.compact(outputPath, pqOutPath);
+
+        assertTrue("sidecar-parity near-duplicate merge should certify members, got "
+                        + compactor.clusterCertified.get(),
+                compactor.clusterCertified.get() > 0);
+
+        // recall of the merged output vs brute force over the union
+        int total = nSrc * perSource;
+        var effective = compactor.effectiveRemappers();
+        int[] newToDataset = new int[total];
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            for (int i = 0; i < perSource; i++) {
+                int newOrd = effective.get(sIdx).oldToNew(i);
+                newToDataset[newOrd] = sIdx * perSource + i;
+            }
+        }
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            queries.add(all.get(rnd.nextInt(all.size())));
+        }
+        List<List<Integer>> gt = new ArrayList<>();
+        for (var q : queries) {
+            List<Integer> idx = new ArrayList<>();
+            for (int i = 0; i < total; i++) idx.add(i);
+            idx.sort((a, b) -> Float.compare(
+                    similarityFunction.compare(q, all.get(b)),
+                    similarityFunction.compare(q, all.get(a))));
+            gt.add(new ArrayList<>(idx.subList(0, topK)));
+        }
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs);
+            List<VectorFloat<?>> reordered = new ArrayList<>(total);
+            for (int n = 0; n < total; n++) {
+                reordered.add(all.get(newToDataset[n]));
+            }
+            var reorderedRavv = new ListRandomAccessVectorValues(reordered, dimension);
+            try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
+                int hits = 0;
+                for (int qi = 0; qi < queries.size(); qi++) {
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
+                    SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+                    for (var ns : sr.getNodes()) {
+                        if (gt.get(qi).contains(newToDataset[ns.node])) hits++;
+                    }
+                }
+                double recall = (double) hits / (queries.size() * topK);
+                System.out.printf("Sidecar-parity merge recall: %.4f (certified %d)%n",
+                        recall, compactor.clusterCertified.get());
+                assertTrue("sidecar-parity merge recall should be >= 0.5, got " + recall, recall >= 0.5);
+            }
+        }
+        // The merged sidecar must decode consistently under the retrained codebook.
+        try (var rsCompressed = ReaderSupplierFactory.open(pqOutPath); var reader = rsCompressed.get()) {
+            PQVectors mergedPqv = PQVectors.load(reader);
+            assertEquals("merged PQVectors count", total, mergedPqv.count());
+        }
+        for (var r : rss) r.close();
+    }
 }
