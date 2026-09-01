@@ -187,6 +187,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         return chunk;
     }
 
+    @Override
+    public void releaseTransientState() {
+        releaseCacheAndTruncate();
+    }
+
     private void closeCache() {
         if (codeCache != null) {
             codeCache.close();

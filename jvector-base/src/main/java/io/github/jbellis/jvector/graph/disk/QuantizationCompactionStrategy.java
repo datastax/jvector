@@ -137,6 +137,15 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * Releases any transient resources still held after a failed compaction (pre-encode cache
+     * mappings, un-truncated scratch regions). Idempotent; a successful run releases them in its
+     * normal flow, so this only acts when a failure interrupted that flow. No-op by default.
+     */
+    public void releaseTransientState() {
+        // no-op
+    }
+
+    /**
      * Writes the merged compressed-vectors sidecar file. Called by the compactor's
      * {@code compact(graphPath, compressedPath)} entry point after the graph is fully written.
      * Throws {@link UnsupportedOperationException} by default; sidecar strategies override.

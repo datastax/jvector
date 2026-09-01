@@ -502,6 +502,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } finally {
             activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
             inlineStrategy.onAfterClose(graphPath);
+            // No-op after a successful writeSidecar; releases the cache mapping and truncates
+            // the scratch region if a failure interrupted the normal flow.
+            sidecarStrategy.releaseTransientState();
         }
     }
 
