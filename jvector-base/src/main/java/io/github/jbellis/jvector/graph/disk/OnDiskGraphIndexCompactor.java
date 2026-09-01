@@ -1620,6 +1620,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         float worst = scratch.clusterWorstSim[targetIdx];
         VectorFloat<?> anchorQuery = scratch.clusterAnchorQuery[targetIdx];
         for (var r : more.getNodes()) {
+            if (at >= nodes.length) {
+                break; // scratch capacity reached; stop growing this anchor's list
+            }
             float ex = params.fusedPQEnabled
                     ? rescoreAgainst(searchView, r.node, anchorQuery, scratch.tmpVec)
                     : r.score;
