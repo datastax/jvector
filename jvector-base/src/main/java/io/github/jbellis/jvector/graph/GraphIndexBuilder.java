@@ -92,36 +92,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
     private final Random rng;
 
-    /**
-     * Reads all the vectors from vector values, builds a graph connecting them by their dense
-     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
-     * By default, refineFinalGraph = true.
-     *
-     * @param vectorValues     the vectors whose relations are represented by the graph - must provide a
-     *                         different view over those vectors than the one used to add via addGraphNode.
-     * @param M                – the maximum number of connections a node can have
-     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
-     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
-     *                         node. larger values will build more efficiently, but use more memory.
-     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
-     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
-     *                         an HNSW graph will be created, which is usually not what you want.
-     */
-    public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
-                             VectorSimilarityFunction similarityFunction,
-                             int M,
-                             int beamWidth,
-                             float neighborOverflow,
-                             float alpha)
-    {
-        this(getBuildScoreProvider(vectorValues, similarityFunction),
-                vectorValues.dimension(),
-                M,
-                beamWidth,
-                neighborOverflow,
-                alpha);
-    }
-
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
         CompressionType type = resolveJmxBuildCompressionType();
         switch(type) {
@@ -253,31 +223,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
      * Default executor pools are used.
-     * By default, refineFinalGraph = true.
-     *
-     * @param scoreProvider    describes how to determine the similarities between vectors
-     * @param M                the maximum number of connections a node can have
-     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
-     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
-     *                         node. larger values will build more efficiently, but use more memory.
-     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
-     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
-     *                         an HNSW graph will be created, which is usually not what you want.
-     */
-    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
-                             int dimension,
-                             int M,
-                             int beamWidth,
-                             float neighborOverflow,
-                             float alpha)
-    {
-        this(scoreProvider, dimension, M, beamWidth, neighborOverflow, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
-    }
-
-    /**
-     * Reads all the vectors from vector values, builds a graph connecting them by their dense
-     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
-     * Default executor pools are used.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
      * @param M                the maximum number of connections a node can have
@@ -343,34 +288,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     /**
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
      * ordinals, using the given hyperparameter settings, and returns the resulting graph.
-     *
-     * @param scoreProvider    describes how to determine the similarities between vectors
-     * @param M                the maximum number of connections a node can have
-     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
-     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
-     *                         node. larger values will build more efficiently, but use more memory.
-     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
-     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
-     *                         an HNSW graph will be created, which is usually not what you want.
-     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
-     *                         the number of physical cores.
-     * @param parallelExecutor ForkJoinPool instance for parallel stream operations
-     */
-    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
-                             int dimension,
-                             int M,
-                             int beamWidth,
-                             float neighborOverflow,
-                             float alpha,
-                             ForkJoinPool simdExecutor,
-                             ForkJoinPool parallelExecutor)
-    {
-        this(scoreProvider, dimension, List.of(M), beamWidth, neighborOverflow, alpha, simdExecutor, parallelExecutor);
-    }
-
-    /**
-     * Reads all the vectors from vector values, builds a graph connecting them by their dense
-     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
      * Default executor pools are used.
      *
      * @param scoreProvider    describes how to determine the similarities between vectors
@@ -398,31 +315,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              boolean refineFinalGraph)
     {
         this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, addHierarchy, refineFinalGraph, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
-    }
-
-    /**
-     * Reads all the vectors from vector values, builds a graph connecting them by their dense
-     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
-     * Default executor pools are used.
-     *
-     * @param scoreProvider    describes how to determine the similarities between vectors
-     * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
-     *      *                  are specified than the number of layers, the last entry is used for all remaining layers.
-     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
-     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
-     *                         node. larger values will build more efficiently, but use more memory.
-     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
-     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
-     *                         an HNSW graph will be created, which is usually not what you want.
-     */
-    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
-                             int dimension,
-                             List<Integer> maxDegrees,
-                             int beamWidth,
-                             float neighborOverflow,
-                             float alpha)
-    {
-        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
 
     /**
@@ -465,34 +357,143 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     /**
-     * Reads all the vectors from vector values, builds a graph connecting them by their dense
-     * ordinals, using the given hyperparameter settings, and returns the resulting graph.
+     * Entry point for the fluent builder. {@code addHierarchy}, {@code refineFinalGraph}, and the
+     * build-time compression strategy are administrative concerns controlled via
+     * {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig} and are not exposed here;
+     * use one of the deprecated constructors if you need to pin those per-instance.
      *
-     * @param scoreProvider    describes how to determine the similarities between vectors
-     * @param maxDegrees       the maximum number of connections a node can have in each layer; if fewer entries
-     *                         are specified than the number of layers, the last entry is used for all remaining layers.
-     * @param beamWidth        the size of the beam search to use when finding nearest neighbors.
-     * @param neighborOverflow the ratio of extra neighbors to allow temporarily when inserting a
-     *                         node. larger values will build more efficiently, but use more memory.
-     * @param alpha            how aggressive pruning diverse neighbors should be.  Set alpha &gt; 1.0 to
-     *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
-     *                         an HNSW graph will be created, which is usually not what you want.
-     * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
-     *                         the number of physical cores.
-     * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     * @param scoreProvider describes how to determine the similarities between vectors
+     * @param dimension     the dimension of the vectors
+     * @param maxDegrees    the maximum number of connections a node can have in each layer; if fewer entries
+     *                      are specified than the number of layers, the last entry is used for all remaining layers.
      */
-    public GraphIndexBuilder(BuildScoreProvider scoreProvider,
-                             int dimension,
-                             List<Integer> maxDegrees,
-                             int beamWidth,
-                             float neighborOverflow,
-                             float alpha,
-                             ForkJoinPool simdExecutor,
-                             ForkJoinPool parallelExecutor) {
-        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
-             resolveJmxAddHierarchy(maxDegrees),
-             resolveJmxRefineFinalGraph(),
-             simdExecutor, parallelExecutor, null);
+    public static Builder builder(BuildScoreProvider scoreProvider, int dimension, List<Integer> maxDegrees) {
+        return new Builder(scoreProvider, dimension, maxDegrees);
+    }
+
+    /**
+     * Entry point for the fluent builder, for the common case of a single (non-hierarchical) max degree.
+     *
+     * @param scoreProvider describes how to determine the similarities between vectors
+     * @param dimension     the dimension of the vectors
+     * @param M             the maximum number of connections a node can have
+     */
+    public static Builder builder(BuildScoreProvider scoreProvider, int dimension, int M) {
+        return new Builder(scoreProvider, dimension, List.of(M));
+    }
+
+    /**
+     * Entry point for the fluent builder, resolving the {@link BuildScoreProvider} from raw vectors via
+     * {@link #getBuildScoreProvider(RandomAccessVectorValues, VectorSimilarityFunction)}.
+     *
+     * @param vectorValues       the vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity function to score vectors with
+     * @param maxDegrees         the maximum number of connections a node can have in each layer; if fewer entries
+     *                           are specified than the number of layers, the last entry is used for all remaining layers.
+     */
+    public static Builder builder(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction, List<Integer> maxDegrees) {
+        return new Builder(getBuildScoreProvider(vectorValues, similarityFunction), vectorValues.dimension(), maxDegrees);
+    }
+
+    /**
+     * Entry point for the fluent builder, for the common case of a single (non-hierarchical) max degree,
+     * resolving the {@link BuildScoreProvider} from raw vectors.
+     *
+     * @param vectorValues       the vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity function to score vectors with
+     * @param M                  the maximum number of connections a node can have
+     */
+    public static Builder builder(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction, int M) {
+        return builder(vectorValues, similarityFunction, List.of(M));
+    }
+
+    /**
+     * Entry point for the fluent builder, building from an existing {@link MutableGraphIndex} (e.g. one just
+     * loaded from disk) rather than constructing a fresh {@link OnHeapGraphIndex}. {@code addHierarchy} is not
+     * settable here — it is structural and is always derived from {@code mutableGraphIndex}'s own topology.
+     *
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param dimension          the dimension of the vectors.
+     * @param mutableGraphIndex  a mutable graph index to take ownership of and continue building on.
+     */
+    public static Builder builder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex) {
+        return new Builder(buildScoreProvider, dimension, mutableGraphIndex);
+    }
+
+    /**
+     * Fluent builder for {@link GraphIndexBuilder}. Collects the mutable configuration state itself;
+     * {@code GraphIndexBuilder}'s own fields remain {@code final} and are set exactly once, in
+     * {@link #build()}, via the private all-args constructors.
+     * <p>
+     * {@code beamWidth}, {@code neighborOverflow}, and {@code alpha} are required — if left unset,
+     * {@link #build()} fails with the same {@link IllegalArgumentException} the constructors throw.
+     */
+    public static class Builder {
+        private final BuildScoreProvider scoreProvider;
+        private final int dimension;
+        private final List<Integer> maxDegrees;
+        private final MutableGraphIndex existingGraph;
+        private int beamWidth;
+        private float neighborOverflow;
+        private float alpha;
+        private ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+        private ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
+
+        private Builder(BuildScoreProvider scoreProvider, int dimension, List<Integer> maxDegrees) {
+            this.scoreProvider = scoreProvider;
+            this.dimension = dimension;
+            this.maxDegrees = maxDegrees;
+            this.existingGraph = null;
+        }
+
+        private Builder(BuildScoreProvider scoreProvider, int dimension, MutableGraphIndex existingGraph) {
+            this.scoreProvider = scoreProvider;
+            this.dimension = dimension;
+            this.maxDegrees = null;
+            this.existingGraph = existingGraph;
+        }
+
+        /** The size of the beam search to use when finding nearest neighbors. */
+        public Builder withBeamWidth(int beamWidth) {
+            this.beamWidth = beamWidth;
+            return this;
+        }
+
+        /** The ratio of extra neighbors to allow temporarily when inserting a node. */
+        public Builder withNeighborOverflow(float neighborOverflow) {
+            this.neighborOverflow = neighborOverflow;
+            return this;
+        }
+
+        /** How aggressive pruning diverse neighbors should be; alpha &gt; 1.0 allows longer edges. */
+        public Builder withAlpha(float alpha) {
+            this.alpha = alpha;
+            return this;
+        }
+
+        /** ForkJoinPool for SIMD operations; ideally sized to the number of physical cores. Defaults to {@link PhysicalCoreExecutor#pool()}. */
+        public Builder withSimdExecutor(ForkJoinPool simdExecutor) {
+            this.simdExecutor = simdExecutor;
+            return this;
+        }
+
+        /** ForkJoinPool for general parallel stream operations. Defaults to {@link ForkJoinPool#commonPool()}. */
+        public Builder withParallelExecutor(ForkJoinPool parallelExecutor) {
+            this.parallelExecutor = parallelExecutor;
+            return this;
+        }
+
+        public GraphIndexBuilder build() {
+            if (existingGraph != null) {
+                boolean refineFinalGraph = resolveJmxRefineFinalGraph();
+                return new GraphIndexBuilder(scoreProvider, dimension, existingGraph, beamWidth, neighborOverflow, alpha,
+                                              refineFinalGraph, simdExecutor, parallelExecutor, null);
+            }
+            boolean addHierarchy = resolveJmxAddHierarchy(maxDegrees);
+            boolean refineFinalGraph = resolveJmxRefineFinalGraph();
+            return new GraphIndexBuilder(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
+                                          addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, null);
+        }
     }
 
     // Private workhorse — all public constructors funnel here.
@@ -601,24 +602,6 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
         this(buildScoreProvider, dimension, mutableGraphIndex, beamWidth, neighborOverflow, alpha,
              logCallerRefineFinalGraph(refineFinalGraph), simdExecutor, parallelExecutor,
-             null);
-    }
-
-    /**
-     * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
-     * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
-     *
-     * @param buildScoreProvider the provider responsible for calculating build scores.
-     * @param mutableGraphIndex a mutable graph index.
-     * @param beamWidth the width of the beam used during the graph building process.
-     * @param neighborOverflow the factor determining how many additional neighbors are allowed beyond the configured limit.
-     * @param alpha the weight factor for balancing score computations.
-     * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
-     * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
-     */
-    public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
-        this(buildScoreProvider, dimension, mutableGraphIndex, beamWidth, neighborOverflow, alpha,
-             resolveJmxRefineFinalGraph(), simdExecutor, parallelExecutor,
              null);
     }
 
@@ -1329,16 +1312,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
         try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, newVectors.dimension(), overflowRatio, diversityProvider);) {
 
-            GraphIndexBuilder builder = new GraphIndexBuilder(
-                    buildScoreProvider,
-                    newVectors.dimension(),
-                    graph,
-                    beamWidth,
-                    overflowRatio,
-                    alpha,
-                    simdExecutor,
-                    parallelExecutor
-            );
+            GraphIndexBuilder builder = GraphIndexBuilder.builder(buildScoreProvider, newVectors.dimension(), graph)
+                    .withBeamWidth(beamWidth)
+                    .withNeighborOverflow(overflowRatio)
+                    .withAlpha(alpha)
+                    .withSimdExecutor(simdExecutor)
+                    .withParallelExecutor(parallelExecutor)
+                    .build();
 
             var vv = newVectors.threadLocalSupplier();
 

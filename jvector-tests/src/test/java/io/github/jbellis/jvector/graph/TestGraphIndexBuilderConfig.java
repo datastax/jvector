@@ -109,8 +109,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
     public void testAddHierarchy_jmx_false() {
         GraphIndexBuilderConfig.getInstance().setAddHierarchy(false);
         var ravv = buildVectors();
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE,
-                M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+        var builder = GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build();
         TestUtil.buildSequentially(builder, ravv);
         assertEquals(0, ((OnHeapGraphIndex) builder.graph).getMaxLevel());
     }
@@ -119,8 +119,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
     public void testAddHierarchy_jmx_true() {
         GraphIndexBuilderConfig.getInstance().setAddHierarchy(true);
         var ravv = buildVectors();
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE,
-                M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+        var builder = GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build();
         TestUtil.buildSequentially(builder, ravv);
         assertTrue(((OnHeapGraphIndex) builder.graph).getMaxLevel() > 0);
     }
@@ -149,8 +149,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
     public void testRefineFinalGraph_jmx_false() {
         GraphIndexBuilderConfig.getInstance().setRefineFinalGraph(false);
         var ravv = buildVectors();
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE,
-                M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+        var builder = GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build();
         assertFalse(builder.isRefineFinalGraph());
     }
 
@@ -158,8 +158,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
     public void testRefineFinalGraph_jmx_true() {
         GraphIndexBuilderConfig.getInstance().setRefineFinalGraph(true);
         var ravv = buildVectors();
-        var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE,
-                M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA);
+        var builder = GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build();
         assertTrue(builder.isRefineFinalGraph());
     }
 
@@ -170,7 +170,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
         GraphIndexBuilderConfig.getInstance().setParallelBuild(false);
         var ravv = buildVectors();
         var graph = TestUtil.buildSequentially(
-                new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA),
+                GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                        .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build(),
                 ravv);
         writeAndVerify(graph, ravv, testDirectory.resolve("sequential.index"));
     }
@@ -180,7 +181,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
         GraphIndexBuilderConfig.getInstance().setParallelBuild(true);
         var ravv = buildVectors();
         var graph = TestUtil.buildSequentially(
-                new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA),
+                GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                        .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build(),
                 ravv);
         writeAndVerify(graph, ravv, testDirectory.resolve("parallel.index"));
     }
@@ -189,7 +191,8 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
     public void testUnifiedBuilder_parallelAndSequentialProduceIdenticalGraph() throws IOException {
         var ravv = buildVectors();
         var graph = TestUtil.buildSequentially(
-                new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, M, BEAM_WIDTH, NEIGHBOR_OVERFLOW, ALPHA),
+                GraphIndexBuilder.builder(ravv, VectorSimilarityFunction.COSINE, M)
+                        .withBeamWidth(BEAM_WIDTH).withNeighborOverflow(NEIGHBOR_OVERFLOW).withAlpha(ALPHA).build(),
                 ravv);
 
         var seqPath = testDirectory.resolve("seq.index");
