@@ -41,6 +41,33 @@ public interface ReaderSupplier extends AutoCloseable {
     default void prefetch(long offset, long length) {
     }
 
+    /**
+     * Advises the OS that the byte range {@code [offset, offset + length)} will be read soon,
+     * initiating an asynchronous fetch into the page cache without blocking the caller.
+     * Unlike {@link #prefetch(long, long)}, which streams the range synchronously, this returns
+     * immediately — many small hints issued back-to-back put many reads in flight concurrently,
+     * so a single thread can drive the device at high queue depth. Best-effort no-op by default.
+     */
+    default void willNeed(long offset, long length) {
+    }
+
+    /**
+     * Releases the supplier's underlying resource. Two implementation families exist, with very
+     * different safety under concurrency:
+     * <ul>
+     * <li><b>Coordinated</b> (e.g. the jvector-native {@code MemorySegmentReader.Supplier}, whose
+     * shared-Arena close performs a liveness handshake): closing while vended readers are still
+     * in use degrades to {@code IllegalStateException} on those readers.</li>
+     * <li><b>Raw-release</b> (e.g. {@link SimpleMappedReader.Supplier}, which unmaps
+     * immediately): closing while any vended reader is mid-read invalidates the mapped pages
+     * underneath it, and the JVM fails with a native fault (SIGSEGV) rather than an
+     * exception.</li>
+     * </ul>
+     * Callers must not close a supplier until every reader vended by {@link #get()} is provably
+     * quiescent; implementations should document which family they belong to.
+     *
+     * @throws IOException if an I/O error occurs
+     */
     default void close() throws IOException {
     }
 }

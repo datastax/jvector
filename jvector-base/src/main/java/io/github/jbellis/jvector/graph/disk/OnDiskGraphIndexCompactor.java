@@ -25,6 +25,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.*;
@@ -35,11 +37,17 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.disk.SimpleReader;
+import io.github.jbellis.jvector.disk.WritebackAdvisor;
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.AdcScorer;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -81,10 +89,71 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int dimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
-    private final ForkJoinPool executor;
+    /**
+     * Runs the compactor's internal fan-out to completion. The embedder chooses how that
+     * iteration is distributed — its own bounded pool, the caller's thread, or a ForkJoinPool —
+     * so compaction is bound to the host's thread budget instead of a jvector-owned pool.
+     */
+    private final ParallelExecutor executor;
+    /**
+     * The executor's intended width. Used only to pick task granularity: enough batches that the
+     * executor has something to load-balance. It is NOT an in-flight window — the executor owns
+     * how many units run at once.
+     */
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
     private boolean refineAfterCompaction = false;
+    /**
+     * Observes phases and throttles output, instrumented: every stage's start, progress, and
+     * completion is logged and timed at this one point, and {@link StageInstrumentation#summary()}
+     * closes the run with the per-stage breakdown. Defaults to wrapping
+     * {@link ProgressLimiter#UNLIMITED}, which behaves exactly as if no SPI were installed apart
+     * from the logging.
+     */
+    private StageInstrumentation progress = new StageInstrumentation(ProgressLimiter.UNLIMITED, log::info);
+
+    /**
+     * Installs the embedder's progress + throttle surface. A compaction is long enough that a host
+     * needs to show it moving, and heavy enough on write bandwidth that a host may need to pace it
+     * against foreground traffic; both facets are optional and default to no-ops.
+     *
+     * @param progress the control surface, or {@code null} for {@link ProgressLimiter#UNLIMITED}
+     */
+    @Experimental
+    public void setProgressLimiter(ProgressLimiter progress) {
+        this.progress = new StageInstrumentation(progress == null ? ProgressLimiter.UNLIMITED : progress, log::info);
+    }
+
+    /**
+     * Advances {@code counter} by {@code delta} and delivers the new total to {@code scope}.
+     * <p>
+     * {@link ProgressTracker.PhaseScope} specifies reports that are monotonically non-decreasing
+     * within a phase, and is written for a single orchestrating caller. During a fan-out there is
+     * no orchestrating thread, and an unguarded {@code addAndGet}-then-report lets a worker that
+     * counted 200 deliver before the worker that counted 150 — a decreasing report, and
+     * concurrent entry into a consumer that never expected it. Advancing and reporting under one
+     * lock keeps both guarantees, for one lock per batch (~128 nodes).
+     */
+    private static void report(ProgressTracker.PhaseScope scope, AtomicLong counter, long delta, long total) {
+        synchronized (scope) {
+            scope.onProgress(counter.addAndGet(delta), total);
+        }
+    }
+
+    /**
+     * Blocks until {@code bytes} of output may be written, in the units the embedder's limiter
+     * defines (bytes, for this consumer). An interrupt while throttled aborts the compaction
+     * rather than writing through the limit, and the interrupt flag is restored so the embedder's
+     * own cancellation still observes it.
+     */
+    private WorkLimiter.Grant admit(long bytes) {
+        try {
+            return progress.acquire(bytes);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Compaction interrupted while throttled", e);
+        }
+    }
 
     /**
      * Whether to run the second-pass neighbor refinement after the merged graph is written
@@ -97,6 +166,454 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     public void setRefineAfterCompaction(boolean refineAfterCompaction) {
         this.refineAfterCompaction = refineAfterCompaction;
     }
+
+    // ---- Full-precision cross-source search seeding (always on for full-precision compaction) ----
+    // The full-precision cross-source search descends from the global entry node and reads a full
+    // vector (getVectorInto) on every hop — a disk fault per hop at >RAM scale. Seeding warm-starts
+    // the layer-0 beam from entry points near the query, produced during compaction: when node u
+    // searches source t, a finished same-source neighbor k of u contributes the members of its
+    // merged adjacency that belong to t (they are near k, hence near u). This cuts the hop count and
+    // therefore the full-vector reads. Seeds are scored with full vectors (a few per partition),
+    // which is cheap against the descent hops they replace. Only the WHERE-candidates-come-from
+    // changes; diversity, scores fed to it, and the output are unaffected. Distinct from the fused
+    // ADC path — this targets the full-vector-read regime where hop count dominates.
+    //
+    // Memory: a finished node's merged edges are NOT mirrored in heap — they are read back from the
+    // output file (which already holds them) on demand, so per-node heap is just the done-flag and
+    // the two ordinal maps (~12 bytes/node) rather than ~142 with a degree-wide adjacency mirror.
+    // The done-flag is published only after the record is physically written, so an output-file
+    // read of a flagged node always sees committed data.
+    private static final int SEEDS_PER_PARTITION = 4;
+    private static final int SEED_POOL_CAPACITY = 64;
+    private boolean seedingActive;
+    private int seedDegree;
+    private java.util.concurrent.atomic.AtomicIntegerArray doneFlag;
+    private int[] srcOfNewOrd;
+    private int[] oldOfNewOrd;
+    private CompactWriter seedWriter;   // for neighborCountFileOffset; set during L0 compaction
+    final java.util.concurrent.atomic.AtomicLong seededSearches = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong coldSearches = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Builds the seeding structures (done-flag + ordinal maps; no adjacency mirror). */
+    private void setupSeeding(int baseDegree) {
+        int bound = maxOrdinal + 1;
+        seedDegree = baseDegree;
+        doneFlag = new java.util.concurrent.atomic.AtomicIntegerArray(bound);
+        srcOfNewOrd = new int[bound];
+        oldOfNewOrd = new int[bound];
+        Arrays.fill(srcOfNewOrd, -1);
+        for (int s = 0; s < sources.size(); s++) {
+            FixedBitSet alive = liveNodes.get(s);
+            OrdinalMapper mapper = remappers.get(s);
+            for (int oldOrd = 0; oldOrd < alive.length(); oldOrd++) {
+                if (!alive.get(oldOrd)) continue;
+                int newOrd = mapper.oldToNew(oldOrd);
+                srcOfNewOrd[newOrd] = s;
+                oldOfNewOrd[newOrd] = oldOrd;
+            }
+        }
+        seedingActive = true;
+        log.info("Full-precision search seeding enabled ({} nodes, degree {}; edges read from output)",
+                bound, baseDegree);
+    }
+
+    // ---- Pair-asymmetric cross-linking (reverse-edge propagation) ----
+    // L0 sources are processed in ascending live-size order with a barrier between sources, and a
+    // node searches only sources LARGER than its own. The reverse direction of each source pair is
+    // supplied by propagation instead of a search: when node u finds v in a larger source, u is
+    // offered as a reverse candidate for v, and v's diversity selection (which runs in a later
+    // group, after the barrier) unions those offers with v's retained same-source edges. Similarity
+    // is symmetric and offers carry exact scores, so the propagated candidates are exactly what v's
+    // own search would have scored — only WHERE candidates come from changes. The larger source of
+    // every pair therefore does no cross-source searching at all; under skewed source sizes that
+    // population dominates total search count, which is what this trades against the smaller
+    // reverse candidate budget (REVERSE_CANDIDATE_SLOTS vs searchTopK per source).
+    private static final int REVERSE_CANDIDATE_SLOTS = 16;
+
+    private PreEncodedCodeCache orderingCache;   // non-null only while L0 runs under fused mode
+
+    // Bounded cluster search: consecutive (similarity-ordered) nodes share one anchor search per
+    // target source. The anchor searches CLUSTER_MARGIN deeper than needed; a member rescores the
+    // anchor's list against its own query and skips its search only when the triangle inequality
+    // certifies that no point outside the shared list can reach its top-K: with delta the
+    // query-to-anchor angular distance and ThetaD the anchor's worst kept angle, certification is
+    // memberKthAngle <= ThetaD - delta. Fallback is a normal cold search (which becomes the new
+    // anchor). Valid for angular similarities (normalized DOT_PRODUCT / COSINE) and EUCLIDEAN,
+    // where the underlying distance is a metric; disabled otherwise.
+    // On-demand anchor depth: anchors search plain searchTopK; when a member's certificate
+    // fails, the anchor search is resumed in CLUSTER_EXT_STEP increments (growing ThetaD for
+    // this and all later members) up to CLUSTER_MARGIN total extra results, before the member
+    // falls back to its own search. Exact duplicates certify with no extension at all.
+    private static final int CLUSTER_MARGIN = 32;
+    private static final int CLUSTER_EXT_STEP = 16;
+    // Batch-prefetch accounting. The own-record prefetch below is gated on the batch's
+    // ordinals forming a dense range; under similarity ordering they often do not, and a
+    // silently-declined prefetch is indistinguishable from one that ran. Count both so an
+    // above-RAM run can say which happened.
+    /** Window size, in node ordinals, for the source pretouch below. Bounds how much of a
+     * source is streamed per call, so transient page-cache demand stays proportional to the
+     * window rather than the whole file -- the shape {@link
+     * io.github.jbellis.jvector.disk.ReaderSupplier#prefetch(long, long)} documents. Override
+     * with {@code jvector.compaction.sourcePretouchWindowNodes}. */
+    static final int SOURCE_PRETOUCH_WINDOW_NODES =
+            (int) resolveLongProperty("jvector.compaction.sourcePretouchWindowNodes", 1 << 20);
+
+    /** Per-source cap on pretouched ordinals. 0 (default) disables the pretouch entirely;
+     * -1 warms the whole source.
+     *
+     * <p>This is the "windowed guard", and it is deliberately NOT 670f5588's
+     * skip-when-sources-exceed-MemAvailable rule. That rule self-disables in exactly the
+     * above-RAM regime that motivates the pretouch: on a 1B-row merge the sources are hundreds
+     * of GB against a few hundred GB of cache, so the whole-file test fails and the pass never
+     * runs. A cap lets an operator warm the leading N ordinals of each source -- as much as the
+     * cache can actually hold -- instead of choosing between everything and nothing.
+     *
+     * <p>Default off because whether it pays depends on the consuming phase's ACCESS ORDER, not
+     * just on size. CODE_PRE_ENCODE sweeps every live node in order and a warm window is still
+     * resident when it arrives; PQ_RETRAIN samples randomly across the source, so on an
+     * over-capacity source the head is evicted before it is sampled and the pass is pure cost.
+     * Measure per phase before turning this on. */
+    static final long SOURCE_PRETOUCH_MAX_NODES =
+            resolveLongProperty("jvector.compaction.sourcePretouchMaxNodes", 0L);
+
+    /** Ordinals streamed by the source pretouch. */
+    final java.util.concurrent.atomic.AtomicLong pretouchedNodes = new java.util.concurrent.atomic.AtomicLong();
+
+    private static long resolveLongProperty(String key, long fallback) {
+        try {
+            String raw = System.getProperty(key);
+            if (raw != null && !raw.isBlank()) {
+                return Long.parseLong(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // Malformed tuning must not fail a compaction.
+        }
+        return fallback;
+    }
+
+    /** Whether to asynchronously hint the cross-source seed records before the beam search
+     * that reads them. On by default; set {@code jvector.compaction.crossSourceSeedPrefetch=false}
+     * for a baseline arm. */
+    static final boolean CROSS_SOURCE_SEED_PREFETCH = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.crossSourceSeedPrefetch", "true"));
+
+    /** Cross-source seed records hinted. */
+    final java.util.concurrent.atomic.AtomicLong seedHints = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Whether to asynchronously hint the cluster-path rescore lists before reading them.
+     *
+     * <p>{@code gatherFromOtherSource}'s clusterMode branch is the one cross-source path with no
+     * batch hint at all: the seed hint covers only the SEEDED branch, and
+     * {@link FrontierPrefetchingView} hints the searcher's frontier, not the exact-rescore reads
+     * that follow. Two loops in that branch do have their candidate list in hand before the first
+     * read — the member-rescore loop in {@link #clusterSearchL0} and the resume-rescore loop in
+     * {@link #extendAnchor} — which is exactly the shape {@code gatherFromSameSource} already
+     * batch-hints.
+     *
+     * <p>Measured 2026-08-24 on a 1B-row table: 38 of 94 RUNNABLE compaction threads were in
+     * {@code clusterSearchL0} and 1 was in {@code gatherFromSameSource}, i.e. the existing batch
+     * hint covers the branch carrying 1 of 39 threads.
+     *
+     * <p>OFF by default so enabling it is the single variable in an A/B against the prior arm.
+     * Set {@code jvector.compaction.clusterRescorePrefetch=true}.
+     */
+    static final boolean CLUSTER_RESCORE_PREFETCH = "true".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.clusterRescorePrefetch", "false"));
+
+    /** Cluster-path rescore records hinted. */
+    final java.util.concurrent.atomic.AtomicLong clusterRescoreHints = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Whether the cluster-certification fast path in {@link #clusterSearchL0} may run at all.
+     *
+     * <p>Measured 2026-08-21..24 over <b>1.18 billion</b> anchor searches on a 1B-row table: the
+     * fast path certified <b>0.0032%</b> of nodes, and every node spent exactly <b>1.98</b>
+     * {@link #extendAnchor} resumes -- i.e. it always exhausts {@link #CLUSTER_MARGIN} /
+     * {@link #CLUSTER_EXT_STEP} = 2 resumes, fails to certify, and runs the full fallback search
+     * anyway. Each resume exact-rescores up to CLUSTER_EXT_STEP results, and every exact rescore
+     * is a full vector read. The rate was uniform across healthy and collapsed merges and across
+     * merge sizes, so this is deterministic overhead rather than a mistuning.
+     *
+     * <p>Set {@code jvector.compaction.clusterSearch=false} to skip it. Defaults to true so the
+     * flag is the single variable in an A/B.
+     */
+    static final boolean CLUSTER_SEARCH_ENABLED = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.clusterSearch", "true"));
+
+    /** Exact rescores performed inside the cluster path; each is a full vector read. */
+    final java.util.concurrent.atomic.AtomicLong clusterRescoreReads = new java.util.concurrent.atomic.AtomicLong();
+
+    final java.util.concurrent.atomic.AtomicLong batchPrefetchIssued = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong batchPrefetchDeclined = new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Whether a batch whose own-record ordinals are too sparse for one range prefetch hints each
+     * record individually instead of issuing nothing. Before this, a declined batch left every
+     * own-record read to demand-fault one page against a {@code MADV_RANDOM} mapping, serially —
+     * the 4.00 KB mean request size and 50% iowait measured on 2026-08-23. Per-record hints are
+     * asynchronous, so a 128-node batch puts up to 128 reads in flight before the first
+     * {@code processBaseNode} blocks on one. The I/O model this follows
+     * ({@code vector_merge_splat_design.md} §8): above RAM the merge is concurrency-bound before
+     * it is device-bound, and depth is the lever. {@code jvector.compaction.batchOwnRecordHints=false}
+     * restores the decline, for a baseline arm.
+     */
+    static final boolean BATCH_OWN_RECORD_HINTS = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.batchOwnRecordHints", "true"));
+    /** Own records hinted individually in sparse batches. */
+    final java.util.concurrent.atomic.AtomicLong batchOwnRecordHints = new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * Bytes of base-layer output written between {@code fdatasync} barriers on the output channel
+     * (the host-interface {@code durability_barrier}). The base layer's reads are scattered across
+     * the sources while its writes accumulate as dirty pages; a scattered read that needs a frame
+     * holding an unflushed output page forces that page out on the allocation path, one page at
+     * a time, instead of through the flusher in order. Bounding the dirty debt keeps the merge's
+     * writeback sequential and off its own read path. 64 MiB by default — at base-layer write
+     * rates that is a barrier every second or so, each a few tens of ms on one worker.
+     * {@code jvector.compaction.outputSyncBytes=0} disables.
+     */
+    static final long OUTPUT_SYNC_BYTES = resolveLongProperty("jvector.compaction.outputSyncBytes", 64L << 20);
+    /**
+     * Whether the merge ends by writing the {@link NodeTokenStream} section of its output. The
+     * compactor has no in-memory graph, and refinement rewrites base-layer adjacency after the
+     * footer is written, so the only correct source is the finished output: one sequential pass
+     * over the written base layer, after the pre-encode cache section has been truncated away,
+     * with the footer rewritten behind the section. {@code jvector.compaction.tokenStream=false}
+     * skips it.
+     */
+    static final boolean TOKEN_STREAM = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.tokenStream", "true"));
+    /**
+     * Which {@link SimilarityKey} orders the similarity ordinals: {@code lsh} (default) is the
+     * codebook-free random-projection key that the {@link NodeTokenStream} carries, so the ordinal
+     * pass can take keys from the sources' streams; {@code pq} is the previous key — the leading
+     * bytes of the PQ code under this merge's retrained codebook — which exists only at merge
+     * time and always reads every source vector. {@code jvector.compaction.similarityKey}.
+     */
+    static final boolean PQ_SIMILARITY_KEYS = "pq".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.similarityKey", "lsh"));
+    /** Test hook: when false the ordinal pass ignores stream keys and computes them from vectors. */
+    boolean streamKeys = true;
+    /** The plan, once similarity ordinals are assigned: new ordinal -> (source, old ordinal). */
+    private int[] planNewToOld;
+    private int[] planNewToSrc;
+    /** Sources whose keys came from their token stream in the last ordinal pass. */
+    final AtomicLong streamKeyedSources = new AtomicLong();
+    /**
+     * Band-staged base layer: before a source's base-layer batches run, the source is swept once
+     * in its own ordinal order and every live node's vector and edges are spilled into bands of
+     * the merged ordinal space ({@link BandStore}); the batches then read each node's own record
+     * from its band instead of seeking into the source. Requires similarity ordinals (the plan);
+     * without them the direct path runs. {@code jvector.compaction.bandStaged=false} disables.
+     */
+    static final boolean BAND_STAGED = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.bandStaged", "true"));
+    /** Band width in new ordinals; {@code jvector.compaction.bandNodes}. */
+    static final int BAND_NODES = (int) Math.max(1, resolveLongProperty("jvector.compaction.bandNodes", 1L << 18));
+    /** Instance override of {@link #BAND_STAGED}, for parity tests. */
+    boolean bandStaged = BAND_STAGED;
+    /** The band store of the source whose base-layer batches are running, or null on the direct path. */
+    private volatile BandStore currentBands;
+    /** First new ordinal of each source's live range, from the similarity-ordinal plan. */
+    private int[] planSourceStart;
+    /** Own records served from bands instead of source seeks. */
+    final AtomicLong bandOwnRecords = new AtomicLong();
+    /** Bytes spilled into bands across the run. */
+    final AtomicLong distributeBytes = new AtomicLong();
+    /**
+     * Candidate scoring: {@code exact} (default) reads each candidate's vector from its source
+     * record and compares it to the node's; {@code adc} scores the node's exact vector against the
+     * candidate's PQ code from the pre-encode cache ({@link AdcScorer}) and runs diversity on
+     * decoded codes, so no candidate record is read at all — same-source neighbours, the
+     * cross-source rescoring after each search, and the diversity pass. Requires fused PQ (the
+     * cache). {@code jvector.compaction.candidateScoring}. Step 4 of the design: the recall
+     * experiment decides the default.
+     */
+    static final boolean ADC_SCORING = "adc".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.candidateScoring", "exact"));
+    /** Instance override of {@link #ADC_SCORING}, for the recall experiment. */
+    boolean adcScoring = ADC_SCORING;
+    /** The pre-encode cache while the layers are being written and {@link #adcScoring} can use it. */
+    private volatile PreEncodedCodeCache scoringCache;
+    /** Candidate scores computed from codes instead of vector reads. */
+    final AtomicLong adcScores = new AtomicLong();
+    /** Candidate vectors decoded from codes for the diversity pass instead of read. */
+    final AtomicLong adcDecodes = new AtomicLong();
+    /**
+     * Per-band durability barrier: when the last batch of a band has written its records, start
+     * writeback of exactly that band's output range ({@link WritebackAdvisor}, {@code
+     * sync_file_range} where available) so the band's dirty pages do not wait for the next band's
+     * scattered reads to evict them one at a time. Without a native advisor the byte-cadence
+     * {@code fdatasync} above is the only barrier. {@code jvector.compaction.bandWriteback}.
+     */
+    static final boolean BAND_WRITEBACK = !"false".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.bandWriteback", "true"));
+    boolean bandWriteback = BAND_WRITEBACK;
+    /**
+     * Per-band target-window pretouch: a band is a similarity cluster, and its searches into a
+     * target that is itself similarity-ordered on disk (a previous merge's output) land in the
+     * few blocks of the target whose key extent overlaps the band's key range. The first batch of
+     * each band warms those blocks of every larger source before searching, up to this many
+     * ordinals per target; targets where more than {@link #BAND_PRETOUCH_MAX_OVERLAP} of the blocks
+     * overlap (arrival-ordered sources) are skipped as unclustered. 0 disables.
+     * {@code jvector.compaction.bandPretouchMaxNodes}, {@code jvector.compaction.bandPretouchMaxOverlap}.
+     */
+    static final int BAND_PRETOUCH_MAX_NODES = (int) Math.max(0, resolveLongProperty("jvector.compaction.bandPretouchMaxNodes", 1L << 20));
+    static final double BAND_PRETOUCH_MAX_OVERLAP = resolveDoubleProperty("jvector.compaction.bandPretouchMaxOverlap", 0.5);
+    /** Ordinals per key block of {@link KeyBlockIndex}; {@code jvector.compaction.keyBlockNodes}. */
+    static final int KEY_BLOCK_NODES = (int) Math.max(1, resolveLongProperty("jvector.compaction.keyBlockNodes", 4096));
+    int bandPretouchMaxNodes = BAND_PRETOUCH_MAX_NODES;
+    int keyBlockNodes = KEY_BLOCK_NODES;
+    int bandNodes = BAND_NODES;
+    /** Per-source key-block extents, from stream keys; null where the source carried none. */
+    private KeyBlockIndex[] keyBlocks;
+    /** Per source, per band: the band's key range (unsigned), from the sorted plan. */
+    private long[][] bandKeyMin;
+    private long[][] bandKeyMax;
+    private int[] bandWidth;
+    /** Per-band batch accounting of the source being processed. */
+    private volatile BandTracker currentTracker;
+    private volatile WritebackAdvisor outputWriteback;
+    boolean writebackAdvisorAvailable;
+    final AtomicLong bandWritebackHints = new AtomicLong();
+    final AtomicLong bandPretouchBands = new AtomicLong();
+    final AtomicLong bandPretouchNodes = new AtomicLong();
+    final AtomicLong bandPretouchSkippedUnclustered = new AtomicLong();
+
+    private static double resolveDoubleProperty(String key, double fallback) {
+        try {
+            String raw = System.getProperty(key);
+            if (raw != null && !raw.isBlank()) {
+                return Double.parseDouble(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // keep the default
+        }
+        return fallback;
+    }
+
+    /** Batches per band of one source, and how many have written; the last one hints writeback and the first one warms targets. */
+    private static final class BandTracker {
+        final int sourceIdx;
+        final int start;
+        final int width;
+        final int[] total;
+        final java.util.concurrent.atomic.AtomicIntegerArray done;
+        final java.util.concurrent.atomic.AtomicIntegerArray claimed;
+
+        BandTracker(int sourceIdx, int start, int width, int bands) {
+            this.sourceIdx = sourceIdx;
+            this.start = start;
+            this.width = width;
+            this.total = new int[bands];
+            this.done = new java.util.concurrent.atomic.AtomicIntegerArray(bands);
+            this.claimed = new java.util.concurrent.atomic.AtomicIntegerArray(bands);
+        }
+
+        int bandOf(int newOrdinal) {
+            return (newOrdinal - start) / width;
+        }
+
+        /** The band's first and last new ordinal. */
+        int bandStart(int band) {
+            return start + band * width;
+        }
+
+        int bandEnd(int band, int liveCount) {
+            return Math.min(start + liveCount, start + (band + 1) * width) - 1;
+        }
+
+        boolean claim(int band) {
+            return claimed.compareAndSet(band, 0, 1);
+        }
+    }
+    /**
+     * Resident cross-source search: each searched source's base-layer adjacency is loaded from
+     * its token stream into memory ({@link ResidentGraph}) and the beam search scores every
+     * visited node from the pre-encode cache ({@link AdcScorer}), so the search reads no record.
+     * The results are then rescored per {@code candidateScoring} — exactly (one record read per
+     * result, not per hop) or from codes (none). Sources go resident largest-first within
+     * {@code residentGraphMaxBytes}; the rest are searched on disk as before. Requires fused PQ
+     * and sources that carry a token stream. Default off: like {@code adc} it scores the search
+     * with the retrained codebook, and the recall experiment decides.
+     * {@code jvector.compaction.residentSearch}, {@code jvector.compaction.residentGraphMaxBytes}.
+     */
+    static final boolean RESIDENT_SEARCH = "true".equalsIgnoreCase(
+            System.getProperty("jvector.compaction.residentSearch", "false"));
+    static final long RESIDENT_GRAPH_MAX_BYTES = resolveLongProperty("jvector.compaction.residentGraphMaxBytes", 8L << 30);
+    boolean residentSearch = RESIDENT_SEARCH;
+    long residentGraphMaxBytes = RESIDENT_GRAPH_MAX_BYTES;
+    /** Per source: its resident adjacency, or null when it is searched on disk. */
+    private volatile ResidentGraph[] residentGraphs;
+    private volatile PreEncodedCodeCache residentCache;
+    final AtomicLong residentSearches = new AtomicLong();
+    final AtomicLong residentGraphBytes = new AtomicLong();
+    /** Durability barriers issued on the base-layer output. */
+    final java.util.concurrent.atomic.AtomicLong outputSyncs = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong outputBytesSinceSync = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Density factor for the own-record batch prefetch: warm [lo,hi] when the span is no wider
+     * than this multiple of the batch size. The 8 was chosen against a cache-resident working
+     * set, where a sparse warm is pure waste; above RAM a sparse warm still converts 4 KB
+     * demand faults into one sequential stream, so the useful factor is larger. Override with
+     * {@code jvector.compaction.batchPrefetchDensity}; 0 disables the prefetch entirely
+     * (baseline arm), a negative value makes it unconditional. */
+    static final long BATCH_PREFETCH_DENSITY = resolveBatchPrefetchDensity();
+
+    private static long resolveBatchPrefetchDensity() {
+        try {
+            String raw = System.getProperty("jvector.compaction.batchPrefetchDensity");
+            if (raw != null && !raw.isBlank()) {
+                return Long.parseLong(raw.trim());
+            }
+        } catch (NumberFormatException e) {
+            // Malformed tuning must not fail a compaction.
+        }
+        return 8L;
+    }
+
+    final java.util.concurrent.atomic.AtomicLong clusterResumes = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong clusterCertified = new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.atomic.AtomicLong clusterAnchors = new java.util.concurrent.atomic.AtomicLong();
+
+    // Similarity-assigned merged ordinals: the compactor replaces the caller's remappers with a
+    // mapping that numbers each source's live nodes in PQ-code order (sources in ascending-size
+    // processing order). Record write offsets follow new ordinals, so processing in the same
+    // order makes the writer sequential, and similar vectors become adjacent records in the
+    // output — locality that also benefits post-compaction searches. Callers opting in must
+    // read the mapping back via {@link #effectiveRemappers()}.
+    private static final boolean SIMILARITY_ORDINALS_DEFAULT =
+            Boolean.parseBoolean(System.getProperty("jvector.compaction.similarityOrdinals", "false"));
+    private boolean similarityOrdinals = SIMILARITY_ORDINALS_DEFAULT;
+    private boolean similarityOrdinalsActive;
+    private List<OrdinalMapper> effectiveRemappers;   // survives releaseSourcesBeforeRefine
+    private int[] sizeRank;            // rank of each source in ascending live-node order
+    private int[] l0ProcessOrder;      // source indices in ascending live-node order
+    private BandedReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+    /** Reverse-offer band width: peak buffer memory is O(band), independent of node count. */
+    private static final int OFFER_BAND_WIDTH = 1 << 20;
+    private Path spillParent; // parent dir of the compaction output; set by compact()
+    final java.util.concurrent.atomic.AtomicLong retainedOnlyNodes = new java.util.concurrent.atomic.AtomicLong();
+
+    /** Orders sources by live-node count (ties by index) and allocates the reverse buffer. */
+    private void setupCrossLink() {
+        int k = sources.size();
+        Integer[] order = new Integer[k];
+        for (int s = 0; s < k; s++) order[s] = s;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer s) -> numLiveNodesPerSource.get(s))
+                .thenComparingInt(s -> s));
+        l0ProcessOrder = new int[k];
+        sizeRank = new int[k];
+        for (int i = 0; i < k; i++) {
+            l0ProcessOrder[i] = order[i];
+            sizeRank[order[i]] = i;
+        }
+        reverseCandidates = new BandedReverseCandidateBuffer(sources.size(), maxOrdinal + 1,
+                                                             REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH, spillParent);
+        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node, {} ordinals/band",
+                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH);
+    }
+
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -109,6 +626,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
         this(sources, null, liveNodes, remappers, similarityFunction, executor);
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
+     * Equivalent to calling the 7-arg constructor with {@code sourceCompressed = null}.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ParallelExecutor executor,
+            int parallelism) {
+        this(sources, null, liveNodes, remappers, similarityFunction, executor, parallelism);
     }
 
     /**
@@ -129,21 +661,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
+        // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
+        // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
+        // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
+        // process-wide and shared with index construction and quantization; the compactor
+        // never owns or shuts it down.
+        this(sources, sourceCompressed, liveNodes, remappers, similarityFunction,
+             ParallelExecutor.forkJoin(executor != null ? executor : PhysicalCoreExecutor.pool()),
+             (executor != null ? executor : PhysicalCoreExecutor.pool()).getParallelism());
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Validates inputs and prepares metadata for compaction.
+     *
+     * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
+     *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
+     *                         that ship alongside each graph. Pass {@code null} when sources carry
+     *                         quantization inline (FUSED_PQ) or have none. Must not be combined
+     *                         with sources that carry the FUSED_PQ feature.
+     * @param executor         runs every internal fan-out to completion; the embedder decides how
+     *                         the iteration is distributed and retains the underlying resource's
+     *                         lifecycle. {@code null} means
+     *                         {@link ParallelExecutor#forkJoin(ForkJoinPool) forkJoin} over the
+     *                         shared physical-core pool.
+     * @param parallelism      the executor's intended width, used only to pick task granularity;
+     *                         values {@code < 1} are clamped to 1. {@code ExecutorService} does not
+     *                         expose its width, so it has to be stated.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            VectorSimilarityFunction similarityFunction,
+            ParallelExecutor executor,
+            int parallelism) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes, remappers);
 
         if (executor != null) {
             this.executor = executor;
+            this.taskWindowSize = max(1, parallelism);
         } else {
-            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
-            // flush + refinement) is compute- and memory-bandwidth-bound, so sizing to logical
-            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
-            // process-wide and shared with index construction and quantization; the compactor
-            // never owns or shuts it down.
-            this.executor = PhysicalCoreExecutor.pool();
+            ForkJoinPool pool = PhysicalCoreExecutor.pool();
+            this.executor = ParallelExecutor.forkJoin(pool);
+            this.taskWindowSize = pool.getParallelism();
         }
-        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
-        // whether the executor is the shared default or a caller-injected pool.
-        this.taskWindowSize = this.executor.getParallelism();
 
         this.sources = sources;
         this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
@@ -229,8 +793,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private void validateInputSizes(List<OnDiskGraphIndex> sources,
                                     List<FixedBitSet> liveNodes,
                                     List<OrdinalMapper> remappers) {
-        if (sources.size() < 2) {
-            throw new IllegalArgumentException("Must have at least two sources");
+        if (sources.isEmpty()) {
+            throw new IllegalArgumentException("Must have at least one source");
         }
         Objects.requireNonNull(liveNodes, "liveNodes");
         Objects.requireNonNull(remappers, "remappers");
@@ -301,23 +865,122 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * When enabled, the compactor assigns merged ordinals itself, numbering nodes in vector
+     * similarity order, and ignores the ordinal values of the caller-supplied remappers (their
+     * source/oldOrdinal structure is still used to enumerate nodes). The mapping actually used
+     * is available from {@link #effectiveRemappers()} after {@code compact(...)} begins.
+     * Requires fused-PQ sources; silently keeps caller ordinals otherwise.
+     */
+    @Experimental
+    public void setSimilarityOrdinals(boolean enabled) {
+        this.similarityOrdinals = enabled;
+    }
+
+    /** Candidate scoring from PQ codes ({@code adc}) instead of candidate vector reads; see {@link #ADC_SCORING}. */
+    @Experimental
+    public void setCandidateScoringFromCodes(boolean adc) {
+        this.adcScoring = adc;
+    }
+
+    /** Cross-source searches over resident adjacency from the sources' token streams; see {@link #RESIDENT_SEARCH}. */
+    @Experimental
+    public void setResidentSearch(boolean enabled) {
+        this.residentSearch = enabled;
+    }
+
+    /** Own records from a per-source band spill instead of source seeks; see {@link #BAND_STAGED}. */
+    @Experimental
+    public void setBandStaged(boolean enabled) {
+        this.bandStaged = enabled;
+    }
+
+    /** The ordinal mappers in effect (the caller's, or the compactor-assigned similarity mapping). */
+    public List<OrdinalMapper> effectiveRemappers() {
+        return effectiveRemappers != null ? effectiveRemappers : remappers;
+    }
+
+    /**
      * Main compaction entry point. Merges all source indexes into a single output index at the
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
      */
     @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
+        compact(CompactionDestination.toFile(outputPath));
+    }
+
+    /**
+     * Main compaction entry point. Merges all source indexes into a region the embedder reserves
+     * from {@code destination}, so the merged graph lands directly inside the embedder's container
+     * — after whatever header it reserved — instead of a standalone file it then has to copy.
+     * <p>
+     * The reservation is committed once the body is written and forced; any failure leaves it
+     * uncommitted, and closing it un-committed is what tells the embedder to discard the partial
+     * output. {@link CompactionDestination#toFile(Path)} recovers the standalone-file behaviour of
+     * {@link #compact(Path)}.
+     */
+    @Experimental
+    public void compact(CompactionDestination destination) throws FileNotFoundException {
+        progress.beginRun();
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
-        try {
-            compactGraphImpl(outputPath, strategy);
-            releaseSourcesBeforeRefine(strategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(outputPath, strategy);
+        try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
+            Path outputPath = reservation.file();
+            long startOffset = reservation.startOffset();
+            try {
+                compactGraphImpl(outputPath, startOffset, strategy);
+                releaseSourcesBeforeRefine(strategy);
+                if (refineAfterCompaction) {
+                    refineCompactedGraph(outputPath, startOffset, strategy);
+                }
+            } finally {
+                // Delayed until after refinement so refineCompactedGraph can read from the
+                // pre-encoded code cache appended past the projected EOF; onAfterClose unmaps it
+                // and truncates the section away. It has to run before the body length is
+                // measured, or the commit would report the cache section as part of the graph.
+                strategy.onAfterClose(outputPath);
             }
-        } finally {
-            // Delayed until after refinement so refineCompactedGraph can read from the pre-encoded
-            // code cache appended past the projected EOF; onAfterClose unmaps it and truncates.
-            strategy.onAfterClose(outputPath);
+            emitTokenStream(outputPath, startOffset);
+            commit(reservation, outputPath, startOffset);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Compaction failed", e);
         }
+        log.info(progress.summary());
+    }
+
+    /**
+     * Reads the finished base layer back in ordinal order and appends its {@link NodeTokenStream}
+     * section, then rewrites the footer behind it. Runs after refinement and after the strategy has
+     * truncated its cache section, so the file ends at the footer and the adjacency is final. A
+     * node is emitted live when its record carries at least one edge: a compaction output slot
+     * that was never written reads as zero edges, and an isolated live node — indistinguishable
+     * from it here — contributes nothing to a plan either way.
+     */
+    private void emitTokenStream(Path outputPath, long startOffset) throws IOException {
+        if (!TOKEN_STREAM) {
+            return;
+        }
+        try (var scope = progress.startPhase(CompactionStage.TOKEN_STREAM)) {
+            var r = TokenStreamRetrofit.append(outputPath, startOffset, scope);
+            if (r.alreadyPresent) {
+                log.info("Token stream: output already carries a section of {} bytes; not rewriting", r.sectionBytes);
+            }
+        }
+    }
+
+    /**
+     * Forces the written body to durable storage and fulfills the reservation. Forcing is the
+     * compactor's job, not the embedder's: {@code commit} is specified to be signalled after the
+     * body is durable, and only the compactor knows when the last write landed.
+     */
+    private void commit(CompactionDestination.OutputReservation reservation, Path outputPath, long startOffset)
+            throws IOException {
+        long bodyLength;
+        long t0 = System.nanoTime();
+        try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
+            fc.force(true);
+            bodyLength = fc.size() - startOffset;
+        }
+        reservation.commit(bodyLength);
+        log.info("Output forced and committed: {} bytes in {} ms", bodyLength, (System.nanoTime() - t0) / 1_000_000L);
     }
 
     /**
@@ -331,6 +994,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        compact(CompactionDestination.toFile(graphPath), compressedPath);
+    }
+
+    /**
+     * Compaction entry point for graphs that ship a non-fused compressed sidecar, writing the
+     * merged graph into a region reserved from {@code destination} (see
+     * {@link #compact(CompactionDestination)}) and the merged compressed vectors to
+     * {@code compressedPath}.
+     * <p>
+     * The sidecar is written before the reservation is committed, so a sidecar failure aborts the
+     * whole compaction rather than committing a graph whose companion file is missing.
+     */
+    @Experimental
+    public void compact(CompactionDestination destination, Path compressedPath) throws FileNotFoundException {
         if (sourceCompressed == null) {
             throw new IllegalStateException(
                     "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
@@ -339,20 +1016,32 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
         // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+        progress.beginRun();
         QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
         QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
-        try {
-            sidecarStrategy.retrain(similarityFunction);
-            compactGraphImpl(graphPath, inlineStrategy);
-            if (refineAfterCompaction) {
-                refineCompactedGraph(graphPath, inlineStrategy);
+        try (CompactionDestination.OutputReservation reservation = destination.reserve()) {
+            Path graphPath = reservation.file();
+            long startOffset = reservation.startOffset();
+            try {
+                // The sidecar's retrain ran under no stage at all before this; it is the same
+                // work as the inline path's PQ_RETRAIN and is reported as such.
+                try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
+                    sidecarStrategy.retrain(similarityFunction, scope);
+                }
+                compactGraphImpl(graphPath, startOffset, inlineStrategy);
+                if (refineAfterCompaction) {
+                    refineCompactedGraph(graphPath, startOffset, inlineStrategy);
+                }
+                sidecarStrategy.writeSidecar(compressedPath);
+            } finally {
+                inlineStrategy.onAfterClose(graphPath);
             }
-            sidecarStrategy.writeSidecar(compressedPath);
+            emitTokenStream(graphPath, startOffset);
+            commit(reservation, graphPath, startOffset);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
-        } finally {
-            inlineStrategy.onAfterClose(graphPath);
         }
+        log.info(progress.summary());
     }
 
     /**
@@ -371,6 +1060,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         sources = null;
         liveNodes = null;
         remappers = null;
+        planNewToOld = null;
+        planNewToSrc = null;
+        planSourceStart = null;
+        keyBlocks = null;
+        bandKeyMin = null;
+        bandKeyMax = null;
     }
 
     /**
@@ -404,7 +1099,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize);
+                dimension, maxOrdinal, executor, taskWindowSize, progress);
     }
 
     /**
@@ -417,8 +1112,75 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
-    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
-        strategy.retrain(similarityFunction);
+    /**
+     * Streams each source's L0 records into the page cache, in bounded windows, before the bulk
+     * phases read them.
+     *
+     * <p>Source readers advise {@code MADV_RANDOM}, which is right for search but disables
+     * kernel readahead, so a bulk phase that touches every node faults one page-sized read at a
+     * time and coalesces with nothing. Measured 2026-08-23 on a 1B-row merge: 113k reads/s at a
+     * 4.00 KB mean request size with the device at 99% util and 0.000 MiB/s of merge byte
+     * progress. A sequential warm reads the same bytes at streaming rate instead.
+     *
+     * <p>Windows are streamed one at a time rather than fanned out across sources: {@link
+     * OnDiskGraphIndex#prefetchL0Records} is synchronous, and overlapping several streams on one
+     * device turns the sequential access this exists to create back into something the elevator
+     * has to sort. Whether per-source parallelism wins on a wide array is worth measuring, and
+     * is why the window is a knob.
+     *
+     * <p>Best-effort throughout: {@code prefetchL0Records} is a no-op on suppliers that cannot
+     * warm, and a failure here must never fail a compaction.
+     */
+    private void pretouchSources() {
+        if (SOURCE_PRETOUCH_MAX_NODES == 0 || SOURCE_PRETOUCH_WINDOW_NODES <= 0) {
+            return;
+        }
+        long cap = SOURCE_PRETOUCH_MAX_NODES < 0 ? Long.MAX_VALUE : SOURCE_PRETOUCH_MAX_NODES;
+        long total = 0;
+        for (int s = 0; s < sources.size(); s++) {
+            // liveNodes.length() == source.getIdUpperBound(), validated at construction.
+            total += Math.min(cap, liveNodes.get(s).length());
+        }
+        long warmed = 0;
+        long start = System.nanoTime();
+        // Its own stage rather than a share of PQ_RETRAIN's: at the 1B tier the warm is minutes,
+        // and a host that shows phases needs to see which one it is in. The stage name is one
+        // more tag value on the host's phase metric, nothing else.
+        try (var scope = progress.startPhase(CompactionStage.SOURCE_PRETOUCH)) {
+            scope.onProgress(0, total);
+            for (int s = 0; s < sources.size(); s++) {
+                int upper = liveNodes.get(s).length();
+                long limit = Math.min(cap, upper);
+                for (long lo = 0; lo < limit; lo += SOURCE_PRETOUCH_WINDOW_NODES) {
+                    int hi = (int) Math.min(lo + SOURCE_PRETOUCH_WINDOW_NODES - 1, limit - 1);
+                    try {
+                        sources.get(s).prefetchL0Records((int) lo, hi);
+                    } catch (RuntimeException e) {
+                        log.warn("source pretouch failed for source {} window [{},{}]; continuing",
+                                 s, lo, hi, e);
+                        break;
+                    }
+                    warmed += hi - lo + 1;
+                    scope.onProgress(warmed, total);
+                }
+            }
+        }
+        pretouchedNodes.addAndGet(warmed);
+        log.info("Source pretouch: warmed {} ordinals across {} sources in {} ms "
+                 + "(window={}, cap={})",
+                 warmed, sources.size(), (System.nanoTime() - start) / 1_000_000,
+                 SOURCE_PRETOUCH_WINDOW_NODES, SOURCE_PRETOUCH_MAX_NODES);
+    }
+
+    private void compactGraphImpl(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy)
+            throws FileNotFoundException {
+        this.spillParent = outputPath.toAbsolutePath().getParent();
+        pretouchSources();
+        // The strategy reports into the scope: sample extraction as the first half, refinement
+        // as the second (see PQRetrainer.retrain). Each report is the host's cancellation point.
+        try (var scope = progress.startPhase(CompactionStage.PQ_RETRAIN)) {
+            strategy.retrain(similarityFunction, scope);
+        }
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
         ProductQuantization pq = strategy.compressorAsPQ();
@@ -427,23 +1189,45 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
                 strategy.outputFusedFeature(maxBaseDegree);
 
+        if (similarityOrdinals) {
+            if (fusedPQEnabled && pq != null && pq.getSubspaceCount() >= 4) {
+                try (var scope = progress.startPhase(CompactionStage.SIMILARITY_ORDINALS)) {
+                    remappers = buildSimilarityOrdinalMappers(pq, scope);
+                }
+                effectiveRemappers = remappers;
+                similarityOrdinalsActive = true;
+                // The strategy snapshotted the caller's remappers at construction; refresh it so
+                // code placement (pre-encode cache, sidecar order) matches the on-disk ordinals.
+                strategy.onRemappersUpdated(buildContext());
+            } else {
+                log.info("similarityOrdinals requested but unavailable (requires fused PQ codes); keeping caller remappers");
+            }
+        }
+
         List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
         int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
         int entryNode = remappers.get(entryNodeSource[0]).oldToNew(entryNodeSource[1]);
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, startOffset, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
             strategy.onAfterHeader(writer);
 
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+            if (seedingActive) {
+                long seeded = seededSearches.get(), cold = coldSearches.get();
+                log.info("Full-precision seeding: {} seeded / {} cold cross-source searches ({}% seeded)",
+                        seeded, cold, cold + seeded == 0 ? 0 : 100 * seeded / (seeded + cold));
+            }
 
-            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
-
-            writer.writeFooter();
+            try (var scope = progress.startPhase(CompactionStage.FINALIZE)) {
+                strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
+                writer.writeFooter();
+                scope.onProgress(1, 1);
+            }
             log.info("Compaction complete: {}", outputPath);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -473,7 +1257,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Only L0 records are written. Upper-layer neighbor lists live in an in-memory map after
      * load and have no addressable file offset, so they're left as written by compactLevels.
      */
-    private void refineCompactedGraph(Path outputPath, QuantizationCompactionStrategy strategy) {
+    private void refineCompactedGraph(Path outputPath, long startOffset, QuantizationCompactionStrategy strategy) {
         log.info("Refining compacted graph: {}", outputPath);
         long t0 = System.nanoTime();
 
@@ -491,7 +1275,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // Code cache may or may not be present; capture once so refineOneNode can take the fast path.
         // The cache is shared across threads; refineOneNode duplicates per call (cheap; no per-thread
         // state to track and the duplicates are tiny GC-friendly ByteBuffer wrappers).
-        final java.nio.MappedByteBuffer codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
+        final PreEncodedCodeCache codeCache = hasFusedPQ ? strategy.getCodeCache() : null;
         final int cacheCodeSize = hasFusedPQ ? strategy.getCacheCodeSize() : 0;
 
         try (var supplier = new SimpleReader.Supplier(outputPath);
@@ -500,7 +1284,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // useFooter=false because the file's logical EOF (where the v6 footer trailer sits) is
             // before the still-attached pre-encode cache section. loadFromFooter() would seek to
             // the actual file length and read garbage as the magic.
-            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, 0, false);
+            OnDiskGraphIndex mergedGraph = OnDiskGraphIndex.load(supplier, startOffset, false);
 
             // Pick the iteration set: when there's a hierarchy, refine only L1 nodes (each also
             // lives in L0, so their L0 record is what we rewrite). Mirrors GraphIndexBuilder's
@@ -518,57 +1302,50 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             final ThreadLocal<RefineScratch> tls = ThreadLocal.withInitial(() ->
                     new RefineScratch(mergedGraph, baseDegree, dimension, searchTopK, pqCodeSize));
 
-            ExecutorCompletionService<Integer> ecs = new ExecutorCompletionService<>(executor);
-
             int total = liveOrdinals.length;
             int targetBatches = Math.max(taskWindowSize * 4, 16);
             int batchSize = Math.max(1, (total + targetBatches - 1) / targetBatches);
+            int batchCount = (total + batchSize - 1) / batchSize;
 
             final int[] ords = liveOrdinals;
             final boolean fpq = hasFusedPQ;
             final int codeSize = pqCodeSize;
             final VectorCompressor<ByteSequence<?>> cmp = compressor;
             final int bw = beamWidth;
-            final java.nio.MappedByteBuffer cache = codeCache;
+            final PreEncodedCodeCache cache = codeCache;
             final int cacheSz = cacheCodeSize;
             final OnDiskGraphIndex graphRef = mergedGraph;
 
             log.info("Refining {} live nodes at level {} (hierarchy maxLevel={}, fusedPQ={}, codeCache={})",
                     total, iterationLevel, mergedGraph.getMaxLevel(), fpq, cache != null);
 
-            int submitted = 0;
-            for (int start = 0; start < total; start += batchSize) {
-                final int s = start;
-                final int e = Math.min(start + batchSize, total);
-                ecs.submit(() -> {
+            final int step = Math.max(1, total / 10);
+            AtomicLong nodesDone = new AtomicLong();
+            AtomicInteger nextProgress = new AtomicInteger(step);
+            final int bSize = batchSize;
+            try (var scope = progress.startPhase(CompactionStage.REFINE)) {
+                executor.forEachInt(batchCount, b -> {
+                    final int s = b * bSize;
+                    final int e = Math.min(s + bSize, total);
                     RefineScratch scratch = tls.get();
                     for (int i = s; i < e; i++) {
-                        int node = ords[i];
-                        refineOneNode(node, scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
+                        refineOneNode(ords[i], scratch, fc, baseDegree, fpq, codeSize, cmp, bw,
                                 graphRef, cache, cacheSz);
                     }
-                    return e - s;
+                    report(scope, nodesDone, e - s, total);
+                    long done = nodesDone.get();
+                    // Claim the milestone so exactly one worker logs each one.
+                    int next = nextProgress.get();
+                    if (done >= next && nextProgress.compareAndSet(next, next + step)) {
+                        log.info("Refinement progress: {}/{} nodes", done, total);
+                    }
                 });
-                submitted++;
-            }
-
-            int completed = 0;
-            int nodesDone = 0;
-            int progressStep = Math.max(1, total / 10);
-            int nextProgress = progressStep;
-            while (completed < submitted) {
-                nodesDone += ecs.take().get();
-                completed++;
-                if (nodesDone >= nextProgress) {
-                    log.info("Refinement progress: {}/{} nodes", nodesDone, total);
-                    nextProgress += progressStep;
-                }
             }
 
             // Per-thread scratches live in worker-thread ThreadLocals; closing the supplier in
             // try-with-resources tears down the underlying mapping, so any later access would
             // fail anyway. The references will be GC'd when the worker threads die.
-        } catch (IOException | InterruptedException | ExecutionException e) {
+        } catch (IOException e) {
             throw new RuntimeException("Refinement failed", e);
         }
 
@@ -593,7 +1370,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                VectorCompressor<ByteSequence<?>> compressor,
                                int beamWidth,
                                OnDiskGraphIndex mergedGraph,
-                               java.nio.MappedByteBuffer codeCache,
+                               PreEncodedCodeCache codeCache,
                                int cacheCodeSize) {
         OnDiskGraphIndex.View view = scratch.view;
         view.getVectorInto(node, scratch.queryVec, 0);
@@ -687,14 +1464,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             writeOffset = view.offsetFor(node, FeatureId.FUSED_PQ);
             if (codeCache != null) {
                 // Memcpy from the pre-encoded cache (indexed by new ordinal). Avoids one FP
-                // vector read AND one PQ encode per selected neighbor. duplicate() gives this
-                // call its own position cursor without racing other workers.
-                ByteBuffer cacheView = codeCache.duplicate();
+                // vector read AND one PQ encode per selected neighbor. The cache resolves the
+                // ordinal to a per-thread view internally, so workers don't race.
                 byte[] codeBuf = scratch.pqCodeBytes;
                 for (int k = 0; k < selectedSize; k++) {
                     int newOrd = scratch.selectedNodes[k];
-                    cacheView.position(newOrd * cacheCodeSize);
-                    cacheView.get(codeBuf, 0, cacheCodeSize);
+                    codeCache.get(newOrd, codeBuf);
                     rec.put(codeBuf, 0, cacheCodeSize);
                 }
             } else {
@@ -875,17 +1650,48 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
         int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
+        // When seeding, each thread reads finished nodes' edges from the output file — give Scratch
+        // the path so it can open its own read channel.
+        Path seedOutputPath = !fusedPQEnabled ? writer.getOutputPath() : null;
+        residentGraphs = null;
+        residentCache = null;
+        if (residentSearch) {
+            if (!fusedPQEnabled || writer.pqCodeCache() == null) {
+                log.info("Resident search requested but there is no pre-encode cache (fused PQ off); searching on disk");
+            } else {
+                residentCache = writer.pqCodeCache();
+                residentGraphs = buildResidentGraphs();
+            }
+        }
+        final ResidentGraph[] residentForScratch = residentGraphs;
         final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() ->
-            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq)
+            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq, seedOutputPath, similarityFunction, residentForScratch)
         );
 
+        // Seeding only helps the full-precision cross-source search (fused already scores hops via
+        // RAM-resident ADC codes); enable it there when requested.
+        // Seeding is always on for full-precision compaction (fused already scores hops via
+        // RAM-resident ADC codes, so it gains nothing there).
+        if (!fusedPQEnabled && !seedingActive) {
+            setupSeeding(maxDegrees.get(0));
+        }
+        if (seedingActive) {
+            seedWriter = writer; // exposes neighborCountFileOffset for reading finished nodes' edges
+        }
+
+        setupCrossLink();
+        orderingCache = fusedPQEnabled ? writer.pqCodeCache() : null;
+        scoringCache = fusedPQEnabled && adcScoring ? writer.pqCodeCache() : null;
+        if (adcScoring && scoringCache == null) {
+            log.info("ADC candidate scoring requested but there is no pre-encode cache (fused PQ off); scoring exactly");
+        }
+
         for (int level = 0; level < maxDegrees.size(); level++) {
-            List<BatchSpec> batches = buildBatches(level);
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
             int beamWidth = Math.max(maxDegrees.get(level), searchTopK) * BEAM_WIDTH_MULTIPLIER;
 
@@ -894,81 +1700,275 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (level == 0) {
                 log.info("Compacting level 0 (base layer)");
 
-                ExecutorCompletionService<List<WriteResult>> ecs =
-                        new ExecutorCompletionService<>(executor);
-
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
+                java.util.function.Function<BatchSpec, List<WriteResult>> computeBatch = (bs) -> {
+                    Scratch scratch = threadLocalScratch.get();
+                    try {
                         return computeBaseBatch(writer, bs, scratch, params);
-                    });
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
                 };
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+                outputWriteback = bandWriteback ? WritebackAdvisor.open(writer.getOutputPath()) : null;
+                writebackAdvisorAvailable = outputWriteback != null;
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
-
-                    runBatchesWithBackpressure(
-                            batches,
-                            ecs,
-                            submitOne,
-                            (results) -> {
-                                try {
-                                    for (WriteResult r : results) {
-                                        ByteBuffer b = r.data;
-                                        long pos = r.fileOffset;
-                                        while (b.hasRemaining()) {
-                                            int n = fc.write(b, pos);
-                                            pos += n;
-                                        }
-                                    }
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
+                    // Runs on the worker that produced the batch. Safe without a lock: every
+                    // record goes to its own ordinal's offset via a positional write (which does
+                    // not touch the channel's shared position), the ranges are disjoint by
+                    // construction, and doneFlag is an AtomicIntegerArray.
+                    java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
+                        long bytes = 0;
+                        for (WriteResult r : results) {
+                            bytes += r.data.remaining();
+                        }
+                        // The base layer is the bulk of the output, so this is where a host that
+                        // paces compaction against foreground traffic actually wants the brake.
+                        // Admission is per batch, not per record: one blocking call amortized over
+                        // ~128 nodes rather than a limiter round-trip per record write.
+                        try (WorkLimiter.Grant grant = admit(bytes)) {
+                            for (WriteResult r : results) {
+                                ByteBuffer b = r.data;
+                                long pos = r.fileOffset;
+                                while (b.hasRemaining()) {
+                                    int n = fc.write(b, pos);
+                                    pos += n;
+                                }
+                                // Publish AFTER the write so a seed reader that sees the
+                                // flag can safely read this node's edges from the file.
+                                if (seedingActive) {
+                                    doneFlag.set(r.newOrdinal, 1);
                                 }
                             }
-                    );
+                            // Per-band barrier: the batch that completes a band starts writeback of
+                            // the band's output range, and only that range, without waiting.
+                            BandTracker tracker = currentTracker;
+                            if (tracker != null && outputWriteback != null && !results.isEmpty()) {
+                                int first = tracker.bandOf(results.get(0).newOrdinal);
+                                int last = tracker.bandOf(results.get(results.size() - 1).newOrdinal);
+                                for (int band = first; band <= last; band++) {
+                                    if (tracker.done.incrementAndGet(band) == tracker.total[band]) {
+                                        int bandStart = tracker.bandStart(band);
+                                        int bandEnd = tracker.bandEnd(band, numLiveNodesPerSource.get(tracker.sourceIdx));
+                                        outputWriteback.hint(writer.recordFileOffset(bandStart),
+                                                             (long) (bandEnd - bandStart + 1) * writer.recordSize());
+                                        bandWritebackHints.incrementAndGet();
+                                    }
+                                }
+                            }
+                            // Durability barrier on a byte cadence (see OUTPUT_SYNC_BYTES) — the
+                            // whole-file, blocking fallback, used only when no ranged advisor is
+                            // there to do it per band. Two workers crossing the threshold together
+                            // both force; harmless.
+                            if (OUTPUT_SYNC_BYTES > 0 && outputWriteback == null
+                                    && outputBytesSinceSync.addAndGet(bytes) >= OUTPUT_SYNC_BYTES) {
+                                outputBytesSinceSync.set(0);
+                                fc.force(false);
+                                outputSyncs.incrementAndGet();
+                            }
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    };
+
+                    // Sources run smallest-first, one group at a time: the drain between groups is
+                    // the barrier that guarantees every reverse-candidate offer into a source has
+                    // completed before that source's own nodes read them.
+                    AtomicLong l0Done = new AtomicLong();
+                    try (var scope = progress.startPhase(CompactionStage.BASE_LAYER)) {
+                        for (int s : l0ProcessOrder) {
+                            // Band-staged: one sequential sweep of this source into its bands, then
+                            // its batches read own records from the bands. Scratch is this source's
+                            // records and goes away with it; the inter-source barrier is untouched.
+                            BandStore store = null;
+                            if (bandStaged && similarityOrdinalsActive) {
+                                try {
+                                    store = distributeSource(s);
+                                } catch (IOException e) {
+                                    throw new UncheckedIOException(e);
+                                }
+                                currentBands = store;
+                            }
+                            try {
+                                List<BatchSpec> batches = buildBatchesForSource(s, 0);
+                                currentTracker = similarityOrdinalsActive ? trackerFor(s, batches) : null;
+                                runBatches(batches, computeBatch, writeResults,
+                                           scope, l0Done, numTotalNodes);
+                            } finally {
+                                currentTracker = null;
+                                currentBands = null;
+                                if (store != null) {
+                                    log.info("Bands for source {} released: {} bands mapped, {} vectors and {} edge lists served, {} bytes of scratch freed",
+                                            s, store.bandsMapped(), store.vectorsServed(), store.neighborsServed(), store.bytes());
+                                    store.close();
+                                }
+                            }
+                        }
+                    }
                 }
 
+                log.info("Cross-link reverse propagation: {} offers onto {} touched of {} nodes ({} slots/node), {} retained-only fast-path nodes",
+                        reverseCandidates.offered(), reverseCandidates.touchedTargets(),
+                        maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
+                // Reported unconditionally: these counters existed before but were never logged,
+                // so a hint path that silently stopped reaching the device was invisible.
+                log.info("Base-layer IO hints: pretouched={} batchPrefetch issued={} declined={} ownRecordHints={} (enabled={}) seedHints={} outputSyncs={} (every {} MiB); bands: enabled={} ownRecordsFromBands={} spilled={} bytes",
+                        pretouchedNodes.get(), batchPrefetchIssued.get(), batchPrefetchDeclined.get(),
+                        batchOwnRecordHints.get(), BATCH_OWN_RECORD_HINTS, seedHints.get(),
+                        outputSyncs.get(), OUTPUT_SYNC_BYTES >> 20,
+                        bandStaged && similarityOrdinalsActive, bandOwnRecords.get(), distributeBytes.get());
+                log.info("Candidate scoring: {} (codeScores={} decodes={})",
+                        adcActive() ? "adc" : "exact", adcScores.get(), adcDecodes.get());
+                if (clusterCertified.get() + clusterAnchors.get() > 0) {
+                    log.info("Cluster search: {} certified from {} anchor searches, {} resumes ({} total)",
+                            clusterCertified.get(), clusterAnchors.get(), clusterResumes.get(),
+                            clusterCertified.get() + clusterAnchors.get());
+                    // Report the hint count unconditionally when the cluster path ran, so a zero
+                    // here is visible evidence the gate is off or the hints are not reaching the
+                    // device -- rather than silence, which is what hid the ReaderSupplier no-op.
+                    log.info("Cluster rescore prefetch: enabled={} hints={}",
+                            CLUSTER_RESCORE_PREFETCH, clusterRescoreHints.get());
+                    long certs = clusterCertified.get(), anch = clusterAnchors.get();
+                    log.info("Cluster path cost: enabled={} certified {}/{} ({}%), {} exact rescores (full vector reads)",
+                            CLUSTER_SEARCH_ENABLED, certs, certs + anch,
+                            String.format("%.4f", 100.0 * certs / Math.max(1, certs + anch)),
+                            clusterRescoreReads.get());
+                }
+                if (outputWriteback != null) {
+                    outputWriteback.close();
+                    outputWriteback = null;
+                }
+                log.info("Band barriers: writebackHints={} (advisor={}); band pretouch: bands={} nodes={} skippedUnclustered={} (budget={} nodes/target, maxOverlap={})",
+                        bandWritebackHints.get(), bandWriteback ? (writebackAdvisorAvailable ? "native" : "none") : "off",
+                        bandPretouchBands.get(), bandPretouchNodes.get(), bandPretouchSkippedUnclustered.get(),
+                        bandPretouchMaxNodes, BAND_PRETOUCH_MAX_OVERLAP);
+                reverseCandidates.close();
+                reverseCandidates = null; // consumed entirely within L0; scales with node count
+                orderingCache = null;
                 writer.offsetAfterInline();
 
             } else {
                 final int lvl = level;
                 log.info("Compacting upper layer {}", level);
+                List<BatchSpec> batches = buildBatches(level);
 
-                ExecutorCompletionService<List<UpperLayerWriteResult>> ecs =
-                        new ExecutorCompletionService<>(executor);
-
-                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
-                    ecs.submit(() -> {
-                        Scratch scratch = threadLocalScratch.get();
-                        return computeUpperBatchForLevel(bs, lvl, scratch, params);
-                    });
-                };
-
-                runBatchesWithBackpressure(
-                        batches,
-                        ecs,
-                        submitOne,
-                        (results) -> {
-                            try {
-                                for (UpperLayerWriteResult r : results) {
-                                    writer.writeUpperLayerNode(
-                                            lvl,
-                                            r.ordinal,
-                                            r.neighbors,
-                                            r.pqCode
-                                    );
+                long upperTotal = 0;
+                for (BatchSpec bs : batches) {
+                    upperTotal += bs.end - bs.start;
+                }
+                AtomicLong upperDone = new AtomicLong();
+                try (var scope = progress.startPhase(CompactionStage.UPPER_LAYERS)) {
+                    runBatches(
+                            batches,
+                            (bs) -> {
+                                Scratch scratch = threadLocalScratch.get();
+                                return computeUpperBatchForLevel(bs, lvl, scratch, params);
+                            },
+                            (results) -> {
+                                // writeUpperLayerNode appends through the sequential writer and
+                                // accumulates level-1 feature records in an ArrayList, so unlike
+                                // the L0 path it cannot run concurrently. Upper layers are a tiny
+                                // fraction of the output; serializing the append costs nothing
+                                // while the searches that produced these results still ran in
+                                // parallel.
+                                synchronized (writer) {
+                                    try {
+                                        for (UpperLayerWriteResult r : results) {
+                                            writer.writeUpperLayerNode(
+                                                    lvl,
+                                                    r.ordinal,
+                                                    r.neighbors,
+                                                    r.pqCode
+                                            );
+                                        }
+                                    } catch (IOException e) {
+                                        throw new UncheckedIOException(e);
+                                    }
                                 }
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                );
+                            },
+                            scope, upperDone, upperTotal
+                    );
+                }
             }
         }
 
+        scoringCache = null;
+        if (residentGraphs != null) {
+            log.info("Resident search: {} searches over {} resident sources ({} bytes of adjacency)",
+                    residentSearches.get(), java.util.Arrays.stream(residentGraphs).filter(java.util.Objects::nonNull).count(),
+                    residentGraphBytes.get());
+        }
+        residentGraphs = null;
+        residentCache = null;
         Scratch s = threadLocalScratch.get();
         s.close();
         threadLocalScratch.remove();
+    }
+
+    /** Loads sources' base-layer adjacency from their token streams, largest first, within the byte budget. */
+    private ResidentGraph[] buildResidentGraphs() {
+        ResidentGraph[] out = new ResidentGraph[sources.size()];
+        Integer[] order = new Integer[sources.size()];
+        for (int i = 0; i < order.length; i++) order[i] = i;
+        Arrays.sort(order, Comparator.comparingInt((Integer i) -> -numLiveNodesPerSource.get(i)).thenComparingInt(i -> i));
+        long used = 0;
+        for (int s : order) {
+            OnDiskGraphIndex source = sources.get(s);
+            if (source.tokenStreamSection().isEmpty()) {
+                log.info("Resident search: source {} carries no token stream; searched on disk", s);
+                continue;
+            }
+            long bytes = ResidentGraph.bytesFor(source.size(0), source.getDegree(0));
+            if (used + bytes > residentGraphMaxBytes) {
+                log.info("Resident search: source {} ({} bytes) exceeds the remaining budget ({} of {} used); searched on disk",
+                        s, bytes, used, residentGraphMaxBytes);
+                continue;
+            }
+            long t0 = System.nanoTime();
+            try {
+                out[s] = ResidentGraph.fromStream(source);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            used += bytes;
+            log.info("Resident search: source {} adjacency resident, {} nodes x degree {} = {} bytes, in {} ms",
+                    s, source.size(0), source.getDegree(0), bytes, (System.nanoTime() - t0) / 1_000_000L);
+        }
+        residentGraphBytes.set(used);
+        return out;
+    }
+
+    private boolean residentActive() {
+        return residentGraphs != null;
+    }
+
+    /** The search's score function over a resident source: the node's query against each visited node's cached code. */
+    private SearchScoreProvider residentProvider(Scratch scratch, int sourceIdx) {
+        final PreEncodedCodeCache cache = residentCache;
+        final OrdinalMapper mapper = remappers.get(sourceIdx);
+        ScoreFunction.ApproximateScoreFunction asf = node -> {
+            cache.get(mapper.oldToNew(node), scratch.codeBuf);
+            return scratch.adc.similarityTo(scratch.codeSeq);
+        };
+        return new DefaultSearchScoreProvider(asf);
+    }
+
+    private boolean adcActive() {
+        return scoringCache != null;
+    }
+
+    /** The node's similarity to a candidate, from the candidate's cached code; no record read. */
+    private float codeScore(Scratch scratch, int candSrc, int candOld) {
+        scoringCache.get(remappers.get(candSrc).oldToNew(candOld), scratch.codeBuf);
+        adcScores.incrementAndGet();
+        return scratch.adc.similarityTo(scratch.codeSeq);
+    }
+
+    /** The approximate vector a candidate's cached code stands for, for the diversity pass. */
+    private void decodeCandidate(Scratch scratch, int candSrc, int candOld, VectorFloat<?> dst) {
+        scoringCache.get(remappers.get(candSrc).oldToNew(candOld), scratch.codeBuf);
+        adcDecodes.incrementAndGet();
+        scratch.adc.decode(scratch.codeSeq, dst);
     }
 
     /**
@@ -977,26 +1977,109 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private List<BatchSpec> buildBatches(int level) {
         List<BatchSpec> batches = new ArrayList<>();
-
         for (int s = 0; s < sources.size(); ++s) {
-            var source = sources.get(s);
-            if (level > source.getMaxLevel()) continue;
+            batches.addAll(buildBatchesForSource(s, level));
+        }
+        return batches;
+    }
+
+    /**
+     * Builds the processing batches for one source at one level. Split out from
+     * {@link #buildBatches} so L0 compaction can run sources one group at a time in size order
+     * (the cross-link barrier); upper layers still batch all sources together.
+     */
+    private List<BatchSpec> buildBatchesForSource(int s, int level) {
+        List<BatchSpec> batches = new ArrayList<>();
+        var source = sources.get(s);
+        if (level > source.getMaxLevel()) return batches;
+
+        int[] nodes;
+        int numNodes;
+        if (level == 0) {
+            // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
+            // seeks and reads a 4-byte id at every node's record offset — a full random disk
+            // scan of the source (the dominant cost of full-precision compaction disk-cold,
+            // where nothing warms the cache first), and unnecessary: liveNodes already holds
+            // exactly the live ordinals. Also skips dead nodes up front rather than in-batch.
+            FixedBitSet alive = liveNodes.get(s);
+            numNodes = alive.cardinality();
+            nodes = new int[numNodes];
+            int i = 0;
+            for (int n = alive.nextSetBit(0);
+                 n != DocIdSetIterator.NO_MORE_DOCS;
+                 n = alive.nextSetBit(n + 1)) {
+                nodes[i++] = n;
+            }
+            if (similarityOrdinalsActive && numNodes > 1) {
+                // Merged ordinals were assigned in similarity order, so ordering processing by
+                // new ordinal gives similarity locality AND sequential record writes at once.
+                // The order is this source's window of the plan, read off by one forward scan
+                // of the plan arrays — the same sequence a sort of (new, old) pairs produced,
+                // without the sort.
+                int[] window = planWindow(planNewToSrc, planNewToOld, s, alive);
+                if (window.length != numNodes) {
+                    throw new IllegalStateException("plan window for source " + s + " has " + window.length
+                                                    + " nodes, live bitset has " + numNodes);
+                }
+                nodes = window;
+                log.info("L0 source {}: {} nodes in similarity-ordinal order", s, numNodes);
+            }
+            // Similarity-ordered scheduling: sort searching sources' nodes by the leading bytes
+            // of their PQ code, so consecutive searches walk overlapping target regions. The
+            // largest source runs no searches and keeps ordinal order (contiguous record
+            // streaming matters more there).
+            boolean searches = reverseCandidates == null || sizeRank[s] < sources.size() - 1;
+            if (!similarityOrdinalsActive && orderingCache != null && searches && orderingCache.codeSize() >= 4 && numNodes > 1) {
+                OrdinalMapper mapper = remappers.get(s);
+                byte[] code = new byte[orderingCache.codeSize()];
+                // Two-level order: similarity-sort WITHIN coarse ordinal chunks. A record's write
+                // offset follows its ordinal, so a global similarity sort scatters the (single
+                // threaded) writer's pwrites across the whole L0 region and random-page writeback
+                // throttling becomes the pipeline ceiling; chunking bounds the write window while
+                // consecutive nodes remain similar within each chunk.
+                int segStart = 0;
+                while (segStart < numNodes) {
+                    int chunk = nodes[segStart] >>> 22;
+                    int segEnd = segStart + 1;
+                    while (segEnd < numNodes && (nodes[segEnd] >>> 22) == chunk) {
+                        segEnd++;
+                    }
+                    int len = segEnd - segStart;
+                    if (len > 1) {
+                        long[] keyed = new long[len];
+                        for (int k = 0; k < len; k++) {
+                            orderingCache.get(mapper.oldToNew(nodes[segStart + k]), code);
+                            long key = ((code[0] & 0xFFL) << 24) | ((code[1] & 0xFFL) << 16)
+                                     | ((code[2] & 0xFFL) << 8) | (code[3] & 0xFFL);
+                            keyed[k] = (key << 32) | (nodes[segStart + k] & 0xFFFFFFFFL);
+                        }
+                        CompactionSort.sort(keyed, len, executor, taskWindowSize);
+                        for (int k = 0; k < len; k++) {
+                            nodes[segStart + k] = (int) keyed[k];
+                        }
+                    }
+                    segStart = segEnd;
+                }
+                log.info("L0 source {}: {} nodes in similarity order within {}-node ordinal chunks",
+                        s, numNodes, 1 << 22);
+            }
+        } else {
             NodesIterator sourceNodes = source.getNodes(level);
-            int numNodes = sourceNodes.size();
-            int[] nodes = new int[numNodes];
+            numNodes = sourceNodes.size();
+            nodes = new int[numNodes];
             int i = 0;
             while (sourceNodes.hasNext()) {
                 nodes[i++] = sourceNodes.next();
             }
+        }
 
-            int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
-            if (numBatches > numNodes) numBatches = numNodes;
-            int batchSize = (numNodes + numBatches - 1) / numBatches;
-            for (int b = 0; b < numBatches; ++b) {
-                int start = min(numNodes, batchSize * b);
-                int end = min(numNodes, batchSize * (b + 1));
-                batches.add(new BatchSpec(s, nodes, start, end));
-            }
+        int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
+        if (numBatches > numNodes) numBatches = numNodes;
+        int batchSize = numBatches == 0 ? 0 : (numNodes + numBatches - 1) / numBatches;
+        for (int b = 0; b < numBatches; ++b) {
+            int start = min(numNodes, batchSize * b);
+            int end = min(numNodes, batchSize * (b + 1));
+            batches.add(new BatchSpec(s, nodes, start, end));
         }
 
         return batches;
@@ -1013,11 +2096,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
-        if (bs.end > bs.start) {
+        scratch.resetChainSeeds();
+        BandStore bands = currentBands;
+        boolean ownFromBands = bands != null && bands.sourceIdx == bs.sourceIdx;
+        BandTracker tracker = currentTracker;
+        if (tracker != null && tracker.sourceIdx == bs.sourceIdx && bs.end > bs.start) {
+            int band = tracker.bandOf(remappers.get(bs.sourceIdx).oldToNew(bs.nodes[bs.start]));
+            if (band < tracker.total.length && tracker.claim(band)) {
+                pretouchBandTargets(tracker, band);
+            }
+        }
+        if (bs.end > bs.start && !ownFromBands) {
             // Stream this batch's own records into the page cache before processing. Search
             // reads into other sources are data-dependent and stay demand-faulted, but each
-            // node's own record read (adjacency + vector) is fully predictable.
-            sources.get(bs.sourceIdx).prefetchL0Records(bs.nodes[bs.start], bs.nodes[bs.end - 1]);
+            // node's own record read (adjacency + vector) is fully predictable. Under
+            // similarity ordering the batch's ordinals are scattered, so only prefetch when
+            // they still form a reasonably dense range.
+            int lo = Integer.MAX_VALUE;
+            int hi = -1;
+            for (int i = bs.start; i < bs.end; i++) {
+                lo = Math.min(lo, bs.nodes[i]);
+                hi = Math.max(hi, bs.nodes[i]);
+            }
+            boolean dense = BATCH_PREFETCH_DENSITY < 0
+                    || (BATCH_PREFETCH_DENSITY > 0
+                        && (long) hi - lo <= BATCH_PREFETCH_DENSITY * (bs.end - bs.start));
+            if (dense) {
+                sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+                batchPrefetchIssued.incrementAndGet();
+            } else {
+                batchPrefetchDeclined.incrementAndGet();
+                if (BATCH_OWN_RECORD_HINTS) {
+                    // Too sparse to stream as one range, but every record is still known up
+                    // front: hint each asynchronously so the reads below overlap in the device
+                    // queue rather than faulting one page at a time.
+                    var source = sources.get(bs.sourceIdx);
+                    FixedBitSet alive = liveNodes.get(bs.sourceIdx);
+                    int hinted = 0;
+                    for (int i = bs.start; i < bs.end; i++) {
+                        int node = bs.nodes[i];
+                        if (alive.get(node)) {
+                            source.willNeedL0Record(node);
+                            hinted++;
+                        }
+                    }
+                    batchOwnRecordHints.addAndGet(hinted);
+                }
+            }
         }
 
         for (int i = bs.start; i < bs.end; i++) {
@@ -1067,8 +2192,28 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             CompactionParams params
     ) throws IOException {
 
-        var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
-        sourceView.getVectorInto(node, scratch.baseVec, 0);
+        // Retained-only fast path: a node of the largest source runs no forward searches, so if
+        // it also received no reverse candidates its candidate set is exactly its retained
+        // same-source edges — and re-running diversity over an already-diversity-selected edge
+        // set is a fixed point. Skip selection entirely: filter dead neighbors, remap, write.
+        if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1) {
+            int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+            if (reverseCandidates.countAt(sourceIdx, newOrdinal) == 0) {
+                return writeRetainedOnlyRecord(node, sourceIdx, newOrdinal, scratch, writer);
+            }
+        }
+
+        BandStore bands = currentBands;
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            bands.vectorInto(node, scratch.baseVec);
+            bandOwnRecords.incrementAndGet();
+        } else {
+            var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+            sourceView.getVectorInto(node, scratch.baseVec, 0);
+        }
+        if (adcActive() || residentActive()) {
+            scratch.adc.setQuery(scratch.baseVec);
+        }
 
         int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -1087,8 +2232,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxDegrees.get(0),
                         selected,
                         scratch.tmpVec,
-                        scratch.gs
+                        scratch.gs,
+                        adcActive() ? (src, n, dst) -> decodeCandidate(scratch, src, n, dst) : null
                 );
+
+        // Reverse-edge propagation (as in single-graph Vamana insertion): this node offers
+        // itself only to the cross-source neighbors its own selection KEPT, not to everything
+        // its searches surfaced. Each target folds its accumulated reverse edges into its one
+        // diversity pass when its group runs; scores are exact and similarity is symmetric, so
+        // the offer carries the score the target's own search would have computed.
+        if (reverseCandidates != null) {
+            for (int k = 0; k < selected.size; k++) {
+                int ssrc = selected.sourceIdx[k];
+                if (ssrc != sourceIdx && sizeRank[ssrc] > sizeRank[sourceIdx]) {
+                    reverseCandidates.offer(ssrc, remappers.get(ssrc).oldToNew(selected.nodes[k]),
+                                            sourceIdx, node, selected.scores[k]);
+                }
+            }
+        }
 
         // remap
         for (int k = 0; k < selected.size; k++) {
@@ -1099,12 +2260,335 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
 
+        // Note: the done-flag that makes this node's edges available as seeds is set after the
+        // record is physically written (in the L0 write callback), not here — so a reader of a
+        // flagged node's edges from the output file always sees committed data.
+
         return writer.writeInlineNodeRecord(
                 newOrdinal,
                 scratch.baseVec,
                 selected,
                 scratch.pqCode
         );
+    }
+
+    /**
+     * Writes a record whose neighbors are the node's live retained same-source edges, unchanged
+     * and in their original order — used by the retained-only fast path. Neighbor vectors are
+     * read only when the writer must encode per-neighbor codes from them (fused output without
+     * the pre-encoded code cache); otherwise the only read is the node's own record.
+     */
+    private WriteResult writeRetainedOnlyRecord(int node, int sourceIdx, int newOrdinal,
+                                                Scratch scratch, CompactWriter writer) throws IOException {
+        var view = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        BandStore bands = currentBands;
+        NodesIterator it;
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            bands.vectorInto(node, scratch.baseVec);
+            it = new NodesIterator.ArrayNodesIterator(scratch.ownNeighbors, bands.neighbors(node, scratch.ownNeighbors));
+            bandOwnRecords.incrementAndGet();
+        } else {
+            view.getVectorInto(node, scratch.baseVec, 0);
+            it = view.getNeighborsIterator(0, node);
+        }
+        FixedBitSet alive = liveNodes.get(sourceIdx);
+        OrdinalMapper mapper = remappers.get(sourceIdx);
+        var selected = scratch.selectedCache;
+        selected.reset();
+        boolean needVecs = writer.needsNeighborVectors();
+
+        while (it.hasNext()) {
+            int nb = it.nextInt();
+            if (!alive.get(nb)) continue;
+            if (needVecs) {
+                view.getVectorInto(nb, scratch.tmpVec, 0);
+                selected.add(sourceIdx, view, nb, 0f, scratch.tmpVec);
+            } else {
+                selected.sourceIdx[selected.size] = sourceIdx;
+                selected.views[selected.size] = view;
+                selected.nodes[selected.size] = nb;
+                selected.scores[selected.size] = 0f;
+                selected.size++;
+            }
+        }
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] = mapper.oldToNew(selected.nodes[k]);
+        }
+        retainedOnlyNodes.incrementAndGet();
+        return writer.writeInlineNodeRecord(newOrdinal, scratch.baseVec, selected, scratch.pqCode);
+    }
+
+    /**
+     * Bounded cluster search for one (node, target) pair. If a valid anchor exists and the
+     * triangle-inequality certificate passes — the member's k-th best rescored distance is at
+     * most the anchor's worst kept distance minus the query-to-anchor distance — the member's
+     * top-k comes from the shared list with no search. Otherwise runs a cold search
+     * {@link #CLUSTER_MARGIN} deeper than k, which becomes the new anchor. Candidates appended
+     * are exactly k either way, with exact scores.
+     */
+    private int clusterSearchL0(int node, int targetIdx, OnDiskGraphIndex.View searchView,
+                                FixedBitSet indexAlive, VectorFloat<?> baseVec, Scratch scratch,
+                                int candSize, CompactionParams params, SearchScoreProvider ssp) {
+        int k = params.searchTopK;
+
+        if (scratch.clusterAnchorValid[targetIdx]) {
+            float qaSim = similarityFunction.compare(baseVec, scratch.clusterAnchorQuery[targetIdx]);
+            double delta = metricDistance(qaSim);
+            int verified = 0;   // prefix of the anchor list already scored against this member
+            while (true) {
+                int n = scratch.clusterCount[targetIdx];
+                double thetaD = metricDistance(scratch.clusterWorstSim[targetIdx]);
+                if (delta < thetaD) {
+                    // score any anchor-list entries this member hasn't scored yet
+                    int[] nodes = scratch.clusterNodes[targetIdx];
+                    float[] ms = scratch.clusterMemberScores;
+                    // The anchor list is fully known before the first vector is read, so hint the
+                    // whole unscored suffix and let the reads below overlap in the device queue
+                    // instead of paying one fault of latency each, serially. Same argument as
+                    // gatherFromSameSource; this branch simply never had it.
+                    if (CLUSTER_RESCORE_PREFETCH && n > verified) {
+                        var target = sources.get(targetIdx);
+                        int hinted = 0;
+                        for (int i = verified; i < n; i++) {
+                            if (indexAlive.get(nodes[i])) {
+                                target.willNeedL0Record(nodes[i]);
+                                hinted++;
+                            }
+                        }
+                        clusterRescoreHints.addAndGet(hinted);
+                    }
+                    int reads = 0;
+                    for (int i = verified; i < n; i++) {
+                        boolean live = indexAlive.get(nodes[i]);
+                        ms[i] = live
+                                ? rescore(searchView, nodes[i], baseVec, scratch.tmpVec)
+                                : Float.NEGATIVE_INFINITY;
+                        if (live) reads++;
+                    }
+                    clusterRescoreReads.addAndGet(reads);
+                    verified = n;
+                    int live = 0;
+                    for (int i = 0; i < n; i++) {
+                        if (ms[i] != Float.NEGATIVE_INFINITY) live++;
+                    }
+                    if (live >= k) {
+                        Integer[] ord = scratch.clusterOrder;
+                        for (int i = 0; i < n; i++) ord[i] = i;
+                        Arrays.sort(ord, 0, n, (a, b) -> Float.compare(ms[b], ms[a]));
+                        double memberKth = metricDistance(ms[ord[k - 1]]);
+                        if (memberKth <= thetaD - delta) {
+                            clusterCertified.incrementAndGet();
+                            for (int j = 0; j < k; j++) {
+                                int idx = ord[j];
+                                scratch.candSrc[candSize] = targetIdx;
+                                scratch.candNode[candSize] = nodes[idx];
+                                scratch.candScore[candSize] = ms[idx];
+                                candSize++;
+                            }
+                            return candSize;
+                        }
+                    }
+                }
+                // not certified at current depth: extend the anchor's search if budget remains
+                if (scratch.clusterExtended[targetIdx] >= CLUSTER_MARGIN) {
+                    break;
+                }
+                int got = extendAnchor(targetIdx, searchView, scratch, params);
+                if (got == 0) {
+                    break; // anchor's search is exhausted; no deeper ThetaD exists
+                }
+            }
+        }
+
+        return clusterFallbackSearch(node, targetIdx, searchView, indexAlive, baseVec,
+                                     scratch, candSize, params, ssp);
+    }
+
+    /**
+     * Extends the current anchor's search by up to {@link #CLUSTER_EXT_STEP} further results via
+     * {@link GraphSearcher#resume}, exact-rescoring them against the ANCHOR's query and growing
+     * the stored list (and so ThetaD) for this and all later members. Returns how many results
+     * the resume produced; 0 means the search space is exhausted at this beam's reach.
+     */
+    private int extendAnchor(int targetIdx, OnDiskGraphIndex.View searchView, Scratch scratch,
+                             CompactionParams params) {
+        clusterResumes.incrementAndGet();
+        SearchResult more = scratch.gs[targetIdx].resume(CLUSTER_EXT_STEP, CLUSTER_EXT_STEP);
+        int[] nodes = scratch.clusterNodes[targetIdx];
+        float[] ascore = scratch.clusterAnchorScores[targetIdx];
+        int at = scratch.clusterCount[targetIdx];
+        int got = 0;
+        float worst = scratch.clusterWorstSim[targetIdx];
+        VectorFloat<?> anchorQuery = scratch.clusterAnchorQuery[targetIdx];
+        // resume() has already produced the complete result set, so every record the rescore
+        // below reads is known now. Hint them all before blocking on the first.
+        if (CLUSTER_RESCORE_PREFETCH && params.fusedPQEnabled) {
+            var target = sources.get(targetIdx);
+            int hinted = 0;
+            for (var r : more.getNodes()) {
+                target.willNeedL0Record(r.node);
+                hinted++;
+            }
+            clusterRescoreHints.addAndGet(hinted);
+        }
+        for (var r : more.getNodes()) {
+            float ex = params.fusedPQEnabled
+                    ? rescoreAgainst(searchView, r.node, anchorQuery, scratch.tmpVec)
+                    : r.score;
+            nodes[at] = r.node;
+            ascore[at] = ex;
+            worst = Math.min(worst, ex);
+            at++;
+            got++;
+        }
+        scratch.clusterCount[targetIdx] = at;
+        scratch.clusterWorstSim[targetIdx] = worst;
+        scratch.clusterExtended[targetIdx] += got;
+        if (params.fusedPQEnabled) clusterRescoreReads.addAndGet(got);
+        return got;
+    }
+
+    /** Exact similarity of {@code node} to an arbitrary query vector (not the current baseVec). */
+    private float rescoreAgainst(OnDiskGraphIndex.View view, int node, VectorFloat<?> query,
+                                 VectorFloat<?> tmp) {
+        view.getVectorInto(node, tmp, 0);
+        return similarityFunction.compare(query, tmp);
+    }
+
+    /** Cold search k+m deep for a node that could not be certified; becomes the new anchor. */
+    private int clusterFallbackSearch(int node, int targetIdx, OnDiskGraphIndex.View searchView,
+                                      FixedBitSet indexAlive, VectorFloat<?> baseVec, Scratch scratch,
+                                      int candSize, CompactionParams params, SearchScoreProvider ssp) {
+        int k = params.searchTopK;
+        clusterAnchors.incrementAndGet();
+        int deep = k;
+        SearchResult results = scratch.gs[targetIdx].search(ssp, deep, deep, 0f, 0f, indexAlive);
+        int[] nodes = scratch.clusterNodes[targetIdx];
+        float[] ascore = scratch.clusterAnchorScores[targetIdx];
+        int stored = 0;
+        for (var r : results.getNodes()) {
+            nodes[stored] = r.node;
+            ascore[stored] = params.fusedPQEnabled
+                    ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                    : r.score;
+            stored++;
+        }
+        // rank the anchor list by exact score (defines both the top-k and the worst-kept bound)
+        final int fstored = stored;
+        Integer[] ord = scratch.clusterOrder;
+        for (int i = 0; i < fstored; i++) ord[i] = i;
+        Arrays.sort(ord, 0, fstored, (a, b) -> Float.compare(ascore[b], ascore[a]));
+        int[] tmpN = new int[fstored];
+        float[] tmpS = new float[fstored];
+        for (int i = 0; i < fstored; i++) {
+            tmpN[i] = nodes[ord[i]];
+            tmpS[i] = ascore[ord[i]];
+        }
+        System.arraycopy(tmpN, 0, nodes, 0, fstored);
+        System.arraycopy(tmpS, 0, ascore, 0, fstored);
+        scratch.clusterCount[targetIdx] = fstored;
+        scratch.clusterWorstSim[targetIdx] = fstored > 0 ? ascore[fstored - 1] : Float.NEGATIVE_INFINITY;
+        scratch.clusterExtended[targetIdx] = 0;
+        scratch.clusterAnchorQuery[targetIdx].copyFrom(baseVec, 0, 0, baseVec.length());
+        scratch.clusterAnchorValid[targetIdx] = fstored >= k;
+
+        int emit = Math.min(k, fstored);
+        for (int j = 0; j < emit; j++) {
+            scratch.candSrc[candSize] = targetIdx;
+            scratch.candNode[candSize] = nodes[j];
+            scratch.candScore[candSize] = ascore[j];
+            candSize++;
+        }
+        return candSize;
+    }
+
+    /**
+     * Collects up to {@link #SEEDS_PER_PARTITION} entry points in {@code targetSourceIdx} for node
+     * {@code u}'s search of that source, taken from {@code u}'s finished same-source neighbors'
+     * merged edges into the target, scored with full vectors. Writes into
+     * {@code scratch.seedNodes}/{@code seedScores}; returns the seed count.
+     */
+    private int gatherSeeds(int node, int nodeSourceIdx, int targetSourceIdx, VectorFloat<?> baseVec,
+                            OnDiskGraphIndex.View targetView, FixedBitSet targetAlive, Scratch scratch) {
+        var uView = (OnDiskGraphIndex.View) scratch.gs[nodeSourceIdx].getView();
+        var it = uView.getNeighborsIterator(0, node);
+        OrdinalMapper uMapper = remappers.get(nodeSourceIdx);
+        FixedBitSet uAlive = liveNodes.get(nodeSourceIdx);
+        int poolSize = 0;
+        while (it.hasNext() && poolSize < SEED_POOL_CAPACITY) {
+            int nb = it.nextInt();
+            if (!uAlive.get(nb)) continue;
+            int nbNew = uMapper.oldToNew(nb);
+            if (doneFlag.get(nbNew) == 0) continue; // neighbor not finished; no merged edges yet
+            // Read the finished neighbor's merged edges (new ordinals) back from the output file
+            // — it already holds them — instead of a heap-resident adjacency mirror.
+            int deg = readCompactedNeighbors(nbNew, scratch);
+            ByteBuffer buf = scratch.seedEdgeBuf;
+            for (int j = 0; j < deg && poolSize < SEED_POOL_CAPACITY; j++) {
+                int m = buf.getInt();
+                if (m < 0) continue; // padding slot
+                if (srcOfNewOrd[m] != targetSourceIdx) continue;
+                int mOld = oldOfNewOrd[m];
+                if (!targetAlive.get(mOld)) continue;
+                boolean dup = false;
+                for (int p = 0; p < poolSize; p++) {
+                    if (scratch.seedPool[p] == mOld) { dup = true; break; }
+                }
+                if (!dup) scratch.seedPool[poolSize++] = mOld;
+            }
+        }
+        // Score the pool with full vectors, keep the top SEEDS_PER_PARTITION (descending score).
+        int seedCount = 0;
+        for (int p = 0; p < poolSize; p++) {
+            int cand = scratch.seedPool[p];
+            targetView.getVectorInto(cand, scratch.tmpVec, 0);
+            float score = similarityFunction.compare(baseVec, scratch.tmpVec);
+            if (seedCount < SEEDS_PER_PARTITION) {
+                int pos = seedCount++;
+                while (pos > 0 && scratch.seedScores[pos - 1] < score) {
+                    scratch.seedScores[pos] = scratch.seedScores[pos - 1];
+                    scratch.seedNodes[pos] = scratch.seedNodes[pos - 1];
+                    pos--;
+                }
+                scratch.seedScores[pos] = score;
+                scratch.seedNodes[pos] = cand;
+            } else if (score > scratch.seedScores[SEEDS_PER_PARTITION - 1]) {
+                int pos = SEEDS_PER_PARTITION - 1;
+                while (pos > 0 && scratch.seedScores[pos - 1] < score) {
+                    scratch.seedScores[pos] = scratch.seedScores[pos - 1];
+                    scratch.seedNodes[pos] = scratch.seedNodes[pos - 1];
+                    pos--;
+                }
+                scratch.seedScores[pos] = score;
+                scratch.seedNodes[pos] = cand;
+            }
+        }
+        return seedCount;
+    }
+
+    /**
+     * Reads finished node {@code newOrd}'s merged neighbor list from the output file into
+     * {@code scratch.seedEdgeBuf}, leaving the buffer positioned at the first neighbor int;
+     * returns the neighbor count. On-disk ints are big-endian (ByteBuffer's default order).
+     * Safe because the caller only reads flagged nodes, whose records are already written.
+     */
+    private int readCompactedNeighbors(int newOrd, Scratch scratch) {
+        long off = seedWriter.neighborCountFileOffset(newOrd);
+        ByteBuffer buf = scratch.seedEdgeBuf;
+        int need = (seedDegree + 1) * Integer.BYTES;
+        buf.clear().limit(need);
+        try {
+            int got = 0;
+            while (got < need) {
+                int r = scratch.outputChannel.read(buf, off + got);
+                if (r <= 0) break;
+                got += r;
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        buf.flip();
+        return buf.getInt(); // count; buffer now positioned at the first neighbor
     }
 
     /**
@@ -1120,6 +2604,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     ) {
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
+        if (adcActive() || residentActive()) {
+            scratch.adc.setQuery(scratch.baseVec);
+        }
 
         int candSize = gatherCandidates(node, level, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -1138,7 +2625,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxDegrees.get(level),
                         selected,
                         scratch.tmpVec,
-                        scratch.gs
+                        scratch.gs,
+                        adcActive() ? (src, n, dst) -> decodeCandidate(scratch, src, n, dst) : null
                 );
 
         // remap
@@ -1192,9 +2680,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
                                                  baseVec, scratch, candSize);
             } else {
-                candSize = gatherFromOtherSource(node, level, ss, searchView, indexAlive,
+                // Cross-link: at L0 only search LARGER sources; candidates from smaller sources
+                // arrive via reverse propagation (consumed below), offered when those sources'
+                // nodes searched this one in an earlier group.
+                if (level == 0 && reverseCandidates != null && sizeRank[ss] < sizeRank[sourceIdx]) {
+                    continue;
+                }
+                candSize = gatherFromOtherSource(node, sourceIdx, level, ss, searchView, indexAlive,
                                                   baseVec, scratch, candSize, params);
             }
+        }
+
+        if (level == 0 && reverseCandidates != null) {
+            candSize = reverseCandidates.appendTo(sourceIdx, remappers.get(sourceIdx).oldToNew(node),
+                    scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
         }
 
         return candSize;
@@ -1207,16 +2706,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int gatherFromSameSource(int node, int level, int sourceIdx,
                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                      VectorFloat<?> baseVec, Scratch scratch, int candSize) {
-        var it = searchView.getNeighborsIterator(level, node);
+        // The whole candidate list is known before any vector is read, so batch-hint every
+        // record and let the reads below overlap in the device queue instead of paying one
+        // fault of latency each, serially. (The extra iterator pass re-reads adjacency the
+        // first pass just faulted in — RAM-cheap.)
+        var source = sources.get(sourceIdx);
+        BandStore bands = level == 0 ? currentBands : null;
+        NodesIterator it;
+        final boolean adc = adcActive();
+        if (bands != null && bands.sourceIdx == sourceIdx && bands.has(node)) {
+            // Own edges from the band; the neighbours' vectors below are source reads unless
+            // scores come from codes, in which case nothing below reads at all.
+            int count = bands.neighbors(node, scratch.ownNeighbors);
+            if (!adc) {
+                for (int k = 0; k < count; k++) {
+                    if (indexAlive.get(scratch.ownNeighbors[k])) {
+                        source.willNeedL0Record(scratch.ownNeighbors[k]);
+                    }
+                }
+            }
+            it = new NodesIterator.ArrayNodesIterator(scratch.ownNeighbors, count);
+        } else {
+            if (!adc) {
+                var hintIt = searchView.getNeighborsIterator(level, node);
+                while (hintIt.hasNext()) {
+                    int nb = hintIt.nextInt();
+                    if (indexAlive.get(nb)) {
+                        source.willNeedL0Record(nb);
+                    }
+                }
+            }
+            it = searchView.getNeighborsIterator(level, node);
+        }
         while (it.hasNext()) {
             int nb = it.nextInt();
             if (!indexAlive.get(nb)) continue;
 
-            searchView.getVectorInto(nb, scratch.tmpVec, 0);
+            float score;
+            if (adc) {
+                score = codeScore(scratch, sourceIdx, nb);
+            } else {
+                searchView.getVectorInto(nb, scratch.tmpVec, 0);
+                score = similarityFunction.compare(baseVec, scratch.tmpVec);
+            }
 
             scratch.candSrc[candSize] = sourceIdx;
             scratch.candNode[candSize] = nb;
-            scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            scratch.candScore[candSize] = score;
             candSize++;
         }
         return candSize;
@@ -1225,7 +2761,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Gathers candidates from a different source index via graph search.
      */
-    private int gatherFromOtherSource(int node, int level, int sourceIdx,
+    private int gatherFromOtherSource(int node, int nodeSourceIdx, int level, int sourceIdx,
                                       OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                       VectorFloat<?> baseVec, Scratch scratch, int candSize,
                                       CompactionParams params) {
@@ -1237,44 +2773,101 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 scratch.tmpVec,
                 similarityFunction
         );
+        // Resident: walk the source's adjacency in memory and score visited nodes from the
+        // cache; the searcher below never touches a record. Rescoring of the results is per
+        // candidateScoring, as for the on-disk search.
+        GraphSearcher searcher = scratch.gs[sourceIdx];
+        final boolean resident = residentActive() && scratch.rgs != null && scratch.rgs[sourceIdx] != null;
+        if (resident) {
+            searcher = scratch.rgs[sourceIdx];
+            ssp = residentProvider(scratch, sourceIdx);
+            residentSearches.incrementAndGet();
+        }
 
         if (level == 0) {
-            // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are largely
-            // pruned by diversity selection, so the doubled approximate-phase cost buys almost
-            // no recall.
-            SearchResult results = scratch.gs[sourceIdx].search(
-                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
-            );
+            int prevCandSize = candSize;
+            boolean clusterMode = !seedingActive && orderingCache != null
+                    && clusterSearchUsable() && params.fusedPQEnabled && !resident
+                    // Code-scored candidates: the cluster path rescores against the anchor's query
+                    // and certifies on exact distances; under adc every cross-source candidate
+                    // comes from the cold search and is scored from its code.
+                    && !adcActive();
+            if (clusterMode) {
+                candSize = clusterSearchL0(node, sourceIdx, searchView, indexAlive, baseVec,
+                                           scratch, candSize, params, ssp);
+                // fall through to the common reverse-offer block below
+            } else {
+                // Seeding: warm-start the L0 beam from finished neighbors' edges into this source,
+                // skipping the hierarchy descent (and its per-hop full-vector reads). Falls back to
+                // a normal search when no seeds are available.
+                int seedCount = seedingActive
+                        ? gatherSeeds(node, nodeSourceIdx, sourceIdx, baseVec, searchView, indexAlive, scratch)
+                        : 0;
+                if (seedCount > 0) {
+                    seededSearches.incrementAndGet();
+                    // The seed set is the one part of a cross-source search that is known
+                    // BEFORE any read: these are the exact entry points the beam will expand
+                    // first. Everything after them is data-dependent and stays demand-faulted
+                    // (see the batch-prefetch note in computeBaseBatch), so this is the only
+                    // place in this path where a batch hint is possible at all. Hints are
+                    // asynchronous and advisory: issuing them back-to-back puts several reads
+                    // in flight before initializeWithSeeds blocks on the first one.
+                    if (CROSS_SOURCE_SEED_PREFETCH) {
+                        var otherSource = sources.get(sourceIdx);
+                        for (int si = 0; si < seedCount; si++) {
+                            otherSource.willNeedL0Record(scratch.seedNodes[si]);
+                        }
+                        seedHints.addAndGet(seedCount);
+                    }
+                    searcher.initializeWithSeeds(ssp, indexAlive,
+                            scratch.seedNodes, scratch.seedScores, seedCount);
+                    searcher.searchOneLayer(ssp, params.searchTopK, 0f, 0, indexAlive);
+                    candSize = appendApproximateResults(
+                            searcher.approximateResults(), sourceIdx, scratch, candSize);
+                } else {
+                    if (seedingActive) {
+                        coldSearches.incrementAndGet();
+                    }
+                    // rerankK = searchTopK, not beamWidth: the wider beam's extra candidates are
+                    // largely pruned by diversity selection, so the doubled approximate-phase cost
+                    // buys almost no recall.
+                    SearchResult results = searcher.search(
+                            ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
+                    );
 
-            for (var r : results.getNodes()) {
-                scratch.candSrc[candSize] = sourceIdx;
-                scratch.candNode[candSize] = r.node;
-                scratch.candScore[candSize] =
-                        params.fusedPQEnabled
-                                ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
-                                : r.score;
-                candSize++;
+                    for (var r : results.getNodes()) {
+                        scratch.candSrc[candSize] = sourceIdx;
+                        scratch.candNode[candSize] = r.node;
+                        scratch.candScore[candSize] =
+                                params.fusedPQEnabled
+                                        ? (adcActive() ? codeScore(scratch, sourceIdx, r.node)
+                                                       : rescore(searchView, r.node, baseVec, scratch.tmpVec))
+                                        : r.score;
+                        candSize++;
+                    }
+                }
             }
+
         } else {
             var entry = searchView.entryNode();
             if (level > entry.level) return candSize;
-            scratch.gs[sourceIdx].initializeInternal(ssp, entry, Bits.ALL);
+            searcher.initializeInternal(ssp, entry, Bits.ALL);
 
             // Descend greedily through levels above the target level, so the search at
             // `level` starts from the best-known region rather than the global entry node.
             // This mirrors how GraphSearcher.searchInternal navigates the hierarchy.
             for (int l = entry.level; l > level; l--) {
-                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
-                scratch.gs[sourceIdx].setEntryPointsFromPreviousLayer();
+                searcher.searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
+                searcher.setEntryPointsFromPreviousLayer();
             }
 
-            scratch.gs[sourceIdx].searchOneLayer(
+            searcher.searchOneLayer(
                     ssp, params.searchTopK, 0f, level, indexAlive
             );
 
             int prev_candSize = candSize;
             candSize = appendApproximateResults(
-                    scratch.gs[sourceIdx].approximateResults(),
+                    searcher.approximateResults(),
                     sourceIdx,
                     scratch,
                     candSize
@@ -1282,17 +2875,49 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             if (params.fusedPQEnabled) {
                 for (int i = prev_candSize; i < candSize; i++) {
-                    scratch.candScore[i] = rescore(
-                            searchView,
-                            scratch.candNode[i],
-                            baseVec,
-                            scratch.tmpVec
-                    );
+                    scratch.candScore[i] = adcActive()
+                            ? codeScore(scratch, sourceIdx, scratch.candNode[i])
+                            : rescore(searchView, scratch.candNode[i], baseVec, scratch.tmpVec);
                 }
             }
         }
 
         return candSize;
+    }
+
+    /**
+     * Converts a jvector similarity score to the underlying metric distance used by the
+     * cluster-search certificates: angular distance for DOT_PRODUCT/COSINE (normalized inputs),
+     * Euclidean distance for EUCLIDEAN. Returns NaN for similarities with no metric backing.
+     */
+    private double metricDistance(float sim) {
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+            case COSINE: {
+                double cos = 2.0 * sim - 1.0;
+                return Math.acos(Math.max(-1.0, Math.min(1.0, cos)));
+            }
+            case EUCLIDEAN: {
+                double d2 = 1.0 / Math.max(1e-9, sim) - 1.0;
+                return Math.sqrt(Math.max(0.0, d2));
+            }
+            default:
+                return Double.NaN;
+        }
+    }
+
+    private boolean clusterSearchUsable() {
+        if (!CLUSTER_SEARCH_ENABLED) {
+            return false;
+        }
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+            case COSINE:
+            case EUCLIDEAN:
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
@@ -1312,39 +2937,47 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * overwhelming memory by limiting the number of in-flight tasks while maintaining high
      * throughput via the completion service.
      */
-    private <T> void runBatchesWithBackpressure(
+    /**
+     * Computes every batch and consumes its results, blocking until the whole list has settled.
+     * <p>
+     * The in-flight window is the {@link ParallelExecutor}'s to choose — the embedder sized its
+     * own execution resource and jvector does not second-guess it — so results are consumed by
+     * {@code onComplete} <em>on the worker that produced them</em>, not on a single orchestrating
+     * thread. {@code onComplete} must therefore be thread-safe: either write through a
+     * positional, disjoint-range channel call (the L0 record path) or hold a lock (the
+     * sequential upper-layer writer path).
+     * <p>
+     * Blocking until the whole list settles is what makes this usable as a barrier, which the L0
+     * caller depends on: draining between source groups is what guarantees every reverse-candidate
+     * offer into a source has completed before that source's own nodes read them.
+     */
+    private <T> void runBatches(
             List<BatchSpec> batches,
-            ExecutorCompletionService<List<T>> ecs,
-            java.util.function.Consumer<BatchSpec> submitOne,
-            java.util.function.Consumer<List<T>> onComplete
-    ) throws InterruptedException, ExecutionException {
-
+            java.util.function.Function<BatchSpec, List<T>> compute,
+            java.util.function.Consumer<List<T>> onComplete,
+            ProgressTracker.PhaseScope scope,
+            AtomicLong nodesDone,
+            long nodesTotal
+    ) {
         final int total = batches.size();
-        int nextToSubmit = 0;
-        int inFlight = 0;
-
-        // initial window
-        while (inFlight < taskWindowSize && nextToSubmit < total) {
-            submitOne.accept(batches.get(nextToSubmit++));
-            inFlight++;
-        }
-
-        int completed = 0;
-        while (completed < total) {
-            List<T> results = ecs.take().get();
-            onComplete.accept(results);
-
-            completed++;
-            inFlight--;
-
-            if (nextToSubmit < total) {
-                submitOne.accept(batches.get(nextToSubmit++));
-                inFlight++;
+        AtomicInteger completed = new AtomicInteger();
+        // By index, not as a stream, for the same reason as joinAll: the executor can only split
+        // evenly if it knows how many units there are.
+        executor.forEachInt(total, i -> {
+            BatchSpec bs = batches.get(i);
+            onComplete.accept(compute.apply(bs));
+            // Reported from the worker, so a phase spanning several runBatches calls (L0 runs one
+            // per source group) still counts up monotonically across the whole phase.
+            report(scope, nodesDone, bs.end - bs.start, nodesTotal);
+            int done = completed.incrementAndGet();
+            if (done % 10 == 0) {
+                // Ordinals as well as batches: ordinals-per-batch varies from ~125 to 4,096
+                // between merges, so a batch count alone is not comparable across them. Reading
+                // rates in batches cost this investigation an 8x error in its headline figure.
+                log.debug("Compaction I/O progress: {}/{} batches written to disk ({}/{} ordinals)",
+                          done, total, nodesDone.get(), nodesTotal);
             }
-            if (completed % 10 == 0) {
-                log.debug("Compaction I/O progress: {}/{} batches written to disk", completed, total);
-            }
-        }
+        });
     }
 
     /**
@@ -1471,6 +3104,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // maxDegrees: small list of integers
         size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
 
+        // Cross-link reverse-candidate buffer (present only while L0 is being compacted)
+        if (reverseCandidates != null) {
+            size += reverseCandidates.ramBytesUsed();
+        }
+
         // executor: a shared pool (default) or caller-injected — not owned by the compactor, so it
         // contributes no pool allocation here. Scratch space still scales with its parallelism.
         int numThreads = taskWindowSize;
@@ -1500,7 +3138,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
         }
         int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0);
+        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
         int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
@@ -1634,6 +3272,352 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Thread-local scratch space containing reusable buffers and search state for processing nodes.
      */
+    /** Array-backed OrdinalMapper for one source of the compactor-assigned similarity mapping. */
+    private static final class ArrayOrdinalMapper implements OrdinalMapper {
+        private final int src;
+        private final int[] oldToNew;      // per-source, indexed by old ordinal
+        private final int[] newToOldAll;   // global, indexed by new ordinal
+        private final int[] newToSrcAll;   // global, indexed by new ordinal
+        private final int maxOrdinal;
+
+        ArrayOrdinalMapper(int src, int[] oldToNew, int[] newToOldAll, int[] newToSrcAll, int maxOrdinal) {
+            this.src = src;
+            this.oldToNew = oldToNew;
+            this.newToOldAll = newToOldAll;
+            this.newToSrcAll = newToSrcAll;
+            this.maxOrdinal = maxOrdinal;
+        }
+
+        @Override
+        public int maxOrdinal() {
+            return maxOrdinal;
+        }
+
+        @Override
+        public int oldToNew(int oldOrdinal) {
+            return oldToNew[oldOrdinal];
+        }
+
+        @Override
+        public int newToOld(int newOrdinal) {
+            if (newOrdinal < 0 || newOrdinal >= newToSrcAll.length || newToSrcAll[newOrdinal] != src) {
+                return OMITTED;
+            }
+            return newToOldAll[newOrdinal];
+        }
+    }
+
+    /**
+     * Builds the similarity-assigned ordinal mapping: one streaming pass per source computes a
+     * 4-byte PQ-code prefix per live node; live nodes are then numbered in (prefix, ordinal)
+     * order, source by source in ascending-size processing order — so batch processing in the
+     * same order writes records sequentially and places similar vectors in adjacent records.
+     * Dead nodes are numbered after all live nodes, preserving a total bijection.
+     */
+    /** Batches per band for one source's base-layer batches (a batch straddling two bands counts for both). */
+    private BandTracker trackerFor(int s, List<BatchSpec> batches) {
+        int width = bandWidth != null && bandWidth[s] > 0 ? bandWidth[s]
+                  : BandStore.clampBandNodes(bandNodes, dimension, sources.get(s).getDegree(0));
+        int live = numLiveNodesPerSource.get(s);
+        int bands = live == 0 ? 0 : (live + width - 1) / width;
+        BandTracker t = new BandTracker(s, planSourceStart[s], width, bands);
+        OrdinalMapper mapper = remappers.get(s);
+        for (BatchSpec bs : batches) {
+            if (bs.end <= bs.start) continue;
+            int first = t.bandOf(mapper.oldToNew(bs.nodes[bs.start]));
+            int last = t.bandOf(mapper.oldToNew(bs.nodes[bs.end - 1]));
+            for (int band = first; band <= last; band++) {
+                t.total[band]++;
+            }
+        }
+        return t;
+    }
+
+    /**
+     * Warms, in every larger source that carries key blocks, the blocks whose key extent overlaps
+     * this band's key range — the window the band's searches will land in when that source is
+     * similarity-ordered on disk. Runs once per band, on the worker that claims it.
+     */
+    private void pretouchBandTargets(BandTracker tracker, int band) {
+        if (bandPretouchMaxNodes <= 0 || keyBlocks == null || bandKeyMin == null) {
+            return;
+        }
+        int s = tracker.sourceIdx;
+        if (bandKeyMin[s] == null || band >= bandKeyMin[s].length) {
+            return;
+        }
+        long kmin = bandKeyMin[s][band];
+        long kmax = bandKeyMax[s][band];
+        long warmed = 0;
+        for (int t = 0; t < sources.size(); t++) {
+            if (t == s || sizeRank[t] < sizeRank[s] || keyBlocks[t] == null) {
+                continue; // searches only go into larger sources
+            }
+            KeyBlockIndex blocks = keyBlocks[t];
+            if (blocks.overlapFraction(kmin, kmax) > BAND_PRETOUCH_MAX_OVERLAP) {
+                bandPretouchSkippedUnclustered.incrementAndGet();
+                continue;
+            }
+            for (int[] run : blocks.runsFor(kmin, kmax, sources.get(t).size(0), bandPretouchMaxNodes)) {
+                sources.get(t).prefetchL0Records(run[0], run[1]);
+                warmed += run[1] - run[0] + 1;
+            }
+        }
+        bandPretouchBands.incrementAndGet();
+        bandPretouchNodes.addAndGet(warmed);
+    }
+
+    /**
+     * The distribute stage for one source: sweep it once in its own ordinal order, in prefetched
+     * windows across the pool, appending every live node's vector and base-layer edges to the
+     * band of its new ordinal. Returns the store ready for reads.
+     */
+    private BandStore distributeSource(int s) throws IOException {
+        OnDiskGraphIndex source = sources.get(s);
+        FixedBitSet alive = liveNodes.get(s);
+        OrdinalMapper mapper = remappers.get(s);
+        int size = source.size(0);
+        int live = numLiveNodesPerSource.get(s);
+        long t0 = System.nanoTime();
+        BandStore store = new BandStore(spillParent, s, planSourceStart[s], live, dimension, source.getDegree(0),
+                                        bandNodes, mapper::oldToNew);
+        try (var scope = progress.startPhase(CompactionStage.DISTRIBUTE)) {
+            scope.onProgress(0, live);
+            AtomicLong done = new AtomicLong();
+            int window = Math.max(4096, (size + 4 * taskWindowSize - 1) / (4 * taskWindowSize));
+            List<Runnable> tasks = new ArrayList<>();
+            for (int from = 0; from < size; from += window) {
+                final int lo = from;
+                final int hi = Math.min(size, from + window);
+                tasks.add(() -> {
+                    source.prefetchL0Records(lo, hi - 1);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    int windowLive = 0;
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int node = lo; node < hi; node++) {
+                            if (!alive.get(node)) continue;
+                            view.getVectorInto(node, vec, 0);
+                            store.put(node, vec, view.getNeighborsIterator(0, node));
+                            windowLive++;
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                    report(scope, done, windowLive, live);
+                });
+            }
+            joinAll(tasks);
+            store.finishDistribute();
+        } catch (RuntimeException | IOException e) {
+            store.close();
+            throw e;
+        }
+        distributeBytes.addAndGet(store.bytes());
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        log.info("Distribute source {}: {} records ({} bytes) into {} bands of {} nodes ({} bytes/record) in {} ms ({} MB/s spilled)",
+                s, store.records(), store.bytes(), store.numBands, store.bandNodes, store.recordBytes, ms,
+                ms == 0 ? "-" : String.format("%.0f", store.bytes() / 1048576.0 / (ms / 1000.0)));
+        return store;
+    }
+
+    /**
+     * This source's slice of the plan in new-ordinal order: the old ordinals of its live nodes,
+     * ascending by the new ordinal they were assigned. One forward scan of the plan arrays.
+     */
+    static int[] planWindow(int[] newToSrc, int[] newToOld, int src, FixedBitSet alive) {
+        int count = 0;
+        for (int n = 0; n < newToSrc.length; n++) {
+            if (newToSrc[n] == src && alive.get(newToOld[n])) {
+                count++;
+            }
+        }
+        int[] out = new int[count];
+        int k = 0;
+        for (int n = 0; n < newToSrc.length; n++) {
+            if (newToSrc[n] == src && alive.get(newToOld[n])) {
+                out[k++] = newToOld[n];
+            }
+        }
+        return out;
+    }
+
+    private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq, ProgressTracker.PhaseScope scope) {
+        long t0 = System.nanoTime();
+        int numSources = sources.size();
+        final SimilarityKey keyFn = PQ_SIMILARITY_KEYS ? null : SimilarityKey.randomProjection(dimension);
+        streamKeyedSources.set(0);
+        keyBlocks = new KeyBlockIndex[numSources];
+        bandKeyMin = new long[numSources][];
+        bandKeyMax = new long[numSources][];
+        bandWidth = new int[numSources];
+        long totalOrdinals = 0;
+        for (OnDiskGraphIndex src : sources) {
+            totalOrdinals += src.size(0);
+        }
+        // Progress is live nodes encoded; the per-source sort and the assignment that follow
+        // each source's windows are short next to the encode sweep and are not counted.
+        final long liveTotal = numTotalNodes;
+        AtomicLong encodedNodes = new AtomicLong();
+        log.info("Assigning similarity ordinals: {} live nodes across {} sources", liveTotal, numSources);
+        scope.onProgress(0, liveTotal);
+        if (totalOrdinals > Integer.MAX_VALUE) {
+            throw new IllegalStateException("merged ordinal space exceeds int range: " + totalOrdinals);
+        }
+
+        // ascending-size processing order, matching setupCrossLink
+        Integer[] order = new Integer[numSources];
+        for (int i = 0; i < numSources; i++) order[i] = i;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer i) -> numLiveNodesPerSource.get(i))
+                .thenComparingInt(i -> i));
+
+        int[] newToOldAll = new int[(int) totalOrdinals];
+        int[] newToSrcAll = new int[(int) totalOrdinals];
+        int[][] oldToNewPerSource = new int[numSources][];
+        int[] sourceStart = new int[numSources];
+        int next = 0;
+
+        for (int oi = 0; oi < numSources; oi++) {
+            int s = order[oi];
+            OnDiskGraphIndex source = sources.get(s);
+            int size = source.size(0);
+            FixedBitSet alive = liveNodes.get(s);
+            int[] oldToNew = new int[size];
+            oldToNewPerSource[s] = oldToNew;
+            sourceStart[s] = next;
+
+            // one pass: a 4-byte similarity key per live node, packed with the ordinal
+            int liveCount = numLiveNodesPerSource.get(s);
+            long[] keyed = new long[liveCount];
+            java.util.concurrent.atomic.AtomicInteger fill = new java.util.concurrent.atomic.AtomicInteger();
+            // Keys straight from the source's token stream when it carries this key function:
+            // a sequential read of a few bytes per node, no record touched, no encoding.
+            boolean fromStream = false;
+            if (keyFn != null && streamKeys && source.tokenStreamSection().isPresent()) {
+                try (var ts = source.openTokenStream()) {
+                    if (ts.keyFunction == keyFn.id() && ts.nodeCount == size) {
+                        int streamLive = 0;
+                        KeyBlockIndex blocks = new KeyBlockIndex(size, keyBlockNodes);
+                        while (ts.next()) {
+                            int node = ts.ordinal();
+                            if (!alive.get(node)) continue;
+                            keyed[fill.getAndIncrement()] = ((ts.key() & 0xFFFFFFFFL) << 32) | (node & 0xFFFFFFFFL);
+                            blocks.add(node, ts.key());
+                            streamLive++;
+                        }
+                        keyBlocks[s] = blocks;
+                        fromStream = true;
+                        streamKeyedSources.incrementAndGet();
+                        report(scope, encodedNodes, streamLive, liveTotal);
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+            // Window sized to the pool, not fixed. A fixed quarter-million-node window gives a
+            // ~1M-node source four tasks, and four tasks can occupy four workers no matter how the
+            // executor splits them: measured at 380s across 7 sources on a 40-thread pool, with
+            // sources running one after another on 4 threads each. Aim for several tasks per
+            // worker so the whole pool is busy on every source; the floor keeps tasks big enough
+            // that the per-task view open and prefetch call stay amortized.
+            int window = Math.max(4096, (size + 4 * taskWindowSize - 1) / (4 * taskWindowSize));
+            List<Runnable> tasks = new ArrayList<>();
+            for (int from = 0; from < size && !fromStream; from += window) {
+                final int lo = from;
+                final int hi = Math.min(size, from + window);
+                tasks.add(() -> {
+                    source.prefetchL0Records(lo, hi - 1);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    int windowLive = 0;
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int node = lo; node < hi; node++) {
+                            if (!alive.get(node)) continue;
+                            view.getVectorInto(node, vec, 0);
+                            long key;
+                            if (keyFn != null) {
+                                key = keyFn.keyOf(vec) & 0xFFFFFFFFL;
+                            } else {
+                                pq.encodeTo(vec, code);
+                                key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
+                                    | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
+                            }
+                            keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
+                            windowLive++;
+                        }
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                    report(scope, encodedNodes, windowLive, liveTotal);
+                });
+            }
+            joinAll(tasks);
+            CompactionSort.sort(keyed, fill.get(), executor, taskWindowSize);
+
+            // The band key ranges fall straight out of the sorted plan: a band is a run of
+            // width consecutive entries, its range the keys at the run's ends.
+            int width = BandStore.clampBandNodes(bandNodes, dimension, source.getDegree(0));
+            int liveHere = fill.get();
+            int bands = liveHere == 0 ? 0 : (liveHere + width - 1) / width;
+            bandWidth[s] = width;
+            bandKeyMin[s] = new long[bands];
+            bandKeyMax[s] = new long[bands];
+            for (int b = 0; b < bands; b++) {
+                bandKeyMin[s][b] = keyed[b * width] >>> 32;
+                bandKeyMax[s][b] = keyed[Math.min(liveHere, (b + 1) * width) - 1] >>> 32;
+            }
+
+            for (int k = 0; k < fill.get(); k++) {
+                int old = (int) keyed[k];
+                oldToNew[old] = next;
+                newToOldAll[next] = old;
+                newToSrcAll[next] = s;
+                next++;
+            }
+        }
+        // dead nodes last, any order
+        for (int oi = 0; oi < numSources; oi++) {
+            int s = order[oi];
+            FixedBitSet alive = liveNodes.get(s);
+            int size = sources.get(s).size(0);
+            int[] oldToNew = oldToNewPerSource[s];
+            for (int node = 0; node < size; node++) {
+                if (alive.get(node)) continue;
+                oldToNew[node] = next;
+                newToOldAll[next] = node;
+                newToSrcAll[next] = s;
+                next++;
+            }
+        }
+
+        this.maxOrdinal = next - 1;
+        this.planNewToOld = newToOldAll;
+        this.planNewToSrc = newToSrcAll;
+        this.planSourceStart = sourceStart;
+        List<OrdinalMapper> mappers = new ArrayList<>(numSources);
+        for (int s = 0; s < numSources; s++) {
+            mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
+        }
+        log.info("Similarity ordinals assigned: {} ordinals across {} sources in {} ms (key function {}; keys from stream for {} of {} sources)",
+                next, numSources, (System.nanoTime() - t0) / 1_000_000,
+                keyFn == null ? "pq" : "lsh", streamKeyedSources.get(), numSources);
+        return mappers;
+    }
+
+    /**
+     * Runs every task to completion on the {@link ParallelExecutor}, blocking until all settle.
+     * <p>
+     * Dispatched by index, never as a stream. These tasks are coarse — a quarter-million nodes
+     * each, a handful per source — and {@code forEach(Stream)} gives the executor no way to know
+     * that: an executor that batches stream elements for the fine-grained case will fold a
+     * four-task list onto a single worker, which turned this pass into a 55-minute
+     * single-threaded encode on a 16M-node merge. {@code forEachInt} hands over the count, which
+     * is exactly what an executor needs to split the work evenly.
+     */
+    private void joinAll(List<Runnable> tasks) {
+        executor.forEachInt(tasks.size(), i -> tasks.get(i).run());
+    }
+
     private static final class Scratch implements AutoCloseable {
 
         final int[] candSrc, candNode;
@@ -1642,11 +3626,39 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final VectorFloat<?> tmpVec, baseVec;
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
+        /** A node's own base-layer edges when they come from its band (sized to the widest source). */
+        final int[] ownNeighbors;
+        /** Searchers over resident adjacency, per source; null entries search on disk. */
+        final GraphSearcher[] rgs;
+        /** Code-based candidate scoring; null without a PQ. */
+        final AdcScorer adc;
+        final byte[] codeBuf;
+        final ByteSequence<?> codeSeq;
+        // Seeding scratch: candidate seed pool (old ordinals in the target source), the chosen top
+        // seeds with their exact scores, a per-thread read channel on the output file, and a buffer
+        // sized for one record's neighbor-count + list.
+        final int[] seedPool = new int[SEED_POOL_CAPACITY];
+        final int[] seedNodes = new int[SEEDS_PER_PARTITION];
+        final float[] seedScores = new float[SEEDS_PER_PARTITION];
+        // Bounded cluster search: per-target anchor (query copy, result ordinals, the anchor's
+        // exact scores) and scratch for member rescoring. Reset at batch boundaries.
+        final VectorFloat<?>[] clusterAnchorQuery;   // [source]; null slot = no anchor
+        final boolean[] clusterAnchorValid;
+        final int[][] clusterNodes;                  // [source][k+m]
+        final float[][] clusterAnchorScores;         // [source][k+m]
+        final int[] clusterCount;
+        final float[] clusterWorstSim;     // worst exact score in the anchor list (defines ThetaD)
+        final int[] clusterExtended;       // results added by resume() for the current anchor
+        final float[] clusterMemberScores;           // [k+m] scratch
+        final Integer[] clusterOrder;                // [k+m] scratch for sorting members
+        final FileChannel outputChannel;      // null unless seeding
+        final ByteBuffer seedEdgeBuf;         // null unless seeding
 
         /**
          * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
          */
-        Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, ProductQuantization pq) {
+        Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources,
+                ProductQuantization pq, Path seedOutputPath, VectorSimilarityFunction vsf, ResidentGraph[] resident) {
             this.candSrc = new int[maxCandidateSize];
             this.candNode = new int[maxCandidateSize];
             this.candScore = new float[maxCandidateSize];
@@ -1654,12 +3666,72 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
             this.baseVec = vectorTypeSupport.createFloatVector(dimension);
             this.pqCode = (pq == null) ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+            int widest = 1;
+            for (OnDiskGraphIndex src : sources) {
+                widest = Math.max(widest, src.getDegree(0));
+            }
+            this.ownNeighbors = new int[widest];
+            if (pq != null) {
+                this.adc = new AdcScorer(pq, vsf);
+                this.codeBuf = new byte[pq.getSubspaceCount()];
+                this.codeSeq = vectorTypeSupport.createByteSequence(codeBuf);
+            } else {
+                this.adc = null;
+                this.codeBuf = null;
+                this.codeSeq = null;
+            }
 
             this.gs = new GraphSearcher[sources.size()];
             for (int i = 0; i < sources.size(); i++) {
-                gs[i] = new GraphSearcher(sources.get(i));
+                gs[i] = new GraphSearcher.Builder(FrontierPrefetchingView.wrap(sources.get(i))).build();
                 gs[i].usePruning(false);
             }
+            if (resident != null) {
+                this.rgs = new GraphSearcher[sources.size()];
+                for (int i = 0; i < sources.size(); i++) {
+                    if (resident[i] != null) {
+                        var view = resident[i].view((OnDiskGraphIndex.View) sources.get(i).getView());
+                        rgs[i] = new GraphSearcher.Builder(view).build();
+                        rgs[i].usePruning(false);
+                    }
+                }
+            } else {
+                this.rgs = null;
+            }
+            int clusterCap = maxCandidateSize; // >= searchTopK + CLUSTER_MARGIN
+            this.clusterAnchorQuery = new VectorFloat<?>[sources.size()];
+            this.clusterAnchorValid = new boolean[sources.size()];
+            this.clusterNodes = new int[sources.size()][];
+            this.clusterAnchorScores = new float[sources.size()][];
+            this.clusterCount = new int[sources.size()];
+            this.clusterWorstSim = new float[sources.size()];
+            this.clusterExtended = new int[sources.size()];
+            this.clusterMemberScores = new float[clusterCap];
+            this.clusterOrder = new Integer[clusterCap];
+            for (int i = 0; i < sources.size(); i++) {
+                this.clusterAnchorQuery[i] = vectorTypeSupport.createFloatVector(dimension);
+                this.clusterNodes[i] = new int[clusterCap];
+                this.clusterAnchorScores[i] = new float[clusterCap];
+            }
+
+            if (seedOutputPath != null) {
+                try {
+                    this.outputChannel = FileChannel.open(seedOutputPath, StandardOpenOption.READ);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                // count int + up to maxDegree neighbor ints
+                this.seedEdgeBuf = ByteBuffer.allocate(Integer.BYTES * (maxDegree + 1));
+            } else {
+                this.outputChannel = null;
+                this.seedEdgeBuf = null;
+            }
+        }
+
+        /** Forgets all cluster anchors; called at batch boundaries. */
+        void resetChainSeeds() {
+            Arrays.fill(clusterAnchorValid, false);
+            Arrays.fill(clusterCount, 0);
         }
 
         /**
@@ -1668,7 +3740,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         @Override
         public void close() throws IOException {
             for (var s : gs) s.close();
+            if (rgs != null) {
+                for (var r : rgs) {
+                    if (r != null) r.close();
+                }
+            }
             selectedCache.reset();
+            if (outputChannel != null) outputChannel.close();
         }
     }
 
@@ -1716,7 +3794,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * Update `selected` with the diverse members of `neighbors`.  `neighbors` is not modified
          * It assumes that the i-th neighbor with 0 {@literal <=} i {@literal <} diverseBefore is already diverse.
          */
-        public void retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs) {
+        public void retainDiverse(int[] candSrc, int[] candNode, float[] candScore, int[] order, int orderSize, int maxDegree, SelectedVecCache selectedCache, VectorFloat<?> tmp, GraphSearcher[] gs,
+                                  CandidateVectors candidateVectors) {
             selectedCache.reset();
             if (orderSize == 0) return;
             int nSelected = 0;
@@ -1732,7 +3811,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     float cScore = candScore[ci];
 
                     OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) gs[cSrc].getView();
-                    cView.getVectorInto(cNode, tmp, 0);
+                    if (candidateVectors != null) {
+                        candidateVectors.into(cSrc, cNode, tmp);
+                    } else {
+                        cView.getVectorInto(cNode, tmp, 0);
+                    }
                     if (isDiverse(cView, cNode, tmp, cScore, currentAlpha, selectedCache)) {
                         selectedCache.add(cSrc, cView, cNode, cScore, tmp);
                         nSelected++;
@@ -1764,6 +3847,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * Cache for storing selected diverse neighbors along with their metadata and vector copies.
      */
+    /** Where the diversity pass gets a candidate's vector: the record, or a decoded code. */
+    interface CandidateVectors {
+        void into(int src, int node, VectorFloat<?> dst);
+    }
+
     static final class SelectedVecCache {
         int[] sourceIdx;
         OnDiskGraphIndex.View[] views;

@@ -16,12 +16,13 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.graph.ParallelExecutor;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 
 /**
  * Bundle of inputs that {@link QuantizationCompactionStrategy} implementations need to do their work
@@ -38,8 +39,23 @@ public final class CompactionContext {
     public final List<OrdinalMapper> remappers;
     public final int dimension;
     public final int maxOrdinal;
-    public final ForkJoinPool executor;
+    /**
+     * Runs a strategy's internal fan-out to completion. Supplied by the embedder via
+     * {@link OnDiskGraphIndexCompactor}, so strategy work is bound to the host's thread budget
+     * rather than a jvector-owned pool.
+     */
+    public final ParallelExecutor executor;
+    /**
+     * The executor's intended width, used only to pick task granularity (how many chunks to
+     * split work into). Never used to size an in-flight window — {@link #executor} owns that.
+     */
     public final int taskWindowSize;
+    /**
+     * The embedder's progress + throttle surface, so a strategy's own phases are visible and its
+     * writes are paced on the same terms as the compactor's. Never {@code null};
+     * {@link ProgressLimiter#UNLIMITED} when the embedder installed none.
+     */
+    public final ProgressLimiter progress;
 
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
@@ -48,8 +64,9 @@ public final class CompactionContext {
             List<OrdinalMapper> remappers,
             int dimension,
             int maxOrdinal,
-            ForkJoinPool executor,
-            int taskWindowSize) {
+            ParallelExecutor executor,
+            int taskWindowSize,
+            ProgressLimiter progress) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
@@ -58,5 +75,6 @@ public final class CompactionContext {
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
         this.taskWindowSize = taskWindowSize;
+        this.progress = progress == null ? ProgressLimiter.UNLIMITED : progress;
     }
 }

@@ -164,7 +164,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
         writeSeparatedFeatures(featureStateSuppliers);
 
         if (version >= 5) {
-            writeFooter(view, out.position());
+            writeFooter(view, out.position(), featureStateSuppliers);
         }
         final var endOfGraphPosition = out.position();
 

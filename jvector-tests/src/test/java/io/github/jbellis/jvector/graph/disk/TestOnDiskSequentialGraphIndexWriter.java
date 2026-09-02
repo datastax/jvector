@@ -107,6 +107,7 @@ public class TestOnDiskSequentialGraphIndexWriter extends LuceneTestCase {
 
             // Validate the loaded graph
             TestUtil.assertGraphEquals(graph, onDiskGraph);
+            TestOnDiskGraphIndex.assertTokenStreamMatches(onDiskGraph);
             try (var onDiskView = onDiskGraph.getView()) {
                 TestOnDiskGraphIndex.validateVectors(onDiskView, ravv);
             }

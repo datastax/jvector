@@ -36,6 +36,9 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.work.ProgressLimiter;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
+import io.github.jbellis.jvector.util.work.WorkStage;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -45,17 +48,24 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
@@ -534,6 +544,1022 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                   compactRecall >= 0.2);
 
         searcher.close();
+    }
+
+    /**
+     * Builds identity remappers with every node live, the setup every compaction test here shares.
+     */
+    /**
+     * The merged output carries a token stream that decodes to its own base layer, written after
+     * refinement (which rewrites adjacency) and after the pre-encode cache is truncated, with the
+     * footer rewritten behind it so the output still loads through its footer.
+     */
+    @Test
+    public void testTokenStreamEmittedForCompactedGraph() throws Exception {
+        for (boolean refine : new boolean[] {false, true}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.setRefineAfterCompaction(refine);
+            Path out = testDirectory.resolve("compact_token_stream_refine_" + refine);
+            compactor.compact(out);
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                assertEquals(numSources * numVectorsPerGraph, g.size(0));
+                TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+    }
+
+    /**
+     * Step 2 parity: the similarity-ordinal plan derived from the sources' token-stream keys must
+     * equal the plan derived by reading every source vector and computing the same key.
+     */
+    @Test
+    public void testPlanFromStreamMatchesPlanFromVectors() throws Exception {
+        List<List<OrdinalMapper>> plans = new ArrayList<>();
+        for (boolean fromStream : new boolean[] {true, false}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            for (var g : graphs) {
+                assertTrue("test sources must carry keyed token streams", g.tokenStreamSection().isPresent());
+            }
+            identityRemappers(liveNodes, remappers);
+            // a few dead nodes, so liveness from the caller is honoured on both paths
+            liveNodes.get(0).clear(3);
+            liveNodes.get(1).clear(numVectorsPerGraph - 1);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.setSimilarityOrdinals(true);
+            compactor.streamKeys = fromStream;
+            compactor.compact(testDirectory.resolve("compact_plan_source_" + fromStream));
+            assertEquals(fromStream ? numSources : 0, compactor.streamKeyedSources.get());
+            plans.add(compactor.effectiveRemappers());
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        var a = plans.get(0);
+        var b = plans.get(1);
+        for (int src = 0; src < numSources; src++) {
+            assertEquals(a.get(src).maxOrdinal(), b.get(src).maxOrdinal());
+            for (int old = 0; old < numVectorsPerGraph; old++) {
+                assertEquals("source " + src + " old " + old, a.get(src).oldToNew(old), b.get(src).oldToNew(old));
+            }
+            for (int n = 0; n <= a.get(src).maxOrdinal(); n++) {
+                assertEquals("new " + n, a.get(src).newToOld(n), b.get(src).newToOld(n));
+            }
+        }
+    }
+
+    /** The plan window is exactly what sorting (new, old) pairs produced: live old ordinals ascending by new ordinal. */
+    @Test
+    public void testPlanWindowEqualsSortedPairs() {
+        var rnd = new java.util.Random(11);
+        int n = 5000;
+        int[] newToOld = new int[n];
+        int[] newToSrc = new int[n];
+        List<int[]> pairs = new ArrayList<>();
+        for (int src = 0; src < 3; src++) {
+            for (int old = 0; old < n / 3 + (src == 0 ? n % 3 : 0); old++) {
+                pairs.add(new int[] {src, old});
+            }
+        }
+        java.util.Collections.shuffle(pairs, rnd);
+        for (int i = 0; i < n; i++) {
+            newToSrc[i] = pairs.get(i)[0];
+            newToOld[i] = pairs.get(i)[1];
+        }
+        for (int src = 0; src < 3; src++) {
+            int size = n / 3 + (src == 0 ? n % 3 : 0);
+            var alive = new FixedBitSet(size);
+            for (int old = 0; old < size; old++) {
+                if (rnd.nextInt(8) != 0) alive.set(old);
+            }
+            // the sort-based construction this replaced
+            List<long[]> keyed = new ArrayList<>();
+            for (int old = alive.nextSetBit(0); old != io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS; old = alive.nextSetBit(old + 1)) {
+                int nw = -1;
+                for (int i = 0; i < n; i++) if (newToSrc[i] == src && newToOld[i] == old) { nw = i; break; }
+                keyed.add(new long[] {nw, old});
+            }
+            keyed.sort(java.util.Comparator.comparingLong(k -> k[0]));
+            int[] expected = keyed.stream().mapToInt(k -> (int) k[1]).toArray();
+            org.junit.Assert.assertArrayEquals(expected, OnDiskGraphIndexCompactor.planWindow(newToSrc, newToOld, src, alive));
+        }
+    }
+
+    /**
+     * Step 3 parity: with own records served from bands instead of source seeks, the merged
+     * output decodes to the same graph as the direct path — every node's base-layer edges,
+     * vector, similarity key, and upper-layer edges — and no spill is left behind. Compared on
+     * decoded content rather than bytes: the retrained PQ codebook in the header is not
+     * byte-deterministic between two runs of the direct path itself (float summation order in
+     * refinement), while nothing the band path touches is affected by it.
+     */
+    @Test
+    public void testBandStagedOutputMatchesDirect() throws Exception {
+        List<Path> outputs = new ArrayList<>();
+        for (boolean banded : new boolean[] {true, false}) {
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            liveNodes.get(2).clear(5);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction,
+                                                          ParallelExecutor.callerRuns(), 1);
+            compactor.setSimilarityOrdinals(true);
+            compactor.bandStaged = banded;
+            Path out = testDirectory.resolve("compact_bands_" + banded);
+            compactor.compact(out);
+            if (banded) {
+                assertEquals("every live node's own record comes from its band",
+                        (long) numSources * numVectorsPerGraph - 1, compactor.bandOwnRecords.get());
+                assertTrue(compactor.distributeBytes.get() > 0);
+            } else {
+                assertEquals(0, compactor.bandOwnRecords.get());
+            }
+            outputs.add(out);
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        try (var rsA = ReaderSupplierFactory.open(outputs.get(0)); var rsB = ReaderSupplierFactory.open(outputs.get(1));
+             var ga = OnDiskGraphIndex.load(rsA); var gb = OnDiskGraphIndex.load(rsB)) {
+            assertEquals(gb.getIdUpperBound(), ga.getIdUpperBound());
+            assertEquals(gb.getMaxLevel(), ga.getMaxLevel());
+            var vts = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorTypeSupport();
+            var va = vts.createFloatVector(ga.getDimension());
+            var vb = vts.createFloatVector(gb.getDimension());
+            try (var ta = ga.openTokenStream(); var tb = gb.openTokenStream();
+                 var viewA = ga.getView(); var viewB = gb.getView()) {
+                int n = 0;
+                while (ta.next()) {
+                    assertTrue(tb.next());
+                    assertEquals(ta.live(), tb.live());
+                    assertEquals("key of " + n, tb.key(), ta.key());
+                    assertArrayEquals("edges of " + n, java.util.Arrays.copyOf(tb.neighbors(), tb.neighborCount()),
+                            java.util.Arrays.copyOf(ta.neighbors(), ta.neighborCount()));
+                    if (ta.live()) {
+                        viewA.getVectorInto(n, va, 0);
+                        viewB.getVectorInto(n, vb, 0);
+                        for (int d = 0; d < ga.getDimension(); d++) {
+                            assertEquals("vector of " + n + " dim " + d, vb.get(d), va.get(d), 0f);
+                        }
+                    }
+                    n++;
+                }
+                assertEquals(ga.getIdUpperBound(), n);
+                for (int level = 1; level <= ga.getMaxLevel(); level++) {
+                    for (var it = ga.getNodes(level); it.hasNext(); ) {
+                        int node = it.nextInt();
+                        var ia = viewA.getNeighborsIterator(level, node);
+                        var ib = viewB.getNeighborsIterator(level, node);
+                        int[] ea = new int[ia.size()];
+                        for (int k = 0; k < ea.length; k++) ea[k] = ia.nextInt();
+                        int[] eb = new int[ib.size()];
+                        for (int k = 0; k < eb.length; k++) eb[k] = ib.nextInt();
+                        assertArrayEquals("level " + level + " edges of " + node, eb, ea);
+                    }
+                }
+            }
+        }
+        try (var left = Files.list(testDirectory)) {
+            assertEquals("no band spill left behind", 0, left.filter(pp -> pp.getFileName().toString().startsWith("bands-src")).count());
+        }
+    }
+
+    /**
+     * Step 4's experiment: candidate scoring from PQ codes (no candidate record reads) against
+     * exact scoring, on the same sources and queries, measured as recall of the merged graph.
+     * The threshold here is a floor against regressions on random test vectors; the number that
+     * decides the default is the same experiment on real data.
+     */
+    @Test
+    public void testAdcScoringRecallAgainstExact() throws Exception {
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+        double[] recall = new double[2];
+        long[] codeScores = new long[2];
+        for (int arm = 0; arm < 2; arm++) {
+            boolean adc = arm == 1;
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.adcScoring = adc;
+            Path out = testDirectory.resolve("compact_scoring_" + (adc ? "adc" : "exact"));
+            compactor.compact(out);
+            codeScores[arm] = compactor.adcScores.get();
+            if (adc) {
+                assertTrue("adc must score from codes", compactor.adcScores.get() > 0);
+                assertTrue("adc must decode candidates for diversity", compactor.adcDecodes.get() > 0);
+            } else {
+                assertEquals(0, compactor.adcScores.get());
+                assertEquals(0, compactor.adcDecodes.get());
+            }
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                recall[arm] = recallOf(g, queries, groundTruth, topK);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        System.out.printf("Candidate scoring recall@%d: exact=%.4f adc=%.4f (adc code scores=%d)%n",
+                topK, recall[0], recall[1], codeScores[1]);
+        assertTrue(String.format("adc recall %.4f must not fall more than 0.15 below exact %.4f", recall[1], recall[0]),
+                recall[1] >= recall[0] - 0.15);
+    }
+
+    /**
+     * Step 5: the band barrier hints writeback once per band when the native advisor is present,
+     * and the band pretouch warms a target's key blocks only when the target is key-clustered —
+     * arrival-ordered sources are skipped as unclustered, a merge output (piecewise key-sorted)
+     * is warmed in the second generation.
+     */
+    @Test
+    public void testBandBarrierAndPretouch() throws Exception {
+        boolean advisor;
+        {
+            Path probe = testDirectory.resolve("advisor-probe");
+            Files.write(probe, new byte[16]);
+            var a = io.github.jbellis.jvector.disk.WritebackAdvisor.open(probe);
+            advisor = a != null;
+            if (a != null) a.close();
+        }
+        // First generation: three arrival-ordered sources. Every key block spans the whole range.
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+        var first = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        first.setSimilarityOrdinals(true);
+        Path gen1 = testDirectory.resolve("compact_gen1");
+        first.compact(gen1);
+        assertTrue("arrival-ordered targets are skipped as unclustered", first.bandPretouchSkippedUnclustered.get() > 0);
+        assertEquals(0, first.bandPretouchNodes.get());
+        if (advisor) {
+            assertTrue("each band hints its output range once", first.bandWritebackHints.get() >= 3);
+        }
+        for (var rs : rss) rs.close();
+
+        // Second generation: the merge output (768 nodes, key-sorted per source run) is the large
+        // target; a fresh arrival-ordered source searches into it band by band.
+        List<ReaderSupplier> rss2 = new ArrayList<>();
+        var big = ReaderSupplierFactory.open(gen1);
+        var small = ReaderSupplierFactory.open(testDirectory.resolve("test_graph_0"));
+        rss2.add(big);
+        rss2.add(small);
+        List<OnDiskGraphIndex> sources2 = List.of(OnDiskGraphIndex.load(big), OnDiskGraphIndex.load(small));
+        assertTrue(sources2.get(0).tokenStreamSection().isPresent());
+        List<FixedBitSet> live2 = new ArrayList<>();
+        List<OrdinalMapper> maps2 = new ArrayList<>();
+        int global = 0;
+        for (var g : sources2) {
+            Map<Integer, Integer> map = new HashMap<>();
+            for (int i = 0; i < g.size(0); i++) map.put(i, global++);
+            maps2.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(g.size(0));
+            lives.set(0, g.size(0));
+            live2.add(lives);
+        }
+        var second = new OnDiskGraphIndexCompactor(sources2, live2, maps2, similarityFunction, null);
+        second.setSimilarityOrdinals(true);
+        second.bandNodes = 64;        // four bands for the 256-node searching source
+        second.keyBlockNodes = 64;    // twelve key blocks over the 768-node target
+        Path gen2 = testDirectory.resolve("compact_gen2");
+        second.compact(gen2);
+        assertTrue("bands of the searching source warmed the clustered target: " + second.bandPretouchBands.get(),
+                second.bandPretouchBands.get() >= 1);
+        assertTrue("some target ordinals were warmed", second.bandPretouchNodes.get() > 0);
+        assertTrue("the warm was a window, not the whole target",
+                second.bandPretouchNodes.get() < (long) second.bandPretouchBands.get() * sources2.get(0).size(0));
+        try (var rs = ReaderSupplierFactory.open(gen2); var g = OnDiskGraphIndex.load(rs)) {
+            assertEquals(768 + 256, g.size(0));
+            TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+        }
+        for (var rs : rss2) rs.close();
+    }
+
+    /**
+     * Step 6: cross-source searches over resident adjacency scored from the cache, against the
+     * on-disk search, as recall of the merged graph on the same sources and queries.
+     */
+    @Test
+    public void testResidentSearchRecallAgainstOnDisk() throws Exception {
+        int topK = 10;
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+        double[] recall = new double[2];
+        for (int arm = 0; arm < 2; arm++) {
+            boolean resident = arm == 1;
+            List<ReaderSupplier> rss = new ArrayList<>();
+            List<FixedBitSet> liveNodes = new ArrayList<>();
+            List<OrdinalMapper> remappers = new ArrayList<>();
+            var graphs = loadSources(rss);
+            identityRemappers(liveNodes, remappers);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+            compactor.residentSearch = resident;
+            Path out = testDirectory.resolve("compact_resident_" + resident);
+            compactor.compact(out);
+            if (resident) {
+                assertTrue("searches must have run over resident adjacency", compactor.residentSearches.get() > 0);
+                assertEquals("every source is resident within the default budget",
+                        (long) numSources * ResidentGraph.bytesFor(numVectorsPerGraph, graphs.get(0).getDegree(0)),
+                        compactor.residentGraphBytes.get());
+            } else {
+                assertEquals(0, compactor.residentSearches.get());
+            }
+            try (var rs = ReaderSupplierFactory.open(out); var g = OnDiskGraphIndex.load(rs)) {
+                recall[arm] = recallOf(g, queries, groundTruth, topK);
+                TestOnDiskGraphIndex.assertTokenStreamMatches(g);
+            }
+            for (var rs : rss) {
+                rs.close();
+            }
+        }
+        System.out.printf("Resident search recall@%d: on-disk=%.4f resident=%.4f%n", topK, recall[0], recall[1]);
+        assertTrue(String.format("resident recall %.4f must not fall more than 0.15 below on-disk %.4f", recall[1], recall[0]),
+                recall[1] >= recall[0] - 0.15);
+    }
+
+    private void identityRemappers(List<FixedBitSet> liveNodes, List<OrdinalMapper> remappers) {
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
+                map.put(i, globalOrdinal++);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+    }
+
+    private List<OnDiskGraphIndex> loadSources(List<ReaderSupplier> rss) throws IOException {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        for (int i = 0; i < numSources; ++i) {
+            var sourcePath = testDirectory.resolve("test_graph_" + i);
+            rss.add(ReaderSupplierFactory.open(sourcePath.toAbsolutePath()));
+            graphs.add(OnDiskGraphIndex.load(rss.get(i)));
+        }
+        return graphs;
+    }
+
+    /**
+     * Compaction into an embedder's container: the graph body must land at the reserved offset,
+     * leave the embedder's preamble untouched, report its own length to commit(), and load and
+     * search correctly from that offset.
+     */
+    @Test
+    public void testCompactToDestinationAtOffset() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        // An embedder's container: a preamble it reserved, then the graph body.
+        final int preambleSize = 4096;
+        byte[] preamble = new byte[preambleSize];
+        new Random(42).nextBytes(preamble);
+        Path container = testDirectory.resolve("container_with_graph");
+        try (FileChannel fc = FileChannel.open(container,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+            fc.write(ByteBuffer.wrap(preamble), 0);
+        }
+
+        AtomicLong committedLength = new AtomicLong(-1);
+        AtomicInteger closes = new AtomicInteger();
+        CompactionDestination destination = () -> new CompactionDestination.OutputReservation() {
+            @Override
+            public Path file() {
+                return container;
+            }
+
+            @Override
+            public long startOffset() {
+                return preambleSize;
+            }
+
+            @Override
+            public void commit(long bodyLength) {
+                committedLength.set(bodyLength);
+            }
+
+            @Override
+            public void close() {
+                closes.incrementAndGet();
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.compact(destination);
+
+        assertEquals("reservation must be closed exactly once", 1, closes.get());
+        assertTrue("commit() must report a positive body length", committedLength.get() > 0);
+        assertEquals("body length must be the container size past the reserved offset",
+                Files.size(container) - preambleSize, committedLength.get());
+
+        // The embedder's preamble must be exactly as it was.
+        byte[] readBack = new byte[preambleSize];
+        try (FileChannel fc = FileChannel.open(container, StandardOpenOption.READ)) {
+            fc.read(ByteBuffer.wrap(readBack), 0);
+        }
+        assertTrue("compaction must not disturb the embedder's reserved preamble",
+                Arrays.equals(preamble, readBack));
+
+        // The body must load and search from its offset.
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(container)) {
+            var compactGraph = OnDiskGraphIndex.load(rs, preambleSize);
+            assertEquals("Compacted graph should have all nodes",
+                    numSources * numVectorsPerGraph, compactGraph.size(0));
+
+            int topK = 10;
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < numQueries; ++i) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> groundTruth = buildGT(queries, topK);
+            List<SearchResult> results = new ArrayList<>();
+            try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
+                for (VectorFloat<?> q : queries) {
+                    results.add(searcher.search(
+                            DefaultSearchScoreProvider.exact(q, similarityFunction, allravv), topK, Bits.ALL));
+                }
+            }
+            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
+            assertTrue(String.format("Recall from an offset graph should be at least 0.2, got %.4f", recall),
+                    recall >= 0.2);
+        }
+    }
+
+    /**
+     * A failed compaction must leave the reservation uncommitted, which is the signal the embedder
+     * uses to discard the partial output.
+     */
+    @Test
+    public void testFailedCompactionDoesNotCommit() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        AtomicInteger commits = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+        // A directory can be neither created nor written as a file, so the compactor fails partway.
+        Path undirectable = testDirectory.resolve("not_a_file");
+        Files.createDirectory(undirectable);
+        CompactionDestination destination = () -> new CompactionDestination.OutputReservation() {
+            @Override
+            public Path file() {
+                return undirectable;
+            }
+
+            @Override
+            public long startOffset() {
+                return 0;
+            }
+
+            @Override
+            public void commit(long bodyLength) {
+                commits.incrementAndGet();
+            }
+
+            @Override
+            public void close() {
+                closes.incrementAndGet();
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        try {
+            compactor.compact(destination);
+            throw new AssertionError("compaction into an unwritable destination should have failed");
+        } catch (RuntimeException | java.io.FileNotFoundException expected) {
+            // expected
+        }
+        assertEquals("a failed compaction must not commit", 0, commits.get());
+        assertEquals("the reservation must still be closed", 1, closes.get());
+    }
+
+    /**
+     * callerRuns() bounds a compaction to the calling thread. The merged graph must be equivalent
+     * to the pool-backed one — the executor decides only how the iteration is distributed, never
+     * what gets written.
+     */
+    @Test
+    public void testCallerRunsExecutorProducesEquivalentGraph() throws Exception {
+        List<ReaderSupplier> poolRss = new ArrayList<>();
+        List<FixedBitSet> poolLive = new ArrayList<>();
+        List<OrdinalMapper> poolRemap = new ArrayList<>();
+        var poolGraphs = loadSources(poolRss);
+        identityRemappers(poolLive, poolRemap);
+        Path poolOut = testDirectory.resolve("compact_pool");
+        new OnDiskGraphIndexCompactor(poolGraphs, poolLive, poolRemap, similarityFunction, (ForkJoinPool) null)
+                .compact(poolOut);
+
+        List<ReaderSupplier> serialRss = new ArrayList<>();
+        List<FixedBitSet> serialLive = new ArrayList<>();
+        List<OrdinalMapper> serialRemap = new ArrayList<>();
+        var serialGraphs = loadSources(serialRss);
+        identityRemappers(serialLive, serialRemap);
+        Path serialOut = testDirectory.resolve("compact_caller_runs");
+        Thread compactionThread = Thread.currentThread();
+        // callerRuns must genuinely run on the calling thread, not merely produce the same output.
+        AtomicInteger offThread = new AtomicInteger();
+        ParallelExecutor watched = new ParallelExecutor() {
+            private final ParallelExecutor delegate = ParallelExecutor.callerRuns();
+
+            private Runnable check() {
+                return () -> {
+                    if (Thread.currentThread() != compactionThread) {
+                        offThread.incrementAndGet();
+                    }
+                };
+            }
+
+            @Override
+            public void forEachInt(int upperBound, java.util.function.IntConsumer body) {
+                delegate.forEachInt(upperBound, i -> {
+                    check().run();
+                    body.accept(i);
+                });
+            }
+
+            @Override
+            public void forEach(java.util.stream.IntStream source, java.util.function.IntConsumer body) {
+                delegate.forEach(source, i -> {
+                    check().run();
+                    body.accept(i);
+                });
+            }
+
+            @Override
+            public <T> void forEach(java.util.stream.Stream<T> source, java.util.function.Consumer<T> body) {
+                delegate.forEach(source, t -> {
+                    check().run();
+                    body.accept(t);
+                });
+            }
+        };
+        new OnDiskGraphIndexCompactor(serialGraphs, serialLive, serialRemap, similarityFunction, watched, 1)
+                .compact(serialOut);
+
+        assertEquals("callerRuns must never leave the calling thread", 0, offThread.get());
+
+        try (ReaderSupplier a = ReaderSupplierFactory.open(poolOut);
+             ReaderSupplier b = ReaderSupplierFactory.open(serialOut)) {
+            var poolGraph = OnDiskGraphIndex.load(a);
+            var serialGraph = OnDiskGraphIndex.load(b);
+            assertEquals("same node count", poolGraph.size(0), serialGraph.size(0));
+            assertEquals("same max level", poolGraph.getMaxLevel(), serialGraph.getMaxLevel());
+            assertEquals("same max degree", poolGraph.maxDegree(), serialGraph.maxDegree());
+
+            int topK = 10;
+            List<VectorFloat<?>> queries = new ArrayList<>();
+            for (int i = 0; i < numQueries; ++i) {
+                queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+            }
+            List<List<Integer>> groundTruth = buildGT(queries, topK);
+            double poolRecall = recallOf(poolGraph, queries, groundTruth, topK);
+            double serialRecall = recallOf(serialGraph, queries, groundTruth, topK);
+            assertTrue(String.format("caller-runs recall (%.4f) should match pool recall (%.4f)",
+                            serialRecall, poolRecall),
+                    Math.abs(poolRecall - serialRecall) < 0.15);
+        }
+    }
+
+    /**
+     * Every phase that fans out must do so through the injected executor, not a pool jvector
+     * picked. This is asserted per phase rather than by watching threads, because an escape (the
+     * codebook retrain used to call ProductQuantization.refine with PhysicalCoreExecutor.pool()
+     * and the common pool) bypasses the injected executor entirely — no thread it observes ever
+     * misbehaves, it simply never gets asked to do the work.
+     */
+    @Test
+    public void testFanOutPhasesUseTheInjectedExecutor() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        // callerRuns keeps every body on this thread, so the phase that is open when the executor
+        // is entered is unambiguous.
+        final String[] activePhase = new String[1];
+        Set<String> phasesThatFannedOut = new LinkedHashSet<>();
+
+        ParallelExecutor watched = new ParallelExecutor() {
+            private final ParallelExecutor delegate = ParallelExecutor.callerRuns();
+
+            private void note() {
+                if (activePhase[0] != null) {
+                    phasesThatFannedOut.add(activePhase[0]);
+                }
+            }
+
+            @Override
+            public void forEachInt(int upperBound, java.util.function.IntConsumer body) {
+                note();
+                delegate.forEachInt(upperBound, body);
+            }
+
+            @Override
+            public void forEach(java.util.stream.IntStream source, java.util.function.IntConsumer body) {
+                note();
+                delegate.forEach(source, body);
+            }
+
+            @Override
+            public <T> void forEach(java.util.stream.Stream<T> source, java.util.function.Consumer<T> body) {
+                note();
+                delegate.forEach(source, body);
+            }
+        };
+
+        ProgressLimiter limiter = new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                activePhase[0] = stage.name();
+                return new PhaseScope() {
+                    @Override
+                    public void onProgress(long completed, long total) {
+                    }
+
+                    @Override
+                    public void close() {
+                        activePhase[0] = null;
+                    }
+                };
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, watched, 1);
+        compactor.setProgressLimiter(limiter);
+        compactor.compact(testDirectory.resolve("compact_executor_per_phase"));
+
+        assertTrue("codebook retrain must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.PQ_RETRAIN.name()));
+        assertTrue("code pre-encode must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.CODE_PRE_ENCODE.name()));
+        assertTrue("base layer must run on the injected executor, phases seen: " + phasesThatFannedOut,
+                phasesThatFannedOut.contains(CompactionStage.BASE_LAYER.name()));
+    }
+
+    private double recallOf(OnDiskGraphIndex graph, List<VectorFloat<?>> queries,
+                            List<List<Integer>> groundTruth, int topK) throws IOException {
+        List<SearchResult> results = new ArrayList<>();
+        try (GraphSearcher searcher = new GraphSearcher(graph)) {
+            for (VectorFloat<?> q : queries) {
+                results.add(searcher.search(
+                        DefaultSearchScoreProvider.exact(q, similarityFunction, allravv), topK, Bits.ALL));
+            }
+        }
+        return AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
+    }
+
+    /**
+     * The compactor must drive the embedder's ProgressLimiter: named phases, non-decreasing
+     * progress within each, and byte admission before output is written.
+     */
+    @Test
+    public void testProgressLimiterObservesPhasesAndThrottlesBytes() throws Exception {
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        var graphs = loadSources(rss);
+        identityRemappers(liveNodes, remappers);
+
+        List<String> startedPhases = Collections.synchronizedList(new ArrayList<>());
+        Set<String> closedPhases = Collections.synchronizedSet(new LinkedHashSet<>());
+        AtomicLong admittedBytes = new AtomicLong();
+        AtomicInteger monotonicViolations = new AtomicInteger();
+        Map<String, Long> lastCompleted = new HashMap<>();
+        Map<String, Long> lastTotal = new HashMap<>();
+
+        ProgressLimiter limiter = new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                startedPhases.add(stage.name());
+                return new PhaseScope() {
+                    @Override
+                    public void onProgress(long completed, long total) {
+                        synchronized (lastCompleted) {
+                            Long prev = lastCompleted.get(stage.name());
+                            if (prev != null && completed < prev) {
+                                monotonicViolations.incrementAndGet();
+                            }
+                            lastCompleted.put(stage.name(), completed);
+                            lastTotal.put(stage.name(), total);
+                        }
+                    }
+
+                    @Override
+                    public void close() {
+                        closedPhases.add(stage.name());
+                    }
+                };
+            }
+
+            @Override
+            public WorkLimiter.Grant acquire(long amount) {
+                admittedBytes.addAndGet(amount);
+                return WorkLimiter.Grant.NOOP;
+            }
+        };
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setProgressLimiter(limiter);
+        Path outputPath = testDirectory.resolve("compact_with_progress");
+        compactor.compact(outputPath);
+
+        assertTrue("base layer phase should be reported, saw " + startedPhases,
+                startedPhases.contains(CompactionStage.BASE_LAYER.name()));
+        assertEquals("every started phase must be closed",
+                new LinkedHashSet<>(startedPhases), closedPhases);
+        assertEquals("progress within a phase must never decrease", 0, monotonicViolations.get());
+
+        Long baseLayerNodes = lastCompleted.get(CompactionStage.BASE_LAYER.name());
+        assertEquals("base layer progress should reach every merged node",
+                Long.valueOf(numSources * numVectorsPerGraph), baseLayerNodes);
+        // Every stage of the run is a phase, and every phase reports: the host's onProgress is
+        // its cancellation checkpoint, so a phase that never reports is one it cannot stop.
+        // (UPPER_LAYERS runs once per level above 0; these single-level sources have none.)
+        for (CompactionStage stage : new CompactionStage[] {
+                CompactionStage.PQ_RETRAIN, CompactionStage.CODE_PRE_ENCODE,
+                CompactionStage.BASE_LAYER, CompactionStage.FINALIZE }) {
+            assertTrue(stage + " must be started, saw " + startedPhases, startedPhases.contains(stage.name()));
+            assertTrue(stage + " must report progress", lastCompleted.containsKey(stage.name()));
+        }
+        // ...and every phase that stated a total reaches it before it closes.
+        synchronized (lastCompleted) {
+            for (Map.Entry<String, Long> e : lastTotal.entrySet()) {
+                if (e.getValue() > 0) {
+                    assertEquals("phase " + e.getKey() + " must complete its stated total",
+                            e.getValue(), lastCompleted.get(e.getKey()));
+                }
+            }
+        }
+
+        // Admission is in bytes, and the compactor must ask before it writes.
+        assertTrue("compactor should admit output bytes through the limiter, got " + admittedBytes.get(),
+                admittedBytes.get() > 0);
+        assertTrue("admitted bytes should not exceed the written graph, got " + admittedBytes.get()
+                        + " vs " + Files.size(outputPath),
+                admittedBytes.get() <= Files.size(outputPath));
+    }
+
+    /**
+     * Compaction with compactor-assigned similarity ordinals: verifies the effective mapping is
+     * a bijection with a working newToOld round-trip, and that search recall over the reordered
+     * graph (results translated back through effectiveRemappers) matches the golden build.
+     */
+    @Test
+    public void testCompactWithSimilarityOrdinals() throws Exception {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> liveNodes = new ArrayList<>();
+        List<OrdinalMapper> remappers = new ArrayList<>();
+
+        for (int i = 0; i < numSources; ++i) {
+            var sourcePath = testDirectory.resolve("test_graph_" + i);
+            rss.add(ReaderSupplierFactory.open(sourcePath.toAbsolutePath()));
+            graphs.add(OnDiskGraphIndex.load(rss.get(i)));
+        }
+        int globalOrdinal = 0;
+        for (int n = 0; n < numSources; n++) {
+            Map<Integer, Integer> map = new HashMap<>(numVectorsPerGraph);
+            for (int i = 0; i < numVectorsPerGraph; i++) {
+                map.put(i, globalOrdinal++);
+            }
+            remappers.add(new OrdinalMapper.MapMapper(map));
+            var lives = new FixedBitSet(numVectorsPerGraph);
+            lives.set(0, numVectorsPerGraph);
+            liveNodes.add(lives);
+        }
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setSimilarityOrdinals(true);
+        Map<String, long[]> ordinalPhase = new HashMap<>(); // name -> {reports, lastCompleted, lastTotal}
+        compactor.setProgressLimiter(new ProgressLimiter() {
+            @Override
+            public PhaseScope startPhase(WorkStage stage) {
+                long[] v = ordinalPhase.computeIfAbsent(stage.name(), k -> new long[3]);
+                return (completed, total) -> {
+                    synchronized (v) {
+                        v[0]++;
+                        v[1] = completed;
+                        v[2] = total;
+                    }
+                };
+            }
+        });
+        int topK = 10;
+
+        var outputPath = testDirectory.resolve("test_compact_simord_graph");
+        List<VectorFloat<?>> queries = new ArrayList<>();
+        for (int i = 0; i < numQueries; ++i) {
+            queries.add(allVecs.get(randomIntBetween(0, allVecs.size() - 1)));
+        }
+        List<SearchResult> goldenResults = searchFromAll(queries, topK);
+        List<List<Integer>> groundTruth = buildGT(queries, topK);
+
+        compactor.compact(outputPath);
+
+        // The mapping in effect must be a total bijection with a working reverse.
+        var effective = compactor.effectiveRemappers();
+        int total = numSources * numVectorsPerGraph;
+        int[] newToDataset = new int[total];
+        boolean[] seen = new boolean[total];
+        for (int src = 0; src < numSources; src++) {
+            for (int old = 0; old < numVectorsPerGraph; old++) {
+                int n = effective.get(src).oldToNew(old);
+                assertTrue("new ordinal in range: " + n, n >= 0 && n < total);
+                assertFalse("no ordinal collisions", seen[n]);
+                seen[n] = true;
+                assertEquals("newToOld round-trip", old, effective.get(src).newToOld(n));
+                newToDataset[n] = src * numVectorsPerGraph + old;
+            }
+        }
+
+        ReaderSupplier rs = ReaderSupplierFactory.open(outputPath);
+        var compactGraph = OnDiskGraphIndex.load(rs);
+        assertEquals(total, compactGraph.size(0));
+
+        // Score by graph ordinal: reorder the exact vectors into new-ordinal order.
+        List<VectorFloat<?>> reordered = new ArrayList<>(total);
+        for (int n = 0; n < total; n++) {
+            reordered.add(allVecs.get(newToDataset[n]));
+        }
+        var reorderedRavv = new ListRandomAccessVectorValues(reordered, allVecs.get(0).length());
+
+        GraphSearcher searcher = new GraphSearcher(compactGraph);
+        int hits = 0;
+        int possible = 0;
+        for (int qi = 0; qi < queries.size(); qi++) {
+            SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), similarityFunction, reorderedRavv);
+            SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+            var gt = groundTruth.get(qi);
+            for (var ns : sr.getNodes()) {
+                if (gt.contains(newToDataset[ns.node])) {
+                    hits++;
+                }
+            }
+            possible += topK;
+        }
+        double compactRecall = (double) hits / possible;
+        double goldenRecall = AccuracyMetrics.recallFromSearchResults(groundTruth, goldenResults, topK, topK);
+        System.out.printf("SimilarityOrdinals compact recall: %.4f (golden %.4f)%n", compactRecall, goldenRecall);
+        assertTrue(String.format("similarity-ordinal recall (%.4f) should be comparable to golden (%.4f)",
+                        compactRecall, goldenRecall),
+                Math.abs(goldenRecall - compactRecall) < 0.2);
+        assertTrue("similarity-ordinal recall should be at least 0.2, got " + compactRecall,
+                compactRecall >= 0.2);
+
+        // The ordinal pass is a stage of its own that reports live nodes encoded and reaches its
+        // total: before this it opened and closed a phase with nothing in between.
+        long[] ord = ordinalPhase.get(CompactionStage.SIMILARITY_ORDINALS.name());
+        assertNotNull("SIMILARITY_ORDINALS phase must be started", ord);
+        assertTrue("SIMILARITY_ORDINALS must report progress", ord[0] >= 2);
+        assertEquals("SIMILARITY_ORDINALS must complete its total", ord[2], ord[1]);
+        assertEquals("SIMILARITY_ORDINALS total is the live node count", (long) total, ord[2]);
+
+        // Every base-layer batch must have warmed its own records one way or the other: as a
+        // range when dense, per record when not. A declined batch that issues nothing is the
+        // demand-fault path measured on 2026-08-23 and must not come back silently.
+        if (compactor.bandStaged) {
+            // Band-staged: own records come from the bands, so no own-record warming is issued.
+            assertTrue("own records must be served from bands", compactor.bandOwnRecords.get() > 0);
+            assertEquals(0, compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get());
+        } else {
+            assertTrue("some own-record warming must have run",
+                    compactor.batchPrefetchIssued.get() + compactor.batchOwnRecordHints.get() > 0);
+            if (compactor.batchPrefetchDeclined.get() > 0) {
+                assertTrue("sparse batches must fall back to per-record hints",
+                        compactor.batchOwnRecordHints.get() > 0);
+            }
+        }
+        searcher.close();
+    }
+
+    /**
+     * Tests the retained-only fast path with a heavily skewed merge: the small source's few
+     * searches can only offer reverse candidates to a bounded set of large-source nodes, so
+     * most large-source nodes must take the fast path (their merged edges are exactly their
+     * retained edges, remapped). Verifies the path fired, that fast-path records preserve the
+     * source adjacency, and that the merged graph searches sanely.
+     */
+    @Test
+    public void testCompactRetainedOnlyFastPath() throws Exception {
+        int dim = 16;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<VectorFloat<?>> smallVecs = createRandomVectors(8, dim);
+        List<VectorFloat<?>> bigVecs = createRandomVectors(300, dim);
+
+        Path smallPath = buildSimpleSourceGraph(smallVecs, dim, vsf, "fastpath_small");
+        Path bigPath = buildSimpleSourceGraph(bigVecs, dim, vsf, "fastpath_big");
+
+        try (ReaderSupplier smallRs = ReaderSupplierFactory.open(smallPath);
+             ReaderSupplier bigRs = ReaderSupplierFactory.open(bigPath)) {
+            var smallGraph = OnDiskGraphIndex.load(smallRs);
+            var bigGraph = OnDiskGraphIndex.load(bigRs);
+
+            List<OnDiskGraphIndex> graphs = new ArrayList<>(List.of(smallGraph, bigGraph));
+            List<FixedBitSet> live = new ArrayList<>();
+            var liveSmall = new FixedBitSet(smallVecs.size());
+            liveSmall.set(0, smallVecs.size());
+            var liveBig = new FixedBitSet(bigVecs.size());
+            liveBig.set(0, bigVecs.size());
+            live.add(liveSmall);
+            live.add(liveBig);
+            List<OrdinalMapper> remappers = new ArrayList<>(List.of(
+                    new OrdinalMapper.OffsetMapper(0, smallVecs.size()),
+                    new OrdinalMapper.OffsetMapper(smallVecs.size(), bigVecs.size())));
+
+            var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, vsf, null);
+            var outputPath = testDirectory.resolve("fastpath_compacted");
+            compactor.compact(outputPath);
+
+            assertTrue("fast path should fire for offer-free big-source nodes, got "
+                            + compactor.retainedOnlyNodes.get(),
+                    compactor.retainedOnlyNodes.get() > 0);
+
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals(smallVecs.size() + bigVecs.size(), merged.size(0));
+                try (var mergedView = merged.getView(); var bigView = bigGraph.getView()) {
+                    VectorFloat<?> tmp = vectorTypeSupport.createFloatVector(dim);
+                    int offset = smallVecs.size();
+                    int verifiedRetained = 0;
+                    for (int n = 0; n < bigVecs.size(); n++) {
+                        // Vector placement always holds.
+                        mergedView.getVectorInto(offset + n, tmp, 0);
+                        assertVecEquals(bigVecs.get(n), tmp, offset + n);
+                        // Collect merged neighbors; for nodes whose merged edges are entirely
+                        // big-source, they must equal the retained adjacency (fast path keeps
+                        // order and membership).
+                        List<Integer> mergedNbrs = new ArrayList<>();
+                        var mit = mergedView.getNeighborsIterator(0, offset + n);
+                        boolean anyCross = false;
+                        while (mit.hasNext()) {
+                            int nb = mit.nextInt();
+                            if (nb < offset) anyCross = true;
+                            mergedNbrs.add(nb);
+                        }
+                        if (anyCross) continue;
+                        // Fast-path nodes keep source order; slow-path nodes whose offers all
+                        // lost to diversity keep the same membership re-ordered by score — so
+                        // membership equality is the invariant common to both.
+                        List<Integer> retained = new ArrayList<>();
+                        var bit = bigView.getNeighborsIterator(0, n);
+                        while (bit.hasNext()) {
+                            retained.add(offset + bit.nextInt());
+                        }
+                        assertEquals("all-retained node " + n + " must keep source adjacency membership",
+                                new HashSet<>(retained), new HashSet<>(mergedNbrs));
+                        verifiedRetained++;
+                    }
+                    assertTrue("expected some purely-retained records", verifiedRetained > 0);
+                }
+
+                // Search sanity on the merged graph.
+                var allFast = new ArrayList<VectorFloat<?>>();
+                allFast.addAll(smallVecs);
+                allFast.addAll(bigVecs);
+                var fastRavv = new ListRandomAccessVectorValues(allFast, dim);
+                try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                    int found = 0;
+                    for (int q = 0; q < 10; q++) {
+                        VectorFloat<?> query = allFast.get(randomIntBetween(0, allFast.size() - 1));
+                        SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, fastRavv);
+                        SearchResult sr = searcher.search(ssp, 5, Bits.ALL);
+                        if (sr.getNodes().length > 0) found++;
+                    }
+                    assertEquals(10, found);
+                }
+                merged.close();
+            }
+        }
     }
 
     /**

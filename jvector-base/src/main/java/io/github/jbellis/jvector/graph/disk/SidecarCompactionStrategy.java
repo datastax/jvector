@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
+import io.github.jbellis.jvector.util.work.WorkLimiter;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -28,11 +30,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
 
 /**
  * Generic compaction strategy for any non-fused {@link CompressedVectors} sidecar. Parameterized
@@ -52,7 +51,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     private static final Logger log = LoggerFactory.getLogger(SidecarCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    private final CompactionContext ctx;
+    private CompactionContext ctx;
     private final CompressedVectors formatHandle;
     private final VectorCompressorRetrainer retrainer;
     private VectorCompressor<?> retrainedCompressor;
@@ -66,10 +65,20 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     }
 
     @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
+    }
+
+    @Override
     public void retrain(VectorSimilarityFunction vsf) {
+        retrain(vsf, ProgressTracker.PhaseScope.NOOP);
+    }
+
+    @Override
+    public void retrain(VectorSimilarityFunction vsf, ProgressTracker.PhaseScope scope) {
         log.info("Retraining sidecar compressor ({}) on merged sources",
                 formatHandle.getClass().getSimpleName());
-        this.retrainedCompressor = retrainer.retrain(vsf);
+        this.retrainedCompressor = retrainer.retrain(vsf, scope);
     }
 
     @Override
@@ -99,20 +108,43 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             formatHandle.writeSidecarHeader(out, retrainedCompressor, count);
 
             int parallelism = Math.max(ctx.taskWindowSize, 1);
-            for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
-                int batchEnd = Math.min(batchStart + parallelism, chunkCount);
-                List<Callable<ByteSequence<?>>> tasks = new ArrayList<>(batchEnd - batchStart);
-                for (int c = batchStart; c < batchEnd; c++) {
-                    final int chunkStart = c * vectorsPerChunk;
-                    final int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
-                    tasks.add(() -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor));
-                }
-                for (var f : ctx.executor.invokeAll(tasks)) {
-                    vectorTypeSupport.writeByteSequence(out, f.get());
+            try (ProgressTracker.PhaseScope scope = ctx.progress.startPhase(CompactionStage.SIDECAR)) {
+                for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {
+                    int batchEnd = Math.min(batchStart + parallelism, chunkCount);
+                    final int base = batchStart;
+                    // Results land in slot order rather than completion order: the sidecar is a
+                    // sequential format, so chunk c must be written before chunk c+1 no matter which
+                    // finishes first. forEachInt blocks until the whole batch is encoded, then the
+                    // calling thread appends them in order.
+                    ByteSequence<?>[] encodedChunks = new ByteSequence<?>[batchEnd - batchStart];
+                    ctx.executor.forEachInt(encodedChunks.length, i -> {
+                        int chunkStart = (base + i) * vectorsPerChunk;
+                        int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
+                        try {
+                            encodedChunks[i] = encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                    long bytes = 0;
+                    for (ByteSequence<?> encoded : encodedChunks) {
+                        bytes += (long) encoded.length();
+                    }
+                    // Paced on the same terms as the graph body: one admission per batch, then the
+                    // sequential append.
+                    try (WorkLimiter.Grant grant = ctx.progress.acquire(bytes)) {
+                        for (ByteSequence<?> encoded : encodedChunks) {
+                            vectorTypeSupport.writeByteSequence(out, encoded);
+                        }
+                    }
+                    scope.onProgress(Math.min((long) batchEnd * vectorsPerChunk, count), count);
                 }
             }
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while throttled writing sidecar to " + compressedPath, e);
+        } catch (UncheckedIOException e) {
+            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e.getCause());
         }
         log.info("Wrote compacted compressed sidecar to {}", compressedPath);
     }

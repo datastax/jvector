@@ -422,9 +422,21 @@ public abstract class PQVectors implements CompressedVectors {
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
         ProductQuantization basePQ = this.pq;
+        // Not a lambda: the scope-aware overload is what lets the retrain phase report progress.
         io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
-                vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
-                        .retrain(vsf, basePQ);
+                new io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer() {
+            @Override
+            public VectorCompressor<?> retrain(VectorSimilarityFunction vsf) {
+                return retrain(vsf, io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope.NOOP);
+            }
+
+            @Override
+            public VectorCompressor<?> retrain(VectorSimilarityFunction vsf,
+                                               io.github.jbellis.jvector.util.work.ProgressTracker.PhaseScope scope) {
+                return new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension, ctx.executor)
+                        .retrain(vsf, basePQ, scope);
+            }
+        };
         return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 

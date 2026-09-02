@@ -146,9 +146,50 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     public static class Supplier implements ReaderSupplier {
+        /** Whether to advise MADV_RANDOM on the mapping. See the rationale at the advice
+         * call site. Default true (unchanged behaviour); {@code jvector.disk.adviseRandom=false}
+         * leaves kernel readahead enabled, for above-RAM compaction measurement. */
+        private static final boolean ADVISE_RANDOM = !"false".equalsIgnoreCase(
+                System.getProperty("jvector.disk.adviseRandom", "true"));
+
+        private static final int POSIX_FADV_WILLNEED = 3; // Value for Linux
+        // fd-side advice handles; unlike MADV_WILLNEED (a no-op on some platforms), fadvise
+        // WILLNEED reliably initiates async readahead into the (shared) page cache
+        private static final java.lang.invoke.MethodHandle OPEN_H;
+        private static final java.lang.invoke.MethodHandle CLOSE_H;
+        private static final java.lang.invoke.MethodHandle FADVISE_H;
+        static {
+            java.lang.invoke.MethodHandle open = null, close = null, fadvise = null;
+            try {
+                var linker = Linker.nativeLinker();
+                var lookup = linker.defaultLookup();
+                var openSym = lookup.find("open");
+                var closeSym = lookup.find("close");
+                var fadviseSym = lookup.find("posix_fadvise");
+                if (openSym.isPresent() && closeSym.isPresent() && fadviseSym.isPresent()) {
+                    open = linker.downcallHandle(openSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+                    close = linker.downcallHandle(closeSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+                    fadvise = linker.downcallHandle(fadviseSym.get(),
+                            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+                                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+                }
+            } catch (Throwable t) {
+                logger.warn("native open/posix_fadvise unavailable; willNeed hints disabled", t);
+                open = null;
+                close = null;
+                fadvise = null;
+            }
+            OPEN_H = open;
+            CLOSE_H = close;
+            FADVISE_H = fadvise;
+        }
+
         private final Arena arena;
         private final MemorySegment memory;
         private final Path path;
+        private final int adviceFd; // -1 when unavailable
 
         public Supplier(Path path) throws IOException {
             this.path = path;
@@ -156,9 +197,33 @@ public class MemorySegmentReader implements RandomAccessReader {
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
 
-                // Apply MADV_RANDOM advice
+                // Apply MADV_RANDOM advice: graph traversal is random access, and kernel
+                // readahead extrapolates from file adjacency, which a diversity-pruned graph's
+                // edges deliberately avoid — wider speculative reads are wasted bandwidth.
+                // Targeted asynchronous warming goes through willNeed() instead.
+                //
+                // The cost of this advice is that there is NO FALLBACK: with readahead off,
+                // every uncached touch is exactly one page-sized read, so any access the
+                // targeted warming fails to cover costs a full device round trip and coalesces
+                // with nothing. That trade is right for search (a point lookup reads one record
+                // and stops) and questionable for compaction, whose base-layer phase will touch
+                // essentially every page of both sources -- measured 2026-08-23 on a 1B-row
+                // merge: 113k reads/s at a 4.00 KB mean request size, device 99% util, 50%
+                // iowait, 0.000 MiB/s of actual merge byte progress.
+                //
+                // `jvector.disk.adviseRandom=false` leaves the mapping on the kernel default so
+                // readahead can absorb what the hints miss. EXPERIMENTAL and process-wide: it
+                // affects search mappings too, so it is an A/B knob for above-RAM compaction
+                // measurement, not a production default. The principled fix is per-reader
+                // advice -- a compaction-time supplier that declines this while search keeps it.
                 var linker = Linker.nativeLinker();
-                var maybeMadvise = linker.defaultLookup().find("posix_madvise");
+                var maybeMadvise = ADVISE_RANDOM
+                        ? linker.defaultLookup().find("posix_madvise")
+                        : java.util.Optional.<java.lang.foreign.MemorySegment>empty();
+                if (!ADVISE_RANDOM) {
+                    logger.info("jvector.disk.adviseRandom=false: mapping left on the kernel "
+                            + "default, readahead enabled");
+                }
                 if (maybeMadvise.isPresent()) {
                     var madvise = linker.downcallHandle(maybeMadvise.get(),
                             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
@@ -166,7 +231,7 @@ public class MemorySegmentReader implements RandomAccessReader {
                     if (result != 0) {
                         throw new IOException("posix_madvise failed with error code: " + result);
                     }
-                } else {
+                } else if (ADVISE_RANDOM) {
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
                 }
             } catch (Throwable e) {
@@ -175,6 +240,37 @@ public class MemorySegmentReader implements RandomAccessReader {
                     throw (IOException) e;
                 }
                 throw new RuntimeException(e);
+            }
+            this.adviceFd = openAdviceFd(path);
+        }
+
+        private static int openAdviceFd(Path path) {
+            if (OPEN_H == null) {
+                return -1;
+            }
+            try (var confined = Arena.ofConfined()) {
+                var cPath = confined.allocateFrom(path.toString());
+                return (int) OPEN_H.invokeExact(cPath, 0); // O_RDONLY
+            } catch (Throwable t) {
+                logger.warn("open for willNeed advice failed on {}; hints disabled", path, t);
+                return -1;
+            }
+        }
+
+        @Override
+        public void willNeed(long offset, long length) {
+            if (adviceFd < 0 || FADVISE_H == null || length <= 0) {
+                return;
+            }
+            long end = Math.min(offset + length, memory.byteSize());
+            long start = Math.max(0, offset);
+            if (start >= end) {
+                return;
+            }
+            try {
+                int ignored = (int) FADVISE_H.invokeExact(adviceFd, start, end - start, POSIX_FADV_WILLNEED);
+            } catch (Throwable t) {
+                // advice is best-effort; never fail a read path over it
             }
         }
 
@@ -188,6 +284,33 @@ public class MemorySegmentReader implements RandomAccessReader {
         private static final ThreadLocal<java.nio.ByteBuffer> PREFETCH_BUF =
                 ThreadLocal.withInitial(() -> java.nio.ByteBuffer.wrap(new byte[64 << 10]));
 
+        /**
+         * Bytes of asynchronous {@code WILLNEED} advice kept in flight ahead of the synchronous
+         * read cursor in {@link #prefetch}. The read loop alone is one 64 KB request at a time on
+         * one thread, throttled by the kernel's sequential readahead ramp (128 KB window): a
+         * 16M-node pretouch measured 42–52 s for ~64 GB, about a quarter of what four NVMe drives
+         * stream. Advising a lead window through the fd turns the cursor into a consumer of
+         * reads already issued, at whatever depth the lead allows. The alternative — {@code
+         * POSIX_FADV_SEQUENTIAL} on the channel — only doubles the window to 256 KB and needs a
+         * descriptor the channel does not expose. {@code jvector.disk.prefetchLeadBytes}; 0
+         * disables and restores the plain read loop.
+         */
+        private static final long PREFETCH_LEAD_BYTES = resolveLeadBytes();
+        /** Advice is issued in steps of this size so it is not one syscall per 64 KB read. */
+        private static final long PREFETCH_ADVISE_STEP = 1L << 20;
+
+        private static long resolveLeadBytes() {
+            try {
+                String raw = System.getProperty("jvector.disk.prefetchLeadBytes");
+                if (raw != null && !raw.isBlank()) {
+                    return Math.max(0L, Long.parseLong(raw.trim()));
+                }
+            } catch (NumberFormatException e) {
+                // keep the default; a malformed knob must not disable warming
+            }
+            return 16L << 20;
+        }
+
         @Override
         public void prefetch(long offset, long length) {
             if (length <= 0) {
@@ -197,7 +320,15 @@ public class MemorySegmentReader implements RandomAccessReader {
             long end = Math.min(offset + length, memory.byteSize());
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 long pos = Math.max(0, offset);
+                long advised = pos;
                 while (pos < end) {
+                    if (PREFETCH_LEAD_BYTES > 0) {
+                        long want = Math.min(end, pos + PREFETCH_LEAD_BYTES);
+                        if (want - advised >= PREFETCH_ADVISE_STEP || (want == end && advised < end)) {
+                            willNeed(advised, want - advised); // no-op when advice is unavailable
+                            advised = want;
+                        }
+                    }
                     buf.clear().limit((int) Math.min(buf.capacity(), end - pos));
                     int n = ch.read(buf, pos);
                     if (n < 0) {
@@ -219,6 +350,13 @@ public class MemorySegmentReader implements RandomAccessReader {
         @Override
         public void close() {
             arena.close();
+            if (adviceFd >= 0 && CLOSE_H != null) {
+                try {
+                    int ignored = (int) CLOSE_H.invokeExact(adviceFd);
+                } catch (Throwable t) {
+                    // best-effort
+                }
+            }
         }
     }
 }

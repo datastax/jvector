@@ -87,6 +87,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     private final AtomicReference<List<Int2ObjectHashMap<int[]>>> inMemoryNeighbors;
     // When using fused features, store the features fully in memory for layers > 0
     private final AtomicReference<Int2ObjectHashMap<FusedFeature.InlineSource>> inMemoryFeatures;
+    /** The {@link NodeTokenStream} section, when the file carries one; discovered from the footer. */
+    private volatile NodeTokenStream.Section tokenSection;
 
     private OnDiskGraphIndex(ReaderSupplier readerSupplier, Header header, long neighborsOffset)
     {
@@ -227,7 +229,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file,
-     * where the index starts at `offset`.
+     * where the index starts at `offset`. Equivalent to {@code load(readerSupplier, offset, true)};
+     * for v5+ graphs the metadata is located via the footer — see the
+     * {@link #load(ReaderSupplier, long, boolean)} warning about suppliers whose range extends
+     * past the graph's end.
      *
      * @param readerSupplier the reader supplier to use to read the graph and index.
      * @param offset the offset in bytes from the start of the file where the index starts.
@@ -239,6 +244,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file,
      * where the index starts at `offset`.
+     * <p>
+     * <b>Footer loading trusts the end of the supplier's range.</b> With {@code useFooter=true}
+     * and a v5+ graph, metadata is located relative to the reader's {@code length()} — the file
+     * end, for whole-file suppliers. That is only correct when the graph is the <i>last</i>
+     * content in the supplier's range. Never footer-load a reused or embedder-owned container
+     * whose length extends past the graph body: stale bytes there either fail the load loudly
+     * or, if they end in a stale-but-still-valid footer, silently resurrect the old graph over
+     * the new bytes. For such containers, pass {@code useFooter=false} with the known
+     * {@code offset}, or use a region-bounded {@link ReaderSupplier} whose {@code length()} is
+     * the end of the graph's region.
      *
      * @param readerSupplier the reader supplier to use to read the graph and index.
      * @param offset the offset in bytes from the start of the file where the index starts.
@@ -270,6 +285,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
     /**
      * Load an index from the given reader supplier where header and graph are located on the same file at offset 0.
+     * For v5+ graphs, metadata is located via the footer at the end of the supplier's range —
+     * the supplier must contain the graph and nothing after it; see the
+     * {@link #load(ReaderSupplier, long, boolean)} warning.
      *
      * @param readerSupplier the reader supplier to use to read the graph index.
      */
@@ -307,6 +325,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     header.common.layerInfo.size(),
                     in.getPosition());
             var odgi = new OnDiskGraphIndex(readerSupplier, header, neighborsOffset);
+            // The token stream section, if any, ends TRAILER_SIZE bytes before the footer's header
+            // copy. A file written without one has body bytes there; the magic check rejects them.
+            odgi.tokenSection = NodeTokenStream.locate(in, headerOffset, neighborsOffset);
             odgi.getInMemoryLayers(in);
             odgi.getInMemoryFeatures(in);
             return odgi;
@@ -314,6 +335,38 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         } catch (Exception e) {
             throw new RuntimeException("Error initializing OnDiskGraph", e);
         }
+    }
+
+    /**
+     * For an index loaded by header offset rather than through its footer — one embedded in a
+     * container that has its own trailer after the graph's footer — finds the token stream
+     * section given where the graph's footer ends. Returns whether a section was found.
+     */
+    public boolean discoverTokenStream(long footerEnd) throws IOException {
+        try (var in = readerSupplier.get()) {
+            in.seek(footerEnd - FOOTER_MAGIC_SIZE);
+            if (in.readInt() != FOOTER_MAGIC) {
+                return false;
+            }
+            in.seek(footerEnd - FOOTER_MAGIC_SIZE - FOOTER_OFFSET_SIZE);
+            long headerOffset = in.readLong();
+            tokenSection = NodeTokenStream.locate(in, headerOffset, neighborsOffset);
+            return tokenSection != null;
+        }
+    }
+
+    /** The {@link NodeTokenStream} section this index carries, if it was written with one and loaded through its footer. */
+    public java.util.Optional<NodeTokenStream.Section> tokenStreamSection() {
+        return java.util.Optional.ofNullable(tokenSection);
+    }
+
+    /** Opens a sequential decoder over the token stream section; the caller closes it. */
+    public NodeTokenStream.Reader openTokenStream() throws IOException {
+        NodeTokenStream.Section s = tokenSection;
+        if (s == null) {
+            throw new IllegalStateException("this index carries no token stream section");
+        }
+        return new NodeTokenStream.Reader(readerSupplier.get(), s);
     }
 
     public Set<FeatureId> getFeatureSet() {
@@ -462,6 +515,17 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
     }
 
+    /**
+     * Hints that the L0 record of {@code node} will likely be read soon, starting an
+     * asynchronous fetch into the page cache; see {@link ReaderSupplier#willNeed(long, long)}.
+     * Unlike {@link #prefetchL0Records}, this does not block. Best-effort no-op when unsupported.
+     */
+    public void willNeedL0Record(int node) {
+        long blockBytes = Integer.BYTES + inlineBlockSize
+                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
+        readerSupplier.willNeed(neighborsOffset + blockBytes * node, blockBytes);
+    }
+
     // re-declared to specify type
     @Override
     public View getView() {
@@ -494,6 +558,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
         }
 
+        /**
+         * Guards every on-disk record access. A node ordinal outside the L0 record space
+         * ({@code idUpperBound}, which exceeds {@code size(0)} for graphs renumbered with holes)
+         * would otherwise become a silent wild offset into the mapped file — reading garbage (or
+         * faulting) instead of failing diagnosably. Both package-private offset entry points call
+         * this, so each access is validated exactly once, with a single branch against a final
+         * bound.
+         */
+        private void requireValidNode(int node) {
+            if (node < 0 || node >= idUpperBound) {
+                throw new IllegalArgumentException(
+                        "node ordinal " + node + " out of range [0, " + idUpperBound + ") for this graph");
+            }
+        }
+
         @Override
         public int dimension() {
             return dimension;
@@ -512,6 +591,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
         long offsetFor(int node, FeatureId featureId) {
+            requireValidNode(node);
             Feature feature = features.get(featureId);
 
             // Separated features are just global offset + node offset
@@ -528,6 +608,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         // package-private: OnDiskGraphIndexCompactor uses this for in-place neighbor refinement
         long neighborsOffsetFor(int level, int node) {
+            requireValidNode(node);
             assert level == 0; // higher layers are in memory
 
             // skip node ID + inline features
@@ -588,8 +669,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     // For layer 0, read from disk
                     reader.seek(neighborsOffsetFor(level, node));
                     nodeDegree = reader.readInt();
-                    assert nodeDegree <= neighbors.length
-                            : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
+                    if (nodeDegree < 0 || nodeDegree > neighbors.length) {
+                        // A real check, not an assert: an out-of-range on-disk degree means the
+                        // block is corrupt or the metadata is stale, and the garbage ints that a
+                        // blind read would yield become out-of-range node ids downstream.
+                        throw new IllegalStateException(String.format(
+                                "Corrupt neighbor block: node %d at level 0 declares degree %d outside [0, %d] (block offset %d)",
+                                node, nodeDegree, neighbors.length, neighborsOffsetFor(level, node)));
+                    }
                     reader.read(neighbors, 0, nodeDegree);
                     stored = neighbors;
                 } else {

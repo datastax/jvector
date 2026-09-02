@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -54,6 +53,10 @@ final class CompactWriter implements AutoCloseable {
     private final int recordSize;
     private final long startOffset;
     private final int headerSize;
+    // Byte offset, within a base-layer record, of the neighbor-count int (then the neighbor list):
+    // id + inline vector [+ fused codes]. Lets a caller read a written node's edges back from the
+    // output file instead of mirroring them in heap.
+    private int neighborCountOffsetInRecord;
     private final Header header;
     private final int version;
     private final FusedFeature fusedFeature;
@@ -72,11 +75,10 @@ final class CompactWriter implements AutoCloseable {
     private ByteSequence<?> entryNodePqCode;
 
     // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
-    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
-    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
-    private MappedByteBuffer pqCodeCache;
+    // codes from the cache instead of calling pq.encodeTo per neighbor. The cache handles
+    // per-thread view duplication internally, so positions don't race.
+    private PreEncodedCodeCache pqCodeCache;
     private int pqCodeSize;
-    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
     CompactWriter(Path outputPath,
@@ -115,6 +117,8 @@ final class CompactWriter implements AutoCloseable {
             rsize += fusedFeature.featureSize();
         }
         this.recordSize = rsize;
+        this.neighborCountOffsetInRecord = Integer.BYTES + inlineVectorFeature.featureSize()
+                + (fusedFeature != null ? fusedFeature.featureSize() : 0);
 
         this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
         var commonHeader = new CommonHeader(this.version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
@@ -139,16 +143,29 @@ final class CompactWriter implements AutoCloseable {
      * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
      * re-encoded per write.
      *
-     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
-     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
+     * @param cache       a cache holding one code per new ordinal, for ordinals
+     *                    {@code 0..maxOrdinal}
      * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
      */
-    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+    public void enablePqCodeCache(PreEncodedCodeCache cache, int pqCodeSize) {
         this.pqCodeCache = cache;
         this.pqCodeSize = pqCodeSize;
-        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
-        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
+    }
+
+    /** The pre-encoded code cache, or null when not enabled. Codes are keyed by new ordinal. */
+    PreEncodedCodeCache pqCodeCache() {
+        return pqCodeCache;
+    }
+
+    /**
+     * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
+     * fused output without the pre-encoded code cache, where neighbor codes are produced by
+     * encoding the neighbor vectors. Callers that can supply neighbor ids without vectors
+     * (the retained-only fast path) use this to skip the vector reads.
+     */
+    boolean needsNeighborVectors() {
+        return fusedPQEnabled && pqCodeCache == null;
     }
 
     public void writeHeader() throws IOException {
@@ -191,6 +208,25 @@ final class CompactWriter implements AutoCloseable {
 
     public Path getOutputPath() {
         return outputPath;
+    }
+
+    /**
+     * File offset of the neighbor-count int (immediately followed by the neighbor list) for the
+     * base-layer record of {@code ordinal}. Callers can read a finished node's merged edges back
+     * from the output file — which already holds them — rather than mirroring them in memory.
+     * Valid only after the record has been written.
+     */
+    /** File offset of the base-layer record of {@code ordinal}. */
+    public long recordFileOffset(int ordinal) {
+        return startOffset + headerSize + (long) ordinal * recordSize;
+    }
+
+    public int recordSize() {
+        return recordSize;
+    }
+
+    public long neighborCountFileOffset(int ordinal) {
+        return startOffset + headerSize + (long) ordinal * recordSize + neighborCountOffsetInRecord;
     }
 
     public void setEntryNodePqCode(ByteSequence<?> code) {
@@ -272,13 +308,10 @@ final class CompactWriter implements AutoCloseable {
             int k = 0;
             if (pqCodeCache != null) {
                 // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
-                ByteBuffer cacheView = pqCacheViewPerThread.get();
                 byte[] codeBuf = pqCodeBufPerThread.get();
                 for (; k < selectedCache.size; k++) {
                     int newOrd = selectedCache.nodes[k]; // already remapped before this call
-                    int offset = newOrd * pqCodeSize;
-                    cacheView.position(offset);
-                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    pqCodeCache.get(newOrd, codeBuf);
                     bwriter.write(codeBuf, 0, pqCodeSize);
                 }
             } else {

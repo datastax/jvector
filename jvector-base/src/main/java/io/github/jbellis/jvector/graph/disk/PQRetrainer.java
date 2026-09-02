@@ -21,8 +21,9 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
+import io.github.jbellis.jvector.graph.ParallelExecutor;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
 import io.github.jbellis.jvector.util.FixedBitSet;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -33,7 +34,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -55,11 +55,22 @@ public class PQRetrainer {
     private final List<Integer> numLiveNodesPerSource;
     private final int dimension;
     private final int numTotalNodes;
+    /**
+     * Runs the codebook refinement. Supplied by the compactor so retraining stays inside the
+     * embedder's thread budget rather than fanning out onto jvector-chosen pools.
+     */
+    private final ParallelExecutor executor;
 
     public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension) {
+        this(sources, liveNodes, dimension, ParallelExecutor.callerRuns());
+    }
+
+    public PQRetrainer(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes, int dimension,
+                       ParallelExecutor executor) {
         this.sources = sources;
         this.liveNodes = liveNodes;
         this.dimension = dimension;
+        this.executor = executor == null ? ParallelExecutor.callerRuns() : executor;
 
         this.numLiveNodesPerSource = new ArrayList<>(sources.size());
         int total = 0;
@@ -78,8 +89,17 @@ public class PQRetrainer {
      * performs no I/O.
      */
     public ProductQuantization retrain(VectorSimilarityFunction similarityFunction) {
+        return retrain(similarityFunction, ProgressTracker.PhaseScope.NOOP);
+    }
+
+    /** {@link #retrain(VectorSimilarityFunction)} reporting into {@code scope}; see the 3-arg form. */
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProgressTracker.PhaseScope scope) {
         FusedPQ fpq = (FusedPQ) sources.get(0).getFeatures().get(FeatureId.FUSED_PQ);
-        return retrain(similarityFunction, fpq.getPQ());
+        return retrain(similarityFunction, fpq.getPQ(), scope);
+    }
+
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
+        return retrain(similarityFunction, basePQ, ProgressTracker.PhaseScope.NOOP);
     }
 
     /**
@@ -87,10 +107,20 @@ public class PQRetrainer {
      * and the supplied base PQ for subspace/cluster parameters. Used when the base PQ comes from a
      * non-fused source (e.g. a sidecar {@code CompressedVectors}) rather than the FUSED_PQ feature.
      */
-    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ) {
+    /**
+     * Progress is reported in two halves of {@code 2 x samples} units: sample extraction (one unit
+     * per vector read, reported every {@link #PROGRESS_STRIDE} vectors) and codebook refinement
+     * (reported once, on completion — {@link ProductQuantization#refine} exposes no per-iteration
+     * hook, so the phase sits at 50% while Lloyd's runs). Each report is the embedder's
+     * cancellation checkpoint; a stopped merge unwinds during extraction, not after refinement.
+     */
+    public ProductQuantization retrain(VectorSimilarityFunction similarityFunction, ProductQuantization basePQ,
+                                       ProgressTracker.PhaseScope scope) {
         log.info("Training PQ using balanced sampling across sources");
 
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
+        final long progressTotal = 2L * samples.size();
+        scope.onProgress(0, progressTotal);
 
         // Sort by (source, node) so extractVectorsSequential reads each source's file
         // in ascending order, enabling OS read-ahead instead of random page faults.
@@ -99,7 +129,8 @@ public class PQRetrainer {
         log.info("Collected {} training samples", samples.size());
 
         long t0 = System.nanoTime();
-        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples, scope, progressTotal);
+        scope.onProgress(samples.size(), progressTotal);
         log.info("Extracted {} vectors in {}ms; starting PQ refinement",
                  trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
 
@@ -114,11 +145,14 @@ public class PQRetrainer {
         ProductQuantization result = basePQ.refine(ravv,
                                                    ProductQuantization.K_MEANS_ITERATIONS,
                                                    -1.0f, // UNWEIGHTED / isotropic
-                                                   PhysicalCoreExecutor.pool(),
-                                                   ForkJoinPool.commonPool());
+                                                   executor);
         log.info("PQ refinement complete in {}ms", (System.nanoTime() - t1) / 1_000_000L);
+        scope.onProgress(progressTotal, progressTotal);
         return result;
     }
+
+    /** Vectors read between progress reports during sample extraction. */
+    private static final int PROGRESS_STRIDE = 1024;
 
     /**
      * Performs balanced sampling across all source indexes to ensure proportional representation.
@@ -216,7 +250,8 @@ public class PQRetrainer {
      * by (source, node) so reads within each source are ascending, letting the OS read-ahead
      * cover them efficiently. Each source's view is opened once and reused for all its samples.
      */
-    private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples) {
+    private List<VectorFloat<?>> extractVectorsSequential(List<SampleRef> samples,
+                                                         ProgressTracker.PhaseScope scope, long progressTotal) {
         prefetchSampleRanges(samples);
 
         OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[sources.size()];
@@ -229,6 +264,9 @@ public class PQRetrainer {
         for (SampleRef ref : samples) {
             views[ref.source].getVectorInto(ref.node, tmp, 0);
             vectors.add(tmp.copy());
+            if ((vectors.size() & (PROGRESS_STRIDE - 1)) == 0) {
+                scope.onProgress(vectors.size(), progressTotal);
+            }
         }
         return vectors;
     }

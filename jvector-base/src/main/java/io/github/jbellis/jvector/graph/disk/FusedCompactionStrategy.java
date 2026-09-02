@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.work.ProgressTracker;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -25,20 +26,16 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Unsafe;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Generic compaction strategy for any {@link FusedFeature} (PQ today, ASH or other schemes
@@ -56,18 +53,6 @@ import java.util.concurrent.Future;
 public final class FusedCompactionStrategy extends QuantizationCompactionStrategy {
     private static final Logger log = LoggerFactory.getLogger(FusedCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private static final Unsafe UNSAFE = getUnsafe();
-
-    private static Unsafe getUnsafe() {
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            return (Unsafe) f.get(null);
-        } catch (Exception e) {
-            log.warn("FusedCompactionStrategy can't acquire needed Unsafe access; code-cache will not be explicitly unmapped");
-            return null;
-        }
-    }
 
     // Non-final: nulled by releaseSources() after compactGraphImpl so the source graphs reachable
     // through ctx.sources can be GC'd before refinement. onAfterClose must not touch ctx.
@@ -78,9 +63,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     private VectorCompressor<ByteSequence<?>> retrainedCompressor;
 
     // Transient pre-encode cache: lives in a memory-mapped section appended past the projected
-    // end of the output graph file. Truncated away in onAfterClose. Off-heap; single-mapping
-    // limit (2 GB) caps this at ~10M nodes for typical codeSize.
-    private MappedByteBuffer codeCache;
+    // end of the output graph file. Truncated away in onAfterClose. Off-heap, and chunked across
+    // several mappings so it is not bounded by the 2 GB single-mapping limit — see
+    // PreEncodedCodeCache for why that ceiling used to disable the pass entirely.
+    private PreEncodedCodeCache codeCache;
     private int cacheCodeSize;
     private long cacheTruncateAt;
 
@@ -93,10 +79,21 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public void retrain(VectorSimilarityFunction vsf) {
+        retrain(vsf, ProgressTracker.PhaseScope.NOOP);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void retrain(VectorSimilarityFunction vsf, ProgressTracker.PhaseScope scope) {
         log.info("Retraining fused-quantization compressor on merged sources");
-        this.retrainedCompressor = (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) retrainer.retrain(vsf);
+        this.retrainedCompressor = (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) retrainer.retrain(vsf, scope);
     }
 
     @Override
@@ -105,7 +102,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
-    public MappedByteBuffer getCodeCache() {
+    public PreEncodedCodeCache getCodeCache() {
         return codeCache;
     }
 
@@ -177,12 +174,8 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     @Override
     public void onAfterClose(Path graphPath) {
         if (cacheTruncateAt > 0) {
-            if (codeCache != null && UNSAFE != null) {
-                try {
-                    UNSAFE.invokeCleaner(codeCache);
-                } catch (IllegalArgumentException ignored) {
-                    // duplicated/indirect buffer; not cleanable
-                }
+            if (codeCache != null) {
+                codeCache.close();
             }
             codeCache = null;
             try (FileChannel fc = FileChannel.open(graphPath, StandardOpenOption.WRITE)) {
@@ -199,9 +192,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     /** Pre-encode every live node's code into a memory-mapped section past the projected output end. */
     private void precomputeCodes(CompactWriter writer) throws IOException {
         cacheCodeSize = retrainedCompressor.compressedVectorSize();
-        long tempSize = (long) (ctx.maxOrdinal + 1) * cacheCodeSize;
-        if (tempSize <= 0 || tempSize > Integer.MAX_VALUE) {
-            log.info("Code pre-encode skipped: required cache size {} bytes exceeds single-mapping limit", tempSize);
+        int codeCount = ctx.maxOrdinal + 1;
+        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize);
+        if (codeCount <= 0 || tempSize <= 0) {
+            log.info("Code pre-encode skipped: degenerate cache size {} bytes for {} codes", tempSize, codeCount);
             return;
         }
 
@@ -213,56 +207,71 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
             fc.write(pad, totalSize - 1);
-            codeCache = fc.map(FileChannel.MapMode.READ_WRITE, tempOffset, tempSize);
+            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize);
         }
 
         final int cs = cacheCodeSize;
         final VectorCompressor<ByteSequence<?>> compressor = retrainedCompressor;
-        List<Callable<Long>> tasks = new ArrayList<>();
+        // Chunk descriptors, not Callables: the ParallelExecutor decides how the iteration is
+        // distributed, so the strategy states only what the units of work are. taskWindowSize
+        // picks granularity (enough chunks to load-balance); the in-flight window is the
+        // executor's business.
+        List<int[]> chunks = new ArrayList<>();   // {sourceIdx, startOrdinal, endOrdinal}
         int targetTasks = Math.max(ctx.taskWindowSize * 4, 16);
         for (int s = 0; s < ctx.sources.size(); s++) {
-            final int sIdx = s;
-            final var source = ctx.sources.get(s);
-            final var alive = ctx.liveNodes.get(s);
-            final int upper = alive.length();
+            final int upper = ctx.liveNodes.get(s).length();
             int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
             for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
-                final int cStart = chunkStart;
-                final int cEnd = Math.min(chunkStart + chunkSize, upper);
-                tasks.add(() -> {
-                    // Stream this chunk's records into the page cache before the encode loop;
-                    // the mapping's MADV_RANDOM otherwise faults them one page at a time.
-                    source.prefetchL0Records(cStart, cEnd - 1);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
-                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
-                    long count = 0;
-                    try (var view = source.getView()) {
-                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                            if (!alive.get(oldOrd)) continue;
-                            view.getVectorInto(oldOrd, vec, 0);
-                            code.zero();
-                            compressor.encodeTo(vec, code);
-                            int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                            int offset = newOrd * cs;
-                            for (int i = 0; i < cs; i++) {
-                                codeCache.put(offset + i, code.get(i));
-                            }
-                            count++;
-                        }
-                    }
-                    return count;
-                });
+                chunks.add(new int[]{s, chunkStart, Math.min(chunkStart + chunkSize, upper)});
             }
         }
+
+        AtomicLong encoded = new AtomicLong();
+        final long liveTotal = ctx.liveNodes.stream().mapToLong(b -> b.cardinality()).sum();
+        try (ProgressTracker.PhaseScope scope = ctx.progress.startPhase(CompactionStage.CODE_PRE_ENCODE)) {
+            // Dispatched by index so the executor knows the chunk count and splits evenly; as a
+            // stream, an element-batching executor ran these 640 chunks on half the pool.
+            rethrowingIO("Code pre-encode failed", () -> ctx.executor.forEachInt(chunks.size(), ci -> {
+                final int[] chunk = chunks.get(ci);
+                final int sIdx = chunk[0], cStart = chunk[1], cEnd = chunk[2];
+                final var source = ctx.sources.get(sIdx);
+                final var alive = ctx.liveNodes.get(sIdx);
+                // Stream this chunk's records into the page cache before the encode loop;
+                // the mapping's MADV_RANDOM otherwise faults them one page at a time.
+                source.prefetchL0Records(cStart, cEnd - 1);
+                ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
+                VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
+                long count = 0;
+                try (var view = source.getView()) {
+                    for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
+                        if (!alive.get(oldOrd)) continue;
+                        view.getVectorInto(oldOrd, vec, 0);
+                        code.zero();
+                        compressor.encodeTo(vec, code);
+                        int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
+                        codeCache.put(newOrd, code);
+                        count++;
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                // Serialized: PhaseScope specifies non-decreasing reports, which an unguarded
+                // addAndGet-then-report cannot honour across concurrent workers.
+                synchronized (scope) {
+                    scope.onProgress(encoded.addAndGet(count), liveTotal);
+                }
+            }));
+        }
+        log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {})",
+                encoded.get(), tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
+    }
+
+    /** Runs {@code body}, restating any {@link UncheckedIOException} a worker threw as checked. */
+    private static void rethrowingIO(String what, Runnable body) throws IOException {
         try {
-            long total = 0;
-            for (Future<Long> f : ctx.executor.invokeAll(tasks)) {
-                total += f.get();
-            }
-            log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache (offset {})",
-                    total, tempSize / (1024 * 1024), tempOffset);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Code pre-encode failed", e);
+            body.run();
+        } catch (UncheckedIOException e) {
+            throw new IOException(what, e.getCause());
         }
     }
 }

@@ -46,12 +46,18 @@ import org.junit.Test;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.List;
+import java.util.Arrays;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static io.github.jbellis.jvector.TestUtil.getNeighborNodes;
 import static io.github.jbellis.jvector.TestUtil.randomVector;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.*;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
@@ -375,6 +381,105 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         var contents1 = Files.readAllBytes(fileIn.toPath());
         var contents2 = Files.readAllBytes(fileOut.toPath());
         assertArrayEquals(contents1, contents2);
+    }
+
+    /**
+     * Decodes an index's token stream section and checks it against the index itself: one NODE per
+     * ordinal in order, the base-layer neighbours of every live node in adjacency order, the level
+     * bits equal to the node's highest level, and dead ordinals carrying nothing.
+     */
+    public static void assertTokenStreamMatches(OnDiskGraphIndex g) throws IOException {
+        assertTrue("index should carry a token stream section", g.tokenStreamSection().isPresent());
+        int n = g.getIdUpperBound();
+        int[] levelOf = new int[n];
+        for (int level = 1; level <= g.getMaxLevel(); level++) {
+            for (var it = g.getNodes(level); it.hasNext(); ) {
+                int node = it.nextInt();
+                levelOf[node] = Math.max(levelOf[node], level);
+            }
+        }
+        try (var view = g.getView(); var ts = g.openTokenStream()) {
+            assertEquals(n, ts.nodeCount);
+            assertEquals(g.getDegree(0), ts.degree);
+            assertEquals(g.getMaxLevel(), ts.maxLevel);
+            SimilarityKey keyFn = ts.keyFunction == SimilarityKey.RANDOM_PROJECTION
+                                  ? SimilarityKey.randomProjection(g.getDimension()) : null;
+            var vec = io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorTypeSupport()
+                    .createFloatVector(g.getDimension());
+            int count = 0;
+            while (ts.next()) {
+                int node = ts.ordinal();
+                assertEquals(count, node);
+                if (keyFn != null && ts.live()) {
+                    view.getVectorInto(node, vec, 0);
+                    assertEquals("key of " + node, keyFn.keyOf(vec), ts.key());
+                }
+                var it = view.getNeighborsIterator(0, node);
+                int[] expected = new int[it.size()];
+                for (int k = 0; k < expected.length; k++) {
+                    expected[k] = it.nextInt();
+                }
+                if (ts.live()) {
+                    assertArrayEquals("neighbours of " + node, expected, Arrays.copyOf(ts.neighbors(), ts.neighborCount()));
+                    assertEquals("level of " + node, levelOf[node], ts.level());
+                } else {
+                    assertEquals("dead ordinal " + node + " must have no edges", 0, expected.length);
+                    assertEquals(0, ts.neighborCount());
+                }
+                count++;
+            }
+            assertEquals(n, count);
+        }
+    }
+
+    /**
+     * The token stream is an additive section: with it on, every byte before the section and the
+     * footer's header copy are identical to a write with it off, the file is longer by the section
+     * and its trailer, the section decodes to the graph, and a file written without it loads with
+     * no section.
+     */
+    @Test
+    public void testTokenStreamSectionIsAdditive() throws Exception {
+        var multilayer = new TestUtil.FullyConnectedGraphIndex(1, List.of(5, 4, 3));
+        for (var graph : List.of(multilayer, randomlyConnectedGraph)) {
+            var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+            var without = testDirectory.resolve("tokens_off_" + graph.getClass().getSimpleName() + graph.getMaxLevel());
+            var with = testDirectory.resolve("tokens_on_" + graph.getClass().getSimpleName() + graph.getMaxLevel());
+            for (boolean enabled : new boolean[] {false, true}) {
+                try (var writer = new OnDiskGraphIndexWriter.Builder(graph, enabled ? with : without)
+                        .with(new InlineVectors(ravv.dimension()))
+                        .withTokenStream(enabled)
+                        .build()) {
+                    writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                            nodeId -> new InlineVectors.State(ravv.getVector(nodeId))));
+                }
+            }
+            byte[] a = Files.readAllBytes(without);
+            byte[] b = Files.readAllBytes(with);
+            assertTrue("the section adds bytes", b.length > a.length);
+            long headerOffsetA = java.nio.ByteBuffer.wrap(a, a.length - 12, 8).getLong();
+            long headerOffsetB = java.nio.ByteBuffer.wrap(b, b.length - 12, 8).getLong();
+            int headerSize = (int) (a.length - 12 - headerOffsetA);
+            assertEquals(headerSize, (int) (b.length - 12 - headerOffsetB));
+            assertArrayEquals("bytes before the section are identical",
+                    Arrays.copyOfRange(a, 0, (int) headerOffsetA), Arrays.copyOfRange(b, 0, (int) headerOffsetA));
+            assertArrayEquals("the footer's header copy is identical",
+                    Arrays.copyOfRange(a, (int) headerOffsetA, (int) headerOffsetA + headerSize),
+                    Arrays.copyOfRange(b, (int) headerOffsetB, (int) headerOffsetB + headerSize));
+            assertEquals("the section and trailer are the only growth",
+                    headerOffsetA + b.length - a.length, headerOffsetB);
+
+            try (var rs = new SimpleMappedReader.Supplier(without); var g = OnDiskGraphIndex.load(rs)) {
+                assertFalse(g.tokenStreamSection().isPresent());
+                TestUtil.assertGraphEquals(graph, g);
+            }
+            try (var rs = new SimpleMappedReader.Supplier(with); var g = OnDiskGraphIndex.load(rs)) {
+                TestUtil.assertGraphEquals(graph, g);
+                assertTokenStreamMatches(g);
+                var section = g.tokenStreamSection().get();
+                assertEquals(headerOffsetB - NodeTokenStream.TRAILER_SIZE, section.offset + section.length);
+            }
+        }
     }
 
     @Test
