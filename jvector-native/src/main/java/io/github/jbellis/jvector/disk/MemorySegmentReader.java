@@ -183,7 +183,10 @@ public class MemorySegmentReader implements RandomAccessReader {
         private final Arena arena;
         private final MemorySegment memory;
         private final Path path;
-        private final int adviceFd; // -1 when unavailable
+        // Lazily opened on the first willNeed call, so consumers that never issue advisory
+        // hints (everything except compaction today) carry no extra descriptor.
+        // -2 = not yet opened, -1 = unavailable.
+        private volatile int adviceFd = -2;
 
         public Supplier(Path path) throws IOException {
             this.path = path;
@@ -191,10 +194,7 @@ public class MemorySegmentReader implements RandomAccessReader {
             try (var ch = FileChannel.open(path, StandardOpenOption.READ)) {
                 this.memory = ch.map(MapMode.READ_ONLY, 0L, ch.size(), arena);
 
-                // Apply MADV_RANDOM advice: graph traversal is random access, and kernel
-                // readahead extrapolates from file adjacency, which a diversity-pruned graph's
-                // edges deliberately avoid — wider speculative reads are wasted bandwidth.
-                // Targeted asynchronous warming goes through willNeed() instead.
+                // Apply MADV_RANDOM advice
                 var linker = Linker.nativeLinker();
                 var maybeMadvise = linker.defaultLookup().find("posix_madvise");
                 if (maybeMadvise.isPresent()) {
@@ -204,7 +204,7 @@ public class MemorySegmentReader implements RandomAccessReader {
                     if (result != 0) {
                         throw new IOException("posix_madvise failed with error code: " + result);
                     }
-                } else if (maybeMadvise.isEmpty()) {
+                } else {
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
                 }
             } catch (Throwable e) {
@@ -214,7 +214,6 @@ public class MemorySegmentReader implements RandomAccessReader {
                 }
                 throw new RuntimeException(e);
             }
-            this.adviceFd = openAdviceFd(path);
         }
 
         private static int openAdviceFd(Path path) {
@@ -232,7 +231,16 @@ public class MemorySegmentReader implements RandomAccessReader {
 
         @Override
         public void willNeed(long offset, long length) {
-            if (adviceFd < 0 || FADVISE_H == null || length <= 0) {
+            int fd = adviceFd;
+            if (fd == -2) {
+                synchronized (this) {
+                    if (adviceFd == -2) {
+                        adviceFd = openAdviceFd(path);
+                    }
+                }
+                fd = adviceFd;
+            }
+            if (fd < 0 || FADVISE_H == null || length <= 0) {
                 return;
             }
             long end = Math.min(offset + length, memory.byteSize());
@@ -241,7 +249,7 @@ public class MemorySegmentReader implements RandomAccessReader {
                 return;
             }
             try {
-                int ignored = (int) FADVISE_H.invokeExact(adviceFd, start, end - start, POSIX_FADV_WILLNEED);
+                int ignored = (int) FADVISE_H.invokeExact(fd, start, end - start, POSIX_FADV_WILLNEED);
             } catch (Throwable t) {
                 // advice is best-effort; never fail a read path over it
             }
