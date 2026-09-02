@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
@@ -492,32 +493,17 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        var vv = ravv.threadLocalSupplier();
-        int size = ravv.size();
-
-        simdExecutor.submit(() -> {
-            IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
-
-        cleanup();
-        return graph;
-    }
-
     /**
-     * Builds the graph from a {@link RandomAccessByteVectorValues}.
-     * Each node is scored via the {@link BuildScoreProvider} supplied at construction time,
-     * so all comparisons remain byte×byte with no float round-trip.
+     * Builds the graph from any {@link VectorValues} source — works for both
+     * {@link RandomAccessVectorValues} (float32) and {@link RandomAccessByteVectorValues} (int8).
+     * The score provider supplied at construction time determines how vectors are compared.
      */
-    public ImmutableGraphIndex build(RandomAccessByteVectorValues ravv) {
-        var vv = ravv.threadLocalSupplier();
+    public ImmutableGraphIndex build(VectorValues<?> ravv) {
         int size = ravv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
+                addGraphNode(node, scoreProvider.searchProviderFor(node));
             });
         }).join();
 
