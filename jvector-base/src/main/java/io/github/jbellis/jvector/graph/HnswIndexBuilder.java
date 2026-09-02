@@ -17,12 +17,14 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.index.HnswRecipe;
+import io.github.jbellis.jvector.index.IndexBuilderValidation;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
+import java.util.stream.IntStream;
 
 /**
  * Fluent, validating builder for {@link GraphIndexBuilder}.
@@ -33,12 +35,18 @@ import java.util.concurrent.ForkJoinPool;
  * and validates that everything required is present before delegating to the appropriate
  * {@link GraphIndexBuilder} constructor in {@link #build()}.
  * <p>
- * Two mutually exclusive ways to supply scoring are accepted, mirroring
+ * {@link #withVectorValues} is always required: it is what drives the actual build loop (it
+ * supplies both the number of nodes to insert and the raw vector for each one), regardless of
+ * which of the two mutually exclusive ways of supplying scoring is used, mirroring
  * {@link GraphIndexBuilder}'s own constructor overloads:
  * <ul>
- *     <li>{@link #withVectorValues} + {@link #withSimilarityFunction} (dimension is derived
- *     automatically from the vector values), or</li>
- *     <li>{@link #withScoreProvider} directly (in which case {@link #withDimension} is required).</li>
+ *     <li>{@link #withVectorValues} + {@link #withSimilarityFunction}, in which case a score
+ *     provider performing exact comparisons is derived automatically (dimension is also derived
+ *     automatically), or</li>
+ *     <li>{@link #withVectorValues} + {@link #withScoreProvider}, to score with something other
+ *     than exact comparison against the raw vectors (e.g. a PQ/BQ-compressed provider); dimension
+ *     is still derived from {@link #withVectorValues} unless overridden with {@link #withDimension}
+ *     for cross-validation.</li>
  * </ul>
  * Similarly, two mutually exclusive ways to supply the graph shape are accepted:
  * <ul>
@@ -46,7 +54,10 @@ import java.util.concurrent.ForkJoinPool;
  *     new graph from scratch, or</li>
  *     <li>{@link #withExistingGraph}, to continue building on top of an already-loaded
  *     {@link MutableGraphIndex} (see {@link GraphIndexBuilder}'s {@code @Experimental} constructor
- *     of the same shape).</li>
+ *     of the same shape). In this case {@link #withVectorValues} must be a superset containing an
+ *     entry for every ordinal already present in the existing graph (at the same ordinals) plus the
+ *     new vectors to append; new nodes are inserted starting at the existing graph's
+ *     {@link GraphIndex#getIdUpperBound()}.</li>
  * </ul>
  */
 public class HnswIndexBuilder {
@@ -70,8 +81,11 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Supplies the score provider directly. Mutually exclusive with {@link #withVectorValues}/
-     * {@link #withSimilarityFunction}. Requires {@link #withDimension} to also be set.
+     * Supplies the score provider directly, for scoring that is not a plain exact comparison of
+     * the raw vectors (e.g. a PQ/BQ-compressed provider). Mutually exclusive with
+     * {@link #withSimilarityFunction}. {@link #withVectorValues} is still required alongside this:
+     * it is what is actually iterated to drive node insertion, independent of how those nodes are
+     * scored.
      */
     public HnswIndexBuilder withScoreProvider(BuildScoreProvider scoreProvider) {
         this.scoreProvider = scoreProvider;
@@ -79,25 +93,33 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Supplies the vectors to build the graph from. Must be paired with
-     * {@link #withSimilarityFunction}; dimension is derived from this automatically.
-     * Mutually exclusive with {@link #withScoreProvider}.
+     * Supplies the vectors to build the graph from. Always required: this is what is iterated to
+     * drive node insertion (both the node count and the vector for each node), regardless of which
+     * scoring option is used. Dimension is derived from this automatically.
+     * <p>
+     * Pair with {@link #withSimilarityFunction} for a score provider performing exact comparisons
+     * against these vectors, or with {@link #withScoreProvider} to score some other way (in which
+     * case these vectors are only used to drive insertion, not to compute scores).
      */
     public HnswIndexBuilder withVectorValues(RandomAccessVectorValues vectorValues) {
         this.vectorValues = vectorValues;
         return this;
     }
 
-    /** The similarity metric to use during construction. Paired with {@link #withVectorValues}. */
+    /**
+     * The similarity metric to use during construction, used to derive a score provider that
+     * performs exact comparisons against {@link #withVectorValues}. Mutually exclusive with
+     * {@link #withScoreProvider}.
+     */
     public HnswIndexBuilder withSimilarityFunction(VectorSimilarityFunction similarityFunction) {
         this.similarityFunction = similarityFunction;
         return this;
     }
 
     /**
-     * The vector dimension. Only needed (and required) when using {@link #withScoreProvider}
-     * directly; when using {@link #withVectorValues}, the dimension is derived from it and does
-     * not need to be set here.
+     * The vector dimension. Optional: it is always derived from {@link #withVectorValues}. Setting
+     * this is only useful as a cross-check — {@link #build()} throws if it disagrees with
+     * {@code withVectorValues().dimension()}.
      */
     public HnswIndexBuilder withDimension(int dimension) {
         this.dimension = dimension;
@@ -187,6 +209,12 @@ public class HnswIndexBuilder {
      * a new one. Mutually exclusive with {@link #withMaxDegree}/{@link #withMaxDegrees} and
      * {@link #withAddHierarchy}, which are ignored (and not required) when this is set, since the
      * existing graph already carries that information.
+     * <p>
+     * The nodes already in {@code existingGraph} are <b>not</b> re-inserted. Instead,
+     * {@link #withVectorValues} must be a superset RAVV: ordinals {@code [0, existingGraph.getIdUpperBound())}
+     * must line up with the vectors already in the graph, and the remaining ordinals
+     * {@code [existingGraph.getIdUpperBound(), vectorValues.size())} are the new vectors that get
+     * appended.
      */
     public HnswIndexBuilder withExistingGraph(MutableGraphIndex existingGraph) {
         this.existingGraph = existingGraph;
@@ -194,69 +222,70 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Validates that all required configuration has been supplied, and constructs the
-     * corresponding {@link GraphIndexBuilder}.
+     * Pre-sets this builder's fixed fields to the given recipe's recommended values, leaving the
+     * recipe's free parameters (e.g. {@code dimensions}) for the caller to still supply.
+     * <p>
+     * Scaffolding only: the recipes' actual fixed-value formulas haven't been decided yet, so
+     * every {@link HnswRecipe} currently refuses here rather than guess at numbers.
+     *
+     * @throws UnsupportedOperationException always, until a recipe's values are defined
+     */
+    public HnswIndexBuilder applyRecipe(HnswRecipe recipe) {
+        throw new UnsupportedOperationException(
+                "HnswRecipe." + recipe + " has no defined values yet");
+    }
+
+    /**
+     * Validates that all required configuration has been supplied, builds the corresponding
+     * {@link GraphIndexBuilder}, and drives it to completion.
      *
      * @throws IllegalStateException if a mutually-exclusive pair was over-specified, or if a
      * required value is missing; the message names every missing/conflicting value at once.
      */
-    public GraphIndexBuilder build() {
-        if (scoreProvider != null && (vectorValues != null || similarityFunction != null)) {
+    public GraphIndex build() {
+        if (scoreProvider != null && similarityFunction != null) {
             throw new IllegalStateException(
-                    "Set either withScoreProvider() or withVectorValues()+withSimilarityFunction(), not both");
+                    "Set either withScoreProvider() or withSimilarityFunction(), not both");
         }
 
-        List<String> missing = new ArrayList<>();
-        BuildScoreProvider resolvedScoreProvider = scoreProvider;
-        Integer resolvedDimension = dimension;
+        new IndexBuilderValidation()
+                .require("vectorValues", vectorValues)
+                .requireCondition("similarityFunction (or scoreProvider)",
+                        scoreProvider != null || similarityFunction != null)
+                .requireCondition("maxDegree/maxDegrees (or existingGraph)",
+                        existingGraph != null || maxDegrees != null)
+                .requireCondition("addHierarchy (or existingGraph)",
+                        existingGraph != null || addHierarchy != null)
+                .require("beamWidth", beamWidth)
+                .require("neighborOverflow", neighborOverflow)
+                .require("alpha", alpha)
+                .throwIfAny("Cannot build GraphIndexBuilder");
 
-        if (resolvedScoreProvider == null) {
-            if (vectorValues == null) {
-                missing.add("vectorValues (or scoreProvider)");
-            }
-            if (similarityFunction == null) {
-                missing.add("similarityFunction (or scoreProvider)");
-            }
-            if (vectorValues != null && similarityFunction != null) {
-                resolvedScoreProvider = BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
-                int derivedDimension = vectorValues.dimension();
-                if (resolvedDimension != null && resolvedDimension != derivedDimension) {
-                    throw new IllegalStateException(String.format(
-                            "dimension(%d) does not match vectorValues.dimension()=%d; " +
-                            "omit withDimension() when using withVectorValues()",
-                            resolvedDimension, derivedDimension));
-                }
-                resolvedDimension = derivedDimension;
-            }
-        } else if (resolvedDimension == null) {
-            missing.add("dimension (required when using scoreProvider() directly)");
+        int resolvedDimension = vectorValues.dimension();
+        if (dimension != null && dimension != resolvedDimension) {
+            throw new IllegalStateException(String.format(
+                    "dimension(%d) does not match vectorValues.dimension()=%d; " +
+                    "omit withDimension(), it is derived automatically from vectorValues",
+                    dimension, resolvedDimension));
         }
 
-        if (existingGraph == null) {
-            if (maxDegrees == null) {
-                missing.add("maxDegree/maxDegrees (or existingGraph)");
-            }
-            if (addHierarchy == null) {
-                missing.add("addHierarchy (or existingGraph)");
-            }
-        }
-        if (beamWidth == null) {
-            missing.add("beamWidth");
-        }
-        if (neighborOverflow == null) {
-            missing.add("neighborOverflow");
-        }
-        if (alpha == null) {
-            missing.add("alpha");
-        }
-
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException(
-                    "Cannot build GraphIndexBuilder, missing required value(s): " + String.join(", ", missing));
-        }
+        BuildScoreProvider resolvedScoreProvider = scoreProvider != null
+                ? scoreProvider
+                : BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
 
         if (existingGraph != null) {
-            return new GraphIndexBuilder(resolvedScoreProvider,
+            int startingNodeOffset = existingGraph.getIdUpperBound();
+            int size = vectorValues.size();
+            if (size < startingNodeOffset) {
+                throw new IllegalStateException(String.format(
+                        "vectorValues.size()=%d is smaller than existingGraph.getIdUpperBound()=%d; " +
+                        "when using withExistingGraph(), vectorValues must be a superset containing an " +
+                        "entry for every node ordinal already in the existing graph, in addition to the " +
+                        "new vectors being appended",
+                        size, startingNodeOffset));
+            }
+
+            GraphIndexBuilder builder = new GraphIndexBuilder(resolvedScoreProvider,
                     resolvedDimension,
                     existingGraph,
                     beamWidth,
@@ -265,6 +294,13 @@ public class HnswIndexBuilder {
                     refineFinalGraph,
                     simdExecutor,
                     parallelExecutor);
+
+            var vv = vectorValues.threadLocalSupplier();
+            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, size).parallel().forEach(node -> {
+                builder.addGraphNode(node, vv.get().getVector(node));
+            })).join();
+            builder.cleanup();
+            return builder.getGraph();
         }
 
         return new GraphIndexBuilder(resolvedScoreProvider,
@@ -276,6 +312,6 @@ public class HnswIndexBuilder {
                 addHierarchy,
                 refineFinalGraph,
                 simdExecutor,
-                parallelExecutor);
+                parallelExecutor).build(vectorValues);
     }
 }

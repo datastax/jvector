@@ -25,7 +25,6 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.index.Index;
-import io.github.jbellis.jvector.index.IndexSearcher;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -84,7 +83,7 @@ public interface GraphIndex extends Index {
      * For in-memory graphs it is generally better to call this once per search rather than reusing
      * an instance across concurrent searches, since {@link GraphSearcher} implementations are not thread-safe.
      */
-    default IndexSearcher searcher() {
+    default GraphSearcher searcher() {
         return new GraphSearcher(this);
     }
 

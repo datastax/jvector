@@ -16,5 +16,12 @@
 
 package io.github.jbellis.jvector.index;
 
+/**
+ * Marker interface for a backing's search entry point, returned by {@link Index#searcher()}.
+ * Each backing (e.g. {@code GraphSearcher} for graph/HNSW indexes, {@code IvfSearcher} for IVF)
+ * implements this with its own type-specific search options; a caller holding only {@link Index}
+ * narrows to the backing's own index interface (e.g. {@code GraphIndex}) to recover the concrete
+ * searcher type instead of casting this marker.
+ */
 public interface IndexSearcher {
 }

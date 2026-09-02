@@ -9,16 +9,8 @@
         <artifactId>jvector-parent</artifactId>
         <version>${revision}</version>
     </parent>
-    <artifactId>jvector-base</artifactId>
-    <name>Base</name>
-
-    <dependencies>
-        <dependency>
-            <groupId>io.github.jbellis</groupId>
-            <artifactId>jvector-api</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-    </dependencies>
+    <artifactId>jvector-api</artifactId>
+    <name>API</name>
 
     <build>
         <plugins>

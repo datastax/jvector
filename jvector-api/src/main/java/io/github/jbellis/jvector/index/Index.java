@@ -18,6 +18,16 @@ package io.github.jbellis.jvector.index;
 
 import io.github.jbellis.jvector.util.Accountable;
 
+/**
+ * The backing-agnostic handle for a vector index. Every concrete index type (graph/HNSW, IVF, and
+ * whatever follows) implements this; callers that don't need to know which backing they hold can
+ * program against {@link Index} alone.
+ * <p>
+ * Callers who <em>do</em> know (or need to recover) the concrete backing use its own interface
+ * instead &mdash; e.g. {@code GraphIndex} or {@code IvfIndex} &mdash; which each override
+ * {@link #searcher()} to return their own, more specific {@link IndexSearcher} subtype with no
+ * cast required.
+ */
 public interface Index extends Accountable, AutoCloseable {
 
     /**

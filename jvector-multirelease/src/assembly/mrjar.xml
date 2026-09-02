@@ -10,6 +10,7 @@
         <moduleSet>
             <useAllReactorProjects>true</useAllReactorProjects>
             <includes>
+                <include>io.github.jbellis:jvector-api</include>
                 <include>io.github.jbellis:jvector-base</include>
             </includes>
             <binaries>

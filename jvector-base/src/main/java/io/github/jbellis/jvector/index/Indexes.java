@@ -17,13 +17,26 @@
 package io.github.jbellis.jvector.index;
 
 import io.github.jbellis.jvector.graph.HnswIndexBuilder;
-import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.ivf.IvfIndexBuilder;
 
-import java.io.Closeable;
-
-public interface IndexBuilder extends Closeable, Accountable {
+/**
+ * Entry point for building a jvector {@link Index}: pick the backing type first, then only its
+ * own parameters are available to set.
+ * <p>
+ * This lives here rather than as static methods on {@link Index} itself because {@link Index} is
+ * part of jvector-api (the pure contract module, with no dependency on any concrete backing),
+ * while the builders returned here construct concrete implementation objects and belong in
+ * jvector-base alongside them.
+ */
+public final class Indexes {
+    private Indexes() {
+    }
 
     public static HnswIndexBuilder hnswBuilder() {
         return new HnswIndexBuilder();
+    }
+
+    public static IvfIndexBuilder ivfBuilder() {
+        return new IvfIndexBuilder();
     }
 }
