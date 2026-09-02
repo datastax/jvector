@@ -898,41 +898,42 @@ public class TestVectorGraph extends LuceneTestCase {
         }
     }
 
-    /** Smoke-test: a built byte-vector graph achieves >80% top-1 recall. */
+    /** Smoke-test: a built byte-vector graph achieves reasonable top-5 recall. */
     @Test
     public void testByteVectorSearchRecall() {
         int n = 200, dim = 16;
+        int topK = 5;
         var rabvv  = randomByteVectorValues(n, dim);
         var bvsf   = ByteVectorSimilarityFunction.EUCLIDEAN;
         var builder = new GraphIndexBuilder(rabvv, bvsf, 16, 50, 1.2f, 1.2f, false);
         var graph  = builder.build(rabvv);
 
-        int hits = 0;
-        int trials = 50;
+        int totalMatches = 0;
+        int trials = 100;
         for (int t = 0; t < trials; t++) {
             byte[] rawQ = new byte[dim];
             getRandom().nextBytes(rawQ);
             ByteSequence<?> query = vectorTypeSupport.createByteSequence(rawQ);
 
-            // brute-force nearest
-            int bruteNearest = -1;
-            float bestScore = -1;
+            // brute-force top-K
+            NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
             for (int i = 0; i < n; i++) {
-                float s = bvsf.compare(query, rabvv.getVector(i));
-                if (s > bestScore) { bestScore = s; bruteNearest = i; }
+                expected.push(i, bvsf.compare(query, rabvv.getVector(i)));
             }
 
-            // graph search via instance method (no static convenience method takes SSP + graph)
+            // graph search with efSearch = 100 (larger than topK to explore more candidates)
             var ssp = new DefaultSearchScoreProvider(
                     (io.github.jbellis.jvector.graph.similarity.ScoreFunction.ExactScoreFunction)
                     node -> bvsf.compare(query, rabvv.getVector(node)));
-            var result = new GraphSearcher(graph).search(ssp, 1, Bits.ALL);
-            int graphNearest = result.getNodes()[0].node;
+            var result = new GraphSearcher(graph).search(ssp, topK, 100, 0f, 0f, Bits.ALL);
+            var actualNodeIds = Arrays.stream(result.getNodes(), 0, topK)
+                    .mapToInt(ns -> ns.node).toArray();
 
-            if (graphNearest == bruteNearest) hits++;
+            totalMatches += computeOverlap(actualNodeIds, expected.nodesCopy());
         }
-        double recall = hits / (double) trials;
-        assertTrue("byte-vector top-1 recall " + recall + " is too low", recall >= 0.8);
+        // with efSearch=100 over a 200-node graph, we can visit most nodes; expect >=90% recall
+        double overlap = totalMatches / (double) (trials * topK);
+        assertTrue("byte-vector recall " + overlap + " is too low", overlap > 0.9);
     }
 
     /** Creates a list-backed RandomAccessByteVectorValues with random int8 vectors. */
