@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -30,6 +31,7 @@ import io.github.jbellis.jvector.graph.TestVectorGraph;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
@@ -38,7 +40,13 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -526,6 +534,206 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
             validateVectors(incrementalView, ravv); // inline vectors should be the same
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // InlineByteVectors (int8) tests
+    // -----------------------------------------------------------------------
+
+    private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    /** Builds a list of n random int8 vectors of the given dimension. */
+    private List<ByteSequence<?>> randomByteVectors(int n, int dim) {
+        var list = new ArrayList<ByteSequence<?>>(n);
+        for (int i = 0; i < n; i++) {
+            byte[] raw = new byte[dim];
+            getRandom().nextBytes(raw);
+            list.add(vts.createByteSequence(raw));
+        }
+        return list;
+    }
+
+    /**
+     * Full round-trip: build with InlineByteVectors, write, reload, verify
+     * getByteVector() returns the original bytes for every node.
+     */
+    @Test
+    public void testInlineByteVectorsRoundTrip() throws IOException {
+        int n = 50, dim = 8;
+        var vectors = randomByteVectors(n, dim);
+        var rabvv   = new ListRandomAccessByteVectorValues(vectors, dim);
+
+        // Build a graph
+        var builder = new GraphIndexBuilder(rabvv, ByteVectorSimilarityFunction.EUCLIDEAN, 8, 20, 1.2f, 1.2f, false);
+        var graph   = builder.build(rabvv);
+
+        // Write with InlineByteVectors feature
+        var outputPath = testDirectory.resolve("byte_vectors_roundtrip");
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .with(new InlineByteVectors(dim))
+                .build())
+        {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                    nodeId -> new InlineByteVectors.State(rabvv.getVector(nodeId))));
+        }
+
+        // Reload and verify every vector
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view   = onDisk.getView())
+        {
+            assertTrue("INLINE_BYTE_VECTORS feature missing",
+                    onDisk.getFeatureSet().contains(FeatureId.INLINE_BYTE_VECTORS));
+            assertEquals(dim, onDisk.dimension);
+
+            for (int i = 0; i < n; i++) {
+                var expected = rabvv.getVector(i);
+                var actual   = view.getByteVector(i);
+                assertEquals("byte vector length mismatch at node " + i, expected.length(), actual.length());
+                for (int d = 0; d < dim; d++) {
+                    assertEquals("byte mismatch at node " + i + " dim " + d,
+                            expected.get(d), actual.get(d));
+                }
+            }
+        }
+    }
+
+    /**
+     * featureSize() of InlineByteVectors must equal the dimension (1 byte per component),
+     * confirming 4× compression vs float32 InlineVectors.
+     */
+    @Test
+    public void testInlineByteVectorsFeatureSize() {
+        for (int dim : new int[]{1, 8, 128, 256}) {
+            var ibv = new InlineByteVectors(dim);
+            assertEquals("featureSize should equal dimension", dim, ibv.featureSize());
+            // float32 InlineVectors uses 4 * dim bytes
+            assertEquals("byte feature 4x smaller than float32",
+                    new InlineVectors(dim).featureSize(), 4 * ibv.featureSize());
+        }
+    }
+
+    /**
+     * getByteVector throws UnsupportedOperationException when the graph has no INLINE_BYTE_VECTORS feature.
+     */
+    @Test
+    public void testGetByteVectorThrowsWithoutFeature() throws IOException {
+        // Build and write a float-vector graph (no INLINE_BYTE_VECTORS)
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(10, 4, getRandom());
+        var ravv  = new TestVectorGraph.CircularFloatVectorValues(10);
+        var outputPath = testDirectory.resolve("float_graph_no_bytes");
+        TestUtil.writeGraph(graph, ravv, outputPath);
+
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view   = onDisk.getView())
+        {
+            assertFalse(onDisk.getFeatureSet().contains(FeatureId.INLINE_BYTE_VECTORS));
+            assertThrows(UnsupportedOperationException.class, () -> view.getByteVector(0));
+        }
+    }
+
+    /**
+     * byteVectorRerankerFor throws UnsupportedOperationException when the graph has no INLINE_BYTE_VECTORS feature.
+     */
+    @Test
+    public void testByteVectorRerankerThrowsWithoutFeature() throws IOException {
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(10, 4, getRandom());
+        var ravv  = new TestVectorGraph.CircularFloatVectorValues(10);
+        var outputPath = testDirectory.resolve("float_graph_reranker");
+        TestUtil.writeGraph(graph, ravv, outputPath);
+
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view   = onDisk.getView())
+        {
+            var qb = vts.createByteSequence(2);
+            assertThrows(UnsupportedOperationException.class,
+                    () -> view.byteVectorRerankerFor(qb, ByteVectorSimilarityFunction.EUCLIDEAN));
+        }
+    }
+
+    /**
+     * byteVectorRerankerFor returns scores consistent with a direct bvsf.compare() call.
+     */
+    @Test
+    public void testByteVectorRerankerScoresMatchDirectCompare() throws IOException {
+        int n = 30, dim = 4;
+        var vectors = randomByteVectors(n, dim);
+        var rabvv   = new ListRandomAccessByteVectorValues(vectors, dim);
+        var bvsf    = ByteVectorSimilarityFunction.EUCLIDEAN;
+
+        var builder = new GraphIndexBuilder(rabvv, bvsf, 8, 20, 1.2f, 1.2f, false);
+        var graph   = builder.build(rabvv);
+
+        var outputPath = testDirectory.resolve("byte_reranker_test");
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .with(new InlineByteVectors(dim))
+                .build())
+        {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                    nodeId -> new InlineByteVectors.State(rabvv.getVector(nodeId))));
+        }
+
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view   = onDisk.getView())
+        {
+            byte[] rawQ = new byte[dim];
+            getRandom().nextBytes(rawQ);
+            var query    = vts.createByteSequence(rawQ);
+            var reranker = view.byteVectorRerankerFor(query, bvsf);
+
+            for (int i = 0; i < n; i++) {
+                float expected = bvsf.compare(query, rabvv.getVector(i));
+                float actual   = reranker.similarityTo(i);
+                assertEquals("reranker score mismatch at node " + i, expected, actual, 1e-5f);
+            }
+        }
+    }
+
+    /**
+     * All three byte-vector similarity functions produce results in [0, 1] for all nodes
+     * after a full int8 end-to-end write/search cycle.
+     */
+    @Test
+    public void testByteVectorEndToEndAllSimilarityFunctions() throws IOException {
+        int n = 40, dim = 8;
+
+        for (var bvsf : ByteVectorSimilarityFunction.values()) {
+            var vectors = randomByteVectors(n, dim);
+            var rabvv   = new ListRandomAccessByteVectorValues(vectors, dim);
+
+            var builder = new GraphIndexBuilder(rabvv, bvsf, 8, 20, 1.2f, 1.2f, false);
+            var graph   = builder.build(rabvv);
+
+            var outputPath = testDirectory.resolve("byte_e2e_" + bvsf.name());
+            try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                    .with(new InlineByteVectors(dim))
+                    .build())
+            {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                        nodeId -> new InlineByteVectors.State(rabvv.getVector(nodeId))));
+            }
+
+            try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+                 var onDisk = OnDiskGraphIndex.load(rs);
+                 var view   = onDisk.getView())
+            {
+                byte[] rawQ = new byte[dim];
+                getRandom().nextBytes(rawQ);
+                var query    = vts.createByteSequence(rawQ);
+                var reranker = view.byteVectorRerankerFor(query, bvsf);
+                var ssp      = new DefaultSearchScoreProvider(reranker);
+                var result   = new GraphSearcher(onDisk).search(ssp, 5, Bits.ALL);
+
+                for (var ns : result.getNodes()) {
+                    float score = ns.score;
+                    assertTrue(bvsf + " score out of [0,1] for node " + ns.node + ": " + score,
+                            score >= 0f && score <= 1.0f);
+                }
+            }
         }
     }
 }
