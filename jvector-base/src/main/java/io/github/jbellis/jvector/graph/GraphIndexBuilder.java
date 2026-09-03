@@ -23,10 +23,13 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,6 +100,63 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      */
+    /**
+     * Convenience constructor for building a byte-vector (int8) graph.
+     * See {@link #GraphIndexBuilder(RandomAccessVectorValues, VectorSimilarityFunction, int, int, float, float, boolean)}
+     * for the float equivalent.
+     *
+     * @param vectorValues      the int8 vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity metric to use during construction
+     * @param M                 the maximum number of connections a node can have
+     * @param beamWidth         the size of the beam search to use when finding nearest neighbors
+     * @param neighborOverflow  the ratio of extra neighbors to allow temporarily when inserting a node
+     * @param alpha             how aggressive pruning diverse neighbors should be
+     * @param addHierarchy      whether to add an HNSW-style hierarchy on top of the Vamana index
+     */
+    public GraphIndexBuilder(RandomAccessByteVectorValues vectorValues,
+                             ByteVectorSimilarityFunction similarityFunction,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy)
+    {
+        this(vectorValues, similarityFunction, M, beamWidth, neighborOverflow, alpha, addHierarchy, true);
+    }
+
+    /**
+     * Convenience constructor for building a byte-vector (int8) graph.
+     * See {@link #GraphIndexBuilder(RandomAccessVectorValues, VectorSimilarityFunction, int, int, float, float, boolean, boolean)}
+     * for the float equivalent.
+     *
+     * @param vectorValues       the int8 vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity metric to use during construction
+     * @param M                  the maximum number of connections a node can have
+     * @param beamWidth          the size of the beam search to use when finding nearest neighbors
+     * @param neighborOverflow   the ratio of extra neighbors to allow temporarily when inserting a node
+     * @param alpha              how aggressive pruning diverse neighbors should be
+     * @param addHierarchy       whether to add an HNSW-style hierarchy on top of the Vamana index
+     * @param refineFinalGraph   whether to do a second pass over each node in the graph to refine its connections
+     */
+    public GraphIndexBuilder(RandomAccessByteVectorValues vectorValues,
+                             ByteVectorSimilarityFunction similarityFunction,
+                             int M,
+                             int beamWidth,
+                             float neighborOverflow,
+                             float alpha,
+                             boolean addHierarchy,
+                             boolean refineFinalGraph)
+    {
+        this(BuildScoreProvider.byteVectorScoreProvider(vectorValues, similarityFunction),
+                vectorValues.dimension(),
+                M,
+                beamWidth,
+                neighborOverflow,
+                alpha,
+                addHierarchy,
+                refineFinalGraph);
+    }
+
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
                              int M,
@@ -433,13 +493,17 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        var vv = ravv.threadLocalSupplier();
+    /**
+     * Builds the graph from any {@link VectorValues} source — works for both
+     * {@link RandomAccessVectorValues} (float32) and {@link RandomAccessByteVectorValues} (int8).
+     * The score provider supplied at construction time determines how vectors are compared.
+     */
+    public ImmutableGraphIndex build(VectorValues<?> ravv) {
         int size = ravv.size();
 
         simdExecutor.submit(() -> {
             IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
+                addGraphNode(node, scoreProvider.searchProviderFor(node));
             });
         }).join();
 
@@ -586,6 +650,19 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @return an estimate of the number of extra bytes used by the graph after adding the given node
      */
     public long addGraphNode(int node, VectorFloat<?> vector) {
+        var ssp = scoreProvider.searchProviderFor(vector);
+        return addGraphNode(node, ssp);
+    }
+
+    /**
+     * Inserts a node with the given int8 byte vector into the graph.
+     *
+     * @param node   the node ID to add
+     * @param vector the byte vector to add
+     * @return an estimate of the number of extra bytes used by the graph after adding the given node
+     * @throws UnsupportedOperationException if this builder was not constructed with a byte-vector score provider
+     */
+    public long addGraphNode(int node, ByteSequence<?> vector) {
         var ssp = scoreProvider.searchProviderFor(vector);
         return addGraphNode(node, ssp);
     }

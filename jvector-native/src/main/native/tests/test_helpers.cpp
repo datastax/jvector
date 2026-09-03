@@ -73,6 +73,10 @@ const std::vector<KernelTestParam> kKernelTestParams = {
     {100, "large_mixed_tail"},
     {128, "large_power_of_2"},
     {255, "large_odd_tail_15"},
+    // ---- i8 VNNI 256-byte unroll boundaries (dot_product_i8/euclidean_i8) -
+    {256, "i8_vnni_4x_exact"},
+    {263, "i8_vnni_4x_tail_7"},
+    {135, "i8_vnni_2zmm_tail_7"},
 };
 
 std::vector<float> make_vec(size_t n, float seed)
@@ -82,6 +86,24 @@ std::vector<float> make_vec(size_t n, float seed)
         v[i] = seed * (1.0f + static_cast<float>(i % 7) * 0.13f);
         if (i % 3 == 0) v[i] = -v[i]; // mix of signs
         v[i] += 0.5f;                  // ensure non-zero even after sign flip
+    }
+    return v;
+}
+
+// Produces n int8_t values with a mix of signs and magnitudes.
+// The pattern ensures no element is zero (important for cosine tests).
+std::vector<int8_t> make_vec_i8(size_t n, int8_t seed)
+{
+    std::vector<int8_t> v(n);
+    for (size_t i = 0; i < n; ++i) {
+        // Scale seed by a small per-element factor to get variety,
+        // then clamp to [-100, 100] to keep products well within int16 range.
+        int val = static_cast<int>(seed) + static_cast<int>(i % 13) - 6;
+        if (i % 3 == 0) val = -val;   // mix of signs
+        if (val == 0)   val = 1;       // never zero
+        if (val >  100) val =  100;
+        if (val < -100) val = -100;
+        v[i] = static_cast<int8_t>(val);
     }
     return v;
 }

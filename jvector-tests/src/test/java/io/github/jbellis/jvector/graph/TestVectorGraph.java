@@ -33,10 +33,13 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import io.github.jbellis.jvector.graph.VectorValues;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -433,7 +436,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     public void testGraphIndexBuilderInvalid(boolean addHierarchy) {
         assertThrows(NullPointerException.class,
-                () -> new GraphIndexBuilder(null, null, 0, 0, 1.0f, 1.0f, addHierarchy));
+                () -> new GraphIndexBuilder((RandomAccessVectorValues) null, (VectorSimilarityFunction) null, 0, 0, 1.0f, 1.0f, addHierarchy));
         // M must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
@@ -799,5 +802,148 @@ public class TestVectorGraph extends LuceneTestCase {
             }
         }
         return bits;
+    }
+
+    // -----------------------------------------------------------------------
+    // Byte-vector (int8) graph construction tests
+    // -----------------------------------------------------------------------
+
+    /** Build a small int8 graph using every similarity function and verify it is navigable. */
+    @Test
+    public void testByteVectorBuildAllSimilarityFunctions() {
+        for (var bvsf : ByteVectorSimilarityFunction.values()) {
+            testByteVectorBuild(bvsf, false);
+            testByteVectorBuild(bvsf, true);
+        }
+    }
+
+    private void testByteVectorBuild(ByteVectorSimilarityFunction bvsf, boolean addHierarchy) {
+        int n = 50, dim = 8;
+        var rabvv = randomByteVectorValues(n, dim);
+        var builder = new GraphIndexBuilder(rabvv, bvsf, 8, 20, 1.2f, 1.2f, addHierarchy);
+        var graph = builder.build(rabvv);
+        validateIndex(graph);
+        assertNotNull("entry node must be set", graph.getView().entryNode());
+        assertEquals(n, graph.size(0));
+    }
+
+    /** addGraphNode(int, ByteSequence) inserts nodes one by one and yields the right count. */
+    @Test
+    public void testByteVectorAddGraphNodeOneByOne() {
+        int n = 30, dim = 4;
+        var rabvv = randomByteVectorValues(n, dim);
+        var builder = new GraphIndexBuilder(rabvv, ByteVectorSimilarityFunction.EUCLIDEAN, 4, 10, 1.2f, 1.2f, false);
+        for (int i = 0; i < n; i++) {
+            builder.addGraphNode(i, rabvv.getVector(i));
+        }
+        builder.cleanup();
+        var graph = builder.getGraph();
+        validateIndex(graph);
+        assertEquals(n, graph.size(0));
+        // every node's neighbor count is within the declared degree
+        var view = graph.getView();
+        for (int i = 0; i < n; i++) {
+            assertTrue(view.getNeighborsIterator(0, i).size() <= graph.getDegree(0));
+        }
+    }
+
+    /**
+     * addGraphNode(int, ByteSequence) must throw when the builder was constructed with a
+     * float-vector score provider.
+     */
+    @Test
+    public void testByteAddGraphNodeThrowsOnFloatBuilder() {
+        var floatRavv = circularVectorValues(10);
+        var builder = new GraphIndexBuilder(floatRavv, VectorSimilarityFunction.EUCLIDEAN, 4, 10, 1.2f, 1.2f, false);
+        var bs = vectorTypeSupport.createByteSequence(4);
+        assertThrows(UnsupportedOperationException.class, () -> builder.addGraphNode(0, bs));
+    }
+
+    /**
+     * build(VectorValues<?>) dispatches correctly when given a RandomAccessByteVectorValues.
+     */
+    @Test
+    public void testByteVectorBuildViaGenericBuildMethod() {
+        int n = 40, dim = 6;
+        var rabvv = randomByteVectorValues(n, dim);
+        var builder = new GraphIndexBuilder(rabvv, ByteVectorSimilarityFunction.DOT_PRODUCT, 6, 20, 1.2f, 1.2f, false);
+        // call the generic VectorValues<?> overload explicitly
+        var graph = builder.build((VectorValues<?>) rabvv);
+        validateIndex(graph);
+        assertEquals(n, graph.size(0));
+    }
+
+    /** refineFinalGraph=false and refineFinalGraph=true both produce valid graphs. */
+    @Test
+    public void testByteVectorRefineFinalGraphVariants() {
+        int n = 40, dim = 4;
+        for (boolean refine : new boolean[]{false, true}) {
+            var rabvv = randomByteVectorValues(n, dim);
+            // Use the 7-arg constructor (refineFinalGraph defaults to true); test both via the
+            // BSP constructor which exposes the refineFinalGraph knob
+            var bsp = io.github.jbellis.jvector.graph.similarity.BuildScoreProvider.byteVectorScoreProvider(
+                    rabvv, ByteVectorSimilarityFunction.EUCLIDEAN);
+            var builder = new GraphIndexBuilder(bsp, dim, 4, 20, 1.2f, 1.2f, false, refine);
+            var graph = builder.build(rabvv);
+            validateIndex(graph);
+            assertEquals(n, graph.size(0));
+            var view = graph.getView();
+            int ub = graph.getIdUpperBound();
+            for (int i = 0; i < n; i++) {
+                for (var it = view.getNeighborsIterator(0, i); it.hasNext(); ) {
+                    int nb = it.nextInt();
+                    assertTrue("neighbor " + nb + " out of bounds", nb >= 0 && nb < ub);
+                }
+            }
+        }
+    }
+
+    /** Smoke-test: a built byte-vector graph achieves reasonable top-5 recall. */
+    @Test
+    public void testByteVectorSearchRecall() {
+        int n = 200, dim = 16;
+        int topK = 5;
+        var rabvv  = randomByteVectorValues(n, dim);
+        var bvsf   = ByteVectorSimilarityFunction.EUCLIDEAN;
+        var builder = new GraphIndexBuilder(rabvv, bvsf, 16, 50, 1.2f, 1.2f, false);
+        var graph  = builder.build(rabvv);
+
+        int totalMatches = 0;
+        int trials = 100;
+        for (int t = 0; t < trials; t++) {
+            byte[] rawQ = new byte[dim];
+            getRandom().nextBytes(rawQ);
+            ByteSequence<?> query = vectorTypeSupport.createByteSequence(rawQ);
+
+            // brute-force top-K
+            NodeQueue expected = new NodeQueue(new BoundedLongHeap(topK), NodeQueue.Order.MIN_HEAP);
+            for (int i = 0; i < n; i++) {
+                expected.push(i, bvsf.compare(query, rabvv.getVector(i)));
+            }
+
+            // graph search with efSearch = 100 (larger than topK to explore more candidates)
+            var ssp = new DefaultSearchScoreProvider(
+                    (io.github.jbellis.jvector.graph.similarity.ScoreFunction.ExactScoreFunction)
+                    node -> bvsf.compare(query, rabvv.getVector(node)));
+            var result = new GraphSearcher(graph).search(ssp, topK, 100, 0f, 0f, Bits.ALL);
+            var actualNodeIds = Arrays.stream(result.getNodes(), 0, topK)
+                    .mapToInt(ns -> ns.node).toArray();
+
+            totalMatches += computeOverlap(actualNodeIds, expected.nodesCopy());
+        }
+        // with efSearch=100 over a 200-node graph, we can visit most nodes; expect >=90% recall
+        double overlap = totalMatches / (double) (trials * topK);
+        assertTrue("byte-vector recall " + overlap + " is too low", overlap > 0.9);
+    }
+
+    /** Creates a list-backed RandomAccessByteVectorValues with random int8 vectors. */
+    private ListRandomAccessByteVectorValues randomByteVectorValues(int n, int dim) {
+        var list = new java.util.ArrayList<ByteSequence<?>>(n);
+        for (int i = 0; i < n; i++) {
+            byte[] raw = new byte[dim];
+            getRandom().nextBytes(raw);
+            list.add(vectorTypeSupport.createByteSequence(raw));
+        }
+        return new ListRandomAccessByteVectorValues(list, dim);
     }
 }
