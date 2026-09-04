@@ -31,8 +31,8 @@ public class NativeVectorizationProvider extends VectorizationProvider {
 
     public NativeVectorizationProvider() {
         var arch = System.getProperty("os.arch", "");
-        if (!arch.equals("amd64") && !arch.equals("x86_64")) {
-            throw new UnsupportedOperationException("Native SIMD operations are only supported on x86_64.");
+        if (!arch.equals("amd64") && !arch.equals("x86_64") && !arch.equals("aarch64")) {
+            throw new UnsupportedOperationException("Native SIMD operations are only supported on x86_64 and aarch64.");
         }
         var libraryLoaded = LibraryLoader.loadJvector();
         if (!libraryLoaded) {

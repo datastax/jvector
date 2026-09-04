@@ -77,8 +77,8 @@ git clone --recurse-submodules <repo-url>
 ### Building native libraries
 
 The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)
-and requires **g++ 11+**. The entry-point script is
-`jvector-native/src/main/native/jextract_vector_simd.sh`. Run it from that directory:
+and requires **g++ 11+**. Supported platforms: **Linux x86-64** (SSE4.2, AVX2, AVX-512) and **Linux AArch64** (NEON, SVE, SVE2).
+The entry-point script is `jvector-native/src/main/native/jextract_vector_simd.sh`. Run it from that directory:
 
 ```bash
 cd jvector-native/src/main/native

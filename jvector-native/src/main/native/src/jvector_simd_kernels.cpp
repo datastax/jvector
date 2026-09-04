@@ -175,6 +175,45 @@
 
 namespace hn = hwy::HWY_NAMESPACE;
 
+#if !HWY_HAVE_SCALABLE
+// The two helpers below rely on MaxLanes being a compile-time constant and on
+// fixed-stride Combine/Half arithmetic.  They are written for fixed vector
+// widths (x86, NEON) and must not be instantiated on scalable targets (SVE/SVE2)
+// where MaxLanes is a loose upper bound unrelated to the runtime VL.
+// Their only call sites are also inside #if !HWY_HAVE_SCALABLE blocks.
+
+// Loads 4 floats from ptr and broadcasts them to fill the full vector D.
+// Uses LoadU + Combine instead of hn::LoadDup128 to avoid a GCC 14 internal
+// compiler error (ICE in convert_move/expr.cc:301) triggered by hn::LoadDup128
+// (which emits ld1rq) on SVE targets.
+//   MaxLanes(D) == 4  → plain LoadU (ptr holds exactly one full vector)
+//   MaxLanes(D) == 8  → load 4-lane half, Combine to duplicate into both halves
+//   MaxLanes(D) == 16 → load 4-lane half-of-half, Combine twice (4→8→16 lanes)
+// hn::Quarter<D> does not exist in this Highway version; two applications
+// of hn::Half<> are used instead.
+template <class D>
+HWY_INLINE hn::Vec<D> BroadcastDup128(D d, const float *HWY_RESTRICT ptr)
+{
+    static_assert(hn::MaxLanes(d) <= 16,
+                  "BroadcastDup128 is not implemented for ISAs wider than 512-bit");
+    if constexpr (hn::MaxLanes(d) > 8) {
+        // 16-lane (AVX-512): half-of-half = 4 lanes; combine up twice.
+        const hn::Half<hn::Half<D>> dq;
+        const auto quarter = hn::LoadU(dq, ptr);
+        const hn::Half<D> dh;
+        const auto half = hn::Combine(dh, quarter, quarter);
+        return hn::Combine(d, half, half);
+    } else if constexpr (hn::MaxLanes(d) > 4) {
+        // MaxLanes == 8 (AVX2): load 4-lane half, combine to full.
+        const hn::Half<D> dh;
+        const auto half = hn::LoadU(dh, ptr);
+        return hn::Combine(d, half, half);
+    } else {
+        // MaxLanes == 4 (SSE4, NEON): ptr holds exactly one full vector.
+        return hn::LoadU(d, ptr);
+    }
+}
+
 // Loads 8 floats from ptr and broadcasts them to fill the full vector D.
 // On ISAs where D is exactly 8 lanes (e.g. AVX2) this is a plain LoadU.
 // On wider ISAs (e.g. AVX-512, 16 lanes) the 8 floats are loaded into the
@@ -197,6 +236,7 @@ HWY_INLINE hn::Vec<D> LoadDup256(D d, const float *HWY_RESTRICT ptr)
         return hn::LoadU(d, ptr);
     }
 }
+#endif  // !HWY_HAVE_SCALABLE
 // =============================================================================
 // Base Fp32 kernels
 // =============================================================================
@@ -239,10 +279,10 @@ HWY_INLINE float L2SquareDistanceImpl(Tag tag, const float *a, const float *b, s
     auto acc2 = hn::Zero(tag), acc3 = hn::Zero(tag);
     size_t ii = 0;
     for (; ii + 4 * lanes <= size; ii += 4 * lanes) {
-        auto d0 = hn::LoadU(tag, a + ii + 0*lanes) - hn::LoadU(tag, b + ii + 0*lanes);
-        auto d1 = hn::LoadU(tag, a + ii + 1*lanes) - hn::LoadU(tag, b + ii + 1*lanes);
-        auto d2 = hn::LoadU(tag, a + ii + 2*lanes) - hn::LoadU(tag, b + ii + 2*lanes);
-        auto d3 = hn::LoadU(tag, a + ii + 3*lanes) - hn::LoadU(tag, b + ii + 3*lanes);
+        auto d0 = hn::Sub(hn::LoadU(tag, a + ii + 0*lanes), hn::LoadU(tag, b + ii + 0*lanes));
+        auto d1 = hn::Sub(hn::LoadU(tag, a + ii + 1*lanes), hn::LoadU(tag, b + ii + 1*lanes));
+        auto d2 = hn::Sub(hn::LoadU(tag, a + ii + 2*lanes), hn::LoadU(tag, b + ii + 2*lanes));
+        auto d3 = hn::Sub(hn::LoadU(tag, a + ii + 3*lanes), hn::LoadU(tag, b + ii + 3*lanes));
         acc0 = hn::MulAdd(d0, d0, acc0);
         acc1 = hn::MulAdd(d1, d1, acc1);
         acc2 = hn::MulAdd(d2, d2, acc2);
@@ -250,11 +290,11 @@ HWY_INLINE float L2SquareDistanceImpl(Tag tag, const float *a, const float *b, s
     }
     auto acc = hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3));
     for (; ii + lanes <= size; ii += lanes) {
-        auto d = hn::LoadU(tag, a + ii) - hn::LoadU(tag, b + ii);
+        auto d = hn::Sub(hn::LoadU(tag, a + ii), hn::LoadU(tag, b + ii));
         acc = hn::MulAdd(d, d, acc);
     }
     if (ii < size) {
-        auto d = hn::LoadN(tag, a + ii, size - ii) - hn::LoadN(tag, b + ii, size - ii);
+        auto d = hn::Sub(hn::LoadN(tag, a + ii, size - ii), hn::LoadN(tag, b + ii, size - ii));
         acc = hn::MulAdd(d, d, acc);
     }
     return hn::ReduceSum(tag, acc);
@@ -549,11 +589,15 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
                                            float *HWY_RESTRICT partialSums)
 {
     int codebookBase = codebookIndex * clusterCount;
+    int ii = 0;
+
+#if !HWY_HAVE_SCALABLE
+    // Fixed-width ISAs (x86, NEON): MaxLanes is a compile-time constant so
+    // centroids_per_iter and the horizontal-reduction shuffles are valid.
     using FloatTag = hn::ScalableTag<float>;
     FloatTag tag;
     constexpr size_t kLanes = hn::MaxLanes(tag);
     alignas(64) float tmp[kLanes];
-    int ii = 0;
 
     if constexpr (kLanes >= 2) {
         if (size == 2) {
@@ -561,10 +605,8 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
                              query[queryOffset + 1],
                              query[queryOffset],
                              query[queryOffset + 1]};
-            hn::Vec<FloatTag> queryVec = hn::LoadDup128(tag, qtmp);
-
-            constexpr size_t kBlock = 2;
-            constexpr int centroids_per_iter = kLanes / kBlock;
+            hn::Vec<FloatTag> queryVec = BroadcastDup128(tag, qtmp);
+            constexpr int centroids_per_iter = static_cast<int>(kLanes / 2);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -573,7 +615,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
                 hn::Vec<FloatTag> score = partial_sum_score<DT, FloatTag>(
                         centroidVec, queryVec);
                 hn::Vec<FloatTag> swapped = hn::Shuffle2301(score);
-                hn::Vec<FloatTag> sum = score + swapped;
+                hn::Vec<FloatTag> sum = hn::Add(score, swapped);
                 hn::StoreU(sum, tag, tmp);
 #pragma GCC unroll 8
                 for (int jj = 0; jj < centroids_per_iter; ++jj) {
@@ -586,7 +628,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
         if (size == 4) {
             constexpr int centroids_per_iter = static_cast<int>(kLanes / 4);
             hn::Vec<FloatTag> queryVec
-                    = hn::LoadDup128(tag, query + queryOffset);
+                    = BroadcastDup128(tag, query + queryOffset);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -632,7 +674,6 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
         }
     }
     if constexpr (kLanes == 16) {
-        // Don't have to worry about making this work on 1024-bit lanes just yet
         if (size == 16) {
             const hn::Vec<FloatTag> queryVec
                     = hn::LoadU(tag, query + queryOffset);
@@ -645,6 +686,8 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
             }
         }
     }
+#endif  // !HWY_HAVE_SCALABLE
+
     for (; ii < clusterCount; ii++) {
         partialSums[codebookBase + ii] = distance_func<DT>(
                 codebook, ii * size, query, queryOffset, size);
@@ -930,14 +973,17 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
     const int codebookBase = codebookIndex * clusterCount;
     using FloatTag = hn::ScalableTag<float>;
     FloatTag tag;
+    int ii = 0;
+
+#if !HWY_HAVE_SCALABLE
+    // Fixed-width ISAs (x86, NEON): MaxLanes is a compile-time constant so
+    // centroids_per_iter and the horizontal-reduction shuffles are valid.
     constexpr size_t kLanes = hn::MaxLanes(tag);
     alignas(64) float tmp[kLanes];
-    int ii = 0;
 
     if constexpr (kLanes >= 2) {
         if (size == 2) {
-            constexpr size_t kBlock = 2;
-            constexpr int centroids_per_iter = kLanes / kBlock;
+            constexpr int centroids_per_iter = static_cast<int>(kLanes / 2);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -999,7 +1045,6 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
         }
     }
     if constexpr (kLanes == 16) {
-        // AVX-512 only: one full register holds exactly one size==16 centroid.
         if (size == 16) {
             for (; ii < clusterCount; ++ii) {
                 const hn::Vec<FloatTag> cv
@@ -1009,12 +1054,15 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
             }
         }
     }
+#endif  // !HWY_HAVE_SCALABLE
+
     // General fallback: one centroid at a time, vector-accumulate then reduce.
+    const size_t lanes = hn::Lanes(tag);
     for (; ii < clusterCount; ii++) {
         const float *cptr = codebook + ii * size;
         auto accVec = hn::Zero(tag);
         size_t j = 0;
-        for (; j + kLanes <= size; j += kLanes) {
+        for (; j + lanes <= size; j += lanes) {
             const auto v = hn::LoadU(tag, cptr + j);
             accVec = hn::MulAdd(v, v, accVec);
         }
@@ -1156,8 +1204,9 @@ HWY_FLATTEN void nvq_quantize_8bit(const float *HWY_RESTRICT vector,
     using Int32Tag = hn::RebindToSigned<FloatTag>;
     FloatTag d_f;
     Int32Tag d_i;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
-    alignas(64) int32_t tmp[kLanes];
+    constexpr size_t kMaxLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
+    alignas(64) int32_t tmp[kMaxLanes];
 
     float delta            = maxValue - minValue;
     float scaledAlpha      = alpha / delta;
@@ -1206,7 +1255,7 @@ HWY_FLATTEN float nvq_loss(const float *HWY_RESTRICT vector,
     using Int32Tag = hn::RebindToSigned<FloatTag>;
     FloatTag d_f;
     Int32Tag d_i;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
 
     int   constant        = (1 << nBits) - 1;
     float delta           = maxValue - minValue;
@@ -1264,7 +1313,7 @@ HWY_FLATTEN float nvq_uniform_loss(const float *HWY_RESTRICT vector,
     using Int32Tag = hn::RebindToSigned<FloatTag>;
     FloatTag d_f;
     Int32Tag d_i;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
 
     float constant = (float)((1 << nBits) - 1);
     float delta    = maxValue - minValue;
@@ -1373,7 +1422,7 @@ HWY_FLATTEN float nvq_square_l2_distance_8bit(const float    *HWY_RESTRICT vecto
     Uint8x4Tag d_b;
     Uint16Tag  d_u16;
     Uint8Tag   d_u8;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
 
     float delta          = maxValue - minValue;
     float scaledAlpha    = alpha / delta;
@@ -1449,7 +1498,7 @@ HWY_FLATTEN float nvq_dot_product_8bit(const float   *HWY_RESTRICT vector,
     Uint8x4Tag d_b;
     Uint16Tag  d_u16;
     Uint8Tag   d_u8;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
 
     float delta          = maxValue - minValue;
     float scaledAlpha    = alpha / delta;
@@ -1572,7 +1621,7 @@ HWY_FLATTEN int64_t nvq_cosine_8bit_packed(const float   *HWY_RESTRICT vector,
     Uint8x4Tag d_b;
     Uint16Tag  d_u16;
     Uint8Tag   d_u8;
-    constexpr size_t kLanes = hn::MaxLanes(d_f);
+    const size_t kLanes = hn::Lanes(d_f);
 
     float delta          = maxValue - minValue;
     float scaledAlpha    = alpha / delta;
