@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
-#include <cpuid.h>
-#include "jvector_simd.h"
+package io.github.jbellis.jvector.management;
 
-bool check_avx512_compatibility(void) {
-    /* __builtin_cpu_init required when this is used in ifunc
-       resolver/__attribute__((constructor)) context, otherwise the CPU
-       features may not be detected correctly. */
-    __builtin_cpu_init();
-    return (__builtin_cpu_supports("avx512f") &&
-        __builtin_cpu_supports("avx512cd") &&
-        __builtin_cpu_supports("avx512dq") &&
-        __builtin_cpu_supports("avx512bw") &&
-        __builtin_cpu_supports("avx512vl"));
+public enum CompressionType {
+    NONE("None"),
+    PQ("PQ"),
+    BQ("BQ");
+
+    private final String type;
+
+    CompressionType(String type) {
+        this.type = type;
+    }
+
+    public String getType() {
+        return type;
+    }
 }

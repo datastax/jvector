@@ -134,6 +134,13 @@ public interface VectorUtilSupport {
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
 
+  default void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
+    int codebookBase = codebookIndex * clusterCount;
+    for (int i = 0; i < clusterCount; i++) {
+      partialMagnitudes.set(codebookBase + i, dotProduct(codebook, i * size, codebook, i * size, size));
+    }
+  }
+
   float max(VectorFloat<?> v);
   float min(VectorFloat<?> v);
 
