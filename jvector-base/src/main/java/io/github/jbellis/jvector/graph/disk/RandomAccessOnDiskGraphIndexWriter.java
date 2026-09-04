@@ -206,7 +206,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
         private boolean parallelUseDirectBuffers = false;
         private ExecutorService parallelExecutor = null;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
             this.filePath = outPath;
         }
