@@ -199,11 +199,14 @@ public class GraphSearcher implements Closeable {
 
     /**
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
+     * @param topK            the number of results to look for. With threshold=Float.NEGATIVE_INFINITY, the search will
+     *                        continue until at least `topK` results have been found, or until the entire graph has been
+     *                        searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param rerankFloor     (Experimental!) Candidates whose approximate similarity is at least this value
@@ -251,8 +254,10 @@ public class GraphSearcher implements Closeable {
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -271,8 +276,13 @@ public class GraphSearcher implements Closeable {
 
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
-            // Search this layer with minimal parameters since we just want the best candidate
-            searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
+            // Search this layer with minimal parameters since we just want the best candidate.
+            // Threshold must be NEGATIVE_INFINITY, not 0.0f: 0.0f is only a valid "accept everything"
+            // floor for similarity functions bounded to (0, 1] (COSINE, EUCLIDEAN). DOT_PRODUCT with
+            // non-unit-normalized vectors can legitimately score below 0, and a 0.0f floor here would
+            // silently discard the only reachable candidate(s) in a hierarchy layer, leaving
+            // approximateResults empty and tripping the assertion below.
+            searchOneLayer(scoreProvider, 1, Float.NEGATIVE_INFINITY, lvl, Bits.ALL);
             assert approximateResults.size() == 1 : approximateResults.size();
             setEntryPointsFromPreviousLayer();
         }
@@ -285,8 +295,10 @@ public class GraphSearcher implements Closeable {
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -317,7 +329,7 @@ public class GraphSearcher implements Closeable {
                                int topK,
                                Bits acceptOrds)
     {
-        return search(scoreProvider, topK, 0.0f, acceptOrds);
+        return search(scoreProvider, topK, Float.NEGATIVE_INFINITY, acceptOrds);
     }
 
     @Experimental
