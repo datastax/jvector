@@ -52,7 +52,7 @@ import java.util.Optional;
 public class DataSetInfo implements DataSetProperties {
     private final DataSetFiles dsFiles;
     private final DataSetProperties baseProperties;
-    private volatile DataSet cached;
+    private volatile InMemoryDataSet cached;
 
     /// Creates a new dataset info handle.
     ///
@@ -123,7 +123,7 @@ public class DataSetInfo implements DataSetProperties {
     /// completes, after which all callers share the same cached instance.
     ///
     /// @return the ready-to-use {@link DataSet}
-    public DataSet getDataSet() {
+    public InMemoryDataSet getDataSet() {
         if (cached == null) {
             synchronized (this) {
                 if (cached == null) {
