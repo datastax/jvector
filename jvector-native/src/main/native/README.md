@@ -32,16 +32,17 @@ Function & Memory (FFM) API.
 ## Directory layout
 
 ```
-jvector_simd.h                — Public C ABI (symbols exported to Java via FFM)
-jvector_simd.cpp              — Runtime ISA dispatcher; thin wrappers over the vtable
-jvector_simd_kernels.h        — Internal C++ declarations for all ISA namespaces (auto-generated from kernel list)
-jvector_simd_kernels.cpp      — Actual SIMD kernels (compiled three times, see below)
-jvector_simd_kernel_list.h    — X-Macro table: single source of truth for all kernel signatures
-jvector_cpu_features.h        — CPUID/XGETBV-based CPU feature detection
-assert_hwy_targets.h          — Compile-time assertions that the expected HWY target is active
-meson.build                   — Build description
-jextract_vector_simd.sh       — Build + jextract script (the usual entry point)
-third_party/highway/          — Google Highway header-only library (git submodule)
+jvector_simd.h                - Public C ABI (symbols exported to Java via FFM)
+jvector_simd.cpp              - Runtime ISA dispatcher; thin wrappers over the vtable
+jvector_simd_kernels.h        - Internal C++ declarations for all ISA namespaces (auto-generated from kernel list)
+jvector_simd_kernels.cpp      - Actual SIMD kernels (compiled three times, see below)
+jvector_simd_kernel_list.h    - X-Macro table: single source of truth for all kernel signatures
+jvector_cpu_features.h        - CPUID/XGETBV-based CPU feature detection
+assert_hwy_targets.h          - Compile-time assertions that the expected HWY target is active
+meson.build                   - Build description
+jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
+build_native_lib.sh           - Build the native library
+third_party/highway/          - Google Highway header-only library (git submodule)
 ```
 
 ---
@@ -62,7 +63,7 @@ third_party/highway/          — Google Highway header-only library (git submod
 Run the build script from this directory:
 
 ```bash
-bash jextract_vector_simd.sh [buildtype]
+bash build_native_lib.sh [buildtype]
 ```
 
 The `buildtype` parameter is optional and defaults to `release`. Valid values are:
@@ -75,24 +76,16 @@ The script:
 2. Runs `meson setup ../../../target/meson-build --wipe --buildtype=<buildtype>` then `meson compile`.
 3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
    `LibraryLoader` expects it.
-4. Optionally re-generates the Java FFM bindings via `jextract` (only needed
-   when `jvector_simd.h` changes — see [Updating the Java bindings](#updating-the-java-bindings)).
 
 To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
 
 ```bash
-bash jextract_vector_simd.sh --auto-install-deps
+bash build_native_lib.sh --auto-install-deps
 ```
 
 This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
-
-To build without regenerating bindings (e.g. when `jextract` is not installed):
-
-```bash
-bash jextract_vector_simd.sh   # jextract step is skipped with a warning if not found
-```
 
 ### Building with Maven
 
@@ -113,7 +106,8 @@ mvn clean install -Dnative.debug
 mvn clean install -Dnative.debugoptimized
 ```
 
-The Maven build automatically invokes the `jextract_vector_simd.sh` script with the appropriate buildtype parameter. The available profiles are:
+The Maven build automatically invokes the `build_native_lib.sh` script with the
+appropriate buildtype parameter. The available profiles are:
 - `release` (default) - Optimized build with no debug symbols
 - `debug` - Unoptimized build with debug symbols (`-g -O0`)
 - `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
@@ -127,6 +121,41 @@ meson compile -C ../../../target/meson-build
 ```
 
 The output is `target/meson-build/libjvector.so.<version>` (relative to the project root).
+
+### Generating Java bindings for native code
+
+Jextract is used for generating Java bindings, which are checked in to git.
+These need to be regenerated if the public header file changes. This is done by
+running the jextract script:
+
+```bash
+bash jextract_generate_bindings.sh  # uses jextract from the PATH
+```
+
+After regeneration the script automatically patches the generated file to add
+`Linker.Option.critical(true)` to every downcall, which avoids heap allocation
+on each call.
+
+You can streamline your combined Java + C++ workflow while building by asking
+maven to call the script for you. You still need to manually update the
+consumers of those bindings if the signatures change.
+
+```bash
+mvn compile -Dnative.jextract.skip=false
+```
+
+As of writing, this module supports Java 22. Newer jextract versions may
+use output bindings using newer language features which break the build, so you
+should ensure that you're using jextract 22. If you have multiple versions of
+jextract on the system, or if it's not on the PATH, you can specify the location
+via environment variable:
+
+```bash
+JEXTRACT_BIN="/opt/jextract-22/bin/jextract" bash jextract_generate_bindings.sh
+```
+
+The same environment variable can be used when invoking the script through
+maven.
 
 ---
 
@@ -289,20 +318,6 @@ JVECTOR_MAX_ISA=sse42 java ...      # force scalar/SSE4.2 fallback
 
 Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42`.
 An unrecognised value is silently ignored and full CPU detection is used.
-
-### Updating the Java bindings
-
-The Java FFM glue in `cnative/NativeSimdOps.java` is generated from
-`jvector_simd.h` by `jextract`. Re-run the script whenever the public C header
-changes:
-
-```bash
-bash jextract_vector_simd.sh   # requires jextract on PATH
-```
-
-After regeneration the script automatically patches the generated file to add
-`Linker.Option.critical(true)` to every downcall, which avoids heap allocation
-on each call.
 
 ---
 
