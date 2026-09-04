@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -27,7 +27,6 @@ import java.nio.channels.AsynchronousFileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Map;
@@ -46,7 +45,7 @@ import java.util.function.IntFunction;
  * <p>
  * This class manages:
  * - A thread pool for building node records in parallel
- * - Per-thread ImmutableGraphIndex.View instances for thread-safe neighbor iteration
+ * - Per-thread GraphIndex.View instances for thread-safe neighbor iteration
  * - A buffer pool to avoid excessive allocation
  * - Asynchronous file channel writes using position-based writes
  * <p>
@@ -63,12 +62,12 @@ import java.util.function.IntFunction;
  */
 class ParallelGraphWriter implements AutoCloseable {
     private final RandomAccessWriter writer;
-    private final ImmutableGraphIndex graph;
+    private final GraphIndex graph;
     private final ExecutorService executor;
     private final boolean ownsExecutor;
-    private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
+    private final ThreadLocal<GraphIndex.View> viewPerThread;
     private final ThreadLocal<ByteBuffer> bufferPerThread;
-    private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<GraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath;
     private final int taskMultiplier;
@@ -115,7 +114,7 @@ class ParallelGraphWriter implements AutoCloseable {
      * @param filePath file path for async writes (required, cannot be null)
      */
     public ParallelGraphWriter(RandomAccessWriter writer,
-                               ImmutableGraphIndex graph,
+                               GraphIndex graph,
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath) {
@@ -134,7 +133,7 @@ class ParallelGraphWriter implements AutoCloseable {
      *        small compute-sized pool (e.g. a physical-core ForkJoinPool) will throttle writes.
      */
     public ParallelGraphWriter(RandomAccessWriter writer,
-                               ImmutableGraphIndex graph,
+                               GraphIndex graph,
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath,

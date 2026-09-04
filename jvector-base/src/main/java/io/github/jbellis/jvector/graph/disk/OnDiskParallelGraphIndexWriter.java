@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -89,7 +89,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   ImmutableGraphIndex graph,
+                                   GraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features,
@@ -110,7 +110,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   ImmutableGraphIndex graph,
+                                   GraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features,
@@ -143,8 +143,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
      */
     @Experimental
     @Override
-    protected void writeL0Records(ImmutableGraphIndex.View view,
-                                Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+    protected void writeL0Records(GraphIndex.View view,
+                                  Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // Flush writer before async writes to ensure buffered data is on disk
         // This is critical when using AsynchronousFileChannel in parallel with BufferedRandomAccessWriter
         out.flush();
@@ -201,7 +201,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         private boolean parallelUseDirectBuffers = false;
         private ExecutorService parallelExecutor = null;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
             this.filePath = outPath;
         }

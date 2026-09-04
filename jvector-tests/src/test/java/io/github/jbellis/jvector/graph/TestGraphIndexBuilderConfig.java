@@ -221,7 +221,7 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
         );
     }
 
-    private void writeGraph(ImmutableGraphIndex graph, ListRandomAccessVectorValues ravv, Path path) throws IOException {
+    private void writeGraph(GraphIndex graph, ListRandomAccessVectorValues ravv, Path path) throws IOException {
         var suppliers = Feature.singleStateFactory(
                 FeatureId.INLINE_VECTORS,
                 nodeId -> new InlineVectors.State(ravv.getVector(nodeId))
@@ -233,7 +233,7 @@ public class TestGraphIndexBuilderConfig extends LuceneTestCase {
         }
     }
 
-    private void writeAndVerify(ImmutableGraphIndex graph, ListRandomAccessVectorValues ravv, Path path) throws IOException {
+    private void writeAndVerify(GraphIndex graph, ListRandomAccessVectorValues ravv, Path path) throws IOException {
         writeGraph(graph, ravv, path);
         try (var readerSupplier = new SimpleMappedReader.Supplier(path)) {
             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);

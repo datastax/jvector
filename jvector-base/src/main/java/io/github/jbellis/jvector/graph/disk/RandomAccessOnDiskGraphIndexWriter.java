@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -65,7 +65,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
     protected RandomAccessOnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                                   int version,
                                                   long startOffset,
-                                                  ImmutableGraphIndex graph,
+                                                  GraphIndex graph,
                                                   OrdinalMapper oldToNewOrdinals,
                                                   int dimension,
                                                   EnumMap<FeatureId, Feature> features)
@@ -184,7 +184,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
         view.close();
     }
 
-    protected abstract void writeL0Records(ImmutableGraphIndex.View view,
+    protected abstract void writeL0Records(GraphIndex.View view,
                                            Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException;
 
     /**
@@ -206,7 +206,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
         private boolean parallelUseDirectBuffers = false;
         private ExecutorService parallelExecutor = null;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+        public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
             this.filePath = outPath;
         }
@@ -269,7 +269,7 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
      * @param view the graph index view
      * @throws IOException if there is an error writing the header
      */
-    public synchronized void writeHeader(ImmutableGraphIndex.View view) throws IOException {
+    public synchronized void writeHeader(GraphIndex.View view) throws IOException {
         out.seek(startOffset);
         super.writeHeader(view, startOffset);
         out.flush();

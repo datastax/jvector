@@ -30,7 +30,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
@@ -148,7 +148,7 @@ public class NvqExample {
                 .parallelStream()
                 .map(query -> {
                     var searcher = searchers.get();
-                    var scoringView = (ImmutableGraphIndex.ScoringView) searcher.getView();
+                    var scoringView = (GraphIndex.ScoringView) searcher.getView();
 
                     // Two-phase search with NVQ:
                     // 1. Use PQ for fast approximate search to get rerankK candidates
