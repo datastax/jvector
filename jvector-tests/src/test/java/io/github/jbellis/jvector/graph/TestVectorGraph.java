@@ -433,7 +433,7 @@ public class TestVectorGraph extends LuceneTestCase {
 
     public void testGraphIndexBuilderInvalid(boolean addHierarchy) {
         assertThrows(NullPointerException.class,
-                () -> new GraphIndexBuilder(null, null, 0, 0, 1.0f, 1.0f, addHierarchy));
+                () -> new GraphIndexBuilder((RandomAccessVectorValues) null, (VectorSimilarityFunction) null, 0, 0, 1.0f, 1.0f, addHierarchy));
         // M must be > 0
         assertThrows(IllegalArgumentException.class,
                 () -> {
