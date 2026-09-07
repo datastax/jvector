@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.example.benchmarks.datasets;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Optional;
 
 /// A lightweight, lazy handle that separates *identifying* a dataset from *loading* its data.
@@ -135,5 +137,34 @@ public class DataSetInfo implements DataSetProperties {
             }
         }
         return cached;
+    }
+
+    /// Returns a {@link DataSet} whose index vectors are backed by memory-mapped files.
+    /// The query vectors and ground truth are still loaded into memory.
+    ///
+    /// The output is not cached, so multiple invocoations will cause duplicate loads
+    /// and create duplicate maps.
+    ///
+    /// @return the ready-to-use {@link DataSet}
+    public RavvDataSet getMappedDataSet() {
+        if (baseProperties.loadBehavior() == LoadBehavior.LEGACY_SCRUB) {
+            throw new UnsupportedOperationException(
+                "Can't map a dataset that wants to be scrubbed, load the full dataset with getDataSet()"
+            );
+        }
+        var maybeVsf = baseProperties.similarityFunction();
+        if (maybeVsf.isEmpty()) {
+            throw new RuntimeException("Need a similarity function to create dataset");
+        }
+        try {
+            return new RavvDataSet(
+                baseProperties.getName(),
+                maybeVsf.get(),
+                FvecRavv.of(dsFiles.getBaseFvecsPath()),
+                SiftLoader.readFvecs(dsFiles.getQueryFvecsPath().toString()),
+                SiftLoader.readIvecs(dsFiles.getGtIvecsPath().toString()));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 }

@@ -78,7 +78,7 @@ public class Grid {
 
     private static final String pqCacheDir = "pq_cache";
 
-    private static final String indexCacheDir = "index_cache";
+    private static final String indexCacheDir = System.getProperty("jvector.bench.index_cache_dir", "index_cache");
 
     private static final String dirPrefix = "BenchGraphDir";
 
@@ -93,6 +93,14 @@ public class Grid {
      */
     public static Double getIndexBuildTimeSeconds(String datasetName) {
         return indexBuildTimes.get(datasetName);
+    }
+
+    private static Path createTmpWorkDir() throws IOException {
+        String maybeRootPath = System.getProperty("jvector.bench.work_dir_root_path");
+        if (maybeRootPath != null) {
+            return Files.createTempDirectory(Path.of(maybeRootPath), dirPrefix);
+        }
+        return Files.createTempDirectory(dirPrefix);
     }
 
     static void runAll(DataSet ds,
@@ -113,7 +121,7 @@ public class Grid {
         boolean success = false;
 
         // Always use a fresh temp directory for per-run artifacts
-        final Path workDir = Files.createTempDirectory(dirPrefix);
+        final Path workDir = createTmpWorkDir();
 
         // Initialize index cache (creates stable directory when enabled, cleans up stale temp files; no-op otherwise)
         final OnDiskGraphIndexCache cache =
@@ -512,12 +520,14 @@ public class Grid {
         var builder = new RandomAccessOnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
 
+        var vv = floatVectors.threadLocalSupplier();
+
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
         for (var featureId : features) {
             switch (featureId) {
                 case INLINE_VECTORS:
                     builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(vv.get().getVector(ordinal)));
                     break;
                 case FUSED_PQ:
                     if (pq == null) {
@@ -533,7 +543,7 @@ public class Grid {
                             ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
                             : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(vv.get().getVector(ordinal))));
                     break;
                 default:
                     break;
