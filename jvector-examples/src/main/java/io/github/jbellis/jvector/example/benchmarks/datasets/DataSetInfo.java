@@ -16,9 +16,10 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+
 import java.util.Optional;
-import java.util.function.Supplier;
 
 /// A lightweight, lazy handle that separates *identifying* a dataset from *loading* its data.
 ///
@@ -49,21 +50,19 @@ import java.util.function.Supplier;
 /// @see DataSetLoader
 /// @see DataSets
 public class DataSetInfo implements DataSetProperties {
-    private final Supplier<DataSet> loader;
+    private final DataSetFiles dsFiles;
     private final DataSetProperties baseProperties;
     private volatile DataSet cached;
 
     /// Creates a new dataset info handle.
     ///
-    /// The supplied {@code loader} will not be invoked until {@link #getDataSet()} is called.
-    /// It should perform the full load-and-scrub pipeline (read vectors, remove duplicates /
-    /// zero vectors, filter queries, normalize) and return a ready-to-use {@link DataSet}.
+    /// The dataset will not be loaded until {@link #getDataSet()} is called for the first time.
     ///
     /// @param baseProperties     the dataset properties (name, similarity function, etc.)
-    /// @param loader             a supplier that performs the deferred load; invoked at most once
-    public DataSetInfo(DataSetProperties baseProperties, Supplier<DataSet> loader) {
+    /// @param dataSetFiles       the bundle of base/query/gt paths required to load the dataset
+    public DataSetInfo(DataSetProperties baseProperties, DataSetFiles dataSetFiles) {
         this.baseProperties = baseProperties;
-        this.loader = loader;
+        this.dsFiles = dataSetFiles;
     }
 
     /**
@@ -128,7 +127,10 @@ public class DataSetInfo implements DataSetProperties {
         if (cached == null) {
             synchronized (this) {
                 if (cached == null) {
-                    cached = loader.get();
+                    var baseVectors = SiftLoader.readFvecs(dsFiles.getBaseFvecsPath().toString());
+                    var queryVectors = SiftLoader.readFvecs(dsFiles.getQueryFvecsPath().toString());
+                    var gtVectors = SiftLoader.readIvecs(dsFiles.getGtIvecsPath().toString());
+                    cached = DataSetUtils.processDataSet(baseProperties.getName(), baseProperties, baseVectors, queryVectors, gtVectors);
                 }
             }
         }

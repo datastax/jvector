@@ -15,7 +15,6 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
@@ -423,12 +422,11 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                         String.format(
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
-        return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
-            var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
-            var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
-            return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
-        }));
+        return Optional.of(new DataSetInfo(props, new DataSetFiles(
+            effectiveCacheDir.resolve(baseFile),
+            effectiveCacheDir.resolve(queryFile),
+            effectiveCacheDir.resolve(gtFile)
+        )));
     }
 
     // ========================================================================================
@@ -785,7 +783,6 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static Map<String, Map<String, String>> loadCatalogFromFile(Path path) {
         try (InputStream in = Files.newInputStream(path)) {
             Map<String, Map<String, String>> result = new Yaml().load(in);
