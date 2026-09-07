@@ -17,6 +17,8 @@ package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderSimpleMFD;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetMetadataReader;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -24,11 +26,19 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -441,12 +451,14 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     @Test
-    public void duplicateEntryAcrossCatalogsDoesNotFail() throws IOException {
-        // root catalog defines test-ds
+    public void duplicateEntryAcrossCatalogsWithConflictingPathsFailsAtConstruction() throws IOException {
+        // root catalog defines test-ds with files cached under cacheDir
         writeTestCatalog(cacheDir);
-        writeTestDataFiles(cacheDir);
 
-        // subdirectory also defines test-ds — one wins (walk order is unspecified)
+        // subdirectory also defines test-ds but its files resolve to a different physical
+        // location (cache_dir defaults to the catalog file's own directory). Walk order
+        // would silently determine which physical file backs the dataset, so the loader
+        // must reject this rather than picking one non-deterministically.
         Path subDir = cacheDir.resolve("override");
         Files.createDirectories(subDir);
         Files.writeString(subDir.resolve("catalog_entries.yaml"),
@@ -454,16 +466,163 @@ public class DataSetLoaderSimpleMFDTest {
                 "  base: test_base.fvecs\n" +
                 "  query: test_query.fvecs\n" +
                 "  gt: test_gt.ivecs\n");
-        writeTestDataFiles(subDir);
+
+        var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        ));
+        assertTrue(failure.getMessage().contains("test-ds"),
+                "error should name the conflicting dataset: " + failure.getMessage());
+    }
+
+    @Test
+    public void duplicateEntryAcrossCatalogsWithIdenticalPathsSucceeds() throws IOException {
+        // two catalog files declaring the same dataset are fine as long as every (dataset, facet)
+        // resolves to the same local path — there is nothing for walk order to disagree about.
+        Path sharedDataDir = tempFolder.newFolder("shared-data").toPath();
+        Files.writeString(cacheDir.resolve("catalog-a.yaml"),
+                "test-ds:\n" +
+                "  cache_dir: " + sharedDataDir + "\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n");
+        Files.writeString(cacheDir.resolve("catalog-b.yaml"),
+                "test-ds:\n" +
+                "  cache_dir: " + sharedDataDir + "\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n");
+        writeTestDataFiles(sharedDataDir);
 
         var loader = new DataSetLoaderSimpleMFD(
                 null, cacheDir.toString(), false, testMetadata
         );
-
-        // should load without error — whichever catalog wins, the dataset is valid
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertNotNull(ds);
         assertEquals(5, ds.getBaseVectors().size());
+    }
+
+    @Test
+    public void sharedQueryFileAcrossDatasetsIsPermitted() throws IOException {
+        // sharing a query file across datasets is a legitimate workflow (e.g. comparing several
+        // base/gt pairs against the same query set) and should not fail construction.
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: shared_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n" +
+                "sub-ds:\n" +
+                "  base: sub_base.fvecs\n" +
+                "  query: shared_query.fvecs\n" +
+                "  gt: sub_gt.ivecs\n");
+        writeTestFvecs(cacheDir.resolve("test_base.fvecs"), 4, new float[][] {
+                {1.0f, 0.0f, 0.0f, 0.0f},
+                {0.0f, 1.0f, 0.0f, 0.0f},
+        });
+        writeTestFvecs(cacheDir.resolve("sub_base.fvecs"), 4, new float[][] {
+                {0.0f, 0.0f, 1.0f, 0.0f},
+                {0.0f, 0.0f, 0.0f, 1.0f},
+        });
+        writeTestFvecs(cacheDir.resolve("shared_query.fvecs"), 4, new float[][] {
+                {1.0f, 0.0f, 0.0f, 0.0f},
+        });
+        writeTestIvecs(cacheDir.resolve("test_gt.ivecs"), new int[][] {{0}});
+        writeTestIvecs(cacheDir.resolve("sub_gt.ivecs"), new int[][] {{1}});
+
+        var loader = new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        );
+        assertEquals(2, loader.loadDataSet("test-ds").orElseThrow().getDataSet().getBaseVectors().size());
+        assertEquals(2, loader.loadDataSet("sub-ds").orElseThrow().getDataSet().getBaseVectors().size());
+    }
+
+    @Test
+    public void sharedGroundTruthFileAcrossDatasetsIsRejected() throws IOException {
+        // ground truth is dataset-specific by definition; sharing one across datasets is wrong.
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: shared_gt.ivecs\n" +
+                "sub-ds:\n" +
+                "  base: sub_base.fvecs\n" +
+                "  query: sub_query.fvecs\n" +
+                "  gt: shared_gt.ivecs\n");
+
+        var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        ));
+        assertTrue(failure.getMessage().contains("shared_gt.ivecs"),
+                "error should name the shared gt path: " + failure.getMessage());
+        assertTrue(failure.getMessage().contains("test-ds:gt") && failure.getMessage().contains("sub-ds:gt"),
+                "error should name both colliding owners: " + failure.getMessage());
+    }
+
+    @Test
+    public void sharedBaseFileAcrossDatasetsIsRejected() throws IOException {
+        // without a row-range specifier (which this loader does not yet support), two datasets
+        // cannot legitimately share a base file.
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: shared_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n" +
+                "sub-ds:\n" +
+                "  base: shared_base.fvecs\n" +
+                "  query: sub_query.fvecs\n" +
+                "  gt: sub_gt.ivecs\n");
+
+        var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        ));
+        assertTrue(failure.getMessage().contains("shared_base.fvecs"),
+                "error should name the shared base path: " + failure.getMessage());
+        assertTrue(failure.getMessage().contains("test-ds:base") && failure.getMessage().contains("sub-ds:base"),
+                "error should name both colliding owners: " + failure.getMessage());
+    }
+
+    @Test
+    public void sharedPathAcrossDifferentFacetsIsRejected() throws IOException {
+        // crossing facets — one dataset's base happens to point at another's query path —
+        // is rejected as soon as any owner is base or gt.
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: crossover.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n" +
+                "sub-ds:\n" +
+                "  base: sub_base.fvecs\n" +
+                "  query: crossover.fvecs\n" +
+                "  gt: sub_gt.ivecs\n");
+
+        var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        ));
+        assertTrue(failure.getMessage().contains("crossover.fvecs"),
+                "error should name the crossover path: " + failure.getMessage());
+        assertTrue(failure.getMessage().contains("test-ds:base") && failure.getMessage().contains("sub-ds:query"),
+                "error should name both colliding owners: " + failure.getMessage());
+    }
+
+    @Test
+    public void multipleSharedPathErrorsAreAggregated() throws IOException {
+        // a single exception should describe every hard collision so the user can fix them all
+        // at once rather than discovering them one round-trip at a time.
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: shared_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: shared_gt.ivecs\n" +
+                "sub-ds:\n" +
+                "  base: shared_base.fvecs\n" +
+                "  query: sub_query.fvecs\n" +
+                "  gt: shared_gt.ivecs\n");
+
+        var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
+                null, cacheDir.toString(), false, testMetadata
+        ));
+        assertTrue(failure.getMessage().contains("shared_base.fvecs"),
+                "error should describe the base collision: " + failure.getMessage());
+        assertTrue(failure.getMessage().contains("shared_gt.ivecs"),
+                "error should describe the gt collision: " + failure.getMessage());
     }
 
     @Test
@@ -1320,8 +1479,10 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     @Test
-    public void localCatalogOverridesCachedIncludedRemoteCatalogOffline() throws IOException {
-        // local dataset should win over a cached included remote dataset of the same name
+    public void localCatalogOverridingIncludedRemoteCachePathFailsAtConstruction() throws IOException {
+        // A local catalog that overrides cache_dir for a dataset also present in an _include'd
+        // remote catalog produces two distinct physical paths for the same (dataset, facet),
+        // which the loader must reject as a critical configuration error.
         Path remoteDir = tempFolder.newFolder("remote-catalog").toPath();
         Path cachedRemoteDir = tempFolder.newFolder("cached-public-data").toPath();
         Path localOverrideDir = tempFolder.newFolder("local-override").toPath();
@@ -1349,28 +1510,14 @@ public class DataSetLoaderSimpleMFDTest {
                             "_defaults:\n" +
                             "  cache_dir: " + cachedRemoteDir + "\n");
 
-            // online construction fetches and caches the included remote catalog,
-            // but the local override should still win
-            var onlineLoader = new DataSetLoaderSimpleMFD(
+            var failure = assertThrows(IllegalStateException.class, () -> new DataSetLoaderSimpleMFD(
                     null, cacheDir.toString(), false, testMetadata
-            );
-
-            var onlineDs = onlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-            assertEquals(1, onlineDs.getBaseVectors().size());
+            ));
+            assertTrue(failure.getMessage().contains("test-ds"),
+                    "error should name the conflicting dataset: " + failure.getMessage());
         } finally {
             server.stop(0);
         }
-
-        // offline, the cached remote catalog should still not override the real local dataset
-        var offlineLoader = new DataSetLoaderSimpleMFD(
-                null, cacheDir.toString(), false, testMetadata
-        );
-
-        var offlineDs = offlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(1, offlineDs.getBaseVectors().size());
-        assertEquals(1, offlineDs.getQueryVectors().size());
-        assertEquals(1, offlineDs.getGroundTruth().size());
-        assertEquals(4, offlineDs.getDimension());
     }
 
     @Test
@@ -1412,6 +1559,162 @@ public class DataSetLoaderSimpleMFDTest {
 
         assertThrows(RuntimeException.class, () -> offlineLoader.loadDataSet("test-ds"),
                 "Cached remote catalog should still fail when the chosen data files are missing offline");
+    }
+
+    // ========================================================================
+    // Concurrent download coalescing
+    // ========================================================================
+
+    @Test
+    public void concurrentLoadDataSetForSharedQueryDownloadsOnlyOnce() throws Exception {
+        // Two datasets share a query file. Concurrent loadDataSet calls for both must coalesce
+        // into a single HTTP GET for the shared file rather than racing two parallel downloads
+        // against the same destination path.
+        Path remoteDir = tempFolder.newFolder("remote").toPath();
+        writeTestFvecs(remoteDir.resolve("test_base.fvecs"), 4, new float[][] {{1f, 0f, 0f, 0f}, {0f, 1f, 0f, 0f}});
+        writeTestFvecs(remoteDir.resolve("sub_base.fvecs"), 4, new float[][] {{0f, 0f, 1f, 0f}, {0f, 0f, 0f, 1f}});
+        writeTestFvecs(remoteDir.resolve("shared_query.fvecs"), 4, new float[][] {{1f, 0f, 0f, 0f}});
+        writeTestIvecs(remoteDir.resolve("test_gt.ivecs"), new int[][] {{0}});
+        writeTestIvecs(remoteDir.resolve("sub_gt.ivecs"), new int[][] {{1}});
+
+        AtomicInteger sharedDownloads = new AtomicInteger();
+        CountDownLatch unblockSharedQuery = new CountDownLatch(1);
+
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            if (exchange.getRequestURI().getPath().endsWith("shared_query.fvecs")) {
+                sharedDownloads.incrementAndGet();
+                try {
+                    unblockSharedQuery.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            serveStaticFile(exchange, remoteDir);
+        });
+        server.start();
+        try {
+            Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                    "_defaults:\n" +
+                    "  base_url: http://127.0.0.1:" + server.getAddress().getPort() + "/\n" +
+                    "test-ds:\n" +
+                    "  base: test_base.fvecs\n" +
+                    "  query: shared_query.fvecs\n" +
+                    "  gt: test_gt.ivecs\n" +
+                    "sub-ds:\n" +
+                    "  base: sub_base.fvecs\n" +
+                    "  query: shared_query.fvecs\n" +
+                    "  gt: sub_gt.ivecs\n");
+
+            var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+
+            ExecutorService es = Executors.newFixedThreadPool(2);
+            try {
+                CompletableFuture<Void> f1 = CompletableFuture.runAsync(
+                        () -> loader.loadDataSet("test-ds").orElseThrow().getDataSet(), es);
+                CompletableFuture<Void> f2 = CompletableFuture.runAsync(
+                        () -> loader.loadDataSet("sub-ds").orElseThrow().getDataSet(), es);
+
+                // wait for the first download to reach the server (proves it actually started)
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (sharedDownloads.get() < 1 && System.nanoTime() < deadline) {
+                    Thread.sleep(10);
+                }
+                assertTrue(sharedDownloads.get() >= 1,
+                        "first thread should have entered the server handler for shared_query.fvecs");
+
+                // brief pause so the second thread has time to reach its computeIfAbsent
+                // for the shared query path while the first thread is still blocked downloading
+                Thread.sleep(100);
+                unblockSharedQuery.countDown();
+
+                f1.join();
+                f2.join();
+            } finally {
+                es.shutdown();
+            }
+
+            assertEquals(1, sharedDownloads.get(),
+                    "shared query file should have been downloaded exactly once via coalescing");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    public void failedDownloadIsRetriable() throws Exception {
+        // A download failure must remove the entry from the in-flight map so a subsequent
+        // loadDataSet call can retry. If the failed future were retained, the retry would
+        // join the cached failed future and observe the same exception forever.
+        Path remoteDir = tempFolder.newFolder("remote").toPath();
+        writeTestDataFiles(remoteDir);
+
+        AtomicInteger requestCount = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            // the first request to any file gets a 500; all subsequent requests succeed
+            if (requestCount.incrementAndGet() == 1) {
+                exchange.sendResponseHeaders(500, -1);
+                exchange.close();
+                return;
+            }
+            serveStaticFile(exchange, remoteDir);
+        });
+        server.start();
+        try {
+            Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                    "_defaults:\n" +
+                    "  base_url: http://127.0.0.1:" + server.getAddress().getPort() + "/\n" +
+                    "test-ds:\n" +
+                    "  base: test_base.fvecs\n" +
+                    "  query: test_query.fvecs\n" +
+                    "  gt: test_gt.ivecs\n");
+
+            var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+
+            assertThrows(RuntimeException.class,
+                    () -> loader.loadDataSet("test-ds").orElseThrow().getDataSet(),
+                    "first load should fail because one of the parallel downloads got a 500");
+
+            // retry: the failed in-flight entry should have been removed, so the missing file
+            // can be downloaded on this call (the other facets are already cached locally)
+            var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
+            assertEquals(5, ds.getBaseVectors().size());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    public void successfulDownloadRemovesEntryFromInFlightMap() throws Exception {
+        // Memory hygiene: after a successful download, the in-flight map must not retain the
+        // completed future. The check uses reflection to avoid widening the field's visibility
+        // purely for test purposes.
+        Path remoteDir = tempFolder.newFolder("remote").toPath();
+        writeTestDataFiles(remoteDir);
+
+        HttpServer server = startFileServer(remoteDir);
+        try {
+            Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                    "_defaults:\n" +
+                    "  base_url: http://127.0.0.1:" + server.getAddress().getPort() + "/\n" +
+                    "test-ds:\n" +
+                    "  base: test_base.fvecs\n" +
+                    "  query: test_query.fvecs\n" +
+                    "  gt: test_gt.ivecs\n");
+
+            var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+            var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
+            assertEquals(5, ds.getBaseVectors().size());
+
+            Field field = DataSetLoaderSimpleMFD.class.getDeclaredField("downloadsInFlight");
+            field.setAccessible(true);
+            ConcurrentHashMap<?, ?> map = (ConcurrentHashMap<?, ?>) field.get(loader);
+            assertEquals(0, map.size(),
+                    "in-flight map should be empty after all downloads complete");
+        } finally {
+            server.stop(0);
+        }
     }
 
     // ========================================================================
