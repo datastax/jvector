@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
 
-public class SimpleDataSet implements DataSet {
+public class SimpleDataSet implements InMemoryDataSet {
     private final String name;
     private final VectorSimilarityFunction similarityFunction;
     private final List<VectorFloat<?>> baseVectors;

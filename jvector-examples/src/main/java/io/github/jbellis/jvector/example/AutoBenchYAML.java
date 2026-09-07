@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.benchmarks.datasets.InMemoryDataSet;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
@@ -123,10 +124,10 @@ public class AutoBenchYAML {
 
                 logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                    InMemoryDataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
                     ).getDataSet();
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
+                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseRavv().size());
 
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {
