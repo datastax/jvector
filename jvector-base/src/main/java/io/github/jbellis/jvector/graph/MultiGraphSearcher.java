@@ -56,8 +56,16 @@ import java.util.function.IntFunction;
  * proportional initial sizing plus a couple of resume rounds converges to the same answer Phase 1
  * would have found by brute force.
  * <p>
+ * {@link #search} starts a new query, discarding any state left over from a previous {@link #search}/
+ * {@link #resume} sequence on this instance. Once it returns, {@link #resume(int)} can be called to
+ * grow that same query's result count by asking every shard to keep searching from where it left off
+ * -- the pull-driven pattern a lazy consumer doing its own downstream filtering (e.g. Cassandra
+ * reconciling stale/duplicate rows across sstables) needs when the current top-K doesn't yield enough
+ * valid results. It is not valid to call {@link #resume(int)} before calling {@link #search}.
+ * <p>
  * Not safe for concurrent use by multiple threads -- like {@link GraphSearcher} (which this class
- * composes, one instance per shard), scratch state is reused across calls to {@link #search}.
+ * composes, one instance per shard), scratch state is reused across calls to {@link #search} and
+ * {@link #resume(int)}.
  * <p>
  * By default, shards are searched sequentially. Since shards are independent (each has its own
  * {@link GraphSearcher} instance, never shared across shards), fan-out across shards can safely be
@@ -78,6 +86,22 @@ public class MultiGraphSearcher implements AutoCloseable {
     private final ExecutorService executor;
     private final OverqueryStrategy overqueryStrategy;
     private final int maxResumeRounds;
+
+    // Session state for the current query, established by search() and extended by resume(). Per-shard
+    // results accumulate across rounds: resume() returns only newly-discovered nodes (continuing the
+    // search where it left off), not a replacement for what a shard already returned, so each round's
+    // new nodes are appended rather than overwriting prior rounds'.
+    private List<SearchResult.NodeScore>[] accumulated;
+    private int[] askThisRound;
+    private int[] nextBudget;
+    private int[] lastReturnedCount;
+    private float[] lastWorstApproximate;
+    private int currentTopK;
+    private int roundsUsedTotal;
+    private int visitedCountTotal;
+    private int expandedCountTotal;
+    private int rerankedCountTotal;
+    private boolean hasSearched = false;
 
     /**
      * @param shards the graph indexes to search, in the order that
@@ -161,8 +185,10 @@ public class MultiGraphSearcher implements AutoCloseable {
             totalSize += size;
         }
 
-        int[] askThisRound = new int[n];
-        int[] nextBudget = new int[n];
+        // Starting a new query: reset all session state left over from any previous search()/resume()
+        // sequence on this instance.
+        askThisRound = new int[n];
+        nextBudget = new int[n];
         for (int i = 0; i < n; i++) {
             askThisRound[i] = proportionalShare(shardSizes[i], totalSize, topK);
             nextBudget[i] = Math.max(
@@ -170,16 +196,14 @@ public class MultiGraphSearcher implements AutoCloseable {
                     overqueryStrategy.initialRerankKFor(i, shardSizes[i], totalSize, topK, rerankK));
         }
 
-        // Per-shard results accumulate across rounds: resume() returns only newly-discovered nodes
-        // (continuing the search where it left off), not a replacement for what a shard already
-        // returned, so each round's new nodes are appended rather than overwriting prior rounds'.
         @SuppressWarnings("unchecked")
-        List<SearchResult.NodeScore>[] accumulated = new List[n];
-        int[] lastReturnedCount = new int[n];
-        float[] lastWorstApproximate = new float[n];
-        int visitedCount = 0;
-        int expandedCount = 0;
-        int rerankedCount = 0;
+        List<SearchResult.NodeScore>[] freshAccumulated = new List[n];
+        accumulated = freshAccumulated;
+        lastReturnedCount = new int[n];
+        lastWorstApproximate = new float[n];
+        visitedCountTotal = 0;
+        expandedCountTotal = 0;
+        rerankedCountTotal = 0;
 
         int[] allIndices = new int[n];
         for (int i = 0; i < n; i++) {
@@ -192,20 +216,62 @@ public class MultiGraphSearcher implements AutoCloseable {
             accumulated[i] = new ArrayList<>(List.of(result.getNodes()));
             lastReturnedCount[i] = result.getNodes().length;
             lastWorstApproximate[i] = result.getWorstApproximateScoreInTopK();
-            visitedCount += result.getVisitedCount();
-            expandedCount += result.getExpandedCount();
-            rerankedCount += result.getRerankedCount();
+            visitedCountTotal += result.getVisitedCount();
+            expandedCountTotal += result.getExpandedCount();
+            rerankedCountTotal += result.getRerankedCount();
             nextBudget[i] = growBudget(nextBudget[i]);
         }
 
+        hasSearched = true;
+        return continueRounds(topK, 1);
+    }
+
+    /**
+     * Grows the current query's result count by {@code additionalK} and returns the new merged
+     * top-{@code (previous topK + additionalK)}, reusing whatever shard results are already
+     * accumulated and only asking shards to search further if what's already been found can't satisfy
+     * the larger request. Intended for a caller that consumes results lazily and does its own
+     * downstream filtering (deduplication, liveness/tombstone checks, ...) -- when that filtering
+     * leaves fewer than the desired number of valid results, {@code resume} asks for more without
+     * restarting the whole multi-shard search from scratch.
+     * <p>
+     * Like {@link #search}, shards that still qualify (returned a full batch last round and remain
+     * competitive with the current cutoff) may be resumed across multiple rounds, up to
+     * {@link Builder#withMaxResumeRounds} rounds for this call.
+     *
+     * @param additionalK how many more results are wanted, beyond the topK from the previous
+     *                    {@link #search}/{@link #resume} call
+     * @return the merged top-{@code (previous topK + additionalK)}, plus metrics summed across all
+     * shards' work across every round since the initiating {@link #search} call
+     * @throws IllegalStateException if called before {@link #search}
+     */
+    public ShardedSearchResult resume(int additionalK) {
+        if (!hasSearched) {
+            throw new IllegalStateException("resume() called before search()");
+        }
+        if (additionalK <= 0) {
+            throw new IllegalArgumentException("additionalK must be positive, got " + additionalK);
+        }
+        return continueRounds(currentTopK + additionalK, roundsUsedTotal);
+    }
+
+    /**
+     * Shared round loop for {@link #search} (called with {@code startingRound=1}, since the initial
+     * per-shard dispatch already happened) and {@link #resume} (called with {@code startingRound} set
+     * to the rounds already used, since it continues an existing session). Merges whatever's currently
+     * accumulated, and if {@code topK} isn't yet satisfied (or a shard still looks competitive), resumes
+     * qualifying shards for up to {@link #maxResumeRounds} more rounds beyond {@code startingRound}.
+     */
+    private ShardedSearchResult continueRounds(int topK, int startingRound) {
+        int n = searchers.size();
         List<ShardedSearchResult.NodeScore> merged;
-        int round = 1;
-        int totalRoundsAllowed = 1 + maxResumeRounds;
+        int round = startingRound;
+        int maxRound = startingRound + maxResumeRounds;
         while (true) {
             merged = mergeAndTrim(accumulated, topK);
             float cutoff = merged.size() < topK ? Float.NEGATIVE_INFINITY : merged.get(merged.size() - 1).score;
 
-            if (round >= totalRoundsAllowed) {
+            if (round >= maxRound) {
                 break;
             }
 
@@ -233,15 +299,17 @@ public class MultiGraphSearcher implements AutoCloseable {
                 accumulated[i].addAll(List.of(result.getNodes()));
                 lastReturnedCount[i] = result.getNodes().length;
                 lastWorstApproximate[i] = result.getWorstApproximateScoreInTopK();
-                visitedCount += result.getVisitedCount();
-                expandedCount += result.getExpandedCount();
-                rerankedCount += result.getRerankedCount();
+                visitedCountTotal += result.getVisitedCount();
+                expandedCountTotal += result.getExpandedCount();
+                rerankedCountTotal += result.getRerankedCount();
                 nextBudget[i] = growBudget(nextBudget[i]);
             }
         }
 
+        currentTopK = topK;
+        roundsUsedTotal = round;
         var nodes = merged.toArray(new ShardedSearchResult.NodeScore[0]);
-        return new ShardedSearchResult(nodes, visitedCount, expandedCount, rerankedCount, round);
+        return new ShardedSearchResult(nodes, visitedCountTotal, expandedCountTotal, rerankedCountTotal, round);
     }
 
     /**

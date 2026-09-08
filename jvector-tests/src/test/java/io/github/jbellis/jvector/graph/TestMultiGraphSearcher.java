@@ -194,6 +194,93 @@ public class TestMultiGraphSearcher extends LuceneTestCase {
     }
 
     @Test
+    public void testCallerResumeGrowsResultCount() throws Exception {
+        // The caller-facing resume(additionalK) mirrors a lazy consumer (e.g. Cassandra) that ran its
+        // own downstream filtering on the first batch, came up short of the results it actually
+        // needed, and asks for more without restarting the multi-shard search from scratch.
+        var vectorsA = new TestVectorGraph.CircularFloatVectorValues(20);
+        var vectorsB = new TestVectorGraph.CircularFloatVectorValues(15);
+        var shardA = buildShard(vectorsA);
+        var shardB = buildShard(vectorsB);
+        var q = query();
+
+        var expected = bruteForceMerge(q, List.of(vectorsA, vectorsB), 8);
+
+        try (var searcher = new MultiGraphSearcher(List.of(shardA, shardB))) {
+            List<SearchScoreProvider> providers = List.of(
+                    DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsA),
+                    DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsB));
+
+            var initial = searcher.search(providers, 3, 20);
+            assertEquals(3, initial.getNodes().length);
+
+            var grown = searcher.resume(5);
+            assertEquals(8, grown.getNodes().length);
+            // the first 3 results must still be there, in the same order, once grown to 8
+            for (int i = 0; i < 3; i++) {
+                assertEquals("rank " + i + " should be stable across resume", initial.getNodes()[i], grown.getNodes()[i]);
+            }
+            for (int i = 0; i < 8; i++) {
+                var actual = grown.getNodes()[i];
+                var expectedNode = expected.get(i);
+                assertEquals("shardIndex at rank " + i, expectedNode.shardIndex, actual.shardIndex);
+                assertEquals("node at rank " + i, expectedNode.node, actual.node);
+                assertEquals("score at rank " + i, expectedNode.score, actual.score, 1e-5);
+            }
+
+            // metrics accumulate across the whole session, so resume's totals can't be less than search's
+            assertTrue(grown.getVisitedCount() >= initial.getVisitedCount());
+            assertTrue(grown.getRoundsUsed() >= initial.getRoundsUsed());
+        }
+    }
+
+    @Test
+    public void testResumeBeforeSearchThrows() throws Exception {
+        var vectors = new TestVectorGraph.CircularFloatVectorValues(10);
+        try (var searcher = new MultiGraphSearcher(List.of(buildShard(vectors)))) {
+            assertThrows(IllegalStateException.class, () -> searcher.resume(5));
+        }
+    }
+
+    @Test
+    public void testResumeRejectsNonPositiveAdditionalK() throws Exception {
+        var vectors = new TestVectorGraph.CircularFloatVectorValues(10);
+        var shard = buildShard(vectors);
+        var q = query();
+        try (var searcher = new MultiGraphSearcher(List.of(shard))) {
+            searcher.search(List.of(DefaultSearchScoreProvider.exact(q, SIMILARITY, vectors)), 3, 6);
+            assertThrows(IllegalArgumentException.class, () -> searcher.resume(0));
+            assertThrows(IllegalArgumentException.class, () -> searcher.resume(-1));
+        }
+    }
+
+    @Test
+    public void testSearchAfterResumeStartsAFreshSession() throws Exception {
+        // search() must discard whatever session state a prior search()/resume() sequence left behind,
+        // so a second, independent query on the same instance behaves exactly like a brand-new instance.
+        var vectorsA = new TestVectorGraph.CircularFloatVectorValues(20);
+        var vectorsB = new TestVectorGraph.CircularFloatVectorValues(15);
+        var shardA = buildShard(vectorsA);
+        var shardB = buildShard(vectorsB);
+        var q = query();
+        List<SearchScoreProvider> providers = List.of(
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsA),
+                DefaultSearchScoreProvider.exact(q, SIMILARITY, vectorsB));
+
+        ShardedSearchResult freshResult;
+        try (var freshSearcher = new MultiGraphSearcher(List.of(shardA, shardB))) {
+            freshResult = freshSearcher.search(providers, 5, 20);
+        }
+
+        try (var searcher = new MultiGraphSearcher(List.of(shardA, shardB))) {
+            searcher.search(providers, 3, 20);
+            searcher.resume(4);
+            var second = searcher.search(providers, 5, 20);
+            assertEquals(freshResult, second);
+        }
+    }
+
+    @Test
     public void testMaxResumeRoundsZeroDisablesResume() throws Exception {
         var vectorsA = new TestVectorGraph.CircularFloatVectorValues(20);
         var vectorsB = new TestVectorGraph.CircularFloatVectorValues(15);
