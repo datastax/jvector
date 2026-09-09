@@ -408,7 +408,15 @@ HWY_FLATTEN float euclidean_f32(
 // #pragma GCC unroll 4: unroll by 4 to hide the 4-cycle FMA latency and keep
 //   both AVX-512 FMA ports saturated across independent load–op–store chains.
 //
-__attribute__((optimize("rename-registers")))
+// Clang does not support the GCC "rename-registers" optimisation attribute and
+// warns on unknown attributes, so we suppress it on Clang builds.
+#ifdef __clang__
+#  define JV_RENAME_REGS
+#else
+#  define JV_RENAME_REGS __attribute__((optimize("rename-registers")))
+#endif
+
+JV_RENAME_REGS
 HWY_FLATTEN void add_in_place_f32(float *HWY_RESTRICT v1,
                                    const float *HWY_RESTRICT v2,
                                    size_t length)
@@ -430,7 +438,7 @@ HWY_FLATTEN void add_in_place_f32(float *HWY_RESTRICT v1,
     }
 }
 
-__attribute__((optimize("rename-registers")))
+JV_RENAME_REGS
 HWY_FLATTEN void add_scalar_in_place_f32(float *HWY_RESTRICT v1,
                                           float value,
                                           size_t length)
@@ -451,7 +459,7 @@ HWY_FLATTEN void add_scalar_in_place_f32(float *HWY_RESTRICT v1,
     }
 }
 
-__attribute__((optimize("rename-registers")))
+JV_RENAME_REGS
 HWY_FLATTEN void sub_in_place_f32(float *HWY_RESTRICT v1,
                                    const float *HWY_RESTRICT v2,
                                    size_t length)
@@ -473,7 +481,7 @@ HWY_FLATTEN void sub_in_place_f32(float *HWY_RESTRICT v1,
     }
 }
 
-__attribute__((optimize("rename-registers")))
+JV_RENAME_REGS
 HWY_FLATTEN void sub_scalar_in_place_f32(float *HWY_RESTRICT v1,
                                           float value,
                                           size_t length)
@@ -494,7 +502,7 @@ HWY_FLATTEN void sub_scalar_in_place_f32(float *HWY_RESTRICT v1,
     }
 }
 
-__attribute__((optimize("rename-registers")))
+JV_RENAME_REGS
 HWY_FLATTEN float max_f32(const float *HWY_RESTRICT v, size_t length)
 {
     hn::ScalableTag<float> d;
@@ -512,7 +520,7 @@ HWY_FLATTEN float max_f32(const float *HWY_RESTRICT v, size_t length)
     return result;
 }
 
-__attribute__((optimize("rename-registers")))
+JV_RENAME_REGS
 HWY_FLATTEN void min_in_place_f32(float *HWY_RESTRICT v1,
                                    const float *HWY_RESTRICT v2,
                                    size_t length)

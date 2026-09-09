@@ -181,7 +181,9 @@ static DispatchResult dispatch_kernels() noexcept
     std::array<bool, static_cast<uint32_t>(CpuFeature::COUNT)> features;
     populate_cpu_features(features);
 
-    auto has = [&](CpuFeature f) noexcept {
+    // [[maybe_unused]]: on AArch64 NEON-only builds (no SVE/SVE2) the lambda is
+    // never called since both JV_HAS_SVE and JV_HAS_SVE2 blocks are compiled out.
+    auto has [[maybe_unused]] = [&](CpuFeature f) noexcept {
         return features[static_cast<uint32_t>(f)];
     };
 
