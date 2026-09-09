@@ -39,22 +39,21 @@ import java.util.function.IntFunction;
  * initial ask is sized proportionally to its share of the total vector count (via
  * {@link OverqueryStrategy}), rather than asking every shard for a full local top-{@code topK} --
  * this avoids the redundant work of Phase 1, where every shard fully explored its own top-{@code topK}
- * even though only a fraction of that typically survives the global merge. Because the initial,
- * proportional ask can shortchange a shard (e.g. a small shard that happens to be unusually close to
- * the query), shards are adaptively resumed across up to {@link Builder#withMaxResumeRounds} additional
- * rounds: after each round, a shard is resumed via {@link GraphSearcher#resume(int, int) resume} --
- * which continues that shard's search and returns only the newly-discovered nodes, appended here to
- * what the shard already contributed -- if it returned a full batch last round (so it isn't simply
- * exhausted) and its worst-scoring new node is still competitive with the current global cutoff (so
- * there's a chance the next batch is too). This repeats until no shard qualifies for resume, or the
- * round cap is hit.
- * <p>
- * Unlike Phase 1, this is <b>not</b> guaranteed to be exact -- a shard that's both exhausted-looking
- * (returned fewer results than asked, so doesn't qualify for resume) and yet, hypothetically, still
- * held better candidates than what was returned isn't distinguishable from a genuinely exhausted shard
- * using only the information {@link SearchResult} exposes. In practice, on well-behaved data, the
- * proportional initial sizing plus a couple of resume rounds converges to the same answer Phase 1
- * would have found by brute force.
+ * even though only a fraction of that typically survives the global merge. Like a single-shard
+ * approximate search, the result is <b>not</b> guaranteed to be exact: a shard's proportional share is
+ * based on its size, not its relevance to the query, so a small shard that happens to be unusually
+ * close to the query can legitimately be underrepresented in the result -- the same kind of recall
+ * tradeoff a larger overquery factor manages for a single index. If the proportional asks together
+ * come up short of {@code topK} candidates overall (e.g. because per-shard {@code acceptOrds} filtered
+ * out most of one shard), shards that weren't exhausted are automatically resumed for up to
+ * {@link Builder#withMaxResumeRounds} additional rounds to fill the shortfall; this is the only
+ * automatic escalation {@link #search} performs; see {@link #resume(int)} for a caller-driven way to
+ * ask for more when the caller -- not a raw candidate-count shortfall -- determines more are needed.
+ * (An earlier version of this class also resumed a shard whenever its own worst-returned score was
+ * still at or above the current merge cutoff, to try to recover exactness; that check is unreliable
+ * once a shard's results make up part of the current top-{@code topK}, since its worst score is then
+ * close to -- or literally part of -- the cutoff it's being compared against, so it fired on nearly
+ * every call and made a single {@link #search} cost close to an exhaustive scan.)
  * <p>
  * {@link #search} starts a new query, discarding any state left over from a previous {@link #search}/
  * {@link #resume} sequence on this instance. Once it returns, {@link #resume(int)} can be called to
@@ -95,7 +94,6 @@ public class MultiGraphSearcher implements AutoCloseable {
     private int[] askThisRound;
     private int[] nextBudget;
     private int[] lastReturnedCount;
-    private float[] lastWorstApproximate;
     private int currentTopK;
     private int roundsUsedTotal;
     private int visitedCountTotal;
@@ -150,6 +148,28 @@ public class MultiGraphSearcher implements AutoCloseable {
     }
 
     /**
+     * @return the {@link ImmutableGraphIndex.View} that shard {@code shardIndex}'s internal
+     * {@link GraphSearcher} traverses with. Fixed for the lifetime of this instance (each shard's
+     * {@code GraphSearcher} is constructed once and reused across every {@link #search}/
+     * {@link #resume} call), so it's safe to fetch once and reuse.
+     * <p>
+     * Needed when building a {@link SearchScoreProvider} whose approximate scoring is stateful and
+     * tied to a specific view -- {@code FUSED_PQ}'s neighbor-code reading during traversal is the
+     * motivating example, since it reads through the view's own reader position as the search walks
+     * neighbors. Such a score provider must be built from <em>this</em> view, not one independently
+     * obtained via {@code shard.getView()} on the original {@link ImmutableGraphIndex} -- a
+     * separately-obtained view has its own independent reader, and scoring built from it silently
+     * reads garbage once the actual search drives a different view's reader position. Score providers
+     * with stateless approximate scoring (exact, or {@code CompressedVectors}-based) aren't affected
+     * and don't need this.
+     *
+     * @param shardIndex index into the shard list passed to this searcher's constructor
+     */
+    public ImmutableGraphIndex.View getView(int shardIndex) {
+        return searchers.get(shardIndex).getView();
+    }
+
+    /**
      * Searches every shard and returns the merged global top-{@code topK}, best first.
      * <p>
      * Each shard's initial ask is sized proportionally to its share of the total vector count
@@ -164,8 +184,10 @@ public class MultiGraphSearcher implements AutoCloseable {
      * @param acceptOrdsPerShard one {@link Bits} per shard, in shard order, using ordinals local to
      *                           that shard. Use {@link Bits#ALL} for shards with no per-query filter.
      * @param topK               desired global result count
-     * @param rerankK            global rerank budget hint, passed through to {@link OverqueryStrategy}
-     *                           (the default strategy does not use it -- see its javadoc)
+     * @param rerankK            global rerank budget, split proportionally across shards by
+     *                           {@link OverqueryStrategy} (default: by shard size, the same split
+     *                           applied to {@code topK}) -- {@code rerankK == topK} costs about the
+     *                           same, per shard, as a single-shard search at that same overquery factor
      * @return the merged results, plus metrics summed across all shards' work across all rounds
      */
     public ShardedSearchResult search(List<SearchScoreProvider> scoreProviders,
@@ -200,7 +222,6 @@ public class MultiGraphSearcher implements AutoCloseable {
         List<SearchResult.NodeScore>[] freshAccumulated = new List[n];
         accumulated = freshAccumulated;
         lastReturnedCount = new int[n];
-        lastWorstApproximate = new float[n];
         visitedCountTotal = 0;
         expandedCountTotal = 0;
         rerankedCountTotal = 0;
@@ -215,7 +236,6 @@ public class MultiGraphSearcher implements AutoCloseable {
             var result = initial[i];
             accumulated[i] = new ArrayList<>(List.of(result.getNodes()));
             lastReturnedCount[i] = result.getNodes().length;
-            lastWorstApproximate[i] = result.getWorstApproximateScoreInTopK();
             visitedCountTotal += result.getVisitedCount();
             expandedCountTotal += result.getExpandedCount();
             rerankedCountTotal += result.getRerankedCount();
@@ -259,8 +279,22 @@ public class MultiGraphSearcher implements AutoCloseable {
      * Shared round loop for {@link #search} (called with {@code startingRound=1}, since the initial
      * per-shard dispatch already happened) and {@link #resume} (called with {@code startingRound} set
      * to the rounds already used, since it continues an existing session). Merges whatever's currently
-     * accumulated, and if {@code topK} isn't yet satisfied (or a shard still looks competitive), resumes
-     * qualifying shards for up to {@link #maxResumeRounds} more rounds beyond {@code startingRound}.
+     * accumulated; if that doesn't yet total {@code topK} candidates, resumes shards that aren't
+     * exhausted for up to {@link #maxResumeRounds} more rounds beyond {@code startingRound}, to fill
+     * the shortfall.
+     * <p>
+     * This is deliberately a narrow, unambiguous trigger -- resume only when there is a real shortfall
+     * in the total candidate count -- rather than trying to guess whether some shard's own top result
+     * might be beaten by exploring further. That guess is unreliable: once a shard's own results make
+     * up part of the current global top-{@code topK}, its worst-returned score is, by construction,
+     * close to (or literally part of) the merge's own cutoff, so any per-shard "is my worst score still
+     * competitive" check is close to tautological and fires on nearly every call -- which previously
+     * caused every {@link #search} to escalate to {@link #maxResumeRounds} regardless of whether more
+     * searching would help, making a single call cost close to an exhaustive scan instead of a bounded
+     * approximate search. Bounding resume to genuine shortfalls keeps {@link #search}'s cost comparable
+     * to a single-shard ANN search at the same overquery factor; a caller that wants a shard possibly
+     * holding better-but-unretrieved candidates to be explored further should use the caller-facing
+     * {@link #resume(int)} explicitly.
      */
     private ShardedSearchResult continueRounds(int topK, int startingRound) {
         int n = searchers.size();
@@ -269,17 +303,15 @@ public class MultiGraphSearcher implements AutoCloseable {
         int maxRound = startingRound + maxResumeRounds;
         while (true) {
             merged = mergeAndTrim(accumulated, topK);
-            float cutoff = merged.size() < topK ? Float.NEGATIVE_INFINITY : merged.get(merged.size() - 1).score;
 
-            if (round >= maxRound) {
+            if (merged.size() >= topK || round >= maxRound) {
                 break;
             }
 
             var resumeIndices = new ArrayList<Integer>();
             for (int i = 0; i < n; i++) {
-                boolean returnedFullLocalResult = lastReturnedCount[i] == askThisRound[i];
-                boolean stillCompetitive = lastWorstApproximate[i] >= cutoff;
-                if (returnedFullLocalResult && stillCompetitive) {
+                boolean notExhausted = lastReturnedCount[i] == askThisRound[i];
+                if (notExhausted) {
                     resumeIndices.add(i);
                 }
             }
@@ -298,7 +330,6 @@ public class MultiGraphSearcher implements AutoCloseable {
                 var result = resumed[k];
                 accumulated[i].addAll(List.of(result.getNodes()));
                 lastReturnedCount[i] = result.getNodes().length;
-                lastWorstApproximate[i] = result.getWorstApproximateScoreInTopK();
                 visitedCountTotal += result.getVisitedCount();
                 expandedCountTotal += result.getExpandedCount();
                 rerankedCountTotal += result.getRerankedCount();
@@ -414,10 +445,10 @@ public class MultiGraphSearcher implements AutoCloseable {
 
     /**
      * Pluggable policy for sizing a shard's initial rerank budget, given its share of the total
-     * dataset. The default implementation ignores {@code globalRerankK} entirely and simply doubles
-     * the shard's own proportional share of {@code topK}; it's exposed as a strategy so callers can
-     * plug in something that also accounts for the global rerank budget, or a fixed per-shard floor,
-     * without forking this class.
+     * dataset. The default implementation splits the caller's {@code globalRerankK} proportionally,
+     * the same way {@link #search} splits {@code topK}; it's exposed as a strategy so callers can
+     * plug in a fixed per-shard floor, a different growth curve, or anything else, without forking
+     * this class.
      */
     @FunctionalInterface
     public interface OverqueryStrategy {
@@ -427,21 +458,22 @@ public class MultiGraphSearcher implements AutoCloseable {
          * @param shardSize    number of vectors in this shard ({@code index.size(0)})
          * @param totalSize    number of vectors across all shards
          * @param topK         the caller's requested global result count
-         * @param globalRerankK the caller's requested global rerank budget hint
+         * @param globalRerankK the caller's requested global rerank budget
          * @return the initial rerank budget for this shard. Values less than this shard's
          * proportional share of {@code topK} are clamped up to that share.
          */
         int initialRerankKFor(int shardIndex, long shardSize, long totalSize, int topK, int globalRerankK);
 
         /**
-         * {@code max(shareOfTopK, round(shareOfTopK * 2.0))}, where {@code shareOfTopK} is this
-         * shard's proportional share of {@code topK} (the same value {@link #search} uses for the
-         * shard's local {@code topK}). Ignores {@code globalRerankK}.
+         * This shard's proportional share of {@code globalRerankK} -- the same proportional-by-size
+         * split {@link #search} already applies to {@code topK}, just applied to the caller's actual
+         * rerank budget instead of silently substituting a fixed multiplier. This preserves the
+         * caller's intended overquery factor: requesting {@code rerankK == topK} (overquery 1x) costs
+         * about the same, per shard, as a single-shard search at overquery 1x, rather than always
+         * paying for some other multiplier regardless of what was asked for.
          */
-        OverqueryStrategy DEFAULT = (shardIndex, shardSize, totalSize, topK, globalRerankK) -> {
-            int shareOfTopK = proportionalShare(shardSize, totalSize, topK);
-            return growBudget(shareOfTopK);
-        };
+        OverqueryStrategy DEFAULT = (shardIndex, shardSize, totalSize, topK, globalRerankK) ->
+                proportionalShare(shardSize, totalSize, globalRerankK);
     }
 
     /**

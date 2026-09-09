@@ -137,6 +137,52 @@ public class BenchYAML {
                     config.search.topKOverquery,
                     config.search.useSearchPruning,
                     artifacts);
+
+            printMultiShardComparison(ds, config);
+        }
+    }
+
+    /**
+     * Runs {@link MultiShardBench#runAll} for {@code ds} across the <b>entire</b> construction/search
+     * grid from {@code config} -- the same lists just passed to {@link Grid#runAll} above, so every
+     * shard configuration this sweeps is built and searched exactly like the corresponding single-index
+     * configuration Grid just benchmarked (shard count 1 is that same single-index baseline, rebuilt
+     * and searched through the multi-shard code path for an apples-to-apples comparison). Failures are
+     * non-fatal so a comparison issue never blocks the single-index Grid run above.
+     */
+    private static void printMultiShardComparison(DataSet ds, MultiConfig config) {
+        try {
+            List<BenchResult> results = MultiShardBench.runAll(ds,
+                    config.construction.outDegree,
+                    config.construction.efConstruction,
+                    config.construction.neighborOverflow,
+                    config.construction.addHierarchy,
+                    config.construction.refineFinalGraph,
+                    config.construction.getFeatureSets(),
+                    config.construction.getCompressorParameters(),
+                    config.search.getCompressorParameters(),
+                    config.search.topKOverquery,
+                    config.search.useSearchPruning);
+            if (results.isEmpty()) {
+                return;
+            }
+            System.out.println("\nMulti-shard vs. single-index comparison for " + ds.getName() + ":");
+            System.out.printf("%-9s %-8s %-6s %-14s %-6s %-9s %-6s %-8s %-14s %-14s %-9s %-5s %10s %14s %14s %10s %10s %10s%n",
+                    "numShards", "M", "efC", "overflow", "addHi", "refine", "prune", "topK", "features",
+                    "buildComp", "searchComp", "overq", "recall", "meanLat(ms)", "p99Lat(ms)", "qps", "rounds", "visited");
+            for (BenchResult r : results) {
+                Map<String, Object> p = r.parameters;
+                Map<String, Object> m = r.metrics;
+                String recallKey = "recall@" + p.get("topK");
+                System.out.printf("%-9s %-8s %-6s %-14s %-6s %-9s %-6s %-8s %-14s %-14s %-9s %-5s %10.4f %14.3f %14.3f %10.1f %10.2f %10.1f%n",
+                        p.get("numShards"), p.get("M"), p.get("efConstruction"), p.get("neighborOverflow"),
+                        p.get("addHierarchy"), p.get("refineFinalGraph"), p.get("usePruning"), p.get("topK"),
+                        p.get("features"), p.get("buildCompression"), p.get("searchCompression"), p.get("overquery"),
+                        (double) m.get(recallKey), (double) m.get("meanLatencyMs"), (double) m.get("p99LatencyMs"),
+                        (double) m.get("qps"), (double) m.get("avgRoundsUsed"), (double) m.get("avgVisitedCount"));
+            }
+        } catch (Exception e) {
+            System.err.println("Multi-shard comparison failed for dataset " + ds.getName() + ": " + e);
         }
     }
 
