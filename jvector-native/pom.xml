@@ -93,7 +93,7 @@
             <id>unix-amd64-profile</id>
             <activation>
                 <os>
-                    <family>unix</family>
+                    <name>Linux</name>
                 </os>
             </activation>
             <build>

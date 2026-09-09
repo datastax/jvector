@@ -63,9 +63,11 @@ elif cpu == 'aarch64'
   #
   #   SVE   — Graviton 3 / Neoverse V1 and later.  Highway target: HWY_SVE.
   #           No -msve-vector-bits flag; Highway queries the VL at runtime.
+  #           Requires Clang >= 22 for reliable SVE codegen via Highway.
   #
   #   SVE2  — Graviton 4 / Neoverse V2/N2 and later.  Highway target: HWY_SVE2.
   #           No -msve-vector-bits flag; Highway queries the VL at runtime.
+  #           Requires Clang >= 22 for reliable SVE2 codegen via Highway.
   isa_variants = [
     {
       'name'     : 'neon',
@@ -74,26 +76,40 @@ elif cpu == 'aarch64'
                     '-DHWY_COMPILE_ONLY_STATIC',
                     '-DJV_REQUIRE_HWY_NEON'],
     },
-    {
-      'name'     : 'sve',
-      'namespace': 'SVE',
-      'args'     : ['-march=armv8.4-a+sve',
-                    '-DHWY_COMPILE_ONLY_STATIC',
-                    '-DJV_REQUIRE_HWY_SVE'],
-    },
-    {
-      'name'     : 'sve2',
-      'namespace': 'SVE2',
-      'args'     : ['-march=armv9-a+sve2',
-                    '-DHWY_COMPILE_ONLY_STATIC',
-                    '-DJV_REQUIRE_HWY_SVE2'],
-    },
   ]
+
+  cpp = meson.get_compiler('cpp')
+  # SVE and SVE2 require Clang >= 22 for correct Highway SVE codegen.
+  # GCC does not have this restriction; only gate on Clang.
+  sve_supported = cpp.get_id() != 'clang' or cpp.version().version_compare('>=22')
+
+  if sve_supported
+    isa_variants += [
+      {
+        'name'     : 'sve',
+        'namespace': 'SVE',
+        'args'     : ['-march=armv8.4-a+sve',
+                      '-DHWY_COMPILE_ONLY_STATIC',
+                      '-DJV_REQUIRE_HWY_SVE'],
+      },
+      {
+        'name'     : 'sve2',
+        'namespace': 'SVE2',
+        'args'     : ['-march=armv9-a+sve2',
+                      '-DHWY_COMPILE_ONLY_STATIC',
+                      '-DJV_REQUIRE_HWY_SVE2'],
+      },
+    ]
+  else
+    warning('Clang ' + cpp.version() + ' detected — SVE and SVE2 tiers require Clang >= 22 and will not be built. Only the NEON tier will be available.')
+  endif
 else
   error('Unsupported CPU family: ' + cpu + '. Supported: x86_64, aarch64.')
 endif
 
 isa_libs = []
+# Extra -D flags forwarded to jvector_simd.cpp to record which tiers were built.
+dispatch_defines = []
 foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
@@ -102,6 +118,7 @@ foreach isa : isa_variants
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
   isa_libs += lib
+  dispatch_defines += '-DJV_HAS_' + isa['namespace'].to_upper() + '=1'
 endforeach
 
 if cpu == 'x86_64'
@@ -148,7 +165,7 @@ vectorutil_lib = shared_library(
   sources            : ['src/jvector_simd.cpp',
                         'third_party/highway/hwy/abort.cc'],
   include_directories: [include_directories('src'), hwy_inc],
-  cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'],
+  cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'] + dispatch_defines,
   link_whole         : isa_libs,
   version            : meson.project_version(),
   install            : true,
