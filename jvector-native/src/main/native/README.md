@@ -50,10 +50,19 @@ third_party/highway/          - Google Highway header-only library (git submodul
 
 | Tool | Minimum version | Notes |
 |------|----------------|-------|
-| g++ / clang++ | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (x86-64) | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (AArch64) | GCC 11+ | All three tiers (NEON, SVE, SVE2) built |
+| clang++ (x86-64) | Clang any recent | Must support `-march=skylake-avx512` (Clang 7+) |
+| clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |
 | [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
 | Git submodules | — | `git submodule update --init` (needed once) |
+
+> **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
+> automatically skipped at configure time (`meson setup` prints a warning).
+> The resulting library contains only the NEON tier and falls back to it at
+> runtime even on SVE2-capable hardware (e.g. Graviton 4).  Upgrade to
+> Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
 
 ### Build steps
 

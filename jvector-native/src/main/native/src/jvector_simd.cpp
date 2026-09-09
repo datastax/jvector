@@ -143,17 +143,21 @@ static const KernelVTable NEON_vtable = {
 };
 #undef KERNEL_ENTRY
 
+#if JV_HAS_SVE
 #define KERNEL_ENTRY(ret_type, name, params, names) SVE::name,
 static const KernelVTable SVE_vtable = {
     JVECTOR_SIMD_KERNEL_LIST
 };
 #undef KERNEL_ENTRY
+#endif // JV_HAS_SVE
 
+#if JV_HAS_SVE2
 #define KERNEL_ENTRY(ret_type, name, params, names) SVE2::name,
 static const KernelVTable SVE2_vtable = {
     JVECTOR_SIMD_KERNEL_LIST
 };
 #undef KERNEL_ENTRY
+#endif // JV_HAS_SVE2
 
 #endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
 
@@ -204,16 +208,29 @@ static DispatchResult dispatch_kernels() noexcept
     // SSE42 is the x86-64 baseline — assumed always present, no CPUID check.
     return { SSE42_vtable, MaxIsa::SSE42, env_str };
 #elif JV_ARCH_AARCH64
+#if JV_HAS_SVE2
     if (max_isa == MaxIsa::SVE2)      env_str = "sve2";
-    else if (max_isa == MaxIsa::SVE)  env_str = "sve";
-    else if (max_isa == MaxIsa::NEON) env_str = "neon";
+    else
+#endif
+#if JV_HAS_SVE
+    if (max_isa == MaxIsa::SVE)       env_str = "sve";
+    else
+#endif
+    if (max_isa == MaxIsa::NEON)      env_str = "neon";
 
     // SVE2 and SVE are not available on Apple Silicon (up to and including M4).
     // populate_cpu_features() will return false for those on HWY_OS_APPLE.
+    // The JV_HAS_SVE / JV_HAS_SVE2 guards also handle the case where those tiers
+    // were not compiled in (e.g. Clang < 22), ensuring we never reference a
+    // vtable or a CpuFeature that does not exist in this build.
+#if JV_HAS_SVE2
     if (max_isa > MaxIsa::SVE  && has(CpuFeature::SVE2))
         return { SVE2_vtable, MaxIsa::SVE2, env_str };
+#endif
+#if JV_HAS_SVE
     if (max_isa > MaxIsa::NEON && has(CpuFeature::SVE))
         return { SVE_vtable, MaxIsa::SVE, env_str };
+#endif
     // NEON is the AArch64 baseline — always available, no auxval check needed.
     return { NEON_vtable, MaxIsa::NEON, env_str };
 #endif // JV_ARCH_X86_64 / JV_ARCH_AARCH64
