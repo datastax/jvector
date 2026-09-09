@@ -26,9 +26,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
@@ -46,6 +46,7 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -55,17 +56,19 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 // across several independent on-disk graphs and merging the results, the way an embedding system
 // like Cassandra or OpenSearch would when a logical dataset is sharded into per-segment indexes.
 //
-// Run with `--parallel` to fan the shards out concurrently instead of sequentially; everything else
-// (proportional sizing, the internal adaptive resume loop, and the caller-facing resume(int) call)
-// always runs so a single invocation tells the whole story.
+// Two things are demonstrated in turn: first the full single-query API (proportional initial sizing,
+// the internal adaptive resume loop, and the caller-facing resume(int) call) against one illustrative
+// query; then how a real embedding system actually gets parallelism out of MultiGraphSearcher once it's
+// serving many concurrent client queries -- not by fanning one query's shards out across an executor
+// (MultiGraphSearcher's per-call state and each shard's GraphSearcher/View aren't safe to share across
+// concurrently-running searches), but by running queries concurrently with each worker thread owning
+// its own MultiGraphSearcher, exactly like MultiShardBench/BenchYAML's own throughput measurement does.
 public class MultiSearchExample {
     private static final VectorTypeSupport VTS = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final VectorSimilarityFunction SIMILARITY = VectorSimilarityFunction.COSINE;
     private static final int DIMENSION = 8;
 
-    public static void main(String[] args) throws IOException {
-        boolean useParallelExecutor = Arrays.asList(args).contains("--parallel");
-
+    public static void main(String[] args) throws Exception {
         // Simulate an embedding system whose data has been flushed into four independent on-disk
         // segments of very different sizes -- exactly the scenario docs/multi-index-search.md was
         // written for. The sizes are deliberately skewed, and (see buildAndWriteShard below) the
@@ -81,7 +84,6 @@ public class MultiSearchExample {
         System.out.println("Building " + shardSizes.length + " on-disk shards: " + Arrays.toString(shardSizes)
                 + " vectors each (shard " + needleShard + " holds the true best match)");
         List<ShardHandle> shardHandles = new ArrayList<>();
-        ExecutorService executor = useParallelExecutor ? Executors.newFixedThreadPool(shardSizes.length) : null;
         try {
             for (int s = 0; s < shardSizes.length; s++) {
                 shardHandles.add(buildAndWriteShard(s, shardSizes[s], s == needleShard, query, random));
@@ -94,15 +96,9 @@ public class MultiSearchExample {
                     .map(h -> DefaultSearchScoreProvider.exact(query, SIMILARITY, h.ravv))
                     .collect(Collectors.toList());
 
-            var builder = MultiGraphSearcher.builder(shards);
-            if (executor != null) {
-                System.out.println("Fanning out across shards in parallel (--parallel)");
-                builder.withExecutor(executor);
-            }
-
-            try (MultiGraphSearcher searcher = builder.build()) {
+            int topK = 5;
+            try (MultiGraphSearcher searcher = MultiGraphSearcher.builder(shards).build()) {
                 // --- Search 1: a single call to search(), no caller-driven resume yet ---
-                int topK = 5;
                 System.out.println("\n=== search(): merged top-" + topK + " across all " + shards.size() + " shards ===");
                 ShardedSearchResult initial = searcher.search(providers, topK, topK * 2);
                 printResult(initial, shardSizes);
@@ -136,13 +132,62 @@ public class MultiSearchExample {
                     System.out.printf("  shard=%d node=%-5d score=%.4f%n", n.shardIndex, n.node, n.score);
                 }
             }
+
+            demonstrateConcurrentQueries(shardHandles, shards, topK, random);
         } finally {
-            if (executor != null) {
-                executor.shutdown();
-            }
             for (ShardHandle handle : shardHandles) {
                 handle.close();
             }
+        }
+    }
+
+    /**
+     * Shows how a real embedding system actually gets parallelism out of {@link MultiGraphSearcher}
+     * once it's serving many concurrent client queries: not by fanning one query's shards out across an
+     * executor, but by running queries concurrently -- {@code IntStream.range(0, n).parallel()} here,
+     * a thread pool in a real server -- with each worker thread owning its own {@link MultiGraphSearcher}
+     * via {@link ExplicitThreadLocal}, doing plain sequential per-shard search within that thread.
+     * <p>
+     * This mirrors exactly how {@code MultiShardBench}/{@code BenchYAML} measure multi-shard throughput.
+     * An earlier version of both this example and that benchmark instead tried to parallelize a single
+     * query's shard fan-out via a shared executor -- {@link MultiGraphSearcher} holds mutable per-call
+     * search state and each shard's {@code GraphSearcher}/{@code View} isn't safe to share across
+     * concurrently-running searches, so that only pays off when there's truly one query in flight at a
+     * time; real query concurrency (many independent callers, each searching all shards) is what
+     * actually keeps every core busy, and per-thread searcher instances are what make that safe.
+     */
+    private static void demonstrateConcurrentQueries(List<ShardHandle> shardHandles, List<ImmutableGraphIndex> shards,
+                                                       int topK, Random random) throws Exception
+    {
+        int numQueries = 2000;
+        List<VectorFloat<?>> queries = new ArrayList<>(numQueries);
+        for (int i = 0; i < numQueries; i++) {
+            queries.add(randomUnitVector(random, DIMENSION));
+        }
+
+        System.out.printf("%n=== Concurrent queries: %d independent client searches across all %d shards ===%n",
+                numQueries, shards.size());
+        System.out.println("(each worker thread owns its own MultiGraphSearcher via ExplicitThreadLocal; "
+                + "common pool parallelism=" + java.util.concurrent.ForkJoinPool.getCommonPoolParallelism() + ")");
+
+        Set<Long> threadsUsed = ConcurrentHashMap.newKeySet();
+        try (ExplicitThreadLocal<MultiGraphSearcher> searcherPool =
+                     ExplicitThreadLocal.withInitial(() -> MultiGraphSearcher.builder(shards).build())) {
+            long start = System.nanoTime();
+            IntStream.range(0, numQueries).parallel().forEach(i -> {
+                threadsUsed.add(Thread.currentThread().getId());
+                MultiGraphSearcher searcher = searcherPool.get();
+                VectorFloat<?> q = queries.get(i);
+                List<SearchScoreProvider> providers = shardHandles.stream()
+                        .map(h -> DefaultSearchScoreProvider.exact(q, SIMILARITY, h.ravv))
+                        .collect(Collectors.toList());
+                searcher.search(providers, topK, topK * 2);
+            });
+            long elapsedNanos = System.nanoTime() - start;
+
+            double qps = numQueries / (elapsedNanos / 1_000_000_000.0);
+            System.out.printf("%,d queries in %.3f ms across %d worker threads: %,.1f qps%n",
+                    numQueries, elapsedNanos / 1_000_000.0, threadsUsed.size(), qps);
         }
     }
 

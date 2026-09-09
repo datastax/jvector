@@ -46,6 +46,7 @@ import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
@@ -64,6 +65,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.stream.IntStream;
 
 /**
  * Compares {@link MultiGraphSearcher} against a traditional, unsharded single-index search over the
@@ -92,7 +94,8 @@ import java.util.function.IntFunction;
  * {@link DataSet#getGroundTruth()}. A shard count of 1 is included deliberately: since it goes through
  * the exact same build/search code as every other configuration, it isolates {@link MultiGraphSearcher}'s
  * own overhead from the effect of sharding itself, and serves as the apples-to-apples single-index
- * baseline for comparison.
+ * baseline for comparison -- which requires {@link #search} to measure throughput the same way
+ * {@link Grid}'s {@code ThroughputBenchmark} does (see that method's javadoc for why).
  * <p>
  * Two things {@link Grid} supports are deliberately out of scope here: index caching
  * ({@code ConstructionParameters.useSavedIndexIfExists}) -- every configuration builds its shards fresh
@@ -291,7 +294,7 @@ public final class MultiShardBench {
                                                 int numShards, int M, int efConstruction, float neighborOverflow,
                                                 boolean addHierarchy, boolean refineFinalGraph, String buildCompressorLabel,
                                                 String searchCompressorLabel, boolean usePruning, int topK,
-                                                double overquery, int rerankK) throws IOException
+                                                double overquery, int rerankK) throws Exception
     {
         SearchStats stats = search(ds, shardHandles, shardOffsets, searchCvs, features, vsf, topK, rerankK);
 
@@ -363,10 +366,32 @@ public final class MultiShardBench {
      * Searches every query across all shards via {@link MultiGraphSearcher}, timing each call and
      * translating shard-local ordinals back to dataset-global ordinals so recall can be computed with
      * the existing {@link AccuracyMetrics} machinery unchanged.
+     * <p>
+     * Queries run <b>concurrently</b>, via {@code IntStream.range(0, n).parallel().forEach(...)}
+     * dispatched onto the JVM's common {@link java.util.concurrent.ForkJoinPool} -- deliberately
+     * mirroring {@code Grid}'s own {@code ThroughputBenchmark#runBenchmark}, which measures QPS the
+     * same way: the full query set fired via a parallel stream, with {@code ConfiguredSystem.searchers}
+     * (an {@link ExplicitThreadLocal ExplicitThreadLocal&lt;GraphSearcher&gt;}) giving each worker
+     * thread its own private searcher/view so concurrent queries never contend on shared search state.
+     * {@code searcherPool} here plays that same role for {@link MultiGraphSearcher}. This match matters:
+     * an earlier version of this method searched queries one at a time in a single-threaded loop, so its
+     * "qps" was single-thread latency-bound throughput being compared directly against Grid's
+     * many-cores-concurrent throughput number -- a benchmark-methodology mismatch that looked exactly
+     * like a ~4x MultiGraphSearcher regression at {@code numShards=1} but had nothing to do with
+     * {@link MultiGraphSearcher} itself (confirmed independently: a single-threaded microbenchmark
+     * comparing raw {@code GraphSearcher} against {@link MultiGraphSearcher} for one shard found no
+     * measurable difference between them).
+     * <p>
+     * Per-shard fan-out within one query is deliberately left sequential (no executor configured on
+     * {@link MultiGraphSearcher}) now that concurrency comes from queries running in parallel, like
+     * Grid -- nesting a second, bounded, shared pool (e.g. {@link PhysicalCoreExecutor}) for intra-query
+     * shard fan-out underneath this outer per-query parallelism would risk starvation, since
+     * {@code MultiGraphSearcher.dispatchInParallel} blocks on a plain {@code Future.get()} with no
+     * {@code ForkJoinPool} join-compensation.
      */
     private static SearchStats search(DataSet ds, List<ShardHandle> shardHandles, int[] shardOffsets,
                                        CompressedVectors[] searchCvs, Set<FeatureId> features, VectorSimilarityFunction vsf,
-                                       int topK, int rerankK) throws IOException
+                                       int topK, int rerankK) throws Exception
     {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
@@ -375,15 +400,17 @@ public final class MultiShardBench {
             shards.add(h.graph);
         }
 
-        try (MultiGraphSearcher searcher = MultiGraphSearcher.builder(shards).build()) {
+        try (ExplicitThreadLocal<MultiGraphSearcher> searcherPool =
+                     ExplicitThreadLocal.withInitial(() -> MultiGraphSearcher.builder(shards).build())) {
             int n = queryVectors.size();
-            List<SearchResult> results = new ArrayList<>(n);
+            SearchResult[] results = new SearchResult[n];
             long[] latenciesNanos = new long[n];
-            long totalNanos = 0;
-            long totalRounds = 0;
-            long totalVisited = 0;
+            long[] roundsUsed = new long[n];
+            long[] visitedCounts = new long[n];
 
-            for (int i = 0; i < n; i++) {
+            long wallStart = System.nanoTime();
+            IntStream.range(0, n).parallel().forEach(i -> {
+                MultiGraphSearcher searcher = searcherPool.get();
                 VectorFloat<?> query = queryVectors.get(i);
                 List<SearchScoreProvider> providers = new ArrayList<>(shardHandles.size());
                 for (int s = 0; s < shardHandles.size(); s++) {
@@ -392,23 +419,26 @@ public final class MultiShardBench {
 
                 long t0 = System.nanoTime();
                 ShardedSearchResult sr = searcher.search(providers, topK, rerankK);
-                long elapsed = System.nanoTime() - t0;
-                latenciesNanos[i] = elapsed;
-                totalNanos += elapsed;
-                totalRounds += sr.getRoundsUsed();
-                totalVisited += sr.getVisitedCount();
+                latenciesNanos[i] = System.nanoTime() - t0;
+                roundsUsed[i] = sr.getRoundsUsed();
+                visitedCounts[i] = sr.getVisitedCount();
+                results[i] = toGlobalSearchResult(sr, shardOffsets);
+            });
+            long wallNanos = System.nanoTime() - wallStart;
 
-                results.add(toGlobalSearchResult(sr, shardOffsets));
-            }
-
-            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, topK, topK);
+            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, Arrays.asList(results), topK, topK);
+            long totalNanos = Arrays.stream(latenciesNanos).sum();
             double meanLatencyMs = (totalNanos / (double) n) / 1_000_000.0;
-            double qps = totalNanos > 0 ? n / (totalNanos / 1_000_000_000.0) : 0.0;
+            double qps = wallNanos > 0 ? n / (wallNanos / 1_000_000_000.0) : 0.0;
 
-            Arrays.sort(latenciesNanos);
+            long[] sortedLatencies = latenciesNanos.clone();
+            Arrays.sort(sortedLatencies);
             int p99Index = (int) Math.ceil(0.99 * n) - 1;
             p99Index = Math.min(Math.max(p99Index, 0), n - 1);
-            double p99LatencyMs = latenciesNanos[p99Index] / 1_000_000.0;
+            double p99LatencyMs = sortedLatencies[p99Index] / 1_000_000.0;
+
+            long totalRounds = Arrays.stream(roundsUsed).sum();
+            long totalVisited = Arrays.stream(visitedCounts).sum();
 
             return new SearchStats(recall, meanLatencyMs, p99LatencyMs, qps,
                     totalRounds / (double) n, totalVisited / (double) n);

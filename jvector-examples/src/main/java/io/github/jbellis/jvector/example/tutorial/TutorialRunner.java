@@ -16,10 +16,8 @@
 
 package io.github.jbellis.jvector.example.tutorial;
 
-import java.io.IOException;
-
 public class TutorialRunner {
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
         if (args.length != 1) {
             throw new IllegalArgumentException("Please pick an example");
         }
