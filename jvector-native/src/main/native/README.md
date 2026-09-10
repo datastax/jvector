@@ -16,9 +16,9 @@ limitations under the License.
 
 # JVector Native SIMD Library
 
-This directory contains the C++ source for `libjvector.so`, the native SIMD
-backend that accelerates vector operations in JVector via the Java Foreign
-Function & Memory (FFM) API.
+This directory contains the C++ source for `libjvector-x86_64.so` and
+`libjvector-aarch64.so`, the native SIMD backends that accelerate vector
+operations in JVector via the Java Foreign Function & Memory (FFM) API.
 
 > **Platform support:** Currently enabled on **Linux x86-64** (SSE4.2, AVX2,
 > AVX-512) and **Linux AArch64** (NEON, SVE, SVE2). Windows and macOS are not
@@ -37,8 +37,10 @@ jvector_simd_kernel_list.h    - X-Macro table: single source of truth for all ke
 jvector_cpu_features.h        - CPUID/XGETBV-based CPU feature detection
 assert_hwy_targets.h          - Compile-time assertions that the expected HWY target is active
 meson.build                   - Build description
+aarch64-cross.ini             - Meson cross-compile file: build aarch64 from an x86_64 host
+x86_64-cross.ini              - Meson cross-compile file: build x86_64 from an aarch64 host
 jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
-build_native_lib.sh           - Build the native library
+build_native_lib.sh           - Build the native library (native arch + optional cross-compile)
 third_party/highway/          - Google Highway header-only library (git submodule)
 ```
 
@@ -69,21 +71,27 @@ third_party/highway/          - Google Highway header-only library (git submodul
 Run the build script from this directory:
 
 ```bash
-bash build_native_lib.sh [buildtype]
+bash build_native_lib.sh [buildtype] [crossarch]
 ```
 
-The `buildtype` parameter is optional and defaults to `release`. Valid values are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+Parameters (all optional):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
+| `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
 
 The script:
-1. Verifies prerequisites (g++, meson, ninja, Highway submodule).
-2. Runs `meson setup ../../../target/meson-build --wipe --buildtype=<buildtype>` then `meson compile`.
-3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
-   `LibraryLoader` expects it.
+1. Detects the host arch via `uname -m` (x86_64 or aarch64).
+2. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
+4. If `crossarch=true`, also cross-compiles the **other arch** library into
+   `target/meson-build-<other-arch>/` using the bundled cross-compile file.
+5. Copies each built `.so` to `src/main/resources/libjvector-<arch>.so`.
+   Debug symbols are stripped from the resource copy and saved separately as
+   `target/meson-build-<arch>/libjvector-<arch>.so.debug`.
 
-To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
+To install all required dependencies automatically and then build, pass `--auto-install-deps` as the first argument:
 
 ```bash
 bash build_native_lib.sh --auto-install-deps
@@ -93,40 +101,107 @@ This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
 
+### Cross-compilation
+
+Both `.so` files can be produced on a single machine without access to the
+target hardware.
+
+#### Build aarch64 from an x86_64 host
+
+Install the cross-toolchain:
+
+```bash
+sudo apt-get install -y g++-aarch64-linux-gnu
+```
+
+Build both libraries:
+
+```bash
+bash build_native_lib.sh release true
+# produces: src/main/resources/libjvector-x86_64.so
+#           src/main/resources/libjvector-aarch64.so
+```
+
+#### Build x86_64 from an aarch64 host
+
+Install the cross-toolchain:
+
+```bash
+sudo apt-get install -y g++-x86-64-linux-gnu
+```
+
+Build both libraries:
+
+```bash
+bash build_native_lib.sh release true
+# produces: src/main/resources/libjvector-aarch64.so
+#           src/main/resources/libjvector-x86_64.so
+```
+
+The cross-compile file used for each direction lives in this directory:
+
+| File | Direction |
+|------|-----------|
+| [`aarch64-cross.ini`](../aarch64-cross.ini) | x86_64 host → aarch64 target |
+| [`x86_64-cross.ini`](../x86_64-cross.ini) | aarch64 host → x86_64 target |
+
+Meson reads the cross file (via `--cross-file`) and sets
+`host_machine.cpu_family` to the target arch, which causes `meson.build` to
+select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
+
 ### Building with Maven
 
 From the project root, you can build the native module using Maven:
 
-**Release build (default):**
+**Native arch only — release (default):**
 ```bash
 mvn clean install
 ```
 
-**Debug build:**
+**Native arch only — debug:**
 ```bash
 mvn clean install -Dnative.debug
 ```
 
-**Debug-optimized build:**
+**Native arch only — debug-optimized:**
 ```bash
 mvn clean install -Dnative.debugoptimized
 ```
 
-The Maven build automatically invokes the `build_native_lib.sh` script with the
-appropriate buildtype parameter. The available profiles are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+**Both architectures (native + cross-compiled):**
+```bash
+mvn clean install -Dnative.crossarch
+```
+
+**Both architectures, debug build:**
+```bash
+mvn clean install -Dnative.crossarch -Dnative.debug
+```
+
+The `-Dnative.crossarch` flag activates the `native.crossarch` Maven profile,
+which passes `crossarch=true` as the second argument to `build_native_lib.sh`.
+Without it, only the library for the host architecture is built.
 
 ### Manual meson build
 
+**Native build:**
 ```bash
 cd jvector-native/src/main/native
-meson setup ../../../target/meson-build --wipe --buildtype=release
-meson compile -C ../../../target/meson-build
+meson setup ../../../target/meson-build-x86_64 . --wipe --buildtype=release
+meson compile -C ../../../target/meson-build-x86_64
 ```
 
-The output is `target/meson-build/libjvector.so.<version>` (relative to the project root).
+**Cross-compile aarch64 from x86_64:**
+```bash
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build-aarch64 . --wipe \
+    --cross-file aarch64-cross.ini --buildtype=release
+meson compile -C ../../../target/meson-build-aarch64
+```
+
+The versioned output (e.g. `libjvector.so.0.1.0`) is the real file; copy and
+rename it to `src/main/resources/libjvector-<arch>.so` to make it available to
+`LibraryLoader`.
 
 ### Generating Java bindings for native code
 
@@ -307,8 +382,9 @@ Java caller
 
 1. `NativeVectorizationProvider` calls `LibraryLoader.loadJvector()` at startup.
 2. `LibraryLoader` first tries `System.loadLibrary("jvector")` (picks up a
-   system-installed `.so`), then falls back to extracting `libjvector.so` from
-   the JAR's resources and loading it from a temp file.
+   system-installed `.so`), then falls back to reading `os.arch` to select the
+   correct resource name (`libjvector-x86_64.so` or `libjvector-aarch64.so`),
+   extracting it from the JAR, and loading it from a temp file.
 3. On first call into `NativeSimdOps`, the FFM `SymbolLookup` resolves each
    exported symbol directly against the loaded library.
 
