@@ -14,6 +14,8 @@
     <properties>
         <native.buildtype>release</native.buildtype>
         <native.jextract.skip>true</native.jextract.skip>
+        <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
+        <native.crossarch>false</native.crossarch>
     </properties>
     <build>
         <plugins>
@@ -89,12 +91,24 @@
                 <native.buildtype>release</native.buildtype>
             </properties>
         </profile>
+        <!-- Activate with -Dnative.crossarch to also cross-compile for the other arch -->
+        <profile>
+            <id>native.crossarch</id>
+            <activation>
+                <property>
+                    <name>native.crossarch</name>
+                </property>
+            </activation>
+            <properties>
+                <native.crossarch>true</native.crossarch>
+            </properties>
+        </profile>
+
         <profile>
             <id>unix-amd64-profile</id>
             <activation>
                 <os>
-                    <family>unix</family>
-                    <arch>amd64</arch>
+                    <name>Linux</name>
                 </os>
             </activation>
             <build>
@@ -157,6 +171,7 @@
                                     <arguments>
                                         <argument>build_native_lib.sh</argument>
                                         <argument>${native.buildtype}</argument>
+                                        <argument>${native.crossarch}</argument>
                                     </arguments>
                                     <skip>false</skip>
                                     <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>

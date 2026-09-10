@@ -16,16 +16,13 @@ limitations under the License.
 
 # JVector Native SIMD Library
 
-This directory contains the C++ source for `libjvector.so`, the native SIMD
-backend that accelerates vector operations in JVector via the Java Foreign
-Function & Memory (FFM) API.
+This directory contains the C++ source for `libjvector-x86_64.so` and
+`libjvector-aarch64.so`, the native SIMD backends that accelerate vector
+operations in JVector via the Java Foreign Function & Memory (FFM) API.
 
 > **Platform support:** Currently enabled on **Linux x86-64** (SSE4.2, AVX2,
-> and AVX-512). Windows and macOS are not yet supported. Support for **ARM**
-> (NEON and SVE) is planned for the near future; the
-> [Google Highway](https://github.com/google/highway) library used for SIMD
-> portability already targets both AArch64 targets, which will make the
-> extension straightforward.
+> AVX-512) and **Linux AArch64** (NEON, SVE, SVE2). Windows and macOS are not
+> yet supported.
 
 ---
 
@@ -40,8 +37,10 @@ jvector_simd_kernel_list.h    - X-Macro table: single source of truth for all ke
 jvector_cpu_features.h        - CPUID/XGETBV-based CPU feature detection
 assert_hwy_targets.h          - Compile-time assertions that the expected HWY target is active
 meson.build                   - Build description
+aarch64-cross.ini             - Meson cross-compile file: build aarch64 from an x86_64 host
+x86_64-cross.ini              - Meson cross-compile file: build x86_64 from an aarch64 host
 jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
-build_native_lib.sh           - Build the native library
+build_native_lib.sh           - Build the native library (native arch + optional cross-compile)
 third_party/highway/          - Google Highway header-only library (git submodule)
 ```
 
@@ -53,31 +52,46 @@ third_party/highway/          - Google Highway header-only library (git submodul
 
 | Tool | Minimum version | Notes |
 |------|----------------|-------|
-| g++ / clang++ | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (x86-64) | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (AArch64) | GCC 11+ | All three tiers (NEON, SVE, SVE2) built |
+| clang++ (x86-64) | Clang any recent | Must support `-march=skylake-avx512` (Clang 7+) |
+| clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |
 | [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
 | Git submodules | — | `git submodule update --init` (needed once) |
+
+> **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
+> automatically skipped at configure time (`meson setup` prints a warning).
+> The resulting library contains only the NEON tier and falls back to it at
+> runtime even on SVE2-capable hardware (e.g. Graviton 4).  Upgrade to
+> Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
 
 ### Build steps
 
 Run the build script from this directory:
 
 ```bash
-bash build_native_lib.sh [buildtype]
+bash build_native_lib.sh [buildtype] [crossarch]
 ```
 
-The `buildtype` parameter is optional and defaults to `release`. Valid values are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+Parameters (all optional):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
+| `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
 
 The script:
-1. Verifies prerequisites (g++, meson, ninja, Highway submodule).
-2. Runs `meson setup ../../../target/meson-build --wipe --buildtype=<buildtype>` then `meson compile`.
-3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
-   `LibraryLoader` expects it.
+1. Detects the host arch via `uname -m` (x86_64 or aarch64).
+2. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
+4. If `crossarch=true`, also cross-compiles the **other arch** library into
+   `target/meson-build-<other-arch>/` using the bundled cross-compile file.
+5. Copies each built `.so` to `src/main/resources/libjvector-<arch>.so`.
+   Debug symbols are stripped from the resource copy and saved separately as
+   `target/meson-build-<arch>/libjvector-<arch>.so.debug`.
 
-To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
+To install all required dependencies automatically and then build, pass `--auto-install-deps` as the first argument:
 
 ```bash
 bash build_native_lib.sh --auto-install-deps
@@ -87,40 +101,107 @@ This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
 
+### Cross-compilation
+
+Both `.so` files can be produced on a single machine without access to the
+target hardware.
+
+#### Build aarch64 from an x86_64 host
+
+Install the cross-toolchain:
+
+```bash
+sudo apt-get install -y g++-aarch64-linux-gnu
+```
+
+Build both libraries:
+
+```bash
+bash build_native_lib.sh release true
+# produces: src/main/resources/libjvector-x86_64.so
+#           src/main/resources/libjvector-aarch64.so
+```
+
+#### Build x86_64 from an aarch64 host
+
+Install the cross-toolchain:
+
+```bash
+sudo apt-get install -y g++-x86-64-linux-gnu
+```
+
+Build both libraries:
+
+```bash
+bash build_native_lib.sh release true
+# produces: src/main/resources/libjvector-aarch64.so
+#           src/main/resources/libjvector-x86_64.so
+```
+
+The cross-compile file used for each direction lives in this directory:
+
+| File | Direction |
+|------|-----------|
+| [`aarch64-cross.ini`](../aarch64-cross.ini) | x86_64 host → aarch64 target |
+| [`x86_64-cross.ini`](../x86_64-cross.ini) | aarch64 host → x86_64 target |
+
+Meson reads the cross file (via `--cross-file`) and sets
+`host_machine.cpu_family` to the target arch, which causes `meson.build` to
+select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
+
 ### Building with Maven
 
 From the project root, you can build the native module using Maven:
 
-**Release build (default):**
+**Native arch only — release (default):**
 ```bash
 mvn clean install
 ```
 
-**Debug build:**
+**Native arch only — debug:**
 ```bash
 mvn clean install -Dnative.debug
 ```
 
-**Debug-optimized build:**
+**Native arch only — debug-optimized:**
 ```bash
 mvn clean install -Dnative.debugoptimized
 ```
 
-The Maven build automatically invokes the `build_native_lib.sh` script with the
-appropriate buildtype parameter. The available profiles are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+**Both architectures (native + cross-compiled):**
+```bash
+mvn clean install -Dnative.crossarch
+```
+
+**Both architectures, debug build:**
+```bash
+mvn clean install -Dnative.crossarch -Dnative.debug
+```
+
+The `-Dnative.crossarch` flag activates the `native.crossarch` Maven profile,
+which passes `crossarch=true` as the second argument to `build_native_lib.sh`.
+Without it, only the library for the host architecture is built.
 
 ### Manual meson build
 
+**Native build:**
 ```bash
 cd jvector-native/src/main/native
-meson setup ../../../target/meson-build --wipe --buildtype=release
-meson compile -C ../../../target/meson-build
+meson setup ../../../target/meson-build-x86_64 . --wipe --buildtype=release
+meson compile -C ../../../target/meson-build-x86_64
 ```
 
-The output is `target/meson-build/libjvector.so.<version>` (relative to the project root).
+**Cross-compile aarch64 from x86_64:**
+```bash
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build-aarch64 . --wipe \
+    --cross-file aarch64-cross.ini --buildtype=release
+meson compile -C ../../../target/meson-build-aarch64
+```
+
+The versioned output (e.g. `libjvector.so.0.1.0`) is the real file; copy and
+rename it to `src/main/resources/libjvector-<arch>.so` to make it available to
+`LibraryLoader`.
 
 ### Generating Java bindings for native code
 
@@ -271,25 +352,39 @@ JVECTOR_MAX_ISA=sse42 ../../../target/meson-build/bench_simd_kernels
 
 ## How it is integrated into JVector
 
+**x86-64:**
 ```
 Java caller
   └─ NativeVectorUtilSupport   (jvector-native/.../vector/)
        └─ NativeSimdOps        (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
             └─ libjvector.so   (this library, loaded at runtime by LibraryLoader)
                  └─ jvector_simd.cpp — dispatches to the best ISA vtable
-                      ├─ AVX3_SPR::* (compiled with -march=skylake-avx512 -mavx512fp16 …, Sapphire Rapids)
-                      ├─ AVX3_DL::*  (compiled with -march=skylake-avx512 -mavx512vnni …, Ice Lake)
+                      ├─ AVX3_SPR::* (compiled with -march=sapphirerapids)
+                      ├─ AVX3_DL::*  (compiled with -march=icelake-server)
                       ├─ AVX3::*     (compiled with -march=skylake-avx512)
                       ├─ AVX2::*     (compiled with -march=haswell)
                       └─ SSE42::*    (compiled with -msse4.2, scalar fallback)
+```
+
+**AArch64:**
+```
+Java caller
+  └─ NativeVectorUtilSupport   (jvector-native/.../vector/)
+       └─ NativeSimdOps        (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
+            └─ libjvector.so   (this library, loaded at runtime by LibraryLoader)
+                 └─ jvector_simd.cpp — dispatches to the best ISA vtable
+                      ├─ SVE2::*  (compiled with -march=armv9-a+sve2,   scalable VL)
+                      ├─ SVE::*   (compiled with -march=armv8.4-a+sve,  scalable VL)
+                      └─ NEON::*  (compiled with -march=armv8-a+crypto, baseline)
 ```
 
 ### Load sequence
 
 1. `NativeVectorizationProvider` calls `LibraryLoader.loadJvector()` at startup.
 2. `LibraryLoader` first tries `System.loadLibrary("jvector")` (picks up a
-   system-installed `.so`), then falls back to extracting `libjvector.so` from
-   the JAR's resources and loading it from a temp file.
+   system-installed `.so`), then falls back to reading `os.arch` to select the
+   correct resource name (`libjvector-x86_64.so` or `libjvector-aarch64.so`),
+   extracting it from the JAR, and loading it from a temp file.
 3. On first call into `NativeSimdOps`, the FFM `SymbolLookup` resolves each
    exported symbol directly against the loaded library.
 
@@ -297,9 +392,10 @@ Java caller
 
 Dispatch happens **once** at C++ static-init time (before `main()`):
 
-1. `populate_cpu_features()` issues CPUID / XGETBV and fills a feature array.
-2. `dispatch_kernels()` checks the feature array in descending capability order
-   (`AVX3` ⊃ `AVX2` ⊃ `SSE42`) and returns a copy of the matching `KernelVTable`.
+1. `populate_cpu_features()` issues CPUID / XGETBV (x86) or `getauxval` (AArch64) and fills a feature array.
+2. `dispatch_kernels()` checks the feature array in descending capability order and returns a copy of the matching `KernelVTable`:
+   - x86-64: `AVX3_SPR` ⊃ `AVX3_DL` ⊃ `AVX3` ⊃ `AVX2` ⊃ `SSE42`
+   - AArch64: `SVE2` ⊃ `SVE` ⊃ `NEON`
 3. All public API functions are one-liner wrappers that call through
    `kernels.<fn>`.
 
@@ -308,15 +404,23 @@ Dispatch happens **once** at C++ static-init time (before `main()`):
 Set the `JVECTOR_MAX_ISA` environment variable before starting the JVM to cap
 the selected ISA without recompiling:
 
+**x86-64:**
 ```bash
 JVECTOR_MAX_ISA=avx3_spr java ...   # use Sapphire-Rapids FP16 tier
 JVECTOR_MAX_ISA=avx3_dl  java ...   # use Ice Lake tier
-JVECTOR_MAX_ISA=avx3  java ...      # use AVX-512 even if a higher tier is available
-JVECTOR_MAX_ISA=avx2  java ...      # use AVX2 even on an AVX-512 machine
-JVECTOR_MAX_ISA=sse42 java ...      # force scalar/SSE4.2 fallback
+JVECTOR_MAX_ISA=avx3     java ...   # use AVX-512 even if a higher tier is available
+JVECTOR_MAX_ISA=avx2     java ...   # use AVX2 even on an AVX-512 machine
+JVECTOR_MAX_ISA=sse42    java ...   # force scalar/SSE4.2 fallback
 ```
 
-Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42`.
+**AArch64:**
+```bash
+JVECTOR_MAX_ISA=sve2  java ...   # use SVE2 tier (Graviton 4 / Neoverse V2/N2)
+JVECTOR_MAX_ISA=sve   java ...   # use SVE tier  (Graviton 3 / Neoverse V1)
+JVECTOR_MAX_ISA=neon  java ...   # force NEON baseline
+```
+
+Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42` (x86-64); `sve2`, `sve`, `neon` (AArch64).
 An unrecognised value is silently ignored and full CPU detection is used.
 
 ---

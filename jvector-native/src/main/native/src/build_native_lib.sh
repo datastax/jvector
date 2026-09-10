@@ -30,7 +30,6 @@ NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
 MODULE_ROOT="${REPO_ROOT}/jvector-native"
 
 HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
-BUILD_DIR="${MODULE_ROOT}/target/meson-build"
 RESOURCES_DIR="${MODULE_ROOT}/src/main/resources"
 
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
@@ -45,11 +44,14 @@ if [ "$BUILDTYPE" != "release" ] && [ "$BUILDTYPE" != "debug" ] && [ "$BUILDTYPE
 fi
 printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
 
-mkdir -p "${RESOURCES_DIR}"
+# Accept crossarch flag (default: false).
+# When true, builds both the native arch library AND cross-compiles for the other arch.
+#   On x86_64: builds libjvector-x86_64.so  + cross-compiles libjvector-aarch64.so
+#   On aarch64: builds libjvector-aarch64.so + cross-compiles libjvector-x86_64.so
+CROSSARCH="${2:-false}"
+printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
-# compile jvector_simd_check.cpp as x86-64
-# compile jvector_simd.cpp as skylake-avx512
-# produce one shared library
+mkdir -p "${RESOURCES_DIR}"
 
 # Check that the Google Highway submodule has been initialised
 if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
@@ -83,33 +85,92 @@ require_cmd() {
   fi
 }
 
-require_cmd g++    "sudo apt-get install -y g++"
 require_cmd meson  "sudo apt-get install -y meson"
 require_cmd ninja  "sudo apt-get install -y ninja-build"
 
-# Check g++ version
-CURRENT_GPP_VERSION=$(g++ -dumpversion)
+# ---------------------------------------------------------------------------
+# Detect the host CPU architecture.
+# ---------------------------------------------------------------------------
+HOST_ARCH="$(uname -m)"   # e.g. x86_64 or aarch64
+printf "HOST_ARCH=%s\n" "${HOST_ARCH}"
 
-# Check if the current GCC version is greater than or equal to the minimum required version
-if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head -n1)" != "$MIN_GCC_VERSION" ]; then
-    echo "WARNING: g++ version $CURRENT_GPP_VERSION is too old. Please upgrade to g++ $MIN_GCC_VERSION or newer."
+# ---------------------------------------------------------------------------
+# build_native <arch>
+#   Compiles the library for <arch> using either a native build (when arch ==
+#   HOST_ARCH) or a cross-compile via the bundled cross file.
+#   Output: RESOURCES_DIR/libjvector-<arch>.so
+# ---------------------------------------------------------------------------
+build_native() {
+  local ARCH="$1"
+  local BUILD_DIR="${MODULE_ROOT}/target/meson-build-${ARCH}"
+  local OUT_SO="${RESOURCES_DIR}/libjvector-${ARCH}.so"
+
+  rm -rf "${OUT_SO}"
+
+  if [ "${ARCH}" == "${HOST_ARCH}" ]; then
+    # ---- Native build ------------------------------------------------------
+    require_cmd g++ "sudo apt-get install -y g++"
+
+    CURRENT_GPP_VERSION=$(g++ -dumpversion)
+    if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head -n1)" != "$MIN_GCC_VERSION" ]; then
+      echo "WARNING: g++ version $CURRENT_GPP_VERSION is too old. Please upgrade to g++ $MIN_GCC_VERSION or newer."
+      exit 1
+    fi
+
+    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
+        --wipe \
+        --buildtype="${BUILDTYPE}"
+  else
+    # ---- Cross-compile build -----------------------------------------------
+    # Only x86_64 <-> aarch64 is supported.
+    if [ "${ARCH}" == "aarch64" ]; then
+      CROSS_TOOLCHAIN="aarch64-linux-gnu-g++"
+      CROSS_INSTALL="sudo apt-get install -y g++-aarch64-linux-gnu"
+      CROSS_FILE="${NATIVE_DIR}/aarch64-cross.ini"
+    elif [ "${ARCH}" == "x86_64" ]; then
+      CROSS_TOOLCHAIN="x86_64-linux-gnu-g++"
+      CROSS_INSTALL="sudo apt-get install -y g++-x86-64-linux-gnu"
+      CROSS_FILE="${NATIVE_DIR}/x86_64-cross.ini"
+    else
+      echo "ERROR: No cross-compile support for arch '${ARCH}'." ; exit 1
+    fi
+
+    require_cmd "${CROSS_TOOLCHAIN}" "${CROSS_INSTALL}"
+
+    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
+        --wipe \
+        --cross-file "${CROSS_FILE}" \
+        --buildtype="${BUILDTYPE}"
+  fi
+
+  meson compile -C "${BUILD_DIR}"
+
+  # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
+  SOFILE=$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjvector.so.*' -type f | head -1)
+  if [ -z "${SOFILE}" ]; then
+    echo "ERROR: libjvector.so not found in ${BUILD_DIR} after ${ARCH} build."
     exit 1
+  fi
+  cp "${SOFILE}" "${OUT_SO}"
+  printf "Built: %s\n" "${OUT_SO}"
+}
+
+# ---------------------------------------------------------------------------
+# Determine which archs to build.
+# ---------------------------------------------------------------------------
+if [ "${HOST_ARCH}" == "x86_64" ]; then
+  OTHER_ARCH="aarch64"
+elif [ "${HOST_ARCH}" == "aarch64" ]; then
+  OTHER_ARCH="x86_64"
+else
+  echo "ERROR: Unsupported host architecture '${HOST_ARCH}'. Supported: x86_64, aarch64."
+  exit 1
 fi
 
-rm -rf "${RESOURCES_DIR}/libjvector.so"
+# Always build the native arch.
+build_native "${HOST_ARCH}"
 
-# Configure (--wipe resets any stale configuration) then compile
-meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-    --wipe \
-    --buildtype="${BUILDTYPE}"
-
-meson compile -C "${BUILD_DIR}"
-
-# The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
-# Copy it to src/main/resources/ so Maven packages it into the jar for LibraryLoader.
-SOFILE=$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjvector.so.*' -type f | head -1)
-if [ -z "${SOFILE}" ]; then
-    echo "ERROR: libjvector.so not found in ${BUILD_DIR} after build."
-    exit 1
+# Optionally cross-compile the other arch.
+if [ "${CROSSARCH}" == "true" ]; then
+  build_native "${OTHER_ARCH}"
 fi
-cp "${SOFILE}" "${RESOURCES_DIR}/libjvector.so"
