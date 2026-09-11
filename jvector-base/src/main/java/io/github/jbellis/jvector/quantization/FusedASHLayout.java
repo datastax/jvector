@@ -49,7 +49,7 @@ public final class FusedASHLayout {
     public static final int SCALE_BYTES = Short.BYTES;
     public static final int OFFSET_BYTES = Short.BYTES;
     public static final int LANDMARK_BYTES = Byte.BYTES;
-    public static final int HEADER_BYTES_PER_LANE = SCALE_BYTES + OFFSET_BYTES + LANDMARK_BYTES;
+    public static final int HEADER_BYTES_PER_LANE = AsymmetricHashing.HEADER_BYTES;
 
     public static boolean supportsBitsPerDimension(int bitsPerDimension) {
         return bitsPerDimension == 1 || bitsPerDimension == 2 || bitsPerDimension == 4;
