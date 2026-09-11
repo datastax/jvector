@@ -17,13 +17,19 @@ construction:
         bitsPerDimension: 2
         optimizer: itq
         landmarkCount: 1
+#    - type: PQ
+#      parameters:
+#        m: 197
+#        k: 256
+#        centerData: No
+#        anisotropicThreshold: -1.0
   reranking:
     - FP
-  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+  useSavedIndexIfExists: Yes # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:
-    10: [1.00]
+    10: [1.0, 2.0, 3.0, 4.0]
 #    100: [1.0]
   useSearchPruning: [No]
   compression:
@@ -33,4 +39,10 @@ search:
         bitsPerDimension: 2
         optimizer: itq
         landmarkCount: 1
+#    - type: PQ
+#      parameters:
+#        m: 197
+#        k: 256
+#        centerData: No
+#        anisotropicThreshold: -1.0
 # Run-level controls, such as benchmarks, console, and logging, are in run.yml.
