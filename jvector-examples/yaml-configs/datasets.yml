@@ -9,7 +9,7 @@ jvector-100k:
 #  - e5-base-v2-100k
 #  - e5-large-v2-100k
 #jvector-1M:
-#  - ada002-1M
+  - ada002-1M
 #  - colbert-1M
 #ann-benchmarks:
 #  - glove-25-angular
@@ -24,7 +24,7 @@ jvector-100k:
 #  - dpr-10M
 #  - cap-1M
 #  - cap-6M
-  - cohere-english-v3-1M
+#  - cohere-english-v3-1M
 #  - cohere-english-v3-10M
 #  - mpnet-1m
 #  - tahoe-x1-1m
