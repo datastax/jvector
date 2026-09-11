@@ -31,7 +31,9 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Container for ASH-compressed vectors with a minimal scoring interface.
+ * Container for ASH-compressed vectors with scalar, SIMD, and block scoring.
+ * All public node and block scorers return nonnegative DOT_PRODUCT similarities,
+ * {@code max(0, (1 + rawDotProduct) / 2)}, rather than raw ASH dot products.
  *
  * <p>
  * This class implements the functionality required for:
@@ -41,15 +43,8 @@ import java.util.Objects;
  *   <li>Vectorized versions of scoring</li>
  * </ul>
  *
- * <p>
- * TODO (future work):
- * <ul>
- *   <li>Add a full ASH ScoreFunction aligned with graph search semantics</li>
- *   <li>Support similarityToNeighbor(...) where appropriate</li>
- *   <li>Integrate ASH as a Feature for on-disk graph indexes</li>
- *   <li>Define reranking strategy</li>
- *   <li>Support multi-landmark ASH </li>
- * </ul>
+ * <p>Fused graph neighborhoods are scored separately by {@link FusedASHDecoder},
+ * using the same similarity scale and shared numerical kernels.</p>
  */
 public class ASHVectors implements CompressedVectors {
 
@@ -63,10 +58,11 @@ public class ASHVectors implements CompressedVectors {
         SIMD;
 
         static AshSingleKernel fromProperty() {
-            String v = System.getProperty("jvector.ash.singleKernel", "auto").toLowerCase();
+            String v = System.getProperty("jvector.ash.singleKernel", "auto").trim().toLowerCase(java.util.Locale.ROOT);
             if ("scalar".equals(v)) return SCALAR;
             if ("simd".equals(v))   return SIMD;
-            return AUTO;
+            if ("auto".equals(v)) return AUTO;
+            throw new IllegalArgumentException("jvector.ash.singleKernel must be auto, scalar or simd: " + v);
         }
     }
 
@@ -76,10 +72,11 @@ public class ASHVectors implements CompressedVectors {
         SIMD;
 
         static AshBlockKernel fromProperty() {
-            String v = System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
+            String v = System.getProperty("jvector.ash.blockKernel", "auto").trim().toLowerCase(java.util.Locale.ROOT);
             if ("scalar".equals(v)) return SCALAR;
             if ("simd".equals(v))   return SIMD;
-            return AUTO;
+            if ("auto".equals(v)) return AUTO;
+            throw new IllegalArgumentException("jvector.ash.blockKernel must be auto, scalar or simd: " + v);
         }
     }
 
@@ -100,6 +97,11 @@ public class ASHVectors implements CompressedVectors {
     // Flat row-major sign bits for single-vector SIMD (built lazily, 1-bit path only)
     // Layout: [v0_w0, v0_w1, ... v0_wN, v1_w0, ...]
     private volatile long[] flatPackedVectors = null;
+
+    // Immutable, body-only nibble blocks shared by queries. Header arrays contain
+    // decoded binary16 values; the serialized header remains 40 bits per vector.
+    private final java.util.concurrent.ConcurrentMap<Integer, byte[][]> projectionBlocks =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * Initialize ASHVectors with an array of ASH-compressed vectors.
@@ -212,11 +214,11 @@ public class ASHVectors implements CompressedVectors {
             throw new UnsupportedOperationException("ASH scorer supports DOT_PRODUCT only");
         }
 
-        // Multibit scoring is currently routed through the scalar/reference scorer.
-        // The packed SIMD kernels below are sign-bit-only and remain enabled for 1-bit ASH.
+        // ASHScorer dispatches canonical 2/4-bit projection scoring to SIMD when available.
+        // The packed masked-add path below is specific to one-bit codes.
         if (ash.bitsPerDimension != 1) {
             final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-            return node -> f.similarityTo(compressedVectors[node]);
+            return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
         }
 
         final AshSingleKernel kernel = AshSingleKernel.fromProperty();
@@ -225,7 +227,7 @@ public class ASHVectors implements CompressedVectors {
         // Scalar forced
         if (kernel == AshSingleKernel.SCALAR) {
             final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-            return node -> f.similarityTo(compressedVectors[node]);
+            return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
         }
 
         // AUTO/SIMD: use SIMD scorer only when backend supports masked-load kernel;
@@ -237,8 +239,11 @@ public class ASHVectors implements CompressedVectors {
         }
 
         // Fallback: existing scalar behavior (stable reference)
+        if (kernel == AshSingleKernel.SIMD) {
+            throw new IllegalStateException("ASH single-vector SIMD is unavailable on " + vecUtil.getClass().getName());
+        }
         final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-        return node -> f.similarityTo(compressedVectors[node]);
+        return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
     }
 
     // ============================================================================
@@ -290,7 +295,8 @@ public class ASHVectors implements CompressedVectors {
                     words
             );
 
-            return scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c]) + qp.dotQMu[c] + offsets[node2];
+            return ASHScorer.toSimilarity(scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c])
+                    + qp.dotQMu[c] + offsets[node2]);
         }
 
         @Override
@@ -343,18 +349,14 @@ public class ASHVectors implements CompressedVectors {
 
             final int end = start + count;
             for (int i = start, o = 0; i < end; i++, o++) {
-                out[o] = scorer.similarityTo(vectors[i]);
+                out[o] = ASHScorer.toSimilarity(scorer.similarityTo(vectors[i]));
             }
         }
     }
 
     /**
-     * Returns a scalar reference block scorer.
-     *
-     * <p>
-     * The returned scorer matches {@link #scoreFunctionFor} exactly
-     * and computes each score independently.
-     * </p>
+     * Returns the independent scalar reference scorer, regardless of kernel properties.
+     * Use the overload accepting a block size for automatic or forced SIMD dispatch.
      */
     public ASHBlockScorer blockScorerFor(
             VectorFloat<?> query,
@@ -366,7 +368,7 @@ public class ASHVectors implements CompressedVectors {
         }
 
         ASHScorer.ASHScoreFunction f =
-                scorer.scoreFunctionFor(query, similarityFunction);
+                scorer.scalarScoreFunctionFor(query);
 
         return new LegacyASHBlockScorer(f, compressedVectors);
     }
@@ -376,7 +378,8 @@ public class ASHVectors implements CompressedVectors {
      *
      * <p>
      * This factory selects between a portable scalar implementation and a
-     * SIMD implementation of ASH block scoring (ASH paper, Figure 1 / Table 1).
+     * SIMD implementation. One-bit codes use masked adds; 2/4-bit codes use
+     * nibble lookup tables over interleaved blocks of 8, 16 or 32 vectors.
      * </p>
      *
      * <p>
@@ -388,14 +391,14 @@ public class ASHVectors implements CompressedVectors {
      * </pre>
      *
      * <ul>
-     *   <li><b>auto</b> (default): the active VectorUtilSupport backend determines whether execution is vectorized or scalar</li>
-     *   <li><b>scalar</b>: force the portable scalar register-accumulating implementation</li>
-     *   <li><b>simd</b>: simd: force the block scorer defined in the ASH paper; execution may still be scalar if the active backend does not support masked-load SIMD</li>
+     *   <li><b>auto</b> (default): use SIMD when supported by the active backend</li>
+     *   <li><b>scalar</b>: force portable scalar accumulation</li>
+     *   <li><b>simd</b>: require SIMD; fail if unavailable</li>
      * </ul>
      *
      * <p>
-     * In all cases, accumulation of the masked-add term ⟨q̃, b⟩ is performed in
-     * local scalar registers, ensuring numerical equivalence across backends.
+     * Scorers are numerically equivalent within floating-point accumulation error.
+     * Packed multi-bit bodies are cached per block size and shared across queries.
      * </p>
      */
     public ASHBlockScorer blockScorerFor(
@@ -410,13 +413,24 @@ public class ASHVectors implements CompressedVectors {
             throw new IllegalArgumentException("blockSize must be > 0");
         }
 
-        // Multibit block scoring uses the scalar/reference scorer for now. The
-        // optimized block kernels below assume 1-bit sign reconstruction.
+        if (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) {
+            FusedASHLayout.validateBlockSize(blockSize);
+            return new LutASHBlockScorer(query, blockSize);
+        }
+
+        // Other bit widths retain their canonical scalar reconstruction.
         if (ash.bitsPerDimension != 1) {
+            if (AshBlockKernel.fromProperty() == AshBlockKernel.SIMD) {
+                throw new UnsupportedOperationException("SIMD ASH block scoring supports bitsPerDimension 1, 2 and 4");
+            }
             return blockScorerFor(query, similarityFunction);
         }
 
         final AshBlockKernel kernel = AshBlockKernel.fromProperty();
+        final boolean supportsSimd = VectorizationProvider.getInstance().getVectorUtilSupport().supportsAshMaskedLoad();
+        if (kernel == AshBlockKernel.SIMD && !supportsSimd) {
+            throw new IllegalStateException("ASH masked-add SIMD is unavailable on the active backend");
+        }
 
         // Compute query precompute ONCE (shared by scalar + simd)
         final QueryPrecompute qp = precomputeQuery(query);
@@ -424,7 +438,7 @@ public class ASHVectors implements CompressedVectors {
         // ------------------------------------------------------------
         // Forced scalar path (portable register-accumulator)
         // ------------------------------------------------------------
-        if (kernel == AshBlockKernel.SCALAR) {
+        if (kernel == AshBlockKernel.SCALAR || !supportsSimd) {
             return new ScalarASHBlockScorer(
                     compressedVectors,
                     scales,
@@ -435,11 +449,8 @@ public class ASHVectors implements CompressedVectors {
         }
 
         // ------------------------------------------------------------
-        // SIMD or AUTO path (paper-faithful block kernel)
+        // SIMD path
         // ------------------------------------------------------------
-        // AUTO and SIMD intentionally share the same implementation.
-        // VectorUtilSupport decides whether masked-load is vectorized
-        // or falls back to scalar internally.
         ensurePackedBits(blockSize);
 
         return new SimdASHBlockScorer(
@@ -451,6 +462,74 @@ public class ASHVectors implements CompressedVectors {
                 blockSize,
                 qp
         );
+    }
+
+    private byte[][] packProjectionBlocks(int blockSize) {
+        int count = compressedVectors.length;
+        int bytes = FusedASHLayout.canonicalCodeBytes(d, ash.bitsPerDimension);
+        byte[][] blocks = new byte[count / blockSize + (count % blockSize == 0 ? 0 : 1)][];
+        for (int block = 0; block < blocks.length; block++) {
+            byte[] body = new byte[Math.multiplyExact(bytes, blockSize)];
+            int base = block * blockSize;
+            for (int lane = 0; lane < Math.min(blockSize, count - base); lane++) {
+                byte[] code = compressedVectors[base + lane].extraBits;
+                if (code == null || code.length < bytes) {
+                    throw new IllegalArgumentException("Missing ASH projection code at ordinal " + (base + lane));
+                }
+                for (int i = 0; i < bytes; i++) body[i * blockSize + lane] = code[i];
+            }
+            blocks[block] = body;
+        }
+        return blocks;
+    }
+
+    /** Query-local LUT and dispatch over immutable, container-owned packed blocks. */
+    private final class LutASHBlockScorer implements ASHBlockScorer {
+        private final ASHLutKernel kernel = new ASHLutKernel();
+        private final int blockSize;
+        private final byte[][] blocks;
+        private final float[] lut;
+        private final float[] dotQMu;
+        private final int groups = FusedASHLayout.codeGroups(d, ash.bitsPerDimension);
+
+        LutASHBlockScorer(VectorFloat<?> query, int blockSize) {
+            this.blockSize = blockSize;
+            this.blocks = projectionBlocks.computeIfAbsent(blockSize, ASHVectors.this::packProjectionBlocks);
+            float[] q = new float[ash.originalDimension];
+            for (int i = 0; i < q.length; i++) q[i] = query.get(i);
+            float[] projected = new float[d];
+            VectorUtilSupport backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+            for (int i = 0; i < d; i++) projected[i] = backend.ashDotRow(ash.stiefelTransform.AFloat[i], q);
+            lut = new float[Math.multiplyExact(groups, 16)];
+            FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
+            dotQMu = new float[ash.landmarkCount];
+            for (int i = 0; i < dotQMu.length; i++) dotQMu[i] = VectorUtil.dotProduct(query, ash.landmarks[i]);
+        }
+
+        @Override
+        public void scoreRange(int start, int count, float[] out) {
+            Objects.checkFromIndexSize(start, count, compressedVectors.length);
+            Objects.checkFromIndexSize(0, count, out.length);
+            for (int done = 0; done < count;) {
+                int ordinal = start + done;
+                int lane = ordinal % blockSize;
+                int lanes = Math.min(count - done, blockSize - lane);
+                kernel.score(blocks[ordinal / blockSize], 0, groups, blockSize,
+                        lane, lanes, lut, out, done);
+                for (int i = 0; i < lanes; i++) {
+                    int node = ordinal + i;
+                    out[done + i] = ASHScorer.toSimilarity(scales[node] * out[done + i]
+                            + dotQMu[landmarks[node] & 255] + offsets[node]);
+                }
+                done += lanes;
+            }
+        }
+
+        @Override
+        public String toString() { return "LutASHBlockScorer[" + kernel + ", blockSize=" + blockSize + "]"; }
+
+        @Override
+        public String description() { return toString(); }
     }
 
     private void ensurePackedBits(int blockSize) {
@@ -594,10 +673,10 @@ public class ASHVectors implements CompressedVectors {
                     }
                 }
 
-                out[i] =
+                out[i] = ASHScorer.toSimilarity(
                         scales[idx] * (2f * maskedAdd - sumTildeQ[c])
                                 + dotQMu[c]
-                                + offsets[idx];
+                                + offsets[idx]);
             }
         }
     }
@@ -738,11 +817,11 @@ public class ASHVectors implements CompressedVectors {
                 for (int lane = 0; lane < runLen; lane++) {
                     int idx = ord + lane;
                     float m = maskedAdds[lane];
-                    out[idx - start] =
+                    out[idx - start] = ASHScorer.toSimilarity(
                             // scale the 0/1 stored bits to +/-1 for processing.
                             scales[idx] * (2f * m - runSumTildeQ)
                                     + runDotQMu
-                                    + offsets[idx];
+                                    + offsets[idx]);
                 }
 
                 ord += runLen;
@@ -1007,7 +1086,12 @@ public class ASHVectors implements CompressedVectors {
         long vectorsDataSize =
                 (long) ash.compressedVectorSize() * compressedVectors.length;
 
-        return ash.ramBytesUsed() + vectorsArraySize + vectorsDataSize;
+        long projectionCacheBytes = 0;
+        for (byte[][] blocks : projectionBlocks.values()) {
+            projectionCacheBytes += AH_BYTES + (long) REF_BYTES * blocks.length;
+            for (byte[] body : blocks) projectionCacheBytes += RamUsageEstimator.sizeOf(body);
+        }
+        return ash.ramBytesUsed() + vectorsArraySize + vectorsDataSize + projectionCacheBytes;
     }
 
     @Override

@@ -11,6 +11,9 @@ package io.github.jbellis.jvector.quantization;
  */
 public interface ASHBlockScorer {
 
+    /** Human-readable implementation and dispatch details for benchmark diagnostics. */
+    default String description() { return getClass().getSimpleName(); }
+
     /**
      * Score {@code count} vectors starting at {@code start}.
      * Results are written to {@code out[0..count-1]}.
@@ -20,4 +23,3 @@ public interface ASHBlockScorer {
      */
     void scoreRange(int start, int count, float[] out);
 }
-

@@ -36,8 +36,9 @@ import java.util.Objects;
  * existing fused-feature search API while avoiding one-neighbor-at-a-time decode work in the
  * hot graph-expansion loop.</p>
  *
- * <p>This class is the scalar/reference implementation over the final FusedASH block layout.
- * SIMD kernels should consume the same byte layout and produce the same lane scores.</p>
+ * <p>Scalar and SIMD execution share the same packed layout. The property
+ * {@code jvector.ash.blockKernel=auto|scalar|simd} selects execution once per decoder;
+ * forced SIMD fails at construction if the backend cannot provide it.</p>
  *
  * <p>FusedASH has two primary scoring paths:</p>
  *
@@ -55,10 +56,11 @@ import java.util.Objects;
  *   offset = &lt;x, μ&gt; - ||μ||² - scale * &lt;Aμ, code&gt;
  * </pre>
  *
- * <p>Given that encode-time adjustment, query-time scoring is:</p>
+ * <p>Given that encode-time adjustment, the raw dot-product estimate is:</p>
  *
  * <pre>
- *   score = scale * &lt;Aq, code&gt; + &lt;q, μ&gt; + offset
+ *   rawDotProduct = scale * &lt;Aq, code&gt; + &lt;q, μ&gt; + offset
+ *   similarity = max(0, (1 + rawDotProduct) / 2)
  * </pre>
  */
 public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunction {
@@ -99,6 +101,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
     private final float[] queryLut;
     private final float[] dotQMuByLandmark;
+    private final ASHLutKernel kernel = new ASHLutKernel();
 
     private int origin = -1;
 
@@ -203,9 +206,11 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
             return;
         }
 
-        this.origin = origin;
+        // Invalidate before I/O: a failed read must not leave partially replaced scores cached.
+        this.origin = -1;
         packedNeighborhoods.readInto(origin, neighborhoodScratch);
         scoreNeighborhood();
+        this.origin = origin;
     }
 
     /**
@@ -233,7 +238,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
             );
         }
 
-        return sourceScorer.similarityTo(vector);
+        return ASHScorer.toSimilarity(sourceScorer.similarityTo(vector));
     }
 
     @Override
@@ -254,19 +259,26 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
             int laneBase = block * blockSize;
             int lanes = Math.min(blockSize, maxDegree - laneBase);
 
+            kernel.score(neighborhoodScratch, blockOffset,
+                    FusedASHLayout.codeGroups(quantizedDim, bitsPerDimension), blockSize,
+                    0, lanes, queryLut, neighborScores, laneBase);
             for (int lane = 0; lane < lanes; lane++) {
-                neighborScores[laneBase + lane] = FusedASHLayout.scoreLane(
-                        neighborhoodScratch,
-                        blockOffset,
-                        lane,
-                        quantizedDim,
-                        bitsPerDimension,
-                        blockSize,
-                        queryLut,
-                        dotQMuByLandmark);
+                int landmark = FusedASHLayout.readLandmark(neighborhoodScratch, blockOffset,
+                        lane, quantizedDim, bitsPerDimension, blockSize);
+                if (landmark >= dotQMuByLandmark.length) {
+                    throw new IllegalStateException("Invalid FusedASH landmark: " + landmark);
+                }
+                neighborScores[laneBase + lane] = ASHScorer.toSimilarity(FusedASHLayout.readScale(neighborhoodScratch,
+                        blockOffset, lane, quantizedDim, bitsPerDimension, blockSize)
+                        * neighborScores[laneBase + lane] + dotQMuByLandmark[landmark]
+                        + FusedASHLayout.readOffset(neighborhoodScratch, blockOffset,
+                        lane, quantizedDim, bitsPerDimension, blockSize));
             }
         }
     }
+
+    @Override
+    public String toString() { return "FusedASHDecoder[" + kernel + "]"; }
 
     private void precomputeQuery(VectorFloat<?> query, float[] lut, float[] dotQMu) {
         final int D = ash.originalDimension;
