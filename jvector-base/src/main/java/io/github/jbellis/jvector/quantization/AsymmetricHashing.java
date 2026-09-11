@@ -62,15 +62,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Final setting TBD. */
     private static final int TRAINING_ITERS = 25;
 
-    /** Current legacy default: one stored bit per projected dimension. */
+    /** Default number of stored bits per projected dimension. */
     private static final int DEFAULT_BITS_PER_DIMENSION = 2;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: fp16 (16 bits), where scale = ||x − μ|| / ||code||
     //  - offset: fp16 (16 bits), where offset = <x, μ> − ||μ||_2^2
     //  - landmark id: byte (8 bits) in [0, C)
-    public static final int HEADER_BITS =
-            (Short.BYTES + Short.BYTES + Byte.BYTES) * 8; // 40 bits currently
+    public static final int HEADER_BYTES = Short.BYTES + Short.BYTES + Byte.BYTES;
+    public static final int HEADER_BITS = HEADER_BYTES * Byte.SIZE;
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -969,6 +969,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // ---------------------------------------------------------------------
 
     public static class QuantizedVector {
+        // Decoded arithmetic values, rounded to binary16 by encoding/loading.
+        // They are serialized as two bytes each, not as Java float32 fields.
         public float scale; // ||x_i - μ_i*||_2 / ||encoded body||_2
         public float offset; // offset_i = <x_i, μ_i*> - ||μ_i*||^2
         public byte landmark; // c_i*, unsigned [0, C)
@@ -1029,7 +1031,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         public static int serializedSizeBytes(int quantizedDim, int bitsPerDimension) {
-            return Short.BYTES + Short.BYTES + Byte.BYTES
+            return HEADER_BYTES
                     + signWordsForDims(quantizedDim, bitsPerDimension) * Long.BYTES
                     + bodyBytesForDims(quantizedDim, bitsPerDimension);
         }
