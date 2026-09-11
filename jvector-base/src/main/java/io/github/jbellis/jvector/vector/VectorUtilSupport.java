@@ -35,6 +35,51 @@ import java.util.List;
  */
 public interface VectorUtilSupport {
 
+  /** Effective ASH kernel tuning for benchmark diagnostics. */
+  default String ashKernelDescription() { return "portable scalar ASH kernels"; }
+
+  /** Query factories select the tuned entry point once, outside the scoring hot loop. */
+  default boolean usesAshProjectionTuning() { return false; }
+
+  /** Explicitly tuned projection kernel; the ordinary entry point retains its compact default loop. */
+  default float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, dimensions, bitsPerDimension);
+  }
+
+  /** Whether ASH nibble lookup and accumulation are implemented with SIMD. */
+  default boolean supportsAshLutScoring() { return false; }
+
+  /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
+  default boolean supportsAshProjectionScoring() { return false; }
+
+  /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
+  default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    if (bitsPerDimension != 2 && bitsPerDimension != 4) {
+      throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
+    }
+    java.util.Objects.checkFromIndexSize(0, dimensions, query.length);
+    int perByte = 8 / bitsPerDimension;
+    java.util.Objects.checkFromIndexSize(0, dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1), code.length);
+    int sign = 1 << (bitsPerDimension - 1);
+    float sum = 0;
+    for (int i = 0; i < dimensions; i++) {
+      int field = (code[i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
+      float magnitude = (field & (sign - 1)) + 0.5f;
+      sum += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
+    }
+    return sum;
+  }
+
+  /**
+   * Scores contiguous lanes in a byte-interleaved ASH block using a 16-entry LUT per nibble.
+   * Even groups occupy low nibbles; odd groups occupy high nibbles. Each byte row has
+   * {@code stride} lanes. Writes projection dot products, without per-vector headers.
+   */
+  default void ashLutScore(byte[] codes, int offset, int groups, int stride,
+                           int lane, int count, float[] lut, float[] out, int outOffset) {
+    ASHLutScoring.score(codes, offset, groups, stride, lane, count, lut, out, outOffset);
+  }
+
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 

@@ -16,12 +16,15 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
- * Query-time scalar scorer for ASH vectors.
+ * Query-time raw dot-product scorer for ASH vectors, with scalar and SIMD paths.
+ * Graph-facing scorers convert its estimates using {@link #toSimilarity(float)}.
  *
  * <p>
  * The 1-bit path preserves the original ASH decomposition:
@@ -51,6 +54,18 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * NOTE: Only DOT_PRODUCT is supported for now.
  */
 public final class ASHScorer {
+    /**
+     * Converts a raw ASH dot-product estimate to the graph's DOT_PRODUCT similarity
+     * scale. Graph search uses zero as its minimum similarity, including during
+     * hierarchy descent; passing a negative raw dot product can lose the entry point.
+     * Clamp the lower tail because quantization can estimate a dot product below -1.
+     * Kernels and this class's ASHScoreFunction retain raw dot products; node and
+     * block scorer adapters must apply this conversion exactly once.
+     */
+    public static float toSimilarity(float dotProduct) {
+        return Math.max(0f, (1f + dotProduct) / 2f);
+    }
+
     private final AsymmetricHashing ash;
 
     public ASHScorer(AsymmetricHashing ash) {
@@ -100,6 +115,9 @@ public final class ASHScorer {
             return fastScanProjectionDotProductScoreFunction(qp);
         }
 
+        if (ASHVectors.AshSingleKernel.fromProperty() == ASHVectors.AshSingleKernel.SIMD) {
+            throw new UnsupportedOperationException("SIMD ASH projection scoring supports 2 and 4 bits per dimension");
+        }
         return genericMultibitDotProductScoreFunction(qp);
     }
 
@@ -138,10 +156,39 @@ public final class ASHScorer {
         };
     }
 
+    /** Independent scalar oracle for the reference block-scoring API. */
+    ASHScoreFunction scalarScoreFunctionFor(VectorFloat<?> query) {
+        QueryPrecompute qp = precomputeQuery(query);
+        if (ash.bitsPerDimension == 1) return oneBitDotProductScoreFunction(qp);
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
+            return fastScanProjectionDotProductScoreFunction(qp, false);
+        }
+        return genericMultibitDotProductScoreFunction(qp);
+    }
+
     private ASHScoreFunction fastScanProjectionDotProductScoreFunction(QueryPrecompute qp) {
+        final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        final var mode = ASHVectors.AshSingleKernel.fromProperty();
+        if (mode == ASHVectors.AshSingleKernel.SIMD && !backend.supportsAshProjectionScoring()) {
+            throw new IllegalStateException("ASH single-vector SIMD requested, but backend "
+                    + backend.getClass().getName() + " does not support projection scoring");
+        }
+        final boolean simd = mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshProjectionScoring();
+        return fastScanProjectionDotProductScoreFunction(qp, simd);
+    }
+
+    private ASHScoreFunction fastScanProjectionDotProductScoreFunction(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
+        final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+
+        // Keep tuning dispatch out of the per-vector default kernel. Its compact
+        // compilation shape matters for end-to-end scoring throughput on HotSpot.
+        if (simd && backend.usesAshProjectionTuning()) {
+            return v -> v.scale * backend.ashProjectionDotTuned(qp.qProj, v.extraBits, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+        }
 
         return (AsymmetricHashing.QuantizedVector v) -> {
             final int c = v.landmark & 0xFF; // unsigned [0,C)
@@ -150,7 +197,8 @@ public final class ASHScorer {
             // C++ projection-mode scoring:
             //   score = scale * <Aq, code> + <q, μ_c> + stored_offset
             // stored_offset already includes -scale * <Aμ_c, code>.
-            float ip = AsymmetricHashing.dotProjectionCode(
+            float ip = simd ? backend.ashProjectionDot(qp.qProj, v.extraBits, d, bitsPerDimension)
+                    : AsymmetricHashing.dotProjectionCode(
                     qp.qProj,
                     v.extraBits,
                     d,

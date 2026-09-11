@@ -31,8 +31,86 @@ import java.util.Objects;
 import java.util.List;
 
 class PanamaVectorUtilSupport implements VectorUtilSupport {
-    private static final String ASH_BLOCK_KERNEL =
-            System.getProperty("jvector.ash.blockKernel", "mask"); // "lut" or "mask"
+    private static final VectorSpecies<Float> ASH_FLOATS = FloatVector.SPECIES_PREFERRED;
+    private static final VectorSpecies<Integer> ASH_INTS = VectorSpecies.of(
+            int.class, ASH_FLOATS.vectorShape());
+    // Byte loads need only one byte per float lane; conversion part zero widens those lanes.
+    private static final VectorSpecies<Byte> ASH_BYTES = ASH_FLOATS.length() <= 8
+            ? ByteVector.SPECIES_64 : ByteVector.SPECIES_128;
+    private static final int[] ASH_TWO_BIT_QUERY_INDICES = ashQueryIndices(4);
+    private static final int[] ASH_FOUR_BIT_QUERY_INDICES = ashQueryIndices(2);
+
+    private static int[] ashQueryIndices(int dimensionsPerByte) {
+        int[] indices = new int[ASH_FLOATS.length()];
+        for (int i = 0; i < indices.length; i++) indices[i] = i * dimensionsPerByte;
+        return indices;
+    }
+
+    @Override
+    public boolean supportsAshProjectionScoring() { return PanamaASHKernels.supported(); }
+
+    @Override
+    public boolean supportsAshLutScoring() { return PanamaASHKernels.supported(); }
+
+    @Override
+    public String ashKernelDescription() { return PanamaASHKernels.description(); }
+
+    @Override
+    public boolean usesAshProjectionTuning() { return PanamaASHKernels.projectionTuningEnabled(); }
+
+    @Override
+    public float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+        if (!supportsAshProjectionScoring()) {
+            return VectorUtilSupport.super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+        }
+        return PanamaASHKernels.projectionDot(query, code, dimensions, bitsPerDimension);
+    }
+
+    @Override
+    public float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+        if (!supportsAshProjectionScoring()) {
+            return VectorUtilSupport.super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+        }
+        if (bitsPerDimension != 2 && bitsPerDimension != 4) {
+            throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
+        }
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        int perByte = 8 / bitsPerDimension;
+        int bytes = dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1);
+        Objects.checkFromIndexSize(0, bytes, code.length);
+        int sign = 1 << (bitsPerDimension - 1);
+        int[] indices = bitsPerDimension == 2 ? ASH_TWO_BIT_QUERY_INDICES : ASH_FOUR_BIT_QUERY_INDICES;
+        FloatVector sum = FloatVector.zero(ASH_FLOATS);
+        for (int base = 0; base < bytes; base += ASH_FLOATS.length()) {
+            int activeBytes = Math.min(ASH_FLOATS.length(), bytes - base);
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, base,
+                    ASH_BYTES.indexInRange(0, activeBytes)).convertShape(VectorOperators.B2I, ASH_INTS, 0);
+            for (int slot = 0; slot < perByte; slot++) {
+                int remaining = dimensions - base * perByte - slot;
+                if (remaining <= 0) break;
+                int active = Math.min(ASH_FLOATS.length(), (remaining - 1) / perByte + 1);
+                var mask = ASH_FLOATS.indexInRange(0, active);
+                var fields = packed.lanewise(VectorOperators.LSHR, slot * bitsPerDimension);
+                var magnitude = ((FloatVector) fields.and(sign - 1)
+                        .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+                var values = magnitude.blend(magnitude.neg(), fields.and(sign)
+                        .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
+                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, indices, 0, mask);
+                sum = sum.add(q.mul(values));
+            }
+        }
+        return sum.reduceLanes(VectorOperators.ADD);
+    }
+
+    @Override
+    public void ashLutScore(byte[] codes, int offset, int groups, int stride,
+                            int lane, int count, float[] lut, float[] out, int outOffset) {
+        if (!supportsAshLutScoring()) {
+            VectorUtilSupport.super.ashLutScore(codes, offset, groups, stride, lane, count, lut, out, outOffset);
+            return;
+        }
+        PanamaASHKernels.lutScore(codes, offset, groups, stride, lane, count, lut, out, outOffset);
+    }
 
     static final int PREFERRED_BIT_SIZE = FloatVector.SPECIES_PREFERRED.vectorBitSize();
     static {
@@ -1672,95 +1750,290 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
     }
 
-    public float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words) {
-        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED; // Assumed 512-bit (16 floats)
-        int safeWords = d / 64;
+    private static final int ASH_512_ACCUMULATORS =
+            Integer.getInteger("jvector.ash.512.accumulators", 8);
 
-        // 1. Determine Unroll Strategy based on d
-        // We aim for 8 accumulators for large d, but 384 remains at 6.
-        int numAcc = (d >= 512) ? 8 : (d == 384 ? 6 : (d >= 128 ? 4 : 2));
-
-        // Initialize required accumulators
-        FloatVector acc0 = FloatVector.zero(SPEC), acc1 = FloatVector.zero(SPEC);
-        FloatVector acc2 = null, acc3 = null, acc4 = null, acc5 = null, acc6 = null, acc7 = null;
-
-        if (numAcc >= 4) { acc2 = FloatVector.zero(SPEC); acc3 = FloatVector.zero(SPEC); }
-        if (numAcc >= 6) { acc4 = FloatVector.zero(SPEC); acc5 = FloatVector.zero(SPEC); }
-        if (numAcc >= 8) { acc6 = FloatVector.zero(SPEC); acc7 = FloatVector.zero(SPEC); }
-
-        int w = 0;
-
-        // 2. Main Unrolled Loop
-        // For d=384, this uses a 3-word unroll.
-        // For d >= 512, we use a 2-word unroll across 8 registers for better throughput.
-        int unrollFactor = (d == 384) ? 3 : (d >= 512 ? 2 : 1);
-
-        for (; w <= safeWords - unrollFactor; w += unrollFactor) {
-            int baseIdx = qOffset + (w << 6);
-
-            // Word 0 Processing
-            long wd0 = allPackedVectors[packedBase + w];
-            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, wd0 & 0xFFFF));
-            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (wd0 >>> 16) & 0xFFFF));
-            acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (wd0 >>> 32) & 0xFFFF));
-            acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (wd0 >>> 48)));
-
-            if (unrollFactor >= 2) {
-                long wd1 = allPackedVectors[packedBase + w + 1];
-                int b1 = baseIdx + 64;
-                if (numAcc == 6) { // Special Case for d=384 Interleave
-                    acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b1),      VectorMask.fromLong(SPEC, wd1 & 0xFFFF));
-                    acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 16), VectorMask.fromLong(SPEC, (wd1 >>> 16) & 0xFFFF));
-                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 32), VectorMask.fromLong(SPEC, (wd1 >>> 32) & 0xFFFF));
-                    acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 48), VectorMask.fromLong(SPEC, (wd1 >>> 48)));
-                } else { // Standard 8-accumulator path
-                    acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b1),      VectorMask.fromLong(SPEC, wd1 & 0xFFFF));
-                    acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 16), VectorMask.fromLong(SPEC, (wd1 >>> 16) & 0xFFFF));
-                    acc6 = acc6.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 32), VectorMask.fromLong(SPEC, (wd1 >>> 32) & 0xFFFF));
-                    acc7 = acc7.add(FloatVector.fromArray(SPEC, tildeQ, b1 + 48), VectorMask.fromLong(SPEC, (wd1 >>> 48)));
-                }
-            }
-
-            if (unrollFactor == 3) { // Tail of the d=384 case
-                long wd2 = allPackedVectors[packedBase + w + 2];
-                int b2 = baseIdx + 128;
-                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, b2),      VectorMask.fromLong(SPEC, wd2 & 0xFFFF));
-                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 16), VectorMask.fromLong(SPEC, (wd2 >>> 16) & 0xFFFF));
-                acc4 = acc4.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 32), VectorMask.fromLong(SPEC, (wd2 >>> 32) & 0xFFFF));
-                acc5 = acc5.add(FloatVector.fromArray(SPEC, tildeQ, b2 + 48), VectorMask.fromLong(SPEC, (wd2 >>> 48)));
-            }
-        }
-
-        // 3. Cleanup Loop
-        for (; w < safeWords; w++) {
-            int baseIdx = qOffset + (w << 6);
-            long wd = allPackedVectors[packedBase + w];
-            acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx),      VectorMask.fromLong(SPEC, wd & 0xFFFF));
-            acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 16), VectorMask.fromLong(SPEC, (wd >>> 16) & 0xFFFF));
-            if (numAcc >= 4) {
-                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 32), VectorMask.fromLong(SPEC, (wd >>> 32) & 0xFFFF));
-                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, baseIdx + 48), VectorMask.fromLong(SPEC, (wd >>> 48)));
-            }
-        }
-
-        // 4. Dynamic Reduction Tree
-        return performReduction(acc0, acc1, acc2, acc3, acc4, acc5, acc6, acc7, numAcc);
+    public float ashMaskedAdd_512(
+            float[] tildeQ,
+            int qOffset,
+            long[] allPackedVectors,
+            int packedBase,
+            int d,
+            int words) {
+        return ashMaskedAdd_512(
+                tildeQ,
+                qOffset,
+                allPackedVectors,
+                packedBase,
+                d,
+                words,
+                ASH_512_ACCUMULATORS);
     }
 
-    private float performReduction(FloatVector a0, FloatVector a1, FloatVector a2, FloatVector a3,
-                                   FloatVector a4, FloatVector a5, FloatVector a6, FloatVector a7, int count) {
-        FloatVector res;
-        if (count == 8) {
-            FloatVector s01 = a0.add(a1), s23 = a2.add(a3), s45 = a4.add(a5), s67 = a6.add(a7);
-            res = s01.add(s23).add(s45.add(s67));
-        } else if (count == 6) {
-            res = a0.add(a1).add(a2.add(a3)).add(a4.add(a5));
-        } else if (count == 4) {
-            res = a0.add(a1).add(a2.add(a3));
-        } else {
-            res = a0.add(a1);
+    /**
+     * Package-private overload for correctness tests and microbenchmarks.
+     */
+    float ashMaskedAdd_512(
+            float[] tildeQ,
+            int qOffset,
+            long[] allPackedVectors,
+            int packedBase,
+            int d,
+            int words,
+            int accumulatorCount) {
+        if (d < 0) {
+            throw new IllegalArgumentException("d must be nonnegative: " + d);
         }
-        return res.reduceLanes(VectorOperators.ADD);
+
+        int requiredWords = d / 64 + (d % 64 == 0 ? 0 : 1);
+        if (words < requiredWords) {
+            throw new IllegalArgumentException(
+                    "Not enough packed words: required="
+                            + requiredWords
+                            + ", provided="
+                            + words);
+        }
+
+        Objects.checkFromIndexSize(qOffset, d, tildeQ.length);
+        Objects.checkFromIndexSize(packedBase, requiredWords, allPackedVectors.length);
+        // The unrolled kernels below address sixteen float lanes per vector.
+        // Other machines must use the species-width-independent implementation.
+        if (FloatVector.SPECIES_PREFERRED.length() != 16) {
+            if (accumulatorCount != 4 && accumulatorCount != 8) {
+                throw new IllegalArgumentException("accumulatorCount must be 4 or 8");
+            }
+            return ashMaskedAddFlat(tildeQ, qOffset, allPackedVectors, packedBase, d, requiredWords);
+        }
+
+        if (accumulatorCount == 4) {
+            return ashMaskedAdd4(
+                    tildeQ,
+                    qOffset,
+                    allPackedVectors,
+                    packedBase,
+                    d);
+        }
+
+        if (accumulatorCount == 8) {
+            return ashMaskedAdd8(
+                    tildeQ,
+                    qOffset,
+                    allPackedVectors,
+                    packedBase,
+                    d);
+        }
+
+        throw new IllegalArgumentException(
+                "ASH 512 accumulator count must be 4 or 8: "
+                        + accumulatorCount);
+    }
+
+    private float ashMaskedAdd4(
+            float[] tildeQ,
+            int qOffset,
+            long[] packedVectors,
+            int packedBase,
+            int d) {
+        final VectorSpecies<Float> spec = FloatVector.SPECIES_PREFERRED;
+
+        FloatVector acc0 = FloatVector.zero(spec);
+        FloatVector acc1 = FloatVector.zero(spec);
+        FloatVector acc2 = FloatVector.zero(spec);
+        FloatVector acc3 = FloatVector.zero(spec);
+
+        int fullWords = d >>> 6;
+
+        for (int w = 0; w < fullWords; w++) {
+            int qBase = qOffset + (w << 6);
+            long packed = packedVectors[packedBase + w];
+
+            acc0 = addMasked16(acc0, tildeQ, qBase, packed, 0, spec);
+            acc1 = addMasked16(acc1, tildeQ, qBase + 16, packed, 16, spec);
+            acc2 = addMasked16(acc2, tildeQ, qBase + 32, packed, 32, spec);
+            acc3 = addMasked16(acc3, tildeQ, qBase + 48, packed, 48, spec);
+        }
+
+        int remainder = d & 63;
+        if (remainder != 0) {
+            int qBase = qOffset + (fullWords << 6);
+            long packed = packedVectors[packedBase + fullWords];
+
+            if (remainder > 0) {
+                acc0 = addMaskedTail(
+                        acc0, tildeQ, qBase, packed, 0,
+                        Math.min(remainder, 16), spec);
+            }
+            if (remainder > 16) {
+                acc1 = addMaskedTail(
+                        acc1, tildeQ, qBase + 16, packed, 16,
+                        Math.min(remainder - 16, 16), spec);
+            }
+            if (remainder > 32) {
+                acc2 = addMaskedTail(
+                        acc2, tildeQ, qBase + 32, packed, 32,
+                        Math.min(remainder - 32, 16), spec);
+            }
+            if (remainder > 48) {
+                acc3 = addMaskedTail(
+                        acc3, tildeQ, qBase + 48, packed, 48,
+                        remainder - 48, spec);
+            }
+        }
+
+        return reduce4(acc0, acc1, acc2, acc3);
+    }
+
+    private float ashMaskedAdd8(
+            float[] tildeQ,
+            int qOffset,
+            long[] packedVectors,
+            int packedBase,
+            int d) {
+        final VectorSpecies<Float> spec = FloatVector.SPECIES_PREFERRED;
+
+        FloatVector acc0 = FloatVector.zero(spec);
+        FloatVector acc1 = FloatVector.zero(spec);
+        FloatVector acc2 = FloatVector.zero(spec);
+        FloatVector acc3 = FloatVector.zero(spec);
+        FloatVector acc4 = FloatVector.zero(spec);
+        FloatVector acc5 = FloatVector.zero(spec);
+        FloatVector acc6 = FloatVector.zero(spec);
+        FloatVector acc7 = FloatVector.zero(spec);
+
+        int fullWords = d >>> 6;
+        int w = 0;
+
+        // Two packed words produce eight independent SIMD additions.
+        for (; w + 1 < fullWords; w += 2) {
+            int qBase = qOffset + (w << 6);
+
+            long packed0 = packedVectors[packedBase + w];
+            acc0 = addMasked16(acc0, tildeQ, qBase, packed0, 0, spec);
+            acc1 = addMasked16(acc1, tildeQ, qBase + 16, packed0, 16, spec);
+            acc2 = addMasked16(acc2, tildeQ, qBase + 32, packed0, 32, spec);
+            acc3 = addMasked16(acc3, tildeQ, qBase + 48, packed0, 48, spec);
+
+            long packed1 = packedVectors[packedBase + w + 1];
+            int qBase1 = qBase + 64;
+
+            acc4 = addMasked16(acc4, tildeQ, qBase1, packed1, 0, spec);
+            acc5 = addMasked16(acc5, tildeQ, qBase1 + 16, packed1, 16, spec);
+            acc6 = addMasked16(acc6, tildeQ, qBase1 + 32, packed1, 32, spec);
+            acc7 = addMasked16(acc7, tildeQ, qBase1 + 48, packed1, 48, spec);
+        }
+
+        // One remaining complete word.
+        if (w < fullWords) {
+            int qBase = qOffset + (w << 6);
+            long packed = packedVectors[packedBase + w];
+
+            acc0 = addMasked16(acc0, tildeQ, qBase, packed, 0, spec);
+            acc1 = addMasked16(acc1, tildeQ, qBase + 16, packed, 16, spec);
+            acc2 = addMasked16(acc2, tildeQ, qBase + 32, packed, 32, spec);
+            acc3 = addMasked16(acc3, tildeQ, qBase + 48, packed, 48, spec);
+        }
+
+        int remainder = d & 63;
+        if (remainder != 0) {
+            int qBase = qOffset + (fullWords << 6);
+            long packed = packedVectors[packedBase + fullWords];
+
+            if (remainder > 0) {
+                acc4 = addMaskedTail(
+                        acc4, tildeQ, qBase, packed, 0,
+                        Math.min(remainder, 16), spec);
+            }
+            if (remainder > 16) {
+                acc5 = addMaskedTail(
+                        acc5, tildeQ, qBase + 16, packed, 16,
+                        Math.min(remainder - 16, 16), spec);
+            }
+            if (remainder > 32) {
+                acc6 = addMaskedTail(
+                        acc6, tildeQ, qBase + 32, packed, 32,
+                        Math.min(remainder - 32, 16), spec);
+            }
+            if (remainder > 48) {
+                acc7 = addMaskedTail(
+                        acc7, tildeQ, qBase + 48, packed, 48,
+                        remainder - 48, spec);
+            }
+        }
+
+        return reduce8(
+                acc0, acc1, acc2, acc3,
+                acc4, acc5, acc6, acc7);
+    }
+
+    private static FloatVector addMasked16(
+            FloatVector accumulator,
+            float[] values,
+            int valueOffset,
+            long packed,
+            int bitShift,
+            VectorSpecies<Float> spec) {
+        long bits = (packed >>> bitShift) & 0xFFFFL;
+        VectorMask<Float> selected = VectorMask.fromLong(spec, bits);
+
+        return accumulator.add(
+                FloatVector.fromArray(spec, values, valueOffset),
+                selected);
+    }
+
+    private static FloatVector addMaskedTail(
+            FloatVector accumulator,
+            float[] values,
+            int valueOffset,
+            long packed,
+            int bitShift,
+            int laneCount,
+            VectorSpecies<Float> spec) {
+        VectorMask<Float> validLanes =
+                spec.indexInRange(0, laneCount);
+
+        long bits = (packed >>> bitShift) & 0xFFFFL;
+        VectorMask<Float> selected =
+                VectorMask.fromLong(spec, bits).and(validLanes);
+
+        FloatVector vector =
+                FloatVector.fromArray(
+                        spec,
+                        values,
+                        valueOffset,
+                        validLanes);
+
+        return accumulator.add(vector, selected);
+    }
+
+    private static float reduce4(
+            FloatVector acc0,
+            FloatVector acc1,
+            FloatVector acc2,
+            FloatVector acc3) {
+        FloatVector sum01 = acc0.add(acc1);
+        FloatVector sum23 = acc2.add(acc3);
+
+        return sum01.add(sum23)
+                .reduceLanes(VectorOperators.ADD);
+    }
+
+    private static float reduce8(
+            FloatVector acc0,
+            FloatVector acc1,
+            FloatVector acc2,
+            FloatVector acc3,
+            FloatVector acc4,
+            FloatVector acc5,
+            FloatVector acc6,
+            FloatVector acc7) {
+        FloatVector sum01 = acc0.add(acc1);
+        FloatVector sum23 = acc2.add(acc3);
+        FloatVector sum45 = acc4.add(acc5);
+        FloatVector sum67 = acc6.add(acc7);
+
+        return sum01.add(sum23)
+                .add(sum45.add(sum67))
+                .reduceLanes(VectorOperators.ADD);
     }
 
     // This version is optimized for dense masks and uses a masked load, plain add.
