@@ -41,17 +41,20 @@ public class DistancesASH {
     static final String singleMode = System.getProperty("jvector.ash.singleKernel", "auto").toLowerCase();
 
     private static void printScorerInfo(String label, Object scorer) {
-        boolean maskedLoad =
+        var backend =
                 io.github.jbellis.jvector.vector.VectorizationProvider.getInstance()
-                        .getVectorUtilSupport()
-                        .supportsAshMaskedLoad();
+                        .getVectorUtilSupport();
 
         System.out.println(
                 "\t[" + label + "] scorer implementation = "
-                        + scorer.getClass().getName()
+                        + (scorer instanceof ASHBlockScorer
+                            ? ((ASHBlockScorer) scorer).description() : scorer.getClass().getName())
                         + " (singleKernel=" + singleMode
                         + ", blockKernel=" + blockMode
-                        + ", supportsAshMaskedLoad=" + maskedLoad
+                        + ", supportsAshMaskedLoad=" + backend.supportsAshMaskedLoad()
+                        + ", supportsAshLutScoring=" + backend.supportsAshLutScoring()
+                        + ", supportsAshProjectionScoring=" + backend.supportsAshProjectionScoring()
+                        + ", " + backend.ashKernelDescription()
                         + ")"
         );
     }
@@ -59,6 +62,42 @@ public class DistancesASH {
     private static void logProgress(String msg) {
         System.out.println(msg);
         System.out.flush();
+    }
+
+    /** Warm each measured path independently; recall only warms single-vector scoring. */
+    private static void warmupASH(ASHVectors vectors, List<VectorFloat<?>> queries,
+                                  ForkJoinPool executor, int blockSize) {
+        int requested = Integer.parseInt(System.getProperty("jvector.bench.scoringWarmupQueries", "128"));
+        if (requested < 0) throw new IllegalArgumentException("scoringWarmupQueries must be nonnegative");
+        int queryCount = Math.min(requested, queries.size());
+        if (queryCount == 0) return;
+        int workers = Math.min(executor.getParallelism(), queryCount);
+        List<ForkJoinTask<Double>> tasks = new ArrayList<>();
+        for (int worker = 0; worker < workers; worker++) {
+            final int first = worker;
+            tasks.add(executor.submit(() -> {
+                double checksum = 0;
+                float[] scores = blockSize == 0 ? null : new float[blockSize];
+                for (int q = first; q < queryCount; q += workers) {
+                    if (blockSize == 0) {
+                        var scorer = vectors.scoreFunctionFor(queries.get(q), VectorSimilarityFunction.DOT_PRODUCT);
+                        for (int i = 0; i < vectors.count(); i++) checksum += scorer.similarityTo(i);
+                    } else {
+                        var scorer = vectors.blockScorerFor(queries.get(q), VectorSimilarityFunction.DOT_PRODUCT, blockSize);
+                        for (int start = 0; start < vectors.count(); start += blockSize) {
+                            int count = Math.min(blockSize, vectors.count() - start);
+                            scorer.scoreRange(start, count, scores);
+                            for (int i = 0; i < count; i++) checksum += scores[i];
+                        }
+                    }
+                }
+                return checksum;
+            }));
+        }
+        double checksum = 0;
+        for (var task : tasks) checksum += task.join();
+        System.out.printf(java.util.Locale.ROOT, "\t%s warmup: %d queries, checksum=%.6f (excluded from timing)%n",
+                blockSize == 0 ? "Single" : "Block", queryCount, checksum);
     }
 
     private static int parseOptimizerFromProperty() {
@@ -94,24 +133,34 @@ public class DistancesASH {
         final boolean RUN_ACCURACY_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.accuracy", "false"));
 
-        final boolean RUN_SCALAR_SCORING =
-                Boolean.parseBoolean(System.getProperty("jvector.bench.scalar-scoring", "true"));
+        final boolean RUN_SINGLE_SCORING = Boolean.parseBoolean(System.getProperty(
+                "jvector.bench.single-scoring", System.getProperty("jvector.bench.scalar-scoring", "true")));
 
         final boolean RUN_FLOAT_SCORING =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         // ASH header bits
-        final int HEADER_BITS = 40;
+        final int HEADER_BITS = AsymmetricHashing.HEADER_BITS;
+        System.out.println("\tASH header: " + HEADER_BITS + " bits (scale=16, offset=16, landmark=8)");
 
         // Block sizes to benchmark
-        final int[] BLOCK_SIZES = {32}; // 16, 32, and/or 64
+        final int[] BLOCK_SIZES = {32}; // Supported fused/multi-bit block capacities: 8, 16, 32.
 
         // How many ASH landmarks to use, C = [1, 64]
         final int landmarkCount = 1;
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
-        List<List<Integer>> groundTruth = SiftLoader.readIvecs(filenameGT);
+        final List<List<Integer>> groundTruth;
+        if (RUN_RECALL_CHECK) {
+            if (filenameGT == null || filenameGT.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Recall requires a ground-truth filename");
+            }
+            groundTruth = SiftLoader.readIvecs(filenameGT);
+        } else {
+            groundTruth = List.of();
+        }
 
         // ASH normalization policy:
         //
@@ -124,22 +173,35 @@ public class DistancesASH {
         // - No other normalization steps are applied.
 
         int dimension = vectors.get(0).length();
-        int encodedBits = 1536; // (dimension / 4) + HEADER_BITS;
-        // Payload must be 64-bit aligned for SIMD
-        int payloadBits = encodedBits - HEADER_BITS;
-//        if ((payloadBits & 63) != 0) {
-//            throw new IllegalArgumentException(
-//                    "ASH payloadBits must be 64-bit aligned for SIMD. " +
-//                            "Got payloadBits=" + payloadBits +
-//                            " (encodedBits=" + encodedBits +
-//                            ", HEADER_BITS=" + HEADER_BITS + ")"
-//            );
-//        }
+
+        final int bitsPerDimension =
+                Integer.getInteger("jvector.ash.bitsPerDimension", 4);
+
+        final int quantizedDimensions =
+                Integer.getInteger("jvector.ash.quantizedDimensions", dimension / 2);
+
+        if (bitsPerDimension != 1
+                && bitsPerDimension != 2
+                && bitsPerDimension != 4) {
+            throw new IllegalArgumentException(
+                    "bitsPerDimension must be 1, 2, or 4: " + bitsPerDimension);
+        }
+
+        if (quantizedDimensions <= 0 || quantizedDimensions > dimension) {
+            throw new IllegalArgumentException(
+                    "Invalid quantizedDimensions=" + quantizedDimensions
+                            + " for original dimension=" + dimension);
+        }
+
+        int payloadBits = Math.multiplyExact(quantizedDimensions, bitsPerDimension);
+        int encodedBits = Math.addExact(HEADER_BITS, payloadBits);
 
         System.out.println(
-                "\toriginalDim = " + dimension +
-                        ", encodedBits = " + encodedBits
-        );
+                "\toriginalDim=" + dimension
+                        + ", quantizedDim=" + quantizedDimensions
+                        + ", bitsPerDimension=" + bitsPerDimension
+                        + ", payloadBits=" + payloadBits
+                        + ", encodedBits=" + encodedBits);
 
         final List<VectorFloat<?>> finalQueries = queries;
         final List<VectorFloat<?>> finalVectors = vectors;
@@ -160,7 +222,8 @@ public class DistancesASH {
 
         logProgress("\t[stage] ASH initialize: starting (centroids + training)");
         long initStart = System.nanoTime();
-        var ash = AsymmetricHashing.initialize(ravv, optimizer, encodedBits, landmarkCount);
+        var ash = AsymmetricHashing.initialize(
+                ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
         long initEnd = System.nanoTime();
         logProgress("\t[stage] ASH initialize: done in " + (initEnd - initStart) / 1e9 + " seconds");
 
@@ -264,19 +327,33 @@ public class DistancesASH {
         // ------------------------------------------------------------------
         // Shared parallelization setup (executor-honoring)
         // ------------------------------------------------------------------
-//         ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
-        ForkJoinPool simdExecutor = new ForkJoinPool(180); // For profiling
+        // Default to one scoring thread for kernel/accumulator comparisons.
+        // For aggregate throughput, set -Djvector.bench.scoringThreads=N,
+        // where N is the number of physical cores available to this process.
+        // This controls accuracy, recall, and scoring tasks, not encodeAll.
+        final int scoringThreads =
+                Integer.parseInt(
+                        System.getProperty("jvector.bench.scoringThreads", "1").trim());
+
+        if (scoringThreads <= 0) {
+            throw new IllegalArgumentException(
+                    "scoringThreads must be positive: " + scoringThreads);
+        }
+
+        final ForkJoinPool simdExecutor = new ForkJoinPool(scoringThreads);
 
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (queries.size() + parallelism - 1) / parallelism);
 
+        System.out.println("\tScoring parallelism = " + parallelism);
+
         // ==================================================================
         // [1] Accuracy run (NOT timed)
         // ==================================================================
-        if(RUN_ACCURACY_CHECK) {
+        if (RUN_ACCURACY_CHECK) {
             List<ForkJoinTask<double[]>> errorTasks = new ArrayList<>();
 
-            for (int start = 0; start < vectors.size(); start += chunkSize) {
+            for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, queries.size());
 
@@ -293,10 +370,10 @@ public class DistancesASH {
                             final int baseOrd = (newToOldFinal == null) ? j : newToOldFinal[j];
                             VectorFloat<?> v = finalVectors.get(baseOrd);
 
-                            float trueDot = VectorUtil.dotProduct(q, v);
-                            float approxDot = f.similarityTo(j);
+                            float trueSimilarity = VectorSimilarityFunction.DOT_PRODUCT.compare(q, v);
+                            float approxSimilarity = f.similarityTo(j);
 
-                            localError += Math.abs(approxDot - trueDot);
+                            localError += Math.abs(approxSimilarity - trueSimilarity);
                             localCount++;
                         }
 
@@ -315,7 +392,7 @@ public class DistancesASH {
             }
 
             distanceError /= count;
-            System.out.println("\tAverage absolute dot-product error = " + distanceError);
+            System.out.println("\tAverage absolute DOT_PRODUCT similarity error = " + distanceError);
         }
 
         // ==================================================================
@@ -389,9 +466,10 @@ public class DistancesASH {
         }
 
         // ==================================================================
-        // [2] Scalar ASH scoring timing (reference)
+        // [2] Single-vector ASH scoring, using the selected singleKernel
         // ==================================================================
-        if (RUN_SCALAR_SCORING) {
+        if (RUN_SINGLE_SCORING) {
+            warmupASH(ashVectorsFinal, finalQueries, simdExecutor, 0);
             List<ForkJoinTask<Double>> ashTasks = new ArrayList<>();
 
             long ashStart = System.nanoTime();
@@ -506,6 +584,7 @@ public class DistancesASH {
                 printScorerInfo(kernelMode + " (blockSize=" + blockSize + ")", scorer);
             }
 
+            warmupASH(ashVectorsFinal, finalQueries, simdExecutor, blockSize);
             List<ForkJoinTask<Double>> blockTasks = new ArrayList<>();
             long blockStart = System.nanoTime();
 
@@ -534,17 +613,11 @@ public class DistancesASH {
                             j += blockSize;
                         }
 
-                        // Tail uses scalar per-vector scorer (correctness-preserving)
+                        // Exercise the selected block kernel for partial batches as well.
                         if (j < vectors.size()) {
-                            ScoreFunction.ApproximateScoreFunction f =
-                                    ashVecsFinal.scoreFunctionFor(
-                                            finalQueries.get(qi),
-                                            VectorSimilarityFunction.DOT_PRODUCT
-                                    );
-
-                            for (; j < vectors.size(); j++) {
-                                localSum += f.similarityTo(j);
-                            }
+                            int count = vectors.size() - j;
+                            scorer.scoreRange(j, count, scores);
+                            for (int k = 0; k < count; k++) localSum += scores[k];
                         }
                     }
 
