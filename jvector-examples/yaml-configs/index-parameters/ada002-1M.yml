@@ -1,0 +1,36 @@
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
+
+dataset: ada002-1M
+
+construction:
+  outDegree: [64]
+  efConstruction: [200]
+  neighborOverflow: [1.6f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 1576
+        bitsPerDimension: 2
+        optimizer: itq
+        landmarkCount: 1
+  reranking:
+    - FP
+  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+
+search:
+  topKOverquery:
+    10: [1.00]
+#    100: [1.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 1576
+        bitsPerDimension: 2
+        optimizer: itq
+        landmarkCount: 1
+# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
