@@ -76,7 +76,7 @@ public class NVQScorer {
         /* Each sub-vector of query vector (full resolution) will be compared to NVQ quantized sub-vectors that were
          * first de-meaned by subtracting the global mean.
          */
-        var shiftedQuery = VectorUtil.sub(query, this.nvq.globalMean);
+        var shiftedQuery = VectorUtil.nvqSub(query, this.nvq.globalMean);
         var querySubVectors = this.nvq.getSubVectors(shiftedQuery);
 
         switch (this.nvq.bitsPerDimension) {
@@ -113,6 +113,25 @@ public class NVQScorer {
                 for (var i = 0; i < querySubVectors.length; i++) {
                     VectorUtil.nvqShuffleQueryInPlace8bit(querySubVectors[i]);
                     VectorUtil.nvqShuffleQueryInPlace8bit(meanSubVectors[i]);
+                }
+
+                if (VectorUtil.supportsNvqCosine8bitPacked()) {
+                    return vector2 -> {
+                        float cos = 0;
+                        float squaredNormalization = 0;
+                        for (int i = 0; i < querySubVectors.length; i++) {
+                            var svDB = vector2.subVectors[i];
+                            long partialCosSim = VectorUtil.nvqCosine8bitPacked(querySubVectors[i],
+                                    svDB.bytes, svDB.growthRate, svDB.midpoint,
+                                    svDB.minValue, svDB.maxValue,
+                                    meanSubVectors[i]);
+                            cos += Float.intBitsToFloat((int)partialCosSim);
+                            squaredNormalization += Float.intBitsToFloat((int)(partialCosSim >>> 32));
+                        }
+                        float cosine = (cos / queryNorm) / (float) Math.sqrt(squaredNormalization);
+
+                        return (1 + cosine) / 2;
+                    };
                 }
 
                 return vector2 -> {

@@ -31,6 +31,9 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.util.ExceptionUtils;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -54,9 +57,9 @@ import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNW
  * writer.write(featureSuppliers);
  *
  * // Parallel:
- * var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
- *     .with(inlineVectors)
- *     .withParallelWrites(true)  // Enable parallel writes
+ * var writer = new OnDiskParallelGraphIndexWriter.Builder(graph, outputPath)
+ *     .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+ *     .with(inlineVectors)  // Supply every inline feature for complete-record batches
  *     .build();
  * writer.write(featureSuppliers);
  * </pre>
@@ -193,8 +196,8 @@ public class ParallelWriteExample {
             }
 
             // Compare vectors if present (only check layer 0)
-            if (index1.getFeatureSet().contains(FeatureId.INLINE_VECTORS) ||
-                index1.getFeatureSet().contains(FeatureId.NVQ_VECTORS)) {
+            // NVQ and other feature payloads are checked by verifySerializedBytes below.
+            if (index1.getFeatureSet().contains(FeatureId.INLINE_VECTORS)) {
 
                 int vectorsChecked = 0;
                 int maxToCheck = Math.min(100, index1.size(0)); // Check up to 100 vectors as a sample
@@ -240,9 +243,10 @@ public class ParallelWriteExample {
         var nvqFeature = new NVQ(nvq);
         var fusedPQFeature = new FusedPQ(graph.maxDegree(), pq);
 
+        var vectors = floatVectors.threadLocalSupplier();
         // Build suppliers for inline features (NVQ only - FUSED_ADC needs neighbors)
         Map<FeatureId, IntFunction<Feature.State>> inlineSuppliers = new EnumMap<>(FeatureId.class);
-        inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+        inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(vectors.get().getVector(ordinal))));
 
         // FUSED_ADC supplier needs graph view, provided at write time
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
@@ -254,15 +258,16 @@ public class ParallelWriteExample {
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)
-                .build()) {
+                .build();
+             var views = ExplicitThreadLocal.withInitial(graph::getView)) {
 
-            var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
-            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(views.get(), pqVectors, ordinal));
 
             writer.write(writeSuppliers);
-            view.close();
+        } catch (Exception e) {
+            ExceptionUtils.throwIoException(e);
         }
         long sequentialTime = System.nanoTime() - sequentialStart;
         System.out.printf("Sequential write: %.2f ms%n", sequentialTime / 1_000_000.0);
@@ -270,23 +275,42 @@ public class ParallelWriteExample {
         // Parallel write
         long parallelStart = System.nanoTime();
         try (var writer = new OnDiskParallelGraphIndexWriter.Builder(graph, parallelPath)
+                .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
                 .with(nvqFeature)
                 .with(fusedPQFeature)
                 .withMapper(identityMapper)
-                .build()) {
+                .build();
+             var views = ExplicitThreadLocal.withInitial(graph::getView)) {
 
-            var view = graph.getView();
             Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
             writeSuppliers.put(FeatureId.NVQ_VECTORS, inlineSuppliers.get(FeatureId.NVQ_VECTORS));
-            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqVectors, ordinal));
+            writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(views.get(), pqVectors, ordinal));
 
             writer.write(writeSuppliers);
-            view.close();
+        } catch (Exception e) {
+            ExceptionUtils.throwIoException(e);
         }
         long parallelTime = System.nanoTime() - parallelStart;
 
         System.out.printf("Parallel write:   %.2f ms%n", parallelTime / 1_000_000.0);
         System.out.printf("Speedup:          %.2fx%n", (double) sequentialTime / parallelTime);
+    }
+
+    private static void verifySerializedBytes(Path sequential, Path parallel) throws IOException {
+        try (var left = Files.newInputStream(sequential); var right = Files.newInputStream(parallel)) {
+            byte[] a = new byte[64 * 1024], b = new byte[a.length];
+            long offset = 0;
+            while (true) {
+                int n = left.readNBytes(a, 0, a.length);
+                int m = right.readNBytes(b, 0, b.length);
+                if (n != m) throw new AssertionError("Serialized index lengths differ");
+                if (n == 0) break;
+                int mismatch = Arrays.mismatch(a, 0, n, b, 0, n);
+                if (mismatch >= 0) throw new AssertionError("Serialized indexes differ at byte " + (offset + mismatch));
+                offset += n;
+            }
+        }
+        System.out.println("All serialized features match byte for byte.");
     }
 
     /**
@@ -365,6 +389,7 @@ public class ParallelWriteExample {
 
             // Verify that both indices are identical
             verifyIndicesIdentical(sequentialIndex, parallelIndex);
+            verifySerializedBytes(sequentialPath, parallelPath);
 
             // Close the loaded indices
             sequentialIndex.close();

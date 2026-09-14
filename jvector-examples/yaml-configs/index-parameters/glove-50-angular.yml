@@ -3,6 +3,7 @@ yamlSchemaVersion: 2
 onDiskIndexVersion: 7
 
 dataset: glove-50-angular
+useDatasetPrefetching: false
 
 construction:
   outDegree: [32]

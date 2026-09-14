@@ -86,7 +86,7 @@ public class GraphSearcher implements Closeable {
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
 
-        this.pruneSearch = true;
+        this.pruneSearch = false;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
@@ -117,12 +117,25 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * When using pruning, we are using a heuristic to terminate the search earlier.
-     * In certain cases, it can lead to speedups. This is set to false by default.
-     * @param usage a boolean that determines whether we do early termination or not.
+     * Exposes the internal approximate-results queue populated by the most recent
+     * {@link #searchOneLayer} call. Intended for cross-package internal use (e.g. graph
+     * compaction); not part of the stable public API.
      */
+    public NodeQueue approximateResults() {
+        return approximateResults;
+    }
+
+    /**
+     * @deprecated TopK and filtered graph-search pruning is disabled because the
+     * existing heuristic can reduce recall and has not shown reliable production
+     * value. This method is retained for API compatibility and has no effect.
+     *
+     * Threshold searches, where {@code threshold > 0}, continue to use their
+     * legacy threshold early-termination behavior that disregards this setting.
+     */
+    @Deprecated
     public void usePruning(boolean usage) {
-        pruneSearch = usage;
+        pruneSearch = false;
     }
 
     /**
@@ -186,11 +199,14 @@ public class GraphSearcher implements Closeable {
 
     /**
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
-     * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
-     *                        `topK` results have been found, or until the entire graph has been searched.
+     * @param topK            the number of results to look for. With threshold=Float.NEGATIVE_INFINITY, the search will
+     *                        continue until at least `topK` results have been found, or until the entire graph has been
+     *                        searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param rerankFloor     (Experimental!) Candidates whose approximate similarity is at least this value
@@ -238,8 +254,10 @@ public class GraphSearcher implements Closeable {
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
      * @param rerankK         the number of (approximately-scored) results to rerank before returning the best `topK`.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -258,8 +276,13 @@ public class GraphSearcher implements Closeable {
 
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
-            // Search this layer with minimal parameters since we just want the best candidate
-            searchOneLayer(scoreProvider, 1, 0.0f, lvl, Bits.ALL);
+            // Search this layer with minimal parameters since we just want the best candidate.
+            // Threshold must be NEGATIVE_INFINITY, not 0.0f: 0.0f is only a valid "accept everything"
+            // floor for similarity functions bounded to (0, 1] (COSINE, EUCLIDEAN). DOT_PRODUCT with
+            // non-unit-normalized vectors can legitimately score below 0, and a 0.0f floor here would
+            // silently discard the only reachable candidate(s) in a hierarchy layer, leaving
+            // approximateResults empty and tripping the assertion below.
+            searchOneLayer(scoreProvider, 1, Float.NEGATIVE_INFINITY, lvl, Bits.ALL);
             assert approximateResults.size() == 1 : approximateResults.size();
             setEntryPointsFromPreviousLayer();
         }
@@ -272,8 +295,10 @@ public class GraphSearcher implements Closeable {
      * @param scoreProvider   provides functions to return the similarity of a given node to the query vector
      * @param topK            the number of results to look for. With threshold=0, the search will continue until at least
      *                        `topK` results have been found, or until the entire graph has been searched.
-     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything. May be used
-     *                        with a large topK to find (approximately) all nodes above the given threshold.
+     * @param threshold       the minimum similarity (0..1) to accept; 0 will accept everything for EUCLIDEAN and COSINE.
+     *                        DOT_PRODUCT is not bounded unless callers pre-normalize vectors to unit length and
+     *                        requires Float.NEGATIVE_INFINITY rather than 0. May be used with a large topK to find
+     *                        (approximately) all nodes above the given threshold.
      *                        If threshold > 0 then the search will stop when it is probabilistically unlikely
      *                        to find more nodes above the threshold, even if `topK` results have not yet been found.
      * @param acceptOrds      a Bits instance indicating which nodes are acceptable results.
@@ -304,10 +329,11 @@ public class GraphSearcher implements Closeable {
                                int topK,
                                Bits acceptOrds)
     {
-        return search(scoreProvider, topK, 0.0f, acceptOrds);
+        return search(scoreProvider, topK, Float.NEGATIVE_INFINITY, acceptOrds);
     }
 
-    void setEntryPointsFromPreviousLayer() {
+    @Experimental
+    public void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
         approximateResults.foreach(candidates::push);
@@ -316,7 +342,8 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
-    void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
+    @Experimental
+    public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
@@ -339,14 +366,17 @@ public class GraphSearcher implements Closeable {
 
     private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
         float topCandidateScore = localCandidates.topScore();
+
         // we're done when we have K results and the best candidate is worse than the worst result so far
         if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
             return true;
         }
-        // when querying by threshold, also stop when we are probabilistically unlikely to find more qualifying results
+
+        // preserve legacy threshold early termination
         if (threshold > 0 && scoreTracker.shouldStop()) {
             return true;
         }
+
         return false;
     }
 
@@ -384,7 +414,8 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
+    @Experimental
+    public void searchOneLayer(SearchScoreProvider scoreProvider,
                         int rerankK,
                         float threshold,
                         int level,
@@ -394,8 +425,9 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            // track scores to predict when we are done with threshold queries
-            var scoreTracker = scoreTrackerFactory.getScoreTracker(pruneSearch, rerankK, threshold);
+            // TopK and filtered pruning are disabled. Threshold searches retain their
+            // legacy threshold early-termination path inside ScoreTrackerFactory.
+            var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
             // the main search loop
             while (candidates.size() > 0) {

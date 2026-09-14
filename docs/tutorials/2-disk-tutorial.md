@@ -8,7 +8,7 @@ Unlike the previous example, this time we'll use a proper ANN dataset based on O
 // This is a preconfigured dataset that will be downloaded automatically.
 DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
     new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
-);
+).getDataSet();
 ```
 
 > [!TIP]
@@ -45,7 +45,8 @@ Path graphPath = Files.createTempFile("jvector-example-graph", null);  // or whe
 
 // Create a writer for the on-heap graph we just built.
 // Remember to close when done.
-GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.RANDOM_ACCESS_PARALLEL, heapGraph, graphPath)
+GraphIndexWriter writer = new OnDiskParallelGraphIndexWriter.Builder(heapGraph, graphPath)
+    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
     // Let the writer know that we'll also be passing in the actual vector data
     // to be saved "inline" with the data for each corresponding graph node.
     .with(new InlineVectors(dim))
@@ -60,12 +61,19 @@ Since we want to include a feature, we need to tell the writer how to obtain the
 // Supply one map entry for each feature.
 // The key is a FeatureId enum corresponding to the feature
 // and the value is a function which generates the feature state for each graph node.
+var writerVectors = ravv.threadLocalSupplier();
 writer.write(Map.of(
     FeatureId.INLINE_VECTORS,
     // we already have a RAVV, so we'll just use that to supply the writer.
-    nodeId -> new InlineVectors.State(ravv.getVector(nodeId))));
+    nodeId -> new InlineVectors.State(writerVectors.get().getVector(nodeId))));
 // writer.close() if not using try-with-resources
 ```
+
+Supplying every inline feature lets the parallel writer serialize complete records
+in batches of up to 64. The source must remain readable until `write` finishes.
+`threadLocalSupplier()` provides independent views when a source borrows a scratch
+vector; it also works with ordinary preloaded sources. See
+[Deferred batch serialization](../deferred-batch-writer.md) for NVQ and migration examples.
 
 At this point the graph index has been written to disk and can be used by creating an instance of `OnDiskGraphIndex`.
 

@@ -47,4 +47,12 @@ public interface DataSetLoader {
      * @return a {@link DataSetInfo} handle for the dataset, if found
      */
     Optional<DataSetInfo> loadDataSet(String dataSetName);
+
+    /** Choose base-vector loading for a harness run; existing calls retain preload behavior. */
+    default Optional<DataSetInfo> loadDataSet(String dataSetName, BaseVectorLoading loading) {
+        var result = loadDataSet(dataSetName);
+        if (result.isPresent() && loading != BaseVectorLoading.PRELOAD)
+            throw new UnsupportedOperationException("Loader does not support " + loading);
+        return result;
+    }
 }

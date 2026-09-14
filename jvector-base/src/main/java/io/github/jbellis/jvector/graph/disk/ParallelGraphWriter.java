@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -38,6 +39,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
@@ -62,11 +64,14 @@ import java.util.function.IntFunction;
  * </pre>
  */
 class ParallelGraphWriter implements AutoCloseable {
+    // Amortize positioned writes with bounded worker-local buffers.
+    static final int DEFAULT_RECORDS_PER_BATCH = 64;
     private final RandomAccessWriter writer;
     private final ImmutableGraphIndex graph;
     private final ExecutorService executor;
+    private final boolean ownsExecutor;
     private final ThreadLocal<ImmutableGraphIndex.View> viewPerThread;
-    private final ThreadLocal<ByteBuffer> bufferPerThread;
+    private final ExplicitThreadLocal<ByteBuffer> bufferPerThread;
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
     private final Path filePath;
@@ -80,6 +85,7 @@ class ParallelGraphWriter implements AutoCloseable {
         final int workerThreads;
         final boolean useDirectBuffers;
         final int taskMultiplier;
+        final int recordsPerBatch;
 
         /**
          * @param workerThreads number of worker threads for building records (0 = use available processors)
@@ -88,6 +94,14 @@ class ParallelGraphWriter implements AutoCloseable {
          *                       (4x = good balance for most use cases, higher = more fine-grained parallelism)
          */
         public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier) {
+            this(workerThreads, useDirectBuffers, taskMultiplier, DEFAULT_RECORDS_PER_BATCH);
+        }
+
+        public Config(int workerThreads, boolean useDirectBuffers, int taskMultiplier, int recordsPerBatch) {
+            if (recordsPerBatch <= 0) {
+                throw new IllegalArgumentException("Record batch size must be positive");
+            }
+            this.recordsPerBatch = recordsPerBatch;
             this.workerThreads = workerThreads <= 0 ? Runtime.getRuntime().availableProcessors() : workerThreads;
             this.useDirectBuffers = useDirectBuffers;
             this.taskMultiplier = taskMultiplier <= 0 ? 4 : taskMultiplier;
@@ -118,23 +132,47 @@ class ParallelGraphWriter implements AutoCloseable {
                                List<Feature> inlineFeatures,
                                Config config,
                                Path filePath) {
+        this(writer, graph, inlineFeatures, config, filePath, null);
+    }
+
+    /**
+     * Creates a parallel writer that runs its record-building/write tasks on a caller-supplied
+     * executor instead of a dedicated pool.
+     *
+     * @param externalExecutor an externally-owned executor to run tasks on, or {@code null} to
+     *        create (and own) a dedicated fixed thread pool sized to {@code config.workerThreads}.
+     *        An external executor must outlive this writer and is the caller's to shut down;
+     *        {@link #close()} will not shut it down. Note these tasks block on file I/O, so an
+     *        executor sized for I/O concurrency (typically &gt;= logical cores) is appropriate; a
+     *        small compute-sized pool (e.g. a physical-core ForkJoinPool) will throttle writes.
+     */
+    public ParallelGraphWriter(RandomAccessWriter writer,
+                               ImmutableGraphIndex graph,
+                               List<Feature> inlineFeatures,
+                               Config config,
+                               Path filePath,
+                               ExecutorService externalExecutor) {
         this.writer = writer;
         this.graph = graph;
         this.filePath = Objects.requireNonNull(filePath);
         this.taskMultiplier = config.taskMultiplier;
-        this.executor = Executors.newFixedThreadPool(config.workerThreads,
-            r -> {
-                Thread t = new Thread(r);
-                t.setName("ParallelGraphWriter-Worker-" + threadCounter.getAndIncrement());
-                t.setDaemon(false);
-                return t;
-            });
-
-        // Compute fixed record size for L0
-        this.recordSize = Integer.BYTES // node ordinal
-            + inlineFeatures.stream().mapToInt(Feature::featureSize).sum()
-            + Integer.BYTES // neighbor count
-            + graph.getDegree(0) * Integer.BYTES; // neighbors + padding
+        // Validate buffer size before creating a pool that would otherwise need cleanup.
+        this.recordSize = Math.addExact(Integer.BYTES * (2 + graph.getDegree(0)),
+                inlineFeatures.stream().mapToInt(Feature::featureSize).sum());
+        final int bufferSize = Math.multiplyExact(recordSize, config.recordsPerBatch);
+        if (externalExecutor != null) {
+            this.executor = externalExecutor;
+            this.ownsExecutor = false;
+        } else {
+            this.executor = Executors.newFixedThreadPool(config.workerThreads,
+                r -> {
+                    Thread t = new Thread(r);
+                    t.setName("ParallelGraphWriter-Worker-" + threadCounter.getAndIncrement());
+                    t.setDaemon(false);
+                    return t;
+                });
+            this.ownsExecutor = true;
+        }
 
         // Thread-local views for safe neighbor iteration
         // CopyOnWriteArrayList handles concurrent additions safely
@@ -146,9 +184,8 @@ class ParallelGraphWriter implements AutoCloseable {
 
         // Thread-local buffers to avoid allocation overhead
         // Use BIG_ENDIAN to match Java DataOutput specification
-        final int bufferSize = recordSize;
         final boolean useDirect = config.useDirectBuffers;
-        this.bufferPerThread = ThreadLocal.withInitial(() -> {
+        this.bufferPerThread = ExplicitThreadLocal.withInitial(() -> {
             ByteBuffer buffer = useDirect ? ByteBuffer.allocateDirect(bufferSize) : ByteBuffer.allocate(bufferSize);
             buffer.order(java.nio.ByteOrder.BIG_ENDIAN);
             return buffer;
@@ -194,57 +231,66 @@ class ParallelGraphWriter implements AutoCloseable {
         var opts = new java.util.HashSet<java.nio.file.OpenOption>();
         opts.add(StandardOpenOption.WRITE);
         opts.add(StandardOpenOption.READ);
-        
+
         try (var channel = AsynchronousFileChannel.open(filePath, opts, null)) {
             List<Future<Void>> taskFutures = new ArrayList<>(numTasks);
+            // Set on interruption or the first failure, so remaining ranges stop instead of running to completion.
+            var stop = new AtomicBoolean();
+            boolean submitted = false;
 
-            // Submit range-based tasks
-            for (int i = 0; i < numTasks; i++) {
-                int startOrdinal = i * ordinalsPerTask;
-                int endOrdinal = Math.min(startOrdinal + ordinalsPerTask, totalOrdinals);
+            // Always join submitted tasks before closing the channel or supplier resources.
+            try {
+                // Submit range-based tasks
+                for (int i = 0; i < numTasks; i++) {
+                    int startOrdinal = i * ordinalsPerTask;
+                    int endOrdinal = Math.min(startOrdinal + ordinalsPerTask, totalOrdinals);
 
-                // Skip if range is empty (can happen with final task)
-                if (startOrdinal >= totalOrdinals) {
-                    break;
+                    // Skip if range is empty (can happen with final task)
+                    if (startOrdinal >= totalOrdinals) {
+                        break;
+                    }
+
+                    final int start = startOrdinal;
+                    final int end = endOrdinal;
+
+                    Future<Void> future = executor.submit(() -> {
+                        if (stop.get()) return null;
+                        try {
+                            var view = viewPerThread.get();
+                            var buffer = bufferPerThread.get();
+
+                            var task = new NodeRecordTask(
+                                    start,                    // Start of range (inclusive)
+                                    end,                      // End of range (exclusive)
+                                    ordinalMapper,
+                                    graph,
+                                    view,
+                                    inlineFeatures,
+                                    featureStateSuppliers,
+                                    recordSize,
+                                    baseOffset,               // Base offset (task calculates per-ordinal offsets)
+                                    channel,                  // Async file channel for position-based writes
+                                    buffer,                   // Thread-local buffer
+                                    stop::get
+                            );
+
+                            return task.call();
+                        } catch (Exception | Error failure) {
+                            // Signal immediately: awaitTasks may still be joining an earlier range.
+                            stop.set(true);
+                            throw failure;
+                        } finally {
+                            // External executor threads must not retain this writer's graph views.
+                            viewPerThread.remove();
+                        }
+                    });
+
+                    taskFutures.add(future);
                 }
-
-                final int start = startOrdinal;
-                final int end = endOrdinal;
-
-                Future<Void> future = executor.submit(() -> {
-                    var view = viewPerThread.get();
-                    var buffer = bufferPerThread.get();
-
-                    var task = new NodeRecordTask(
-                            start,                    // Start of range (inclusive)
-                            end,                      // End of range (exclusive)
-                            ordinalMapper,
-                            graph,
-                            view,
-                            inlineFeatures,
-                            featureStateSuppliers,
-                            recordSize,
-                            baseOffset,               // Base offset (task calculates per-ordinal offsets)
-                            channel,                  // Async file channel for position-based writes
-                            buffer                    // Thread-local buffer
-                    );
-
-                    return task.call();
-                });
-
-                taskFutures.add(future);
-            }
-
-            // Wait for all tasks to complete - each task writes synchronously using writeFully
-            for (Future<Void> taskFuture : taskFutures) {
-                try {
-                    taskFuture.get();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while writing records", e);
-                } catch (ExecutionException e) {
-                    throw unwrapExecutionException(e);
-                }
+                submitted = true;
+            } finally {
+                if (!submitted) stop.set(true);
+                awaitTasks(taskFutures, stop);
             }
 
             // Force all writes to disk before closing the channel.
@@ -256,23 +302,35 @@ class ParallelGraphWriter implements AutoCloseable {
         }
     }
 
-    /**
-     * Unwraps ExecutionException to throw the underlying cause.
-     * Handles IOException, RuntimeException, and wraps other exceptions.
-     *
-     * @param e the execution exception to unwrap
-     * @return an IOException wrapping the cause
-     * @throws RuntimeException if the cause is a RuntimeException
-     */
-    private IOException unwrapExecutionException(ExecutionException e) {
-        Throwable cause = e.getCause();
-        if (cause instanceof IOException) {
-            return (IOException) cause;
-        } else if (cause instanceof RuntimeException) {
-            throw (RuntimeException) cause;
-        } else {
-            throw new RuntimeException("Error building node record", cause);
+    /// Join every task, so no worker still uses the channel or suppliers when this returns. On
+    /// interruption or the first task failure, set `stop` so the remaining tasks skip or abandon
+    /// their ranges rather than writing them, then rethrow the first failure.
+    private void awaitTasks(List<Future<Void>> futures, AtomicBoolean stop) throws IOException {
+        Throwable failure = null;
+        boolean interrupted = false;
+        for (var future : futures) {
+            boolean done = false;
+            while (!done) {
+                try {
+                    future.get();
+                    done = true;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                    stop.set(true);
+                    if (failure == null) failure = new IOException("Interrupted while writing records", e);
+                } catch (ExecutionException e) {
+                    stop.set(true);
+                    if (failure == null) failure = e.getCause();
+                    else if (failure != e.getCause()) failure.addSuppressed(e.getCause());
+                    done = true;
+                }
+            }
         }
+        if (interrupted) Thread.currentThread().interrupt();
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure != null) throw new IOException("Error building node record", failure);
     }
 
     /**
@@ -285,15 +343,17 @@ class ParallelGraphWriter implements AutoCloseable {
     @Override
     public void close() throws IOException {
         try {
-            // Shutdown executor
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+            // Shut down the executor only if we created it; an injected executor is the caller's.
+            if (ownsExecutor) {
+                executor.shutdown();
+                try {
+                    if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                        executor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
                     executor.shutdownNow();
+                    Thread.currentThread().interrupt();
                 }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
             }
 
             // Close all views (CopyOnWriteArrayList is safe for concurrent iteration)
@@ -301,6 +361,7 @@ class ParallelGraphWriter implements AutoCloseable {
                 view.close();
             }
             allViews.clear();
+            bufferPerThread.close();
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {

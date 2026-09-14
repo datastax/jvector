@@ -1,5 +1,9 @@
 ## JVector step-by-step
 
+> Historical guide: API names and early-write examples below reflect an older
+> version. Use the [current tutorials](../tutorials/2-disk-tutorial.md) and
+> [deferred serialization guide](../deferred-batch-writer.md) for current construction APIs.
+
 All code samples are from [SiftSmall](https://github.com/jbellis/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/SiftSmall.java) in the JVector source repo, which includes the siftsmall dataset as well.  Just import the project in your IDE and click Run to try it out!
 
 #### Step 1: Build and query an index in memory

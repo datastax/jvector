@@ -15,5 +15,5 @@
     </root>
 
     <!-- Set specific logger levels -->
-    <logger name="io.github.jbellis.jvector.example" level="DEBUG" />
+    <logger name="io.github.jbellis.jvector.example" level="INFO" />
 </configuration>

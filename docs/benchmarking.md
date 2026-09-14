@@ -115,3 +115,11 @@ To add a custom fvecs/ivecs dataset:
     ```
 
 For remote datasets, use `base_url` to specify where files should be downloaded from. The `${VAR}` and `${VAR:-default}` syntax is supported for environment variable expansion. See the example config for details.
+
+## Final index serialization
+
+BenchYAML and AutoBenchYAML default to parallel complete-record serialization
+(default batch size 64) after graph cleanup. `-Djvector.parallel_writer=false`
+selects the sequential path, which encodes FP/NVQ features during insertion.
+Dataset prefetching is a separate option and is not required. See
+[Deferred batch serialization](deferred-batch-writer.md) for activation and caller examples.

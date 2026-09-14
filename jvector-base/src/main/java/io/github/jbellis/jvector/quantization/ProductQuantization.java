@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
@@ -60,7 +61,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     static final int DEFAULT_CLUSTERS = 256; // number of clusters per subspace = one byte's worth
-    static final int K_MEANS_ITERATIONS = 6;
+    public static final int K_MEANS_ITERATIONS = 6;
     public static final int MAX_PQ_TRAINING_SET_SIZE = 128000;
 
     final VectorFloat<?>[] codebooks; // array of codebooks, where each codebook is a VectorFloat consisting of k contiguous subvectors each of length M
@@ -116,6 +117,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     {
         checkClusterCount(clusterCount);
 
+        if (ravv.size() < clusterCount) {
+            throw new IllegalArgumentException("Cannot train PQ with %d clusters on %d points, supply more training vectors or lower cluster count.");
+        }
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectors = extractTrainingVectors(ravv, parallelExecutor);
 
@@ -164,15 +168,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             ordinalStream = IntStream.of(ordinalArray);
         }
 
-        var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> ordinalStream.parallel()
-                        .mapToObj(targetOrd -> {
-                            var localRavv = ravvCopy.get();
-                            VectorFloat<?> v = localRavv.getVector(targetOrd);
-                            return localRavv.isValueShared() ? v.copy() : v;
-                        })
-                        .collect(Collectors.toList()))
-                .join();
+        return VectorAccess.copySelected(ravv, ordinalStream.toArray(), parallelExecutor);
     }
 
     /**
@@ -481,6 +477,21 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return clusterCount;
     }
 
+    /** Width of subspace {@code m}'s subvectors. */
+    public int getSubvectorSize(int m) {
+        return subvectorSizesAndOffsets[m][0];
+    }
+
+    /** Subspace {@code m}'s codebook: {@code clusterCount} contiguous subvectors. Read-only use. */
+    public VectorFloat<?> getCodebookVector(int m) {
+        return codebooks[m];
+    }
+
+    /** The global centroid subtracted before encoding, or {@code null} when not center-adjusted. */
+    public VectorFloat<?> getGlobalCentroid() {
+        return globalCentroid;
+    }
+
     static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
         int M = subvectorSizeAndOffset.length;
         Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
@@ -506,6 +517,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         float minDist = Float.MAX_VALUE;
         int subvectorSize = subvectorSizesAndOffsets[m][0];
         int subvectorOffset = subvectorSizesAndOffsets[m][1];
+        int bulkNearest = VectorUtil.tryClosestCentroid(subvector, subvectorOffset, codebook, clusterCount, subvectorSize);
+        if (bulkNearest >= 0) {
+            return bulkNearest;
+        }
         for (int i = 0; i < clusterCount; i++) {
             float dist = VectorUtil.squareL2Distance(subvector, subvectorOffset, codebook, i * subvectorSize, subvectorSize);
             if (dist < minDist) {

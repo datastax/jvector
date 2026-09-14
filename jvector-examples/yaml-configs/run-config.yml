@@ -17,7 +17,7 @@ console:
     count:      [ visited ]  # [visited, expanded, expanded base layer]
     accuracy:   [ recall ]   # [recall, MAP]
   metrics:
-    system: [ max_heap_mb ] # [ max_heap_mb, max_offheap_mb ]
+    system: [ max_heap_mb, max_offheap_mb ] # [ max_heap_mb, max_offheap_mb ]
 #    disk: total_file_size_mb # [ total_file_size_mb, file_count ]
 #    construction: index_build_time_s # [ index_build_time_s, index_quant_time_s, search_quant_time_s ]
 

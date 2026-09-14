@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.yaml;
 
 import org.yaml.snakeyaml.Yaml;
+import software.amazon.awssdk.http.auth.aws.internal.signer.chunkedencoding.Chunk;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -53,5 +54,18 @@ public class DatasetCollection {
             }
         }
         return allDatasetNames;
+    }
+
+    public List<String> getSection(String section) {
+        List<String> sectionDatasetNames = new ArrayList<>();
+        for (var key : datasetNames.keySet()) {
+            if (key.equals(section)) {
+                var subList = datasetNames.get(key);
+                if (subList != null) {
+                    sectionDatasetNames.addAll(subList);
+                }
+            }
+        }
+        return sectionDatasetNames;
     }
 }

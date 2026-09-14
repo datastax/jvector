@@ -11,7 +11,25 @@
     </parent>
     <artifactId>jvector-native</artifactId>
     <name>Native</name>
+    <properties>
+        <native.buildtype>release</native.buildtype>
+        <native.jextract.skip>true</native.jextract.skip>
+        <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
+        <native.crossarch>false</native.crossarch>
+    </properties>
     <build>
+        <!-- Pick up the .so files from target/meson-build/ so that mvn clean
+             removes stale libraries along with every other build artefact.
+             The build script no longer writes into src/main/resources/. -->
+        <resources>
+            <resource>
+                <directory>${project.build.directory}/meson-build</directory>
+                <includes>
+                    <include>libjvector-x86_64.so</include>
+                    <include>libjvector-aarch64.so</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -53,11 +71,63 @@
     </build>
     <profiles>
         <profile>
+            <id>native.debug</id>
+            <activation>
+                <property>
+                    <name>native.debug</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>debug</native.buildtype>
+            </properties>
+        </profile>
+        <profile>
+            <id>native.debugoptimized</id>
+            <activation>
+                <property>
+                    <name>native.debugoptimized</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>debugoptimized</native.buildtype>
+            </properties>
+        </profile>
+        <profile>
+            <id>native.release</id>
+            <activation>
+                <property>
+                    <name>native.release</name>
+                </property>
+            </activation>
+            <properties>
+                <native.buildtype>release</native.buildtype>
+            </properties>
+        </profile>
+        <!-- Activate with -Dnative.crossarch to also cross-compile for the other arch -->
+        <profile>
+            <id>native.crossarch</id>
+            <activation>
+                <property>
+                    <name>native.crossarch</name>
+                </property>
+            </activation>
+            <properties>
+                <native.crossarch>true</native.crossarch>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>release</id>
+            <properties>
+                <native.crossarch>true</native.crossarch>
+            </properties>
+        </profile>
+
+        <profile>
             <id>unix-amd64-profile</id>
             <activation>
                 <os>
-                    <family>unix</family>
-                    <arch>amd64</arch>
+                    <name>Linux</name>
                 </os>
             </activation>
             <build>
@@ -78,6 +148,11 @@
                                             <version>[20,)</version>
                                         </requireJavaVersion>
                                         <requireProfileIdsExist/>
+                                        <requireProperty>
+                                            <property>native.buildtype</property>
+                                            <regex>^(debug|debugoptimized|release)$</regex>
+                                            <regexMessage>native.buildtype must be one of: debug, debugoptimized, release. Use -Dnative.debug, -Dnative.debugoptimized, or -Dnative.release to set it.</regexMessage>
+                                        </requireProperty>
                                     </rules>
                                 </configuration>
                             </execution>
@@ -89,15 +164,36 @@
                         <artifactId>exec-maven-plugin</artifactId>
                         <executions>
                             <execution>
-                                <id>execute-jextract-compile-script</id>
+                                <id>jextract-generate</id>
+                                <!-- Note that jextract in the generate-sources phase runs before the .so is built in the generate-resources phase -->
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>bash</executable>
+                                    <arguments>
+                                        <argument>jextract_generate_bindings.sh</argument>
+                                    </arguments>
+                                    <skip>${native.jextract.skip}</skip>
+                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>execute-native-compile-script</id>
                                 <phase>generate-resources</phase>
                                 <goals>
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>./jextract_vector_simd.sh</executable>
+                                    <executable>bash</executable>
+                                    <arguments>
+                                        <argument>build_native_lib.sh</argument>
+                                        <argument>${native.buildtype}</argument>
+                                        <argument>${native.crossarch}</argument>
+                                    </arguments>
                                     <skip>false</skip>
-                                    <workingDirectory>${project.basedir}/src/main/c/</workingDirectory>
+                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
                                 </configuration>
                             </execution>
                         </executions>
