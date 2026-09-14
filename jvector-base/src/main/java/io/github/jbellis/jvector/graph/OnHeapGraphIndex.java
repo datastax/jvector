@@ -49,7 +49,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.StampedLock;
-import java.util.function.Function;
 import java.util.stream.IntStream;
 
 /**
@@ -351,7 +350,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public int getMaxLevel() {
         for (int lvl = 0; lvl < layers.size(); lvl++) {
             if (layers.get(lvl).size() == 0) {
-                return lvl - 1;
+                return (lvl > 0) ? lvl - 1 : 0;
             }
         }
         return layers.size() - 1;
@@ -542,8 +541,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         var entryNode = entryPoint.get();
-        assert entryNode.level == getMaxLevel();
-        out.writeInt(entryNode.node);
+        if (entryNode != null) {
+            assert entryNode.level == getMaxLevel();
+            out.writeInt(entryNode.node);
+        } else {
+            out.writeInt(ENTRY_NODE_ABSENT);
+        }
 
         for (int level = 0; level < layers.size(); level++) {
             out.writeInt(size(level));
@@ -618,7 +621,9 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         graph.setDegrees(layerDegrees);
-        graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+        if (entryNode != ENTRY_NODE_ABSENT) {
+            graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
+        }
 
         return graph;
     }

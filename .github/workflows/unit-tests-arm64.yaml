@@ -1,0 +1,137 @@
+name: Unit Test CI — ARM64 (NEON / SVE)
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/unit-tests-arm64.yaml
+      - '**.java'
+      - '**/pom.xml'
+
+jobs:
+  build-arm64:
+    concurrency:
+      group: arm64-${{ matrix.max_isa }}-${{ matrix.jdk }}
+      cancel-in-progress: false
+    strategy:
+      matrix:
+        jdk: [ 24 ]
+        # Three ISA tiers in ascending capability order, mirroring avx512f/avx2/sse42.
+        # GitHub-hosted ubuntu-24.04-arm is a Neoverse-N1 (Graviton 2): NEON only, no SVE.
+        # The sve/sve2 matrix entries still exercise the JVECTOR_MAX_ISA cap path and
+        # compile all three ISA variants; the native kernel tests that require actual SVE
+        # hardware are gated on the runtime feature check below.
+        max_isa: [ neon, sve, sve2 ]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Report ARM64 ISA capabilities
+        id: cpu-features
+        run: |
+          # Parse the "Features" line from /proc/cpuinfo — the kernel only exposes a
+          # token here when the OS has set up context-switch support for it, so this is
+          # the same authority as getauxval(AT_HWCAP / AT_HWCAP2).
+          # "asimd" is the NEON token; "sve"/"sve2"/"sveaes" appear on Graviton 3/4.
+          flags="$(grep '^Features' /proc/cpuinfo | head -1 | cut -d: -f2)"
+          has_neon=false; has_sve=false; has_sve2=false
+          [[ " $flags " == *" asimd "* ]] && has_neon=true
+          [[ " $flags " == *" sve "*   ]] && has_sve=true
+          [[ " $flags " == *" sve2 "*  ]] && has_sve2=true
+          printf "NEON=%s  SVE=%s  SVE2=%s\n" "$has_neon" "$has_sve" "$has_sve2"
+          if [[ "$has_neon" != "true" ]]; then
+            echo "ERROR: NEON (asimd) not found in /proc/cpuinfo — not a valid AArch64 runner"
+            exit 2
+          fi
+          # Expose as step outputs for conditional steps below.
+          echo "has_neon=$has_neon" >> "$GITHUB_OUTPUT"
+          echo "has_sve=$has_sve"   >> "$GITHUB_OUTPUT"
+          echo "has_sve2=$has_sve2" >> "$GITHUB_OUTPUT"
+
+      - name: Set up GCC
+        run: |
+          sudo apt install -y gcc g++
+
+      - name: Install Meson, Ninja, and GTest
+        run: |
+          sudo apt update && sudo apt install -y meson ninja-build pkg-config libgtest-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Initialize Git Submodules
+        run: git submodule update --init
+
+      - name: Build test_simd_kernels (native C++)
+        # Meson detects aarch64 and compiles all three ISA variants (neon/sve/sve2)
+        # regardless of what the host CPU supports at runtime.
+        working-directory: jvector-native/src/main/native
+        run: |
+          meson setup build --wipe
+          ninja -C build test_simd_kernels
+
+      - name: Run test_simd_kernels — no ISA cap (auto-detect, neon job)
+        if: matrix.max_isa == 'neon'
+        working-directory: jvector-native/src/main/native
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — capped at neon (sve job, host may lack SVE)
+        if: matrix.max_isa == 'sve'
+        working-directory: jvector-native/src/main/native
+        env:
+          JVECTOR_MAX_ISA: neon
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — no ISA cap on SVE hardware (sve job)
+        if: matrix.max_isa == 'sve' && steps.cpu-features.outputs.has_sve == 'true'
+        working-directory: jvector-native/src/main/native
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — capped at neon (sve2 job baseline check)
+        if: matrix.max_isa == 'sve2'
+        working-directory: jvector-native/src/main/native
+        env:
+          JVECTOR_MAX_ISA: neon
+        run: ./build/test_simd_kernels
+
+      - name: Run test_simd_kernels — no ISA cap on SVE2 hardware (sve2 job)
+        if: matrix.max_isa == 'sve2' && steps.cpu-features.outputs.has_sve2 == 'true'
+        working-directory: jvector-native/src/main/native
+        run: ./build/test_simd_kernels
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: temurin
+          cache: maven
+
+      - name: Verify native-access vector support (JDK ${{ matrix.jdk }})
+        env:
+          JVECTOR_MAX_ISA: ${{ matrix.max_isa }}
+        run: >-
+          mvn -B -Punix-amd64-profile -pl jvector-tests -am test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+
+      - name: Test full suite with native vectorization (JDK ${{ matrix.jdk }})
+        env:
+          JVECTOR_MAX_ISA: ${{ matrix.max_isa }}
+        run: >-
+          mvn -B -Punix-amd64-profile test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+
+      - name: Test Summary for (ARM64/max:${{ matrix.max_isa }},JDK${{ matrix.jdk }})
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: |
+            **/target/surefire-reports/TEST-*.xml
+
+      - name: Upload Surefire Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-results--arm64-${{ matrix.max_isa }}-${{ matrix.jdk }}
+          path: "**/target/surefire-reports/**"

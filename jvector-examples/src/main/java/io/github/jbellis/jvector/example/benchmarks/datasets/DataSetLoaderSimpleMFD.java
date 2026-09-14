@@ -385,8 +385,34 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
     }
 
+    /**
+     * Prepare only a catalog entry's base-vector file for a file-backed source.
+     * Uses the same cache and download rules as loadDataSet, without downloading
+     * queries/ground truth or materializing, normalizing, or scrubbing vectors.
+     *
+     * @param dataSetName the catalog dataset name
+     * @return the local base-file path, or empty if the name is not in this catalog
+     * @throws IOException if the base file cannot be prepared
+     */
+    public Optional<Path> loadBaseVectorFile(String dataSetName) throws IOException {
+        var entry = catalog.get(dataSetName);
+        if (entry == null) return Optional.empty();
+        String filename = entry.fields.get("base");
+        if (filename == null)
+            throw new IOException("Dataset '" + dataSetName + "' has no base file in catalog");
+        ensureFileAvailable(filename, entry.cacheDir,
+                entry.baseUrl != null ? entry.baseUrl : remoteBasePath);
+        return Optional.of(entry.cacheDir.resolve(filename));
+    }
+
     @Override
     public Optional<DataSetInfo> loadDataSet(String dataSetName) {
+        return loadDataSet(dataSetName, BaseVectorLoading.PRELOAD);
+    }
+
+    @Override
+    public Optional<DataSetInfo> loadDataSet(String dataSetName, BaseVectorLoading loading) {
+        java.util.Objects.requireNonNull(loading, "loading");
         var entry = catalog.get(dataSetName);
         if (entry == null) return Optional.empty();
 
@@ -424,9 +450,19 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
+            if (loading == BaseVectorLoading.BUFFERED && props.loadBehavior() != DataSetProperties.LoadBehavior.NO_SCRUB)
+                throw new IllegalArgumentException("Buffered loading requires NO_SCRUB metadata for " + dataSetName);
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
+            if (loading == BaseVectorLoading.BUFFERED) {
+                try {
+                    return new BufferedDataSet(dataSetName, props.similarityFunction().orElseThrow(),
+                            effectiveCacheDir.resolve(baseFile), queryVectors, gtVectors);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
         }));
     }
@@ -854,38 +890,38 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
         S3TransferManager tm = getS3TransferManager();
 
-        DownloadFileRequest request = DownloadFileRequest.builder()
-                .getObjectRequest(b -> b.bucket(bucket).key(key))
-                .addTransferListener(LoggingTransferListener.create())
-                .destination(localPath)
-                .build();
-
-        boolean downloaded = false;
+        Path targetDir = localPath.toAbsolutePath().getParent();
+        Files.createDirectories(targetDir);
         for (int i = 0; i < 3; i++) { // 3 retries
+            // Only this attempt owns the temporary path; the shared cache name stays unpublished.
+            Path tempFile = Files.createTempFile(targetDir, "download-", ".tmp");
             try {
+                DownloadFileRequest request = DownloadFileRequest.builder()
+                        .getObjectRequest(b -> b.bucket(bucket).key(key))
+                        .addTransferListener(LoggingTransferListener.create())
+                        .destination(tempFile)
+                        .build();
                 FileDownload downloadFile = tm.downloadFile(request);
                 CompletedFileDownload result = downloadFile.completionFuture().join();
-                long downloadedSize = Files.size(localPath);
+                long downloadedSize = Files.size(tempFile);
                 Long expectedSize = result.response().contentLength();
 
-                // Null check prevents NullPointerException during unboxing.
-                // If expectedSize is null, we trust the transfer manager's successful completion.
+                // If size is unavailable, trust the transfer manager's successful completion.
                 if (expectedSize != null && downloadedSize != expectedSize) {
                     logger.error("Incomplete download (got {} of {} bytes). Retrying...", downloadedSize, expectedSize);
-                    Files.deleteIfExists(localPath);
                     continue;
                 }
 
-                downloaded = true;
-                break;
+                // Readers see a complete file, and a failed concurrent attempt cannot delete it.
+                Files.move(tempFile, localPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                return;
             } catch (Exception e) {
                 logger.error("Download attempt {} failed for {}: {}", i + 1, redact(key), redact(e.getMessage()));
-                Files.deleteIfExists(localPath);
+            } finally {
+                Files.deleteIfExists(tempFile);
             }
         }
-        if (!downloaded) {
-            throw new IOException("Failed to download " + redact(s3Url) + " after 3 attempts");
-        }
+        throw new IOException("Failed to download " + redact(s3Url) + " after 3 attempts");
     }
 
     private static S3AsyncClient s3AsyncClient() {

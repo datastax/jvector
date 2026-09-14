@@ -41,7 +41,7 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
-        <revision>4.0.0-rc.9-SNAPSHOT</revision>
+        <revision>4.0.3-SNAPSHOT</revision>
         <ludovic.netlib.version>3.0.3</ludovic.netlib.version>
     </properties>
     <modules>
@@ -110,7 +110,17 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.12.0</version>
+                <configuration>
+                    <tags>
+                        <tag>
+                            <!-- Apply to standalone Javadoc goals as well as aggregate packaging. -->
+                            <name>apiNote</name>
+                            <placement>a</placement>
+                            <head>API Note:</head>
+                        </tag>
+                    </tags>
+                </configuration>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>

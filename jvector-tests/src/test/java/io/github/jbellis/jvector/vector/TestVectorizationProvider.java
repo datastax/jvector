@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.vector;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
+
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Assert;
@@ -25,6 +27,7 @@ import org.junit.Assume;
 import org.junit.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.hamcrest.CoreMatchers.instanceOf;
 
 
 public class TestVectorizationProvider extends RandomizedTest {
@@ -46,6 +49,11 @@ public class TestVectorizationProvider extends RandomizedTest {
             v1a.set(i, v1b.get(i));
             v2a.set(i, v2b.get(i));
         }
+
+        Assert.assertThat(v1a, instanceOf(FloatArray.class));
+        Assert.assertThat(v2a, instanceOf(FloatArray.class));
+        Assert.assertArrayEquals(((FloatArray) v1a).array(), getVector(v1a), 0.0001f);
+        Assert.assertArrayEquals(((FloatArray) v2a).array(), getVector(v2a), 0.0001f);
 
         Assert.assertEquals(a.getVectorUtilSupport().dotProduct(v1a,v2a), b.getVectorUtilSupport().dotProduct(v1b, v2b), 0.0001f);
         Assert.assertEquals(a.getVectorUtilSupport().cosine(v1a,v2a), b.getVectorUtilSupport().cosine(v1b, v2b), 0.0001f);
@@ -71,13 +79,18 @@ public class TestVectorizationProvider extends RandomizedTest {
                 offsets[c] = (byte) (c * skipSize);
             }
 
+            Assert.assertThat(v2, instanceOf(FloatArray.class));
+            Assert.assertThat(v3, instanceOf(FloatArray.class));
+            Assert.assertArrayEquals(((FloatArray) v2).array(), getVector(v2), 0.0001f);
+            Assert.assertArrayEquals(((FloatArray) v3).array(), getVector(v3), 0.0001f);
+
             Assert.assertEquals(a.getVectorUtilSupport().sum(v3), b.getVectorUtilSupport().sum(v3), 0.0001);
             Assert.assertEquals(a.getVectorUtilSupport().sum(v3), a.getVectorUtilSupport().assembleAndSum(v2, 0, vectorTypeSupport.createByteSequence(offsets)), 0.0001);
             Assert.assertEquals(b.getVectorUtilSupport().sum(v3), b.getVectorUtilSupport().assembleAndSum(v2, 0, vectorTypeSupport.createByteSequence(offsets)), 0.0001);
         }
     }
 
-    public static String REQUIRE_SPECIFIC_VECTORIZATION_PROVIDER="Test_RequireSpecificVectorizationProvider";
+	public static String REQUIRE_SPECIFIC_VECTORIZATION_PROVIDER="Test_RequireSpecificVectorizationProvider";
 
     /**
      * To run with native-access vector support, use
@@ -85,13 +98,13 @@ public class TestVectorizationProvider extends RandomizedTest {
      *   -ea
      *   --add-modules jdk.incubator.vector
      *   --enable-native-access=ALL-UNNAMED
-     *   -Djvector.experimental.enable_native_vectorization=true
      * }</pre>
      *
      * To run with panama support, use
      * <pre>{@code
-     *   --ea
+     *   -ea
      *   --add-modules jdk.incubator.vector
+     *   -Djvector.vectorization_provider=panama
      * }</pre>
      *
      * If <pre>{@code -DTest_RequireSpecificVectorizationProvider=<simplename>}</pre>
@@ -117,4 +130,11 @@ public class TestVectorizationProvider extends RandomizedTest {
         }
     }
 
+    private static float[] getVector(VectorFloat<?> vf) {
+        final float[] arr = new float[vf.length()];
+        for (int i = 0; i < vf.length(); ++i) {
+            arr[i] = vf.get(i);
+        }
+        return arr;
+    }
 }

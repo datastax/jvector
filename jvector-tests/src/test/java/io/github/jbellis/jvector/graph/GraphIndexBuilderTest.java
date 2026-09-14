@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -33,11 +35,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Random;
 import java.util.function.Supplier;
 
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
@@ -128,6 +133,55 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     }
 
     @Test
+    public void testRescoreMarksCopiedNodesComplete() {
+        testRescoreMarksCopiedNodesComplete(false);
+        testRescoreMarksCopiedNodesComplete(true);
+    }
+
+    /**
+     * Regression test: {@link GraphIndexBuilder#rescore} is used to refine the PQ
+     * codebook mid-build, without pausing insertion of the remaining rows. rescore() copies each
+     * node's edges into the new builder via connectNode(), which does not mark the node complete
+     * in the new builder's CompletionTracker. A node stuck at the tracker's default completion
+     * time (Integer.MAX_VALUE) is filtered out of every ConcurrentGraphIndexView taken on the new
+     * graph from then on, including the entry node's own neighbor list, which is exactly the
+     * view addGraphNode() and cleanup() use while the graph is still mutable (allMutationsCompleted
+     * == false). So a fresh concurrent view taken right after rescore() must already see every
+     * copied edge, not an empty/filtered list.
+     */
+    public void testRescoreMarksCopiedNodesComplete(boolean addHierarchy) {
+        int dimension = 8;
+        int count = 50;
+
+        var vectors = createRandomFloatVectors(count, dimension, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.COSINE);
+
+        var builder = new GraphIndexBuilder(bsp, dimension, 8, 30, 1.2f, 1.2f, addHierarchy);
+        for (int i = 0; i < count; i++) {
+            builder.addGraphNode(i, ravv.getVector(i));
+        }
+
+        // Simulates calling application refining its PQ codebook mid-build
+        var rescored = GraphIndexBuilder.rescore(builder, bsp);
+        var rescoredGraph = (OnHeapGraphIndex) rescored.getGraph();
+
+        // The graph is still mutable at this point (cleanup() hasn't run), so getView() returns a
+        // ConcurrentGraphIndexView that filters on completion time.
+        assertTrue(!rescoredGraph.allMutationsCompleted());
+        var view = rescoredGraph.getView();
+
+        int entry = view.entryNode().node;
+        int rawEntryDegree = rescoredGraph.getNeighbors(0, entry).size();
+        assertTrue("test setup: entry node should have neighbors after rescore", rawEntryDegree > 0);
+
+        int visibleEntryDegree = view.getNeighborsIterator(0, entry).size();
+        assertEquals("entry node's neighbors are hidden from a fresh concurrent view after rescore -- " +
+                     "rescore() must mark copied nodes complete",
+                     rawEntryDegree, visibleEntryDegree);
+    }
+
+    @Test
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
         int size = randomIntBetween(10, 100);
@@ -157,6 +211,34 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertGraphEquals(graph, builder.graph);
     }
 
+    @Test
+    public void testSaveAndLoadEmptyGraph() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        var ravv = MockVectorValues.empty(dimension);
+
+        Supplier<GraphIndexBuilder> newBuilder = () ->
+            new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true);
+
+        var indexDataPath = testDirectory.resolve("index_builder_empty.data");
+        var builder = newBuilder.get();
+
+        var graph = TestUtil.buildSequentially(builder, ravv);
+
+        try (var out = TestUtil.openDataOutputStream(indexDataPath)) {
+            ((OnHeapGraphIndex) graph).setAllMutationsCompleted();
+            ((OnHeapGraphIndex) graph).save(out);
+        }
+
+        builder = newBuilder.get();
+        try(var readerSupplier = new SimpleMappedReader.Supplier(indexDataPath)) {
+            builder.load(readerSupplier.get());
+        }
+
+        assertEquals(ravv.size(), builder.graph.size(0));
+        assertNull(builder.graph.entryNode());
+        assertGraphEquals(graph, builder.graph);
+    }
+
     // Because RandomAccessVectorValues is exposed in such a way that it allows for subsequent additions to the
     // vector source, we need to ensure that GraphIndexBuilder can handle this.
     @Test
@@ -168,6 +250,77 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             for (int i = 0; i < 10; i++) {
                 mutableVectors.add(TestUtil.randomVector(random(), dimension));
                 builder.addGraphNode(i, ravv.getVector(i));
+            }
+        }
+    }
+
+    @Test
+    public void testFullPrecisionNeighborUniquenessAcrossLayers() throws IOException {
+        var random = new Random(522L);
+        var vectors = new ArrayList<VectorFloat<?>>();
+        for (int node = 0; node < 192; node++) {
+            float[] values = new float[16];
+            double norm = 0;
+            for (int d = 0; d < values.length; d++) {
+                values[d] = random.nextFloat() - 0.5f;
+                norm += values[d] * values[d];
+            }
+            for (int d = 0; d < values.length; d++) {
+                values[d] /= (float) Math.sqrt(norm);
+            }
+            vectors.add(vts.createFloatVector(values));
+        }
+        var ravv = new ListRandomAccessVectorValues(vectors, 16);
+        for (boolean hierarchy : new boolean[] {false, true}) {
+            for (int degree : new int[] {2, 3, 16, 32, 64}) {
+                try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT,
+                        degree, 100, 1.2f, 1.2f, hierarchy)) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        builder.addGraphNode(node, ravv.getVector(node));
+                    }
+                    assertUniqueNeighbors(builder.getGraph());
+                    builder.cleanup();
+                    assertUniqueNeighbors(builder.getGraph());
+                }
+            }
+        }
+    }
+
+    /**
+     * PQ build scores are asymmetric: a node's own search and a backlink from its neighbor can score
+     * the same edge differently, which defeated the old score-local duplicate check.
+     */
+    @Test
+    public void testPQNeighborUniquenessAcrossLayers() throws IOException {
+        var ravv = MockVectorValues.fromValues(createRandomFloatVectors(2000, 32, getRandom()));
+        var pq = ProductQuantization.compute(ravv, 8, 256, true);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, (PQVectors) pq.encodeAll(ravv));
+        for (int degree : new int[] {8, 16, 32}) {
+            try (var builder = new GraphIndexBuilder(bsp, ravv.dimension(), degree, 100, 1.2f, 1.2f, true)) {
+                for (int node = 0; node < ravv.size(); node++) {
+                    builder.addGraphNode(node, ravv.getVector(node));
+                }
+                assertUniqueNeighbors(builder.getGraph());
+                builder.cleanup();
+                assertUniqueNeighbors(builder.getGraph());
+            }
+        }
+    }
+
+    private static void assertUniqueNeighbors(ImmutableGraphIndex graph) throws IOException {
+        try (var view = graph.getView()) {
+            for (int level = 0; level <= graph.getMaxLevel(); level++) {
+                var nodes = graph.getNodes(level);
+                while (nodes.hasNext()) {
+                    int source = nodes.nextInt();
+                    var seen = new HashSet<Integer>();
+                    var neighbors = view.getNeighborsIterator(level, source);
+                    while (neighbors.hasNext()) {
+                        int target = neighbors.nextInt();
+                        assertTrue("Repeated edge at level " + level + ": " + source + " -> " + target,
+                                seen.add(target));
+                    }
+                }
             }
         }
     }

@@ -106,4 +106,37 @@ public interface OrdinalMapper {
             return newToOld.get(newOrdinal);
         }
     }
+
+    /**
+     * A mapper that applies a fixed offset to ordinals.
+     * Used for sequential mapping where local ordinal i maps to globalOffset + i.
+     */
+    class OffsetMapper implements OrdinalMapper {
+        private final int offset;
+        private final int size;
+
+        public OffsetMapper(int offset, int size) {
+            this.offset = offset;
+            this.size = size;
+        }
+
+        @Override
+        public int maxOrdinal() {
+            return offset + size - 1;
+        }
+
+        @Override
+        public int oldToNew(int oldOrdinal) {
+            return oldOrdinal + offset;
+        }
+
+        @Override
+        public int newToOld(int newOrdinal) {
+            int oldOrdinal = newOrdinal - offset;
+            if (oldOrdinal < 0 || oldOrdinal >= size) {
+                return OMITTED;
+            }
+            return oldOrdinal;
+        }
+    }
 }

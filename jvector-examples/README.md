@@ -2,6 +2,21 @@
 
 JVector comes with the following sample programs to try:
 
+### Batched file-backed vectors
+
+Two hello-world programs use public-catalog `e5-small-v2-100k`, or accept an existing
+`.fvecs` file through `-DvectorFile=/path/to/vectors.fvecs`:
+
+```bash
+mvn -Pjdk20 -pl jvector-examples -am compile exec:exec@hello-batched-vectors
+mvn -Pjdk20 -pl jvector-examples -am compile exec:exec@hello-batched-quantization
+```
+
+Run from the repository root with JDK 23. The first demonstrates scans, selections
+and vector ownership; the second trains and encodes with PQ and NVQ. See
+[Batched input vector access](../docs/batched-vector-access.md) for configuration,
+source lifecycle, and integration guidance.
+
 ### SiftSmall 
 A simple benchmark for the sift dataset located in the [siftsmall](./siftsmall) directory in the project root.
 
@@ -87,3 +102,13 @@ RESULT [2,1,0]
   * `BULKLOAD {localpath}`
     * Bulk loads a local file in numpy format Rows x Columns
     
+
+### Vector prefetching benchmark
+
+Compare preload, synchronous demand reads, and the PR's buffered source with
+`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`. Use `--samples N` for training sample size;
+each launch samples, trains, and encodes the entire candidate set, running the
+three arms sequentially in fresh JVMs. PQ/NVQ and named quantization parameters are selectable.
+
+See [command-line and IntelliJ instructions](../docs/vector-prefetch-benchmark.md)
+for cold-file-cache verification, timing boundaries and future vector/loader adapters.

@@ -1,0 +1,372 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.graph.disk;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
+import io.github.jbellis.jvector.disk.RandomAccessWriter;
+import io.github.jbellis.jvector.disk.ByteBufferIndexWriter;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+
+import static io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor.WriteResult;
+
+final class CompactWriter implements AutoCloseable {
+
+    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    private static final int FOOTER_MAGIC = 0x4a564244;
+    private static final int FOOTER_OFFSET_SIZE = Long.BYTES;
+    private static final int FOOTER_MAGIC_SIZE = Integer.BYTES;
+    private static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
+
+    private final RandomAccessWriter writer;
+    private final int recordSize;
+    private final long startOffset;
+    private final int headerSize;
+    private final Header header;
+    private final FusedFeature fusedFeature;
+    private final int baseDegree;
+    private final int maxOrdinal;
+    private final int entryNode;
+    private final ThreadLocal<ByteBuffer> bufferPerThread;
+    private final ThreadLocal<ByteSequence<?>> zeroPQ;
+    private final boolean fusedPQEnabled;
+    private final Path outputPath;
+    private final List<CommonHeader.LayerInfo> configuredLayerInfo;
+    private final List<Integer> configuredLayerDegrees;
+    private final List<UpperLayerFeatureRecord> level1FeatureRecords;
+    // PQ code for the entry node, required when hierarchy is disabled (no level 1).
+    // Mirrors what AbstractGraphIndexWriter.writeSparseLevels writes in the no-hierarchy branch.
+    private ByteSequence<?> entryNodePqCode;
+
+    // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
+    // codes from the cache instead of calling pq.encodeTo per neighbor. The cache handles
+    // per-thread view duplication internally, so positions don't race.
+    private PreEncodedCodeCache pqCodeCache;
+    private int pqCodeSize;
+    private ThreadLocal<byte[]> pqCodeBufPerThread;
+
+    CompactWriter(Path outputPath,
+                  int maxOrdinal,
+                  int numBaseLayerNodes,
+                  long startOffset,
+                  List<CommonHeader.LayerInfo> layerInfo,
+                  int entryNode,
+                  int dimension,
+                  List<Integer> layerDegrees,
+                  FusedFeature fusedFeature)
+            throws IOException {
+        this.fusedFeature = fusedFeature;
+        this.fusedPQEnabled = fusedFeature != null;
+        // This writer only ever targets the current on-disk format -- unlike AbstractGraphIndexWriter,
+        // there is no builder/version parameter that lets a caller pick an older version. Because of
+        // that, `fusedPQEnabled` alone is a safe stand-in for "the format supports fused PQ" everywhere
+        // below: there's no other version this class could be writing. We still check the format here,
+        // once, instead of just assuming it, so that if this class is ever changed to support writing
+        // older versions, or a future version drops fused PQ support, this fails loudly at construction
+        // instead of silently omitting the fused-PQ footer/packed-neighbor data later on.
+        int version = OnDiskGraphIndex.CURRENT_VERSION;
+        if (fusedPQEnabled && !GraphIndexFormatFactory.forVersion(version).supportsFeature(FeatureId.FUSED_PQ)) {
+            throw new IllegalStateException(
+                    "Fused PQ requires a format version that supports it; version " + version + " does not");
+        }
+        this.outputPath = outputPath;
+        this.writer = new BufferedRandomAccessWriter(outputPath);
+        this.startOffset = startOffset;
+        this.configuredLayerInfo = new ArrayList<>(layerInfo);
+        this.configuredLayerDegrees = new ArrayList<>(layerDegrees);
+        this.baseDegree = layerDegrees.get(0);
+        this.maxOrdinal = maxOrdinal;
+        this.entryNode = entryNode;
+        this.level1FeatureRecords = new ArrayList<>();
+        this.entryNodePqCode = null;
+
+        Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
+        InlineVectors inlineVectorFeature = new InlineVectors(dimension);
+        featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
+        if (fusedFeature != null) {
+            featureMap.put(fusedFeature.id(), fusedFeature);
+        }
+
+        int rsize = Integer.BYTES + inlineVectorFeature.featureSize() + Integer.BYTES + baseDegree * Integer.BYTES;
+        if (fusedFeature != null) {
+            rsize += fusedFeature.featureSize();
+        }
+        this.recordSize = rsize;
+
+        this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
+        var commonHeader = new CommonHeader(version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
+        this.header = new Header(commonHeader, featureMap);
+        this.headerSize = header.size();
+
+        final int codeSize = fusedFeature != null ? fusedFeature.codeSize() : 1;
+        this.bufferPerThread = ThreadLocal.withInitial(() -> {
+            ByteBuffer buffer = ByteBuffer.allocate(recordSize);
+            buffer.order(ByteOrder.BIG_ENDIAN);
+            return buffer;
+        });
+        this.zeroPQ = ThreadLocal.withInitial(() -> {
+            var vec = vectorTypeSupport.createByteSequence(codeSize);
+            vec.zero();
+            return vec;
+        });
+    }
+
+    /**
+     * Enables the pre-computed PQ code cache. Must be called before any writeInlineNodeRecord
+     * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
+     * re-encoded per write.
+     *
+     * @param cache       a cache holding one code per new ordinal, for ordinals
+     *                    {@code 0..maxOrdinal}
+     * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
+     */
+    public void enablePqCodeCache(PreEncodedCodeCache cache, int pqCodeSize) {
+        this.pqCodeCache = cache;
+        this.pqCodeSize = pqCodeSize;
+        this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
+    }
+
+    /** The pre-encoded code cache, or null when not enabled. Codes are keyed by new ordinal. */
+    PreEncodedCodeCache pqCodeCache() {
+        return pqCodeCache;
+    }
+
+    /**
+     * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
+     * fused output without the pre-encoded code cache, where neighbor codes are produced by
+     * encoding the neighbor vectors. Callers that can supply neighbor ids without vectors
+     * (the retained-only fast path) use this to skip the vector reads.
+     */
+    boolean needsNeighborVectors() {
+        return fusedPQEnabled && pqCodeCache == null;
+    }
+
+    public void writeHeader() throws IOException {
+        writer.seek(startOffset);
+        header.write(writer);
+        assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
+        writer.flush();
+    }
+
+    void writeFooter() throws IOException {
+        // No "&& version == 6" here: the constructor already verified that the format this writer
+        // targets supports fused PQ whenever fusedPQEnabled is true, so that's the only condition
+        // this needs to check. See the constructor for why that's a safe simplification.
+        if (fusedPQEnabled) {
+            if (!level1FeatureRecords.isEmpty()) {
+                // Hierarchy is enabled: write PQ source feature for every level-1 node.
+                // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel >= 1 branch).
+                for (UpperLayerFeatureRecord record : level1FeatureRecords) {
+                    writer.writeInt(record.ordinal);
+                    vectorTypeSupport.writeByteSequence(writer, record.pqCode);
+                }
+            } else if (entryNodePqCode != null) {
+                // No hierarchy: write the entry node's own PQ code so that
+                // OnDiskGraphIndex.loadInMemoryFeatures can populate hierarchyCachedFeatures
+                // and GraphSearcher.initializeInternal can score the entry point.
+                // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel == 0 branch).
+                writer.writeInt(entryNode);
+                vectorTypeSupport.writeByteSequence(writer, entryNodePqCode);
+            }
+        }
+        long headerOffset = writer.position();
+        header.write(writer);
+        writer.writeLong(headerOffset);
+        writer.writeInt(FOOTER_MAGIC);
+        final long expectedPosition = headerOffset + headerSize + FOOTER_SIZE;
+        assert writer.position() == expectedPosition : String.format("%d != %d", writer.position(), expectedPosition);
+    }
+
+    public void offsetAfterInline() throws IOException {
+        long offset = startOffset + headerSize + (long) (maxOrdinal + 1) * recordSize;
+        writer.seek(offset);
+    }
+
+    public Path getOutputPath() {
+        return outputPath;
+    }
+
+    public void setEntryNodePqCode(ByteSequence<?> code) {
+        this.entryNodePqCode = code;
+    }
+
+    private long scratchWatermark = -1;
+
+    /**
+     * Reserves {@code bytes} of transient space past the projected end of the output and returns
+     * its offset. Strategies claim their pre-encode caches through this rather than starting at
+     * {@link #projectedOutputSize()} directly, so that two of them - an inline fused strategy and a
+     * sidecar scratch - can coexist instead of mapping on top of each other. The file is still
+     * truncated back to {@link #projectedOutputSize()} when compaction completes, since every
+     * reserved region lies past it.
+     */
+    public synchronized long reserveScratch(long bytes) {
+        if (scratchWatermark < 0) {
+            scratchWatermark = projectedOutputSize();
+        }
+        long at = scratchWatermark;
+        scratchWatermark += Math.max(0L, bytes);
+        return at;
+    }
+
+    /**
+     * Returns the projected end-of-output offset, computed from layer counts and degrees.
+     * Used to place a transient PQ-code mmap section past the end of the output during
+     * compaction; the file is truncated back to this size when compaction completes.
+     */
+    public long projectedOutputSize() {
+        long total = startOffset + headerSize;
+        // Level-0 records: one per ordinal slot.
+        total += (long) (maxOrdinal + 1) * recordSize;
+        // Upper-layer records: written by writeUpperLayerNode as
+        // [ord int][count int][degree neighbor ints].
+        for (int level = 1; level < configuredLayerDegrees.size(); level++) {
+            int degree = configuredLayerDegrees.get(level);
+            int count = configuredLayerInfo.get(level).size;
+            total += (long) count * (Integer.BYTES * 2L + (long) degree * Integer.BYTES);
+        }
+        // PQ feature records written at the start of writeFooter() when fused PQ is enabled:
+        //   - hierarchy enabled: one [ord, code] record per level-1 node;
+        //   - no hierarchy:      one [entryOrd, code] record for the entry node only.
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled) {
+            int pqSize = fusedFeature.codeSize();
+            if (configuredLayerInfo.size() > 1) {
+                int level1Count = configuredLayerInfo.get(1).size;
+                total += (long) level1Count * (Integer.BYTES + pqSize);
+            } else {
+                total += Integer.BYTES + pqSize;
+            }
+        }
+        // Footer trailer: header copy + headerOffset (long) + magic (int).
+        total += headerSize + FOOTER_SIZE;
+        return total;
+    }
+
+    public void writeUpperLayerNode(int level, int ordinal, int[] neighbors, ByteSequence<?> level1PqCode) throws IOException {
+        writer.writeInt(ordinal);
+        writer.writeInt(neighbors.length);
+        int degree = configuredLayerDegrees.get(level);
+        int n = 0;
+        for (; n < neighbors.length; n++) {
+            writer.writeInt(neighbors[n]);
+        }
+        for (; n < degree; n++) {
+            writer.writeInt(-1);
+        }
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled && level == 1 && level1PqCode != null) {
+            level1FeatureRecords.add(new UpperLayerFeatureRecord(ordinal, level1PqCode.copy()));
+        }
+    }
+
+    public void close() throws IOException {
+        final var endOfGraphPosition = writer.position();
+        writer.seek(endOfGraphPosition);
+        writer.flush();
+        writer.close();
+    }
+
+    public WriteResult writeInlineNodeRecord(int ordinal, VectorFloat<?> vec, SelectedVecCache selectedCache, ByteSequence<?> pqCode) throws IOException
+    {
+        var bwriter = new ByteBufferIndexWriter(bufferPerThread.get());
+
+        long fileOffset = startOffset + headerSize + (long) ordinal * recordSize;
+        bwriter.reset();
+        bwriter.writeInt(ordinal);
+
+        for(int i = 0; i < vec.length(); ++i) {
+            bwriter.writeFloat(vec.get(i));
+        }
+
+        // write fused PQ
+        // since we build a graph in a streaming way,
+        // we cannot use fusedPQfeature.writeInline
+        if (fusedPQEnabled) {
+            int k = 0;
+            if (pqCodeCache != null) {
+                // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
+                byte[] codeBuf = pqCodeBufPerThread.get();
+                for (; k < selectedCache.size; k++) {
+                    int newOrd = selectedCache.nodes[k]; // already remapped before this call
+                    pqCodeCache.get(newOrd, codeBuf);
+                    bwriter.write(codeBuf, 0, pqCodeSize);
+                }
+            } else {
+                var compressor = fusedFeature.getCompressor();
+                for (; k < selectedCache.size; k++) {
+                    pqCode.zero();
+                    compressor.encodeTo(selectedCache.vecs[k], pqCode);
+                    vectorTypeSupport.writeByteSequence(bwriter, pqCode);
+                }
+            }
+            for (; k < baseDegree; k++) {
+                vectorTypeSupport.writeByteSequence(bwriter, zeroPQ.get());
+            }
+        }
+
+        // write neighbors list
+        bwriter.writeInt(selectedCache.size);
+        int n = 0;
+        for (; n < selectedCache.size; n++) {
+            bwriter.writeInt(selectedCache.nodes[n]);
+        }
+
+        // pad out to base layer degree
+        for (; n < baseDegree; n++) {
+            bwriter.writeInt(-1);
+        }
+
+        if (bwriter.bytesWritten() != recordSize) {
+            throw new IllegalStateException(
+                    String.format("Record size mismatch for ordinal %d: expected %d bytes, wrote %d bytes, base degree: %d",
+                            ordinal, recordSize, bwriter.bytesWritten(), baseDegree));
+        }
+
+        ByteBuffer dataCopy = bwriter.cloneBuffer();
+
+        return new WriteResult(ordinal, fileOffset, dataCopy);
+    }
+
+    static final class UpperLayerFeatureRecord {
+        final int ordinal;
+        final ByteSequence<?> pqCode;
+
+        UpperLayerFeatureRecord(int ordinal, ByteSequence<?> pqCode) {
+            this.ordinal = ordinal;
+            this.pqCode = pqCode;
+        }
+    }
+}

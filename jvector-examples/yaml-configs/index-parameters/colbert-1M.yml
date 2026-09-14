@@ -2,6 +2,7 @@ yamlSchemaVersion: 2
 onDiskIndexVersion: 7
 
 dataset: colbert-1M
+useDatasetPrefetching: false
 
 construction:
   outDegree: [32]

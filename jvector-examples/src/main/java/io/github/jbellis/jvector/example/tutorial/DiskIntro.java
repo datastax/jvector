@@ -34,7 +34,8 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
-import io.github.jbellis.jvector.graph.disk.GraphIndexWriterTypes;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
@@ -45,12 +46,13 @@ import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-// Provides the code used in disk-tutorial.md.
-// If you edit this file you may also want to edit disk-tutoral.md
+// Provides the code used in 2-disk-tutorial.md.
+// Keep the tutorial and this example in sync.
 public class DiskIntro {
     public static void main(String[] args) throws IOException {
         // This is a preconfigured dataset that will be downloaded automatically.
-        DataSet dataset = DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
+        String datasetName = args.length == 0 ? "ada002-100k" : args[0];
+        DataSet dataset = DataSets.loadDataSet(datasetName).orElseThrow(() ->
             new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
         ).getDataSet();
 
@@ -76,22 +78,25 @@ public class DiskIntro {
             heapGraph = builder.build(ravv);
         }
 
+        var writerVectors = ravv.threadLocalSupplier();
         Path graphPath = Files.createTempFile("jvector-example-graph", null);  // or wherever you want to save the graph
         try (
             // Create a writer for the on-heap graph we just built.
-            GraphIndexWriter writer = GraphIndexWriter.getBuilderFor(GraphIndexWriterTypes.RANDOM_ACCESS_PARALLEL, heapGraph, graphPath)
+            GraphIndexWriter writer = new OnDiskParallelGraphIndexWriter.Builder(heapGraph, graphPath)
+                .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
                 // Let the writer know that we'll also be passing in the actual vector data
                 // to be saved "inline" with the data for each corresponding graph node.
                 .with(new InlineVectors(dim))
                 .build();
         ) {
+            // Supplying every inline feature enables complete-record batches (default 64).
             // Supply one map entry for each feature.
             // The key is a FeatureId enum corresponding to the feature
             // and the value is a function which generates the feature state for each graph node.
             writer.write(Map.of(
                 FeatureId.INLINE_VECTORS,
                 // we already have a RAVV, so we'll just use that to supply the writer.
-                nodeId -> new InlineVectors.State(ravv.getVector(nodeId))));
+                nodeId -> new InlineVectors.State(writerVectors.get().getVector(nodeId))));
         }
 
         // ReaderSupplierFactory automatically picks an available RandomAccessReader implementation

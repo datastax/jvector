@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -26,7 +27,6 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.IntStream;
 
 /**
  * Binary Quantization of float vectors: each float is compressed to a single bit,
@@ -64,18 +64,11 @@ public class BinaryQuantization implements VectorCompressor<long[]> {
 
     @Override
     public CompressedVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        var ravvCopy = ravv.threadLocalSupplier();
-        var cv = simdExecutor.submit(() -> IntStream.range(0, ravv.size())
-                .parallel()
-                .mapToObj(i -> {
-                    var localRavv = ravvCopy.get();
-                    VectorFloat<?> v = localRavv.getVector(i);
-                    return v == null
-                            ? new long[compressedVectorSize() / Long.BYTES]
-                            : encode(v);
-                        })
-                .toArray(long[][]::new))
-                .join();
+        var cv = new long[ravv.size()][];
+        VectorAccess.forEach(ravv, simdExecutor, (ordinal, vector) ->
+                cv[ordinal] = vector == null
+                        ? new long[compressedVectorSize() / Long.BYTES]
+                        : encode(vector));
         return new ImmutableBQVectors(this, cv);
     }
 

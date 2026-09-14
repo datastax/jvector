@@ -543,4 +543,109 @@ public class TestUtil {
             throw new UnsupportedOperationException();
         }
     }
+
+    public static class EmptyGraphIndex implements ImmutableGraphIndex {
+            private final int dimension;
+            private final List<CommonHeader.LayerInfo> layerInfo;
+            
+            public EmptyGraphIndex(int dimension, Random random) {
+                this.dimension = dimension;
+                this.layerInfo = List.of(new CommonHeader.LayerInfo(0, 0));
+            }
+
+            @Override
+            public long ramBytesUsed() {
+                return 0;
+            }
+
+            @Override
+            public NodesIterator getNodes(int level) {
+                return NodesIterator.EMPTY_NODE_ITERATOR;
+            }
+
+            @Override
+            public View getView() {
+                return new View() {
+                    @Override
+                    public void close() throws IOException {
+                    }
+                    
+                    @Override
+                    public int size() {
+                        return 0;
+                    }
+                    
+                    @Override
+                    public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited,
+                            NeighborProcessor neighborProcessor) {
+                        throw new IllegalStateException("Should not be called, empty graph has no nodes");
+                    }
+                    
+                    @Override
+                    public Bits liveNodes() {
+                        return Bits.ALL;
+                    }
+                    
+                    @Override
+                    public NodesIterator getNeighborsIterator(int level, int node) {
+                        return NodesIterator.EMPTY_NODE_ITERATOR;
+                    }
+                    
+                    @Override
+                    public NodeAtLevel entryNode() {
+                        return null;
+                    }
+                    
+                    @Override
+                    public boolean contains(int level, int node) {
+                        return false;
+                    }
+                };
+            }
+
+            @Override
+            public int maxDegree() {
+                return layerInfo.stream().mapToInt(li -> li.degree).max().orElseThrow();
+            }
+
+            @Override
+            public List<Integer> maxDegrees() {
+                throw new NotImplementedException();
+            }
+
+            @Override
+            public int getDimension() {
+                return dimension;
+            }
+
+            @Override
+            public void close() throws IOException {
+                
+            }
+
+            @Override
+            public boolean isHierarchical() {
+                return false;
+            }
+
+            @Override
+            public int getMaxLevel() {
+                return layerInfo.size() - 1;
+            }
+
+            @Override
+            public int getDegree(int level) {
+                return layerInfo.get(level).degree;
+            }
+
+            @Override
+            public double getAverageDegree(int level) {
+                throw new NotImplementedException();
+            }
+
+            @Override
+            public int size(int level) {
+                return layerInfo.get(level).size;
+            }
+        };
 }

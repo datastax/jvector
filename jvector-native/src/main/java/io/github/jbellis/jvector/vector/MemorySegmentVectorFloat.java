@@ -18,30 +18,46 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.Buffer;
+import java.util.Objects;
 
 /**
- * VectorFloat implementation backed by an on-heap MemorySegment.
+ * VectorFloat backed by a float array with a lazily created on-heap MemorySegment view.
  */
-final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>
+final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>, FloatArray
 {
-    private final MemorySegment segment;
+    private static final VarHandle STORAGE;
+    static {
+        try {
+            STORAGE = MethodHandles.lookup().findVarHandle(MemorySegmentVectorFloat.class, "segment", Object.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    // Reuse the original single reference slot: an array until native access,
+    // then its MemorySegment view. The view keeps the same array alive.
+    private volatile Object segment;
 
     MemorySegmentVectorFloat(int length) {
-        segment = MemorySegment.ofArray(new float[length]);
+        this(new float[length]);
     }
 
     MemorySegmentVectorFloat(Buffer buffer) {
         this(buffer.remaining());
-        segment.copyFrom(MemorySegment.ofBuffer(buffer));
+        get().copyFrom(MemorySegment.ofBuffer(buffer));
     }
 
     MemorySegmentVectorFloat(float[] data) {
-        this.segment = MemorySegment.ofArray(data);
+        this.segment = java.util.Objects.requireNonNull(data);
     }
 
     @Override
@@ -49,37 +65,75 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     {
         int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return OH_BYTES + REF_BYTES + segment.byteSize();
+        return OH_BYTES + REF_BYTES + (long) length() * Float.BYTES;
     }
 
     @Override
     public MemorySegment get()
     {
-        return segment;
+        Object current = segment;
+        if (current instanceof MemorySegment view) {
+            return view;
+        }
+        synchronized (this) {
+            current = segment;
+            if (current instanceof MemorySegment view) {
+                return view;
+            }
+            MemorySegment view = MemorySegment.ofArray((float[]) current);
+            segment = view;
+            return view;
+        }
     }
 
+    // Plain reads may keep the original array after native publication: both states
+    // address the same elements. Heap-segment bounds/base/scope metadata is final.
+    // Retain volatile publication in get() and its single shared-view identity.
     @Override
     public float get(int n)
     {
-        // this is (unfortunately) meaningfully better performing than getting at an offset in the memory segment
-        return ((float[])segment.heapBase().get())[n];
+        Object current = STORAGE.get(this);
+        if (current instanceof float[] data) {
+            return data[n];
+        }
+        MemorySegment view = (MemorySegment) current;
+        if (n < 0 || n >= view.byteSize() / Float.BYTES) {
+            throw new ArrayIndexOutOfBoundsException(n);
+        }
+        // heapBase() returns an Optional that can escape in scalar callers.
+        return view.getAtIndex(ValueLayout.JAVA_FLOAT, n);
     }
 
     @Override
     public void set(int n, float value)
     {
-        // this is (unfortunately) meaningfully better performing than setting at an offset in the memory segment
-        ((float[])segment.heapBase().get())[n] = value;
+        Object current = STORAGE.get(this);
+        if (current instanceof float[] data) {
+            data[n] = value;
+        } else {
+            MemorySegment view = (MemorySegment) current;
+            if (n < 0 || n >= view.byteSize() / Float.BYTES) {
+                throw new ArrayIndexOutOfBoundsException(n);
+            }
+            view.setAtIndex(ValueLayout.JAVA_FLOAT, n, value);
+        }
     }
 
     @Override
     public void zero() {
-        segment.fill((byte) 0);
+        Object current = STORAGE.get(this);
+        if (current instanceof float[] data) {
+            java.util.Arrays.fill(data, 0.0f);
+        } else {
+            ((MemorySegment) current).fill((byte) 0);
+        }
     }
 
     @Override
     public int length() {
-        return (int) (segment.byteSize() / Float.BYTES);
+        Object current = STORAGE.get(this);
+        return current instanceof float[] data
+                ? data.length : (int) (((MemorySegment) current).byteSize() / Float.BYTES);
     }
 
     @Override
@@ -106,9 +160,15 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length)
     {
-        MemorySegmentVectorFloat csrc = (MemorySegmentVectorFloat) src;
-        segment.asSlice((long) destOffset * Float.BYTES, (long) length * Float.BYTES)
-                .copyFrom(csrc.segment.asSlice((long) srcOffset * Float.BYTES, (long) length * Float.BYTES));
+        if (src instanceof FloatArray csrc) {
+            System.arraycopy(csrc.array(), srcOffset, array(), destOffset, length);
+        } else {
+            Objects.checkFromIndexSize(srcOffset, length, src.length());
+            Objects.checkFromIndexSize(destOffset, length, length());
+            for (int i = 0; i < length; i++) {
+                set(destOffset + i, src.get(srcOffset + i));
+            }
+        }
     }
 
     @Override
@@ -134,11 +194,17 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         MemorySegmentVectorFloat that = (MemorySegmentVectorFloat) o;
-        return segment.mismatch(that.segment) == -1;
+        return get().mismatch(that.get()) == -1;
     }
 
     @Override
     public int hashCode() {
         return this.getHashCode();
+    }
+
+    @Override
+    public float[] array() {
+        Object current = segment;
+        return current instanceof float[] data ? data : (float[]) ((MemorySegment) current).heapBase().get();
     }
 }

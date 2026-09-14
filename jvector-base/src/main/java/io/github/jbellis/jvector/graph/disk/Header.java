@@ -22,9 +22,6 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
-import java.util.EnumMap;
-import java.util.EnumSet;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -52,71 +49,18 @@ class Header {
 
     void write(IndexWriter out) throws IOException {
         common.write(out);
-
-        if (common.version >= 6) {
-            // Writing the features in order instead of writing a single integer with all the features (as done in <V6),
-            // preserves the initial ordering computed in the writer.
-            out.writeInt(features.size());
-            for (var featureId : features.keySet()) {
-                out.writeInt(featureId.ordinal());
-                Feature feature = features.get(featureId);
-                feature.writeHeader(out);
-            }
-        } else {
-            if (common.version >= 3) {
-                out.writeInt(FeatureId.serialize(EnumSet.copyOf(features.keySet())));
-            }
-
-            // we restrict pre-version-3 writers to INLINE_VECTORS features, so we don't need additional version-handling here
-            for (Feature writer : features.values()) {
-                writer.writeHeader(out);
-            }
-
-        }
+        common.getGraphIndexFormat().writeHeaderFeatures(out, features);
     }
 
     public int size() {
-        int size = common.size();
-
-        if (common.version >= 6) {
-            // In V6, this accounts for the number of features and the ordinal of each feature
-            size += Integer.BYTES + features.size() * Integer.BYTES;
-        } else if (common.version >= 3) {
-            size += Integer.BYTES;
-        }
-
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
-
-        return size;
+        return common.getGraphIndexFormat().headerSize(features);
     }
 
     static Header load(RandomAccessReader reader, long offset) throws IOException {
         reader.seek(offset);
-
         Map<FeatureId, Feature> features;
-
         CommonHeader common = CommonHeader.load(reader);
-        if (common.version >= 6) {
-            features = new LinkedHashMap<>();
-            int nFeatures = reader.readInt();
-            for (int i = 0; i < nFeatures; i++) {
-                FeatureId featureId = FeatureId.values()[reader.readInt()];
-                features.put(featureId, featureId.load(common, reader));
-            }
-        } else {
-            EnumSet<FeatureId> featureIds;
-            features = new EnumMap<>(FeatureId.class);
-
-            if (common.version >= 3) {
-                featureIds = FeatureId.deserialize(reader.readInt());
-            } else {
-                featureIds = EnumSet.of(FeatureId.INLINE_VECTORS);
-            }
-            for (FeatureId featureId : featureIds) {
-                features.put(featureId, featureId.load(common, reader));
-            }
-        }
-
+        features = common.getGraphIndexFormat().loadHeaderFeatures(reader, common);
         return new Header(common, features);
     }
 }

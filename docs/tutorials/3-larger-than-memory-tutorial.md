@@ -1,7 +1,7 @@
 # JVector Tutorial Part 3: Larger-Than-Memory Indexes with Product Quantization
 
 In the previous tutorials, we built indexes in-memory then wrote them to disk. However, this requires enough memory to hold all the vectors during construction. In this tutorial we'll build larger-than-memory indexes using two key techniques:
-- Write vectors to disk as they are streamed in
+- Write complete records after graph cleanup, reading FP payloads from a replayable source
 - Keep compressed versions of the vectors in the memory to allow JVector to compute similarities during construction. We'll use Product Quantization (PQ).
 
 > [!TIP]
@@ -14,6 +14,11 @@ In the previous tutorials, we built indexes in-memory then wrote them to disk. H
 >
 > Read the [PQ paper](https://ieeexplore.ieee.org/document/5432202) for more details.
 
+For a file-backed vector source with bounded asynchronous reads, see
+[Batched input vector access](../batched-vector-access.md). Its hello-world examples
+show how to supply a `.fvecs` file directly to PQ and NVQ without preloading the
+complete input dataset.
+
 ## Loading the Dataset
 
 We'll change things up with a different dataset:
@@ -24,7 +29,7 @@ We'll change things up with a different dataset:
 // the base vectors in-memory.
 DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
     new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
-);
+).getDataSet();
 
 // Remember that RAVVs need not be in-memory in the general case.
 // We will sample from this RAVV to compute the PQ codebooks.
@@ -64,43 +69,34 @@ var pqVectors = new MutablePQVectors(pq);
 BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(vsf, pqVectors);
 ```
 
-Since we have a BuildScoreProvider, we're now ready to create and use a `GraphIndexBuilder`. We will also create the corresponding `GraphIndexWriter` at the same time. Unlike the last tutorial we created the writer only after building the complete graph, we'll write full-resolution vectors to disk in tandem with adding them to the graph.
+The graph builder uses resident compressed vectors for neighbor comparisons.
+Original input vectors are consumed for insertion and reread for final FP payloads;
+the source must remain available through serialization. It need not preload the
+whole dataset. A one-pass source must retain its final feature states or use the
+compatible incremental-writing API instead.
 
 ```java
-// Initialize the graph parameters M, ef etc
-// ...
-
+// Initialize the graph parameters M, ef etc.
 Path graphPath = Files.createTempFile("jvector-ltm-graph", null);
 
-// remember to close these manually or use try-with-resources
+// Close the builder after final writing, or use try-with-resources.
 GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy);
-OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), graphPath)
-        .with(new InlineVectors(dim))
-        // Since we start with an empty graph, the writer will, by default,
-        // assume an ordinal mapping of size 0 (which is obviously incorrect).
-        // This is easy to rectify if you know the number of vectors beforehand,
-        // if not you may need to implement OrdinalMapper yourself.
-        .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1))
-        .build();
+var vectors = ravv.threadLocalSupplier();
 ```
 
 ## Incremental Index Construction
 
 We'll proceed to add vectors to the index one at a time. The general procedure is:
 - Encode the vector using the PQ codebooks created earlier, and add it to the collection of PQ vectors
-- Write the full-resolution vector to disk
 - Add the new vector to the graph
 
 ```java
 for (int ordinal = 0; ordinal < ravv.size(); ordinal++) {
-    VectorFloat<?> v = ravv.getVector(ordinal);
+    VectorFloat<?> v = vectors.get().getVector(ordinal);
 
     // Encode and add the vector to the working set of PQ vectors,
     // which allows the graph builder to access it through the BuildScoreProvder.
     pqVectors.encodeAndSet(ordinal, v);
-
-    // Write the feature (full-resolution vector) for a single vector instead of all at once.
-    writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
 
     builder.addGraphNode(ordinal, v);
 }
@@ -116,11 +112,24 @@ Once we've added all the vectors we can write the graph structure to disk:
 // Enforces maximum degree constraint among other things.
 builder.cleanup();
 
-// Write the graph structure (neighbor lists) to disk.
-// No need to pass-in a feature supplier since we wrote the features incrementally
-// using writer.writeInLine
-writer.write(Map.of());
+// Serialize FP payloads and adjacency together after cleanup.
+try (var writer = new OnDiskParallelGraphIndexWriter.Builder(builder.getGraph(), graphPath)
+        .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+        .with(new InlineVectors(dim))
+        .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1))
+        .build()) {
+    writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+            ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal))));
+}
+builder.close();
 ```
+
+The parallel writer batches up to 64 complete records without changing V6.
+Callbacks run concurrently, so the per-worker source views above are important for
+borrowed vectors. For NVQ reranking, supply `NVQ.State` instead of `InlineVectors.State`;
+see [Deferred batch serialization](../deferred-batch-writer.md) and
+[`NvqExample.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/NvqExample.java).
+The construction scorer and two-stage query algorithm are unchanged.
 
 We should also save the PQ vectors we created since we'll need them later on when it's time to run searches:
 
@@ -149,7 +158,7 @@ ReaderSupplier graphSupplier = ReaderSupplierFactory.open(graphPath);
 OnDiskGraphIndex graph = OnDiskGraphIndex.load(graphSupplier);
 // except that we also need a reader for the PQ vectors
 ReaderSupplier pqSupplier = ReaderSupplierFactory.open(pqPath);
-RandomAccessReader pqReader = pqSupplier.get()
+RandomAccessReader pqReader = pqSupplier.get();
 // don't forget to close all of the above! (or just use try-with-resources)
 
 // we need to have the PQ vectors in memory
@@ -162,7 +171,7 @@ int rerankK = (int) (topK * overqueryFactor);
 // a friendly reminder that searchers need closing too
 GraphSearcher searcher = new GraphSearcher(graph);
 var graphRavv = (RandomAccessVectorValues) searcher.getView();
-VectorFloat<?> query : dataset.getQueryVectors().get(0);
+VectorFloat<?> query = dataset.getQueryVectors().get(0);
 
 // Two-phase search:
 // 1. ApproximateScoreFunction (ASF) uses compressed vectors for fast initial search

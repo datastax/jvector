@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntFunction;
 
 /**
@@ -38,8 +39,8 @@ import java.util.function.IntFunction;
  * Each task processes a contiguous range of ordinals to reduce task creation overhead.
  * <p>
  * This writes directly to the AsynchronousFileChannel using position-based writes with writeFully
- * to ensure all bytes are written before returning. This eliminates race conditions where the OS
- * buffer cache hasn't flushed data before subsequent reads occur.
+ * to ensure each write completes before its buffer is reused. Durability is handled by
+ * the caller's final channel.force(true).
  */
 class NodeRecordTask implements Callable<Void> {
     private final int startOrdinal;  // Inclusive
@@ -53,6 +54,7 @@ class NodeRecordTask implements Callable<Void> {
     private final long baseOffset;   // Base file offset for L0 (offsets calculated per-ordinal)
     private final AsynchronousFileChannel channel;
     private final ByteBuffer buffer; // Thread-local buffer for building record components
+    private final BooleanSupplier stopRequested;
 
     NodeRecordTask(int startOrdinal,
                    int endOrdinal,
@@ -65,6 +67,25 @@ class NodeRecordTask implements Callable<Void> {
                    long baseOffset,
                    AsynchronousFileChannel channel,
                    ByteBuffer buffer) {
+        this(startOrdinal, endOrdinal, ordinalMapper, graph, view, inlineFeatures, featureStateSuppliers,
+                recordSize, baseOffset, channel, buffer, () -> false);
+    }
+
+    /// Create a task that stops before its next record once `stopRequested` returns true, for
+    /// example after another task failed or the writing thread was interrupted. A stopped task
+    /// returns normally; the writer reports the failure that requested the stop.
+    NodeRecordTask(int startOrdinal,
+                   int endOrdinal,
+                   OrdinalMapper ordinalMapper,
+                   ImmutableGraphIndex graph,
+                   ImmutableGraphIndex.View view,
+                   List<Feature> inlineFeatures,
+                   Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
+                   int recordSize,
+                   long baseOffset,
+                   AsynchronousFileChannel channel,
+                   ByteBuffer buffer,
+                   BooleanSupplier stopRequested) {
         this.startOrdinal = startOrdinal;
         this.endOrdinal = endOrdinal;
         this.ordinalMapper = ordinalMapper;
@@ -76,6 +97,7 @@ class NodeRecordTask implements Callable<Void> {
         this.baseOffset = baseOffset;
         this.channel = channel;
         this.buffer = buffer;
+        this.stopRequested = stopRequested;
     }
 
     /**
@@ -95,8 +117,8 @@ class NodeRecordTask implements Callable<Void> {
         long currentPosition = position;
         while (buffer.hasRemaining()) {
             int written = channel.write(buffer, currentPosition).get();
-            if (written < 0) {
-                throw new IOException("Channel closed while writing");
+            if (written <= 0) {
+                throw new IOException("Channel made no progress while writing");
             }
             currentPosition += written;
         }
@@ -107,16 +129,61 @@ class NodeRecordTask implements Callable<Void> {
         // Reuse writer and buffer across all ordinals in this range
         var writer = new ByteBufferIndexWriter(buffer);
 
+        int payloadBytes = Integer.BYTES * (2 + graph.getDegree(0))
+                + inlineFeatures.stream().mapToInt(Feature::featureSize).sum();
+        if (recordSize != payloadBytes) {
+            throw new IllegalArgumentException("Record size must match its serialized payload");
+        }
+        final boolean completeRecord = inlineFeatures.stream().allMatch(f -> featureStateSuppliers.get(f.id()) != null);
+        final int batch = buffer.capacity() / recordSize;
         for (int newOrdinal = startOrdinal; newOrdinal < endOrdinal; newOrdinal++) {
+            if (stopRequested.getAsBoolean()) return null;
             var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
             long recordOffset = baseOffset + (long) newOrdinal * recordSize;
             long currentPosition = recordOffset;
+
+            // A complete record can share one bounded buffer and one positioned write.
+            if (completeRecord) {
+                if (buffer.position() == buffer.limit()) writer.reset();
+                int recordBegin = buffer.position();
+                writer.writeInt(originalOrdinal == OrdinalMapper.OMITTED ? -1 : newOrdinal);
+                if (originalOrdinal == OrdinalMapper.OMITTED) {
+                    for (var feature : inlineFeatures)
+                        for (int i = 0; i < feature.featureSize(); i++) writer.writeByte(0);
+                    writer.writeInt(0);
+                    for (int n = 0; n < graph.getDegree(0); n++) writer.writeInt(-1);
+                } else {
+                    if (!graph.containsNode(originalOrdinal)) {
+                        throw new IllegalStateException("Missing graph node " + originalOrdinal);
+                    }
+                    for (var feature : inlineFeatures)
+                        feature.writeInline(writer, featureStateSuppliers.get(feature.id()).apply(originalOrdinal));
+                    var neighbors = view.getNeighborsIterator(0, originalOrdinal);
+                    if (neighbors.size() > graph.getDegree(0)) throw new IllegalStateException("Too many neighbors for " + originalOrdinal);
+                    writer.writeInt(neighbors.size());
+                    int n = 0;
+                    while (neighbors.hasNext()) {
+                        int mapped = ordinalMapper.oldToNew(neighbors.nextInt());
+                        if (mapped < 0 || mapped > ordinalMapper.maxOrdinal()) throw new IllegalStateException("Invalid mapped neighbor " + mapped);
+                        writer.writeInt(mapped); n++;
+                    }
+                    for (; n < graph.getDegree(0); n++) writer.writeInt(-1);
+                }
+                if (writer.position() != recordBegin + recordSize) throw new IllegalStateException("Wrong serialized record length");
+                if (buffer.position() < recordSize * batch && newOrdinal != endOrdinal - 1) continue;
+                long batchOffset = recordOffset - recordBegin;
+                buffer.flip();
+                // writeFully waits for completion before this worker reuses its buffer.
+                writeFully(channel, buffer, batchOffset);
+                buffer.clear();
+                continue;
+            }
 
             // Reset buffer for this ordinal
             writer.reset();
 
             // Write node ordinal
-            writer.writeInt(newOrdinal);
+            writer.writeInt(originalOrdinal == OrdinalMapper.OMITTED ? -1 : newOrdinal);
             ByteBuffer ordinalData = writer.cloneBuffer();
             writeFully(channel, ordinalData, currentPosition);
             currentPosition += Integer.BYTES;
@@ -132,8 +199,10 @@ class NodeRecordTask implements Callable<Void> {
                     }
                 }
                 ByteBuffer featureData = writer.cloneBuffer();
+                // writeFully consumes the buffer; retain its length before writing.
+                int featureBytes = featureData.remaining();
                 writeFully(channel, featureData, currentPosition);
-                currentPosition += featureData.remaining();
+                currentPosition += featureBytes;
 
                 // Write empty neighbor list
                 writer.reset();

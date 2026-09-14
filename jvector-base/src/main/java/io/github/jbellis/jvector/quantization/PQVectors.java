@@ -19,6 +19,9 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -90,7 +93,7 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravv, simdExecutor);
+        return encodeAndBuild(pq, vectorCount, IntUnaryOperator.identity(), ravv, simdExecutor, true);
     }
 
     /**
@@ -105,16 +108,16 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
-        // Verify that the mapped ordinals are packed, ie. the total range of ordinals does not exceed
-        // the total vector count as they are mapped from 0 --> vector count - 1.
-        // This assumes no duplicates are included.
-        // Note that the total vector count cannot exceed 2B as that is Integer.MAX_VALUE
+        return encodeAndBuild(pq, vectorCount, ordinalsMapping, ravv, simdExecutor, false);
+    }
+
+    private static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount,
+            IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor,
+            boolean identityMapping) {
+        // Validate input ordinals, not output positions; mappings may select or repeat vectors.
         if (log.isDebugEnabled() || System.getProperties().containsKey("VECTOR_DEBUG")) {
-            IntStream.range(0, vectorCount).forEach(i -> {
-                int mappedOrdinal = ordinalsMapping.applyAsInt(i);
-                if (mappedOrdinal > vectorCount)
-                    throw new IllegalArgumentException("vectorCount=" + mappedOrdinal + " exceeds maximum " + vectorCount);
-            });
+            IntStream.range(0, vectorCount).forEach(i ->
+                    Objects.checkIndex(ordinalsMapping.applyAsInt(i), ravv.size()));
             log.info("Range check completed for encodeAndBuild with vectorCount={}", vectorCount);
         }
 
@@ -131,20 +134,17 @@ public abstract class PQVectors implements CompressedVectors {
         // Encode the vectors in parallel into the compressed data chunks
         // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
         // and then we are guaranteed safe publication because we join the thread after completion.
-        var ravvCopy = ravv.threadLocalSupplier();
-        simdExecutor.submit(() -> IntStream.range(0, vectorCount)
-                        .parallel()
-                        .forEach(ordinal -> {
-                            // Retrieve the slice and mutate it.
-                            var localRavv = ravvCopy.get();
-                            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
-                            if (vector != null)
-                                pq.encodeTo(vector, slice);
-                            else
-                                slice.zero();
-                        }))
-                .join();
+        VectorAccess.VectorConsumer encode = (ordinal, vector) -> {
+            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
+            if (vector != null)
+                pq.encodeTo(vector, slice);
+            else
+                slice.zero();
+        };
+        if (identityMapping)
+            VectorAccess.forEach(ravv, vectorCount, simdExecutor, encode);
+        else
+            VectorAccess.forEach(ravv, vectorCount, ordinalsMapping, simdExecutor, encode);
 
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
@@ -416,6 +416,37 @@ public abstract class PQVectors implements CompressedVectors {
         return pq;
     }
 
+    /** For compaction use. See {@link CompressedVectors#createCompactionStrategy}. */
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        ProductQuantization basePQ = this.pq;
+        io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer retrainer =
+                vsf -> new io.github.jbellis.jvector.graph.disk.PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+                        .retrain(vsf, basePQ);
+        return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
+    }
+
+    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
+    @Override
+    public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        if (!(mergedCompressor instanceof ProductQuantization)) {
+            throw new IllegalArgumentException(
+                    "PQVectors sidecar header requires ProductQuantization; got "
+                            + mergedCompressor.getClass().getSimpleName());
+        }
+        ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
+        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        out.writeInt(count);
+        out.writeInt(mergedPQ.getSubspaceCount());
+    }
+
+    /** For compaction use. See {@link CompressedVectors#sidecarVectorsPerChunk}. */
+    @Override
+    public int sidecarVectorsPerChunk() {
+        // Match MutablePQVectors so the on-disk layout is identical to what PQVectors.load reconstructs.
+        return 1024;
+    }
+
     @Override
     public long ramBytesUsed() {
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
@@ -444,7 +475,7 @@ public abstract class PQVectors implements CompressedVectors {
      * This is emulative of modern Java records, but keeps to J11 standards.
      * This class consolidates the layout calculations for PQ data into one place
      */
-    static class PQLayout {
+    public static class PQLayout {
 
         /**
          * total number of vectors

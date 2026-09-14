@@ -34,7 +34,8 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
@@ -59,7 +60,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
@@ -155,7 +155,7 @@ public class SiftSmall {
             // build the index (in memory)
             ImmutableGraphIndex index = builder.build(ravv);
             // write the index to disk with default options
-            OnDiskGraphIndex.write(index, ravv, indexPath);
+            writeCompleteGraph(index, ravv, indexPath);
         }
 
         // on-disk indexes require a ReaderSupplier (not just a Reader) because we will want it to
@@ -177,7 +177,7 @@ public class SiftSmall {
         Path indexPath = Files.createTempFile("siftsmall", ".inline");
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true)) {
             ImmutableGraphIndex index = builder.build(ravv);
-            OnDiskGraphIndex.write(index, ravv, indexPath);
+            writeCompleteGraph(index, ravv, indexPath);
         }
 
         // compute and write compressed vectors to disk
@@ -229,11 +229,6 @@ public class SiftSmall {
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
-             // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
-             OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
-                     .with(new InlineVectors(ravv.dimension()))
-                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
-                     .build();
              // output for the compressed vectors
              IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
@@ -242,10 +237,7 @@ public class SiftSmall {
                 VectorFloat<?> v = baseVectors.get(ordinal);
                 // compress the new vector and add it to the PQVectors
                 pqv.encodeAndSet(ordinal, v);
-                // write the full vector to disk
-                writer.writeInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
-                // now add it to the graph -- the previous steps must be completed first since the PQVectors
-                // and InlineVectorValues are both used during the search that runs as part of addGraphNode construction
+                // PQ is the resident construction scorer; FP is written after cleanup.
                 builder.addGraphNode(ordinal, v);
             }
 
@@ -253,8 +245,16 @@ public class SiftSmall {
             // that we don't need to worry about here
             builder.cleanup();
 
-            // finish writing the index (by filling in the edge lists) and write our completed PQVectors
-            writer.write(Map.of());
+            // Supply all inline features during final complete-record serialization.
+            var vectors = ravv.threadLocalSupplier();
+            try (var writer = new OnDiskParallelGraphIndexWriter.Builder(builder.getGraph(), indexPath)
+                    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                    .with(new InlineVectors(ravv.dimension()))
+                    .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                        ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal))));
+            }
             pqv.write(pqWriter);
         }
 
@@ -292,11 +292,6 @@ public class SiftSmall {
         Path pqPath = Files.createTempFile("siftsmall", ".pq");
         // Builder creation looks mostly the same
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, false, true);
-             // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
-             OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
-                     .with(new NVQ(nvq))
-                     .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
-                     .build();
              // output for the compressed vectors
              IndexWriter pqWriter = new BufferedRandomAccessWriter(pqPath))
         {
@@ -305,10 +300,7 @@ public class SiftSmall {
                 VectorFloat<?> v = baseVectors.get(ordinal);
                 // compress the new vector and add it to the PQVectors
                 pqv.encodeAndSet(ordinal, v);
-                // write the full vector to disk
-                writer.writeInline(ordinal, Feature.singleState(FeatureId.NVQ_VECTORS, new NVQ.State(nvq.encode(v))));
-                // now add it to the graph -- the previous steps must be completed first since the PQVectors
-                // and InlineVectorValues are both used during the search that runs as part of addGraphNode construction
+                // PQ is the resident construction scorer; NVQ is written after cleanup.
                 builder.addGraphNode(ordinal, v);
             }
 
@@ -316,8 +308,16 @@ public class SiftSmall {
             // that we don't need to worry about here
             builder.cleanup();
 
-            // finish writing the index (by filling in the edge lists) and write our completed PQVectors
-            writer.write(Map.of());
+            // Supply all inline features during final complete-record serialization.
+            var vectors = ravv.threadLocalSupplier();
+            try (var writer = new OnDiskParallelGraphIndexWriter.Builder(builder.getGraph(), indexPath)
+                    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                    .with(new NVQ(nvq))
+                    .withMapper(new OrdinalMapper.IdentityMapper(baseVectors.size() - 1))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.NVQ_VECTORS,
+                        ordinal -> new NVQ.State(nvq.encode(vectors.get().getVector(ordinal)))));
+            }
             pqv.write(pqWriter);
         }
 
@@ -334,6 +334,17 @@ public class SiftSmall {
                 return new DefaultSearchScoreProvider(asf, reranker);
             };
             testRecall(index, queryVectors, groundTruth, sspFactory);
+        }
+    }
+
+    private static void writeCompleteGraph(ImmutableGraphIndex graph, RandomAccessVectorValues source, Path path) throws IOException {
+        var vectors = source.threadLocalSupplier();
+        try (var writer = new OnDiskParallelGraphIndexWriter.Builder(graph, path)
+                .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                .with(new InlineVectors(source.dimension()))
+                .build()) {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                    ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal))));
         }
     }
 

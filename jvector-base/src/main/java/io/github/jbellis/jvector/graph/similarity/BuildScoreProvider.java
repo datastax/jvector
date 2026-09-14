@@ -112,6 +112,29 @@ public interface BuildScoreProvider {
         var vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
+            /// Exact scores against `node1`.
+            ///
+            /// For a value-shared source the anchor is read on the first comparison and kept as
+            /// a private copy, so creating a score function reads nothing, later reads through the
+            /// same views can't overwrite the anchor, and each comparison reads only `node2`.
+            private ScoreFunction.ExactScoreFunction scoreFunctionFor(int node1) {
+                if (ravv.isValueShared()) {
+                    return new ScoreFunction.ExactScoreFunction() {
+                        private VectorFloat<?> anchor;
+
+                        @Override
+                        public float similarityTo(int node2) {
+                            var a = anchor;
+                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            return similarityFunction.compare(a, vectorsCopy.get().getVector(node2));
+                        }
+                    };
+                }
+                var vector = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                return node2 -> similarityFunction.compare(vector, vc.getVector(node2));
+            }
+
             @Override
             public boolean isExact() {
                 return true;
@@ -121,13 +144,12 @@ public interface BuildScoreProvider {
             public VectorFloat<?> approximateCentroid() {
                 var vv = vectors.get();
                 var centroid = vts.createFloatVector(vv.dimension());
-                for (int i = 0; i < vv.size(); i++) {
+                int size = vv.size();
+                for (int i = 0; i < size; i++) {
                     var v = vv.getVector(i);
-                    if (v != null) { // MapRandomAccessVectorValues is not necessarily dense
-                        VectorUtil.addInPlace(centroid, v);
-                    }
+                    if (v != null) VectorUtil.addInPlace(centroid, v);
                 }
-                VectorUtil.scale(centroid, 1.0f / vv.size());
+                VectorUtil.scale(centroid, 1.0f / size);
                 return centroid;
             }
 
@@ -139,25 +161,17 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(node1);
-                return searchProviderFor(v);
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
             }
 
             @Override
             public SearchScoreProvider diversityProviderFor(int node1) {
-                RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(node1);
-                var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(v, similarityFunction, vc);
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
             }
 
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
-                var v = vectors.get().getVector(node1);
-                var vc = vectorsCopy.get();
-                // don't use ESF.reranker, we need thread safety here
-                return (ScoreFunction.ExactScoreFunction) node2 -> similarityFunction.compare(v, vc.getVector(node2));
+                return scoreFunctionFor(node1);
             }
         };
     }

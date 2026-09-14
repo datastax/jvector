@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -66,4 +68,46 @@ public interface CompressedVectors extends Accountable {
 
     /** the number of vectors */
     int count();
+
+    /**
+     * For compaction use: returns the {@link QuantizationCompactionStrategy} the compactor should
+     * run when merging graphs whose non-fused compressed sidecars are this kind of
+     * {@code CompressedVectors}. One strategy instance per compaction; it retrains the compressor
+     * on the merged source vectors and streams the merged sidecar to disk.
+     * <p>
+     * Called by {@code OnDiskGraphIndexCompactor.detectSidecarStrategy()}. Named to mirror
+     * {@code FusedFeature.createCompactionStrategy} — same verb, receiver type disambiguates
+     * whether the returned strategy drives the inline-fused or sidecar workflow. Default throws —
+     * implementations supporting compaction must override.
+     */
+    default QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        throw new UnsupportedOperationException(
+                getClass().getSimpleName() + " does not support sidecar compaction");
+    }
+
+    // ---- For compaction use: sidecar-streaming-write hooks. Called by the generic
+    // SidecarCompactionStrategy to produce a merged-format-compatible sidecar without that
+    // strategy knowing the format. ----
+
+    /**
+     * For compaction use: writes the format-specific sidecar header (compressor params + vector
+     * count + any extras the reader expects between count and the chunk stream). Called once at
+     * the start of a streaming sidecar write by {@code SidecarCompactionStrategy.writeSidecar},
+     * after which the strategy emits chunks of {@code sidecarVectorsPerChunk()} codes each.
+     * Default throws — implementations supporting sidecar compaction must override.
+     */
+    default void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        throw new UnsupportedOperationException(
+                getClass().getSimpleName() + " does not support sidecar compaction");
+    }
+
+    /**
+     * For compaction use: vectors per chunk for streaming sidecar writes. The chunk size must
+     * match the format the reader expects (e.g. {@code PQVectors} uses 1024 to align with
+     * {@code MutablePQVectors}'s on-disk layout). Read by
+     * {@code SidecarCompactionStrategy.writeSidecar} to size each emitted chunk.
+     */
+    default int sidecarVectorsPerChunk() {
+        return 1024;
+    }
 }

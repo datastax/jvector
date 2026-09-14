@@ -36,6 +36,10 @@ public class MultiConfig {
     public ConstructionParameters construction;
     public SearchParameters search;
     public String dataset;
+    /** Opt into bounded bulk input loading; omitted settings preserve resident loading. */
+    public boolean useDatasetPrefetching = false;
+    /** Optional; when [Yes], AutoBenchYAML also runs CompactionBench. Absent defaults to [No]. */
+    public List<Boolean> withCompaction;
 
     private static final String defaultDirectory = "jvector-examples/yaml-configs/index-parameters/";
     private static final java.util.regex.Pattern YAML_SCHEMA_VERSION_KEY =
@@ -174,6 +178,11 @@ public class MultiConfig {
     @Deprecated
     public int getVersion() {
         return getOnDiskIndexVersion();
+    }
+
+    /** Returns true only if withCompaction is present and set to Yes; defaults to false. */
+    public boolean isCompactionEnabled() {
+        return withCompaction != null && withCompaction.contains(Boolean.TRUE);
     }
 
     public int getYamlSchemaVersion() {

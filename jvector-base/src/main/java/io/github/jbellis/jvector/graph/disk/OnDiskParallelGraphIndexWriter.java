@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.function.IntFunction;
 
 /**
@@ -68,6 +69,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     private final Path filePath;
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;
+    private final ExecutorService parallelExecutor;
+    private final int parallelBatchSize;
 
     /**
      * Constructs an OnDiskParallelGraphIndexWriter with all parameters including file path
@@ -95,6 +98,46 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                                    int parallelWorkerThreads,
                                    boolean parallelUseDirectBuffers)
     {
+        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features,
+                filePath, parallelWorkerThreads, parallelUseDirectBuffers, null);
+    }
+
+    /**
+     * @param parallelExecutor an externally-owned executor to run parallel L0 writes on, or
+     *        {@code null} to use a dedicated pool sized to {@code parallelWorkerThreads}. The
+     *        executor must outlive this writer and is the caller's to shut down. Because the write
+     *        tasks block on file I/O, prefer an I/O-sized pool rather than a compute pool.
+     */
+    OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
+                                   int version,
+                                   long startOffset,
+                                   ImmutableGraphIndex graph,
+                                   OrdinalMapper oldToNewOrdinals,
+                                   int dimension,
+                                   EnumMap<FeatureId, Feature> features,
+                                   Path filePath,
+                                   int parallelWorkerThreads,
+                                   boolean parallelUseDirectBuffers,
+                                   ExecutorService parallelExecutor)
+    {
+        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features,
+                filePath, parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor,
+                ParallelGraphWriter.DEFAULT_RECORDS_PER_BATCH);
+    }
+
+    OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
+                                   int version,
+                                   long startOffset,
+                                   ImmutableGraphIndex graph,
+                                   OrdinalMapper oldToNewOrdinals,
+                                   int dimension,
+                                   EnumMap<FeatureId, Feature> features,
+                                   Path filePath,
+                                   int parallelWorkerThreads,
+                                   boolean parallelUseDirectBuffers,
+                                   ExecutorService parallelExecutor,
+                                   int parallelBatchSize)
+    {
         super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
         if (filePath == null) {
             throw new IllegalStateException("Parallel writes require a file path");
@@ -102,6 +145,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         this.filePath = filePath;
         this.parallelWorkerThreads = parallelWorkerThreads;
         this.parallelUseDirectBuffers = parallelUseDirectBuffers;
+        this.parallelExecutor = parallelExecutor;
+        this.parallelBatchSize = parallelBatchSize;
     }
 
     /**
@@ -128,7 +173,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         var config = new ParallelGraphWriter.Config(
             parallelWorkerThreads,
             parallelUseDirectBuffers,
-            4  // Default task multiplier (4x cores)
+            4, // Default task multiplier (4x cores)
+            parallelBatchSize
         );
 
         try (var parallelWriter = new ParallelGraphWriter(
@@ -136,7 +182,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                 graph,
                 inlineFeatures,
                 config,
-                filePath)) {
+                filePath,
+                parallelExecutor)) {
 
             parallelWriter.writeL0Records(
                 ordinalMapper,
@@ -173,6 +220,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         private final Path filePath;
         private int parallelWorkerThreads = 0;
         private boolean parallelUseDirectBuffers = false;
+        private ExecutorService parallelExecutor = null;
+        private int parallelBatchSize = ParallelGraphWriter.DEFAULT_RECORDS_PER_BATCH;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
@@ -211,11 +260,37 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             return this;
         }
 
+        /**
+         * Run parallel L0 writes on a caller-supplied executor instead of a dedicated per-write
+         * pool. The executor is the caller's to shut down and must outlive the writer. When set,
+         * {@link #withParallelWorkerThreads(int)} only affects task batching, not pool size.
+         * <p>
+         * The write tasks block on file I/O, so supply an I/O-sized pool (typically &gt;= logical
+         * cores); a small compute pool (e.g. a physical-core ForkJoinPool) will throttle writes.
+         *
+         * @param executor the shared executor, or {@code null} to keep the dedicated-pool default
+         * @return this builder
+         */
+        public Builder withExecutor(ExecutorService executor) {
+            this.parallelExecutor = executor;
+            return this;
+        }
+
+        /**
+         * Maximum complete L0 records per worker buffer (default 64).
+         * Does not change the disk format. Prewritten features retain their component-write path.
+         */
+        public Builder withParallelBatchSize(int records) {
+            if (records <= 0) throw new IllegalArgumentException("Record batch size must be positive");
+            this.parallelBatchSize = records;
+            return this;
+        }
+
         @Override
         protected OnDiskParallelGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskParallelGraphIndexWriter(
                 out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath,
-                parallelWorkerThreads, parallelUseDirectBuffers
+                parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor, parallelBatchSize
             );
         }
     }

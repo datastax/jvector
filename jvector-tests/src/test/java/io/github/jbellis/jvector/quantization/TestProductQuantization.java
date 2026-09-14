@@ -433,4 +433,17 @@ public class TestProductQuantization extends RandomizedTest {
             }
         }
     }
+
+    @Test
+    public void testErrorOnInsufficientVectors() {
+        int dim = 384;
+        var pqM = 48;
+
+        var ravv100 = new ListRandomAccessVectorValues(createRandomVectors(100, dim), dim);
+        var ravv200 = new ListRandomAccessVectorValues(createRandomVectors(200, dim), dim);
+        ProductQuantization.compute(ravv100, pqM, 50, false);  // should not throw
+        assertThrows(IllegalArgumentException.class, () -> ProductQuantization.compute(ravv100, pqM, 150, false));
+        ProductQuantization.compute(ravv200, pqM, 150, false);  // should not throw
+        assertThrows(IllegalArgumentException.class, () -> ProductQuantization.compute(ravv200, pqM, 256, false));
+    }
 }

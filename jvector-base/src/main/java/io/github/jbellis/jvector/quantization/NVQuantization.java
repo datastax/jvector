@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -33,8 +34,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.vector.VectorUtil.sub;
@@ -148,13 +147,12 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * @param nSubVectors number of subvectors
      */
     public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
-        var ravvCopy = ravv.threadLocalSupplier().get();
-        var dim = ravvCopy.getVector(0).length();
-        var globalMean = vectorTypeSupport.createFloatVector(dim);
-        for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+        Objects.checkIndex(0, ravv.size()); // Preserve rejection of an empty training source.
+        var globalMean = vectorTypeSupport.createFloatVector(ravv.dimension());
+        try (var cursor = VectorAccess.openRange(ravv, 0, ravv.size())) {
+            while (cursor.next()) VectorUtil.addInPlace(globalMean, cursor.vector());
         }
-        VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
+        VectorUtil.nvqScale(globalMean, 1.0f / ravv.size());
         return create(globalMean, nSubVectors);
     }
 
@@ -180,17 +178,12 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      */
     @Override
     public NVQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        var ravvCopy = ravv.threadLocalSupplier();
-        return new NVQVectors(this,
-                parallelExecutor.submit(() -> IntStream.range(0, ravv.size())
-                                .parallel()
-                                .mapToObj(i -> {
-                                    var localRavv = ravvCopy.get();
-                                    VectorFloat<?> v = localRavv.getVector(i);
-                                    return encode(v);
-                                })
-                                .toArray(QuantizedVector[]::new))
-                        .join());
+        var encoded = new QuantizedVector[ravv.size()];
+        // VectorCompressor requires missing ordinals to encode as zero vectors.
+        var zero = vectorTypeSupport.createFloatVector(originalDimension);
+        VectorAccess.forEach(ravv, parallelExecutor,
+                (ordinal, vector) -> encoded[ordinal] = encode(vector == null ? zero : vector));
+        return new NVQVectors(this, encoded);
     }
 
     /**
@@ -205,12 +198,22 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
     }
 
     /**
-     * Encodes the input vector using NVQ into dest
+     * Encodes the input vector using NVQ into dest.
+     * @throws IllegalArgumentException if the input dimension differs from the global mean;
+     *         the destination is left unchanged
      */
     @Override
     public void encodeTo(VectorFloat<?> v, NVQuantization.QuantizedVector dest) {
-        var tempVector = VectorUtil.sub(v, globalMean);
-        QuantizedVector.quantizeTo(getSubVectors(tempVector), bitsPerDimension, learn, dest);
+        if (v.length() != globalMean.length()) {
+            throw new IllegalArgumentException("vector dimensions differ: " + v.length() + "!=" + globalMean.length());
+        }
+        // Shift each subvector directly, avoiding a full-vector temporary and slice copies.
+        for (int i = 0; i < subvectorSizesAndOffsets.length; i++) {
+            int size = subvectorSizesAndOffsets[i][0];
+            int offset = subvectorSizesAndOffsets[i][1];
+            var subvector = VectorUtil.nvqSub(v, offset, globalMean, offset, size);
+            QuantizedSubVector.quantizeTo(subvector, bitsPerDimension, learn, dest.subVectors[i]);
+        }
     }
 
     /**
@@ -364,7 +367,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
     public double reconstructionError(VectorFloat<?> vector) {
         final var encodedVector = QuantizedVector.createEmpty(subvectorSizesAndOffsets, bitsPerDimension);
 
-        final var tempVector = VectorUtil.sub(vector, globalMean);
+        final var tempVector = VectorUtil.nvqSub(vector, globalMean);
         QuantizedVector.quantizeTo(getSubVectors(tempVector), bitsPerDimension, learn, encodedVector);
         final var vectorSubVectors = this.getSubVectors(tempVector);
 
@@ -522,7 +525,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
          * @param dest the destination subvector
          */
         public static void quantizeTo(VectorFloat<?> vector, BitsPerDimension bitsPerDimension, boolean learn, QuantizedSubVector dest) {
-            var minValue = VectorUtil.min(vector);
+            var minValue = VectorUtil.nvqMin(vector);
             var maxValue = VectorUtil.max(vector);
 
             //-----------------------------------------------------------------
@@ -531,31 +534,36 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
             float midpoint = 0;
 
             if (learn) {
-                NonuniformQuantizationLossFunction lossFunction = new NonuniformQuantizationLossFunction(bitsPerDimension);
-                lossFunction.setVector(vector, minValue, maxValue);
+                float nativeGrowthRate = VectorUtil.tryNvqGrowthRate(vector, minValue, maxValue, bitsPerDimension.getInt());
+                if (!Float.isNaN(nativeGrowthRate)) {
+                    growthRate = nativeGrowthRate;
+                } else {
+                    NonuniformQuantizationLossFunction lossFunction = new NonuniformQuantizationLossFunction(bitsPerDimension);
+                    lossFunction.setVector(vector, minValue, maxValue);
 
-                float growthRateCoarse = 1e-2f;
-                float bestLossValue = Float.MIN_VALUE;
-                float[] tempSolution = {growthRateCoarse, 0.f};
-                for (float gr = 1e-6f; gr < 20.f; gr += 1f) {
-                    tempSolution[0] = gr;
-                    float lossValue = lossFunction.compute(tempSolution);
-                    if (lossValue > bestLossValue) {
-                        bestLossValue = lossValue;
-                        growthRateCoarse = gr;
+                    float growthRateCoarse = 1e-2f;
+                    float bestLossValue = Float.MIN_VALUE;
+                    float[] tempSolution = {growthRateCoarse, 0.f};
+                    for (float gr = 1e-6f; gr < 20.f; gr += 1f) {
+                        tempSolution[0] = gr;
+                        float lossValue = lossFunction.compute(tempSolution);
+                        if (lossValue > bestLossValue) {
+                            bestLossValue = lossValue;
+                            growthRateCoarse = gr;
+                        }
                     }
-                }
-                float growthRateFineTuned = growthRateCoarse;
-                for (float gr = growthRateCoarse - 1; gr < growthRateCoarse + 1; gr += 0.1f) {
-                    tempSolution[0] = gr;
-                    float lossValue = lossFunction.compute(tempSolution);
-                    if (lossValue > bestLossValue) {
-                        bestLossValue = lossValue;
-                        growthRateFineTuned = gr;
+                    float growthRateFineTuned = growthRateCoarse;
+                    for (float gr = growthRateCoarse - 1; gr < growthRateCoarse + 1; gr += 0.1f) {
+                        tempSolution[0] = gr;
+                        float lossValue = lossFunction.compute(tempSolution);
+                        if (lossValue > bestLossValue) {
+                            bestLossValue = lossValue;
+                            growthRateFineTuned = gr;
+                        }
                     }
-                }
 
-                growthRate = growthRateFineTuned;
+                    growthRate = growthRateFineTuned;
+                }
             }
             //---------------------------------------------------------------------------
 

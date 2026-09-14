@@ -20,11 +20,17 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.FusedCompactionStrategy;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.PQRetrainer;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.FusedPQDecoder;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -67,6 +73,23 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return pq;
     }
 
+    /** For compaction use. See {@link FusedFeature#getCompressor}. */
+    @Override
+    @SuppressWarnings("unchecked")
+    public VectorCompressor<ByteSequence<?>> getCompressor() {
+        return (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) pq;
+    }
+
+    /** For compaction use. See {@link FusedFeature#withCompressor}. */
+    @Override
+    public FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree) {
+        if (!(newCompressor instanceof ProductQuantization)) {
+            throw new IllegalArgumentException(
+                    "FusedPQ requires ProductQuantization; got " + newCompressor.getClass().getSimpleName());
+        }
+        return new FusedPQ(maxDegree, (ProductQuantization) newCompressor);
+    }
+
     @Override
     public int headerSize() {
         return pq.compressorSize();
@@ -75,6 +98,12 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     @Override
     public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
+    }
+
+    /** For compaction use. See {@link FusedFeature#codeSize}. */
+    @Override
+    public int codeSize() {
+        return pq.compressedVectorSize();
     }
 
     static FusedPQ load(CommonHeader header, RandomAccessReader reader) {
@@ -94,6 +123,16 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
         return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
+    }
+
+    /** For compaction use. See {@link FusedFeature#createCompactionStrategy}. */
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        ProductQuantization basePQ = this.pq;
+        VectorCompressorRetrainer retrainer =
+                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+                        .retrain(vsf, basePQ);
+        return new FusedCompactionStrategy(ctx, this, retrainer);
     }
 
     @Override

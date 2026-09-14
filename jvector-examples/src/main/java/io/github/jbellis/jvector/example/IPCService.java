@@ -23,7 +23,11 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
@@ -194,7 +198,14 @@ public class IPCService
             var testDirectory = Files.createTempDirectory("BenchGraphDir");
             var graphPath = testDirectory.resolve("graph.bin");
 
-            OnDiskGraphIndex.write(index, ravv, graphPath);
+            var vectors = ravv.threadLocalSupplier();
+            try (var writer = new OnDiskParallelGraphIndexWriter.Builder(index, graphPath)
+                    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                    .with(new InlineVectors(ravv.dimension()))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                        ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal))));
+            }
             return index;
         } catch (IOException e) {
             throw new IOError(e);

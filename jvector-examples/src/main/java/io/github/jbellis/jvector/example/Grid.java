@@ -29,15 +29,16 @@ import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiskUsageMonitor;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
+import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
@@ -59,6 +60,7 @@ import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.example.diagnostics.ASHScoreDebug;
 
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -239,7 +241,6 @@ public class Grid {
         // Prepare to collect index construction metrics for reporting....
         var constructionMetrics = new ConstructionMetrics();
 
-        // TODO this does not capture disk usage for cached indexes.  Need to update
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
             diagnostics.startMonitoring("testDirectory", workDirectory);
@@ -262,6 +263,7 @@ public class Grid {
                     (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
 
             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+            Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
             } else {
@@ -279,6 +281,7 @@ public class Grid {
                     if (cached.isPresent()) {
                         System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                         indexes.put(fs, cached.get());
+                        try { indexFileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
                     } else {
                         missing.add(fs);
                         if (cache.isEnabled()) {
@@ -296,9 +299,10 @@ public class Grid {
                 if (!missing.isEmpty()) {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
-                    var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                    var result = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
                             ds, outputDir, buildCompressorObj, handles, constructionMetrics);
-                    indexes.putAll(newIndexes);
+                    indexes.putAll(result.indexes);
+                    indexFileSizes.putAll(result.fileSizes);
                 }
             }
 
@@ -312,6 +316,7 @@ public class Grid {
             try {
                 for (var cpSupplier : compressionGrid) {
                     indexes.forEach((features, index) -> {
+                        constructionMetrics.indexFileSizeBytes = indexFileSizes.get(features);
                         final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
                         CompressedVectors cv;
@@ -374,7 +379,20 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
+    /**
+     * Result of {@link #buildOnDisk}: for each feature set built, the graph index re-opened
+     * from the written file and the size in bytes of that file on disk.
+     */
+    private static final class BuildOnDiskResult {
+        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final Map<Set<FeatureId>, Long> fileSizes;
+        BuildOnDiskResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
+            this.indexes = indexes;
+            this.fileSizes = fileSizes;
+        }
+    }
+
+    private static BuildOnDiskResult buildOnDisk(List<? extends Set<FeatureId>> featureSets,
                                                                         int M,
                                                                         int efConstruction,
                                                                         float neighborOverflow,
@@ -396,6 +414,8 @@ public class Grid {
             buildQuantType = "PQ";
         } else if (buildCompressor instanceof AsymmetricHashing) {
             buildQuantType = "ASH";
+        } else if (buildCompressor instanceof io.github.jbellis.jvector.quantization.BinaryQuantization) {
+            buildQuantType = "BQ";
         } else if (buildCompressor instanceof NVQuantization) {
             buildQuantType = "NVQ";
         } else {
@@ -404,8 +424,8 @@ public class Grid {
 
         // Validation for encoding time support (NVQ not supported)
         if (constructionMetrics != null && buildQuantType != null) {
-            if (!"PQ".equals(buildQuantType) && !"ASH".equals(buildQuantType)) {
-                throw new IllegalArgumentException("Encode timing only supported for PQ or ASH; got: " + buildQuantType);
+            if (!"PQ".equals(buildQuantType) && !"ASH".equals(buildQuantType) && !(buildCompressor instanceof io.github.jbellis.jvector.quantization.BinaryQuantization)) {
+                throw new IllegalArgumentException("Encode timing only supported for PQ, ASH or BQ; got: " + buildQuantType);
             }
         }
 
@@ -438,6 +458,8 @@ public class Grid {
         } else if (buildCv instanceof ASHVectors) {
             ashVectors = (ASHVectors) buildCv;
             bsp = BuildScoreProvider.ashBuildScoreProvider(ds.getSimilarityFunction(), ashVectors);
+        } else if (buildCv instanceof BQVectors) {
+            bsp = BuildScoreProvider.bqBuildScoreProvider((BQVectors) buildCv);
         } else {
             throw new IllegalArgumentException("Unsupported build compressor output type: " + buildCv.getClass().getName());
         }
@@ -448,9 +470,9 @@ public class Grid {
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
-        Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskGraphIndexWriter scoringWriter = null;
+        Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new HashMap<>();
+        Map<Set<FeatureId>, Map<FeatureId, Function<VectorFloat<?>, Feature.State>>> inputSuppliers = new HashMap<>();
+        RandomAccessOnDiskGraphIndexWriter scoringWriter = null;
         int n = 0;
         for (var features : featureSets) {
             // FUSED_PQ requires PQVectors at write time; skip when building with ASH
@@ -482,7 +504,7 @@ public class Grid {
                     constructionMetrics);
             var writer = bws.builder.build();
             writers.put(features, writer);
-            suppliers.put(features, bws.suppliers);
+            inputSuppliers.put(features, bws.inputSuppliers);
             if (features.contains(FeatureId.INLINE_VECTORS) || features.contains(FeatureId.NVQ_VECTORS)) {
                 scoringWriter = writer;
             }
@@ -492,53 +514,49 @@ public class Grid {
             throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
         }
 
-        // build the graph incrementally
+        // The parallel writer calls final suppliers from its workers, so original-vector features
+        // can be encoded after cleanup. The sequential writer calls them on one thread, so it keeps
+        // encoding on the insertion threads and writing each node's features inline.
+        boolean deferFeatures = writers.values().stream()
+                .allMatch(writer -> writer instanceof OnDiskParallelGraphIndexWriter);
         long startTime = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
-        PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                        suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
-                        });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                });
-                builder.addGraphNode(node, vv.get().getVector(node));
+        if (ds.useDatasetPrefetching()) {
+            VectorAccess.forEach(floatVectors, PhysicalCoreExecutor.pool(), (node, vector) -> {
+                if (!deferFeatures) writeInlineStates(writers, inputSuppliers, node, vector);
+                builder.addGraphNode(node, vector);
             });
-        }).join();
+        } else {
+            var vv = floatVectors.threadLocalSupplier();
+            PhysicalCoreExecutor.pool().submit(() -> {
+                IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
+                    var vector = vv.get().getVector(node);
+                    if (!deferFeatures) writeInlineStates(writers, inputSuppliers, node, vector);
+                    builder.addGraphNode(node, vector);
+                });
+            }).join();
+        }
         builder.cleanup();
 
-        // write the edge lists and close the writers
-        // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
+        // With deferred features, supply every feature so the parallel writer emits complete records.
         writers.entrySet().stream().parallel().forEach(entry -> {
             var writer = entry.getValue();
             var features = entry.getKey();
-
-            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_PQ) || features.contains(FeatureId.FUSED_ASH)) {
-                writeSuppliers = new EnumMap<>(FeatureId.class);
-                var view = builder.getGraph().getView();
-
+            try (var vectors = new FinalWriteVectors(floatVectors);
+                 var view = builder.getGraph().getView();
+                 var closeWriter = writer) {
+                Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+                if (deferFeatures) {
+                    inputSuppliers.get(features).forEach((id, supplier) ->
+                            writeSuppliers.put(id, ordinal -> supplier.apply(vectors.get(ordinal))));
+                }
                 if (features.contains(FeatureId.FUSED_PQ)) {
-                    // Safe: such features are only present when pq != null (we skipped them otherwise)
                     writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqFinal, ordinal));
                 }
                 if (features.contains(FeatureId.FUSED_ASH)) {
-                    // Safe: such features are only present when ashVectors != null (we skipped them otherwise)
-                    writeSuppliers.put(FeatureId.FUSED_ASH, ordinal -> new FusedASH.State(view, ashVectorsFinal, ordinal));
+                    writeSuppliers.put(FeatureId.FUSED_ASH,
+                            ordinal -> new FusedASH.State(view, ashVectorsFinal, ordinal));
                 }
-            } else {
-                writeSuppliers = Map.of();
-            }
-
-            try {
                 writer.write(writeSuppliers);
-                writer.close();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -555,8 +573,9 @@ public class Grid {
             entry.getValue().commit();
         }
 
-        // open indexes
+        // open indexes and capture per-feature-set file sizes
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, Long> fileSizes = new HashMap<>();
         n = 0;
         for (var features : featureSets) {
             if (features.contains(FeatureId.FUSED_PQ) && pq == null) {
@@ -570,8 +589,80 @@ public class Grid {
                     : outputDir.resolve("graph" + n++);
 
             indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
+            fileSizes.put(features, Files.size(loadPath));
         }
-        return indexes;
+
+        return new BuildOnDiskResult(indexes, fileSizes);
+    }
+
+    /// Write one node's original-vector features to every writer during insertion. The borrowed
+    /// vector is encoded and written before the caller advances to another vector.
+    private static void writeInlineStates(
+            Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers,
+            Map<Set<FeatureId>, Map<FeatureId, Function<VectorFloat<?>, Feature.State>>> inputSuppliers,
+            int node, VectorFloat<?> vector) {
+        writers.forEach((features, writer) -> {
+            var states = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+            inputSuppliers.get(features).forEach((id, supplier) -> states.put(id, supplier.apply(vector)));
+            try { writer.writeFeaturesInline(node, states); }
+            catch (IOException e) { throw new UncheckedIOException(e); }
+        });
+    }
+
+    /** Worker-local bounded input ranges; a borrowed vector is consumed before advancing. */
+    static final class FinalWriteVectors implements AutoCloseable {
+        private final RandomAccessVectorValues source;
+        private final java.util.concurrent.ConcurrentLinkedQueue<Range> ranges =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
+        private final ThreadLocal<Range> local = ThreadLocal.withInitial(() -> {
+            var range = new Range();
+            ranges.add(range);
+            return range;
+        });
+
+        FinalWriteVectors(RandomAccessVectorValues source) { this.source = source; }
+
+        VectorFloat<?> get(int ordinal) {
+            Objects.checkIndex(ordinal, source.size());
+            var range = local.get();
+            if (range.cursor == null || ordinal != range.ordinal) {
+                if (range.cursor == null || ordinal != range.ordinal + 1 || ordinal == range.end) {
+                    range.close();
+                    range.end = (int) Math.min(source.size(), (long) ordinal + 64);
+                    range.cursor = VectorAccess.openRange(source, ordinal, range.end);
+                }
+                if (!range.cursor.next() || range.cursor.ordinal() != ordinal)
+                    throw new IllegalStateException("Incomplete final-write input range");
+                range.ordinal = ordinal;
+            }
+            return range.cursor.vector();
+        }
+
+        @Override public void close() {
+            // writer.write joins its workers before cursors and their read-ahead are released.
+            RuntimeException failure = null;
+            try {
+                for (var range : ranges) {
+                    try { range.close(); }
+                    catch (RuntimeException e) {
+                        if (failure == null) failure = e;
+                        else if (failure != e) failure.addSuppressed(e);
+                    }
+                }
+            } finally { ranges.clear(); local.remove(); }
+            if (failure != null) throw failure;
+        }
+
+        private static final class Range {
+            io.github.jbellis.jvector.graph.VectorCursor cursor;
+            int ordinal = -1, end;
+            void close() {
+                if (cursor != null) {
+                    try { cursor.close(); }
+                    finally { cursor = null; ordinal = -1; }
+                }
+            }
+        }
     }
 
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
@@ -584,15 +675,20 @@ public class Grid {
             throws FileNotFoundException
     {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
+        var builder = new RandomAccessOnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
+        builder.withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount());
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
+        Map<FeatureId, Function<VectorFloat<?>, Feature.State>> inputSuppliers = new EnumMap<>(FeatureId.class);
+        // File-backed sources reuse scratch vectors; inline writes need a view per worker.
+        var writerVectors = floatVectors.threadLocalSupplier();
         for (var featureId : features) {
             switch (featureId) {
                 case INLINE_VECTORS:
                     builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                    inputSuppliers.put(FeatureId.INLINE_VECTORS, InlineVectors.State::new);
+                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(writerVectors.get().getVector(ordinal)));
                     break;
                 case FUSED_PQ:
                     if (pq == null) {
@@ -616,12 +712,21 @@ public class Grid {
                             ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
                             : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+                    inputSuppliers.put(FeatureId.NVQ_VECTORS, vector -> new NVQ.State(nvq.encode(vector)));
+                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(writerVectors.get().getVector(ordinal))));
                     break;
 
             }
         }
-        return new BuilderWithSuppliers(builder, suppliers);
+        return new BuilderWithSuppliers(builder, suppliers, inputSuppliers);
+    }
+
+    // Entry-point policy only; the library's writer selection remains unchanged.
+    static void configureWriterForBenchmark() {
+        String value = System.getProperty("jvector.parallel_writer", "true").trim();
+        if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false"))
+            throw new IllegalArgumentException("jvector.parallel_writer must be true or false");
+        GraphIndexBuilderConfig.getInstance().setParallelBuild(Boolean.parseBoolean(value));
     }
 
     public static void setDiagnosticLevel(int diagLevel) {
@@ -644,12 +749,20 @@ public class Grid {
     }
 
     private static class BuilderWithSuppliers {
-        public final OnDiskGraphIndexWriter.Builder builder;
+        public final RandomAccessOnDiskGraphIndexWriter.Builder builder;
         public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
 
-        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+        public final Map<FeatureId, Function<VectorFloat<?>, Feature.State>> inputSuppliers;
+
+        public BuilderWithSuppliers(RandomAccessOnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
+            this(builder, suppliers, Map.of());
+        }
+
+        public BuilderWithSuppliers(RandomAccessOnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers,
+                                    Map<FeatureId, Function<VectorFloat<?>, Feature.State>> inputSuppliers) {
             this.builder = builder;
             this.suppliers = suppliers;
+            this.inputSuppliers = inputSuppliers;
         }
     }
 
@@ -679,12 +792,13 @@ public class Grid {
                                                           FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
         var onHeapGraph = builder.build(floatVectors);
+        double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",
                           M,
                           neighborOverflow,
                           efConstruction,
-                          (System.nanoTime() - start) / 1_000_000_000.0);
+                          buildTimeS);
         for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
             System.out.format("  L%d: %d nodes, %.2f avg degree%n",
                               i,
@@ -708,6 +822,7 @@ public class Grid {
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
         }
+        indexBuildTimes.put(ds.getName(), buildTimeS);
         return indexes;
     }
 
@@ -948,6 +1063,7 @@ public class Grid {
                                             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+                                            Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
 
                                             var compressor = getCompressor(buildCompressor, ds);
                                             var searchCompressorObj = getCompressor(searchCompressor, ds);
@@ -989,6 +1105,7 @@ public class Grid {
                                                 if (cached.isPresent()) {
                                                     System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                                                     indexes.put(fs, cached.get());
+                                                    try { indexFileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
                                                 } else {
                                                     missing.add(fs);
                                                     if (cache.isEnabled()) {
@@ -1007,9 +1124,10 @@ public class Grid {
                                             if (!missing.isEmpty()) {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
-                                                var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
+                                                var result = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
                                                         ds, outputDir, compressor, handles, null);
-                                                indexes.putAll(newIndexes);
+                                                indexes.putAll(result.indexes);
+                                                indexFileSizes.putAll(result.fileSizes);
                                             }
 
                                             ImmutableGraphIndex index = indexes.get(features);
@@ -1018,7 +1136,6 @@ public class Grid {
                                             diagnostics.capturePostPhaseSnapshot("Build");
                                             diagnostics.printDiskStatistics("Graph Index Build");
                                             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
-                                            DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
 
                                             try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
                                                 int queryRuns = 2;
@@ -1070,10 +1187,10 @@ public class Grid {
                                                                 allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
                                                             }
 
-                                                            // Add disk metrics if available
-                                                            if (buildDiskSnapshot != null) {
-                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.getTotalBytes() / 1024.0 / 1024.0);
-                                                                allMetrics.put("File Count", buildDiskSnapshot.getTotalFileCount());
+                                                            // Add per-feature-set index file size
+                                                            Long fileSizeBytes = indexFileSizes.get(features);
+                                                            if (fileSizeBytes != null) {
+                                                                allMetrics.put("Disk Usage (MB)", fileSizeBytes / 1024.0 / 1024.0);
                                                             }
 
                                                             results.add(new BenchResult(ds.getName(), params, allMetrics));
@@ -1256,6 +1373,7 @@ public class Grid {
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
+        private final Supplier<RandomAccessVectorValues> exactVectors;
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
             return new GraphSearcher(index);
@@ -1266,6 +1384,8 @@ public class Grid {
             this.index = index;
             this.cv = cv;
             this.features = features;
+            // File-backed sources borrow scratch storage; concurrent scorers need separate views.
+            this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
@@ -1276,7 +1396,7 @@ public class Grid {
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
                 }
 
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
@@ -1321,6 +1441,7 @@ public class Grid {
     static final class ConstructionMetrics {
         // null means “not applicable / not measured”
         public Double indexBuildTimeS;
+        public Long indexFileSizeBytes;
 
         // Index-construction phase (single pass per run)
         private final Map<String, QuantStats> indexByType = new HashMap<>();
@@ -1349,6 +1470,10 @@ public class Grid {
             if (indexBuildTimeS != null) {
                 out.add(Metric.of("construction.index_build_time_s",
                         "Index build time (s)", ".2f", indexBuildTimeS));
+            }
+            if (indexFileSizeBytes != null) {
+                out.add(Metric.of("construction.index_file_size_mb",
+                        "Index file size (MB)", ".2f", indexFileSizeBytes / 1024.0 / 1024.0));
             }
 
             // Index-construction quant timings

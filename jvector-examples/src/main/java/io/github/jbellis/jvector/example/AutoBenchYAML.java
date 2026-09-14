@@ -20,8 +20,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 
 import org.slf4j.Logger;
@@ -36,12 +37,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.LinkedHashMap;
 
 /**
  * Automated benchmark runner for GitHub Actions workflow.
  * This class is specifically designed to handle the --output argument
  * for regression testing in the run-bench.yml workflow.
- * 
+ *
  * The benchmark runner supports checkpointing to allow resuming from failures.
  * It creates a checkpoint file (outputPath + ".checkpoint.json") that records
  * which datasets have been fully processed. If the benchmark is restarted,
@@ -50,22 +52,7 @@ import java.util.stream.Collectors;
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
-
-    /**
-     * Returns a list of all dataset names.
-     * This replaces the need to load datasets.yml which may not be available in all environments.
-     */
-    private static List<String> getAllDatasetNames() {
-        List<String> allDatasets = new ArrayList<>();
-        allDatasets.add("cap-1M");
-        allDatasets.add("cap-6M");
-        allDatasets.add("cohere-english-v3-1M");
-        allDatasets.add("cohere-english-v3-10M");
-        allDatasets.add("dpr-1M");
-        allDatasets.add("dpr-10M");
-
-        return allDatasets;
-    }
+    private static final String REGRESSION_TEST_KEY = "regression-tests";
 
     public static void main(String[] args) throws IOException {
         // Check for --output argument (required for this class)
@@ -78,6 +65,8 @@ public class AutoBenchYAML {
             logger.error("Error: --output argument is required for AutoBenchYAML");
             System.exit(1);
         }
+
+        Grid.configureWriterForBenchmark();
 
         logger.info("Heap space available is {}", Runtime.getRuntime().maxMemory());
 
@@ -98,7 +87,7 @@ public class AutoBenchYAML {
         }
         String finalConfigPath = configPath;
         String[] filteredArgs = Arrays.stream(args)
-                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) && 
+                .filter(arg -> !arg.equals("--output") && !arg.equals(finalOutputPath) &&
                                !arg.equals("--config") && !arg.equals(finalConfigPath))
                 .toArray(String[]::new);
 
@@ -112,10 +101,16 @@ public class AutoBenchYAML {
         // compile regex and do substring matching using find
         var pattern = Pattern.compile(regex);
 
-        var datasetNames = getAllDatasetNames().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetCollection = DatasetCollection.load();
+        var datasetNames = datasetCollection.getSection(REGRESSION_TEST_KEY).stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+
+        if (datasetNames.size() == 0) {
+            throw new RuntimeException("No datasets matched the given patterns, nothing to do");
+        }
 
         logger.info("Executing the following datasets: {}", datasetNames);
         List<BenchResult> results = new ArrayList<>();
+        List<BenchResult> compactionResults = new ArrayList<>();
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
@@ -128,13 +123,7 @@ public class AutoBenchYAML {
                     continue;
                 }
 
-                logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                            () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    ).getDataSet();
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
-
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {
                         normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
@@ -148,28 +137,61 @@ public class AutoBenchYAML {
                             config.dataset = normalizedDatasetName;
                         }
                     } else {
-                        config = MultiConfig.getDefaultConfig("autoDefault");
+                        config = MultiConfig.getDefaultConfig(normalizedDatasetName);
                         config.dataset = normalizedDatasetName;
                     }
                     logger.info("Using configuration: {}", config);
+                    var loading = BaseVectorLoading.forBenchmark(config);
 
-                    List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
-                            config.construction.useSavedIndexIfExists,
-                            config.construction.outDegree, 
-                            config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
-                            config.construction.addHierarchy,
-                            config.construction.refineFinalGraph,
-                            config.construction.getFeatureSets(), 
-                            config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
-                            config.search.useSearchPruning);
-                    results.addAll(datasetResults);
+                    logger.info("Loading dataset: {}", datasetName);
+                    try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
+                            () -> new RuntimeException("Dataset " + datasetName + " not found")
+                    ).getDataSet()) {
+                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
-                    logger.info("Benchmark completed for dataset: {}", datasetName);
-                    // Mark dataset as completed and update checkpoint, passing results
-                    checkpointManager.markDatasetCompleted(datasetName, datasetResults);
+                        List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
+                                config.construction.useSavedIndexIfExists,
+                                config.construction.outDegree,
+                                config.construction.efConstruction,
+                                config.construction.neighborOverflow,
+                                config.construction.addHierarchy,
+                                config.construction.refineFinalGraph,
+                                config.construction.getFeatureSets(),
+                                config.construction.getCompressorParameters(),
+                                config.search.getCompressorParameters(),
+                                config.search.topKOverquery,
+                                config.search.useSearchPruning);
+                        results.addAll(datasetResults);
+
+                        logger.info("Benchmark completed for dataset: {}", datasetName);
+                        // Mark dataset as completed and update checkpoint, passing results
+                        checkpointManager.markDatasetCompleted(datasetName, datasetResults);
+
+                        // Compaction regression is opt-in; failures remain non-fatal.
+                        if (config.isCompactionEnabled()) {
+                            try {
+                                logger.info("Running compaction benchmark for dataset: {}", datasetName);
+                                List<BenchResult> datasetCompactionResults;
+                                if (loading == BaseVectorLoading.BUFFERED) {
+                                    // This legacy validation queries raw originals; keep its resident source.
+                                    try (var resident = DataSets.loadDataSet(datasetName, BaseVectorLoading.PRELOAD)
+                                            .orElseThrow(() -> new RuntimeException("Dataset " + datasetName + " not found"))
+                                            .getDataSet()) {
+                                        datasetCompactionResults = CompactionBench.run(resident);
+                                    }
+                                } else {
+                                    datasetCompactionResults = CompactionBench.run(ds);
+                                }
+                                compactionResults.addAll(datasetCompactionResults);
+                                logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
+                                        datasetName, datasetCompactionResults.size());
+                            } catch (Exception e) {
+                                logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
+                            }
+                        } else {
+                            logger.info("Skipping compaction benchmark for dataset: {} (withCompaction not enabled)", datasetName);
+                        }
+                    }
                 } catch (Exception e) {
                     logger.error("Exception while processing dataset {}", datasetName, e);
                 }
@@ -194,7 +216,8 @@ public class AutoBenchYAML {
             // Write CSV data
             try (FileWriter writer = new FileWriter(outputFile)) {
                 // Write CSV header
-                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited\n");
+                writer.write("dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited," +
+                             "Build Heap Used (MB),Build Off-Heap (MB),Search Heap Used (MB),Search Off-Heap (MB)\n");
 
                 // Write one row per dataset with average metrics
                 for (Map.Entry<String, SummaryStats> entry : statsByDataset.entrySet()) {
@@ -207,7 +230,11 @@ public class AutoBenchYAML {
                     writer.write(datasetStats.getAvgLatency() + ",");
                     writer.write(datasetStats.getAvgRecall() + ",");
                     writer.write(datasetStats.getIndexConstruction() + ",");
-                    writer.write(datasetStats.getAvgNodesVisited() + "\n");
+                    writer.write(datasetStats.getAvgNodesVisited() + ",");
+                    writer.write(datasetStats.getAvgBuildHeapMB() + ",");
+                    writer.write(datasetStats.getAvgBuildOffHeapMB() + ",");
+                    writer.write(datasetStats.getAvgSearchHeapMB() + ",");
+                    writer.write(datasetStats.getAvgSearchOffHeapMB() + "\n");
                 }
             }
 
@@ -220,6 +247,39 @@ public class AutoBenchYAML {
             }
         } catch (Exception e) {
             logger.error("Exception during final processing", e);
+        }
+
+        // Write compaction results to a separate CSV
+        if (!compactionResults.isEmpty()) {
+            try {
+                File compactionFile = new File(outputPath + "-compaction.csv");
+                try (FileWriter writer = new FileWriter(compactionFile)) {
+                    writer.write("dataset,numPartitions,distribution,graphDegree,precision,compactionTimeMs,recall@10,meanLatencyMs,p99LatencyMs,qps,numVectors\n");
+                    for (BenchResult r : compactionResults) {
+                        Map<String, Object> p = r.parameters != null ? r.parameters : new LinkedHashMap<>();
+                        Map<String, Object> m = r.metrics != null ? r.metrics : new LinkedHashMap<>();
+                        writer.write(r.dataset + ",");
+                        writer.write(p.getOrDefault("numPartitions", "") + ",");
+                        writer.write(p.getOrDefault("distribution", "") + ",");
+                        writer.write(p.getOrDefault("graphDegree", "") + ",");
+                        writer.write(p.getOrDefault("precision", "") + ",");
+                        writer.write(m.getOrDefault("compactionTimeMs", "") + ",");
+                        writer.write(m.getOrDefault("recall@10", "") + ",");
+                        writer.write(m.getOrDefault("meanLatencyMs", "") + ",");
+                        writer.write(m.getOrDefault("p99LatencyMs", "") + ",");
+                        writer.write(m.getOrDefault("qps", "") + ",");
+                        writer.write(m.getOrDefault("numVectors", "") + "\n");
+                    }
+                }
+                logger.info("Compaction results written to {}", compactionFile.getAbsolutePath());
+
+                // Also write full compaction JSON for post-processing
+                File compactionJsonFile = new File(outputPath + "-compaction.json");
+                new ObjectMapper().writerWithDefaultPrettyPrinter().writeValue(compactionJsonFile, compactionResults);
+                logger.info("Compaction JSON written to {}", compactionJsonFile.getAbsolutePath());
+            } catch (Exception e) {
+                logger.error("Exception writing compaction results", e);
+            }
         }
     }
 

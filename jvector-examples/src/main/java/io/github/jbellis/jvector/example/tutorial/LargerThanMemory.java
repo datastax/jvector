@@ -17,12 +17,10 @@
 package io.github.jbellis.jvector.example.tutorial;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
@@ -37,7 +35,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -60,11 +58,12 @@ public class LargerThanMemory {
         // The DataSet provided by loadDataSet is in-memory,
         // but you can apply the same technique even when you don't have
         // the base vectors in-memory.
-        DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
+        String datasetName = args.length == 0 ? "e5-small-v2-100k" : args[0];
+        DataSet dataset = DataSets.loadDataSet(datasetName).orElseThrow(() ->
             new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
         ).getDataSet();
 
-        // Remember that RAVVs need not be in-memory in the general case.
+        // RAVVs need not be in-memory, but this source must remain readable through final writing.
         // We will sample from this RAVV to compute the PQ codebooks.
         // In general you don't need to have a RAVV over all the vectors to
         // build PQ codebooks, but you do need a "representative set".
@@ -102,35 +101,20 @@ public class LargerThanMemory {
         System.out.println("Building index incrementally...");
 
         try (
-            GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy);
-            // In DiskIntro we created the writer after generating the complete graph and closing the builder,
-            // but for incremental construction we will build and write in concert.
-            OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), graphPath)
-                    .with(new InlineVectors(dim))
-                    // Since we start with an empty graph, the writer will, by default,
-                    // assume an ordinal mapping of size 0 (which is obviously incorrect).
-                    // This is easy to rectify if you know the number of vectors beforehand,
-                    // if not you may need to implement OrdinalMapper yourself.
-                    .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1))
-                    .build();
+            GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy)
         ) {
+            // Independent views also support sources that borrow a scratch vector.
+            var vectors = ravv.threadLocalSupplier();
             // Graph building is best done with threads = number of physical cores
             // PhysicalCoreExecutor assumes hyperthreading by default, i.e. cores = vCPUs / 2
             // If this is not correct, set the system property `jvector.physical_core_count`
             PhysicalCoreExecutor.pool().submit(() -> {
                 IntStream.range(0, ravv.size()).parallel().forEach(ordinal -> {
-                    VectorFloat<?> v = ravv.getVector(ordinal);
+                    VectorFloat<?> v = vectors.get().getVector(ordinal);
 
                     // Encode and add the vector to the working set of PQ vectors,
                     // which allows the graph builder to access it through the BuildScoreProvder.
                     pqVectors.encodeAndSet(ordinal, v);
-
-                    // Write the feature (full-resolution vector) for a single vector instead of all at once.
-                    try {
-                        writer.writeFeaturesInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
 
                     builder.addGraphNode(ordinal, v);
                 });
@@ -140,9 +124,15 @@ public class LargerThanMemory {
             // Enforces maximum degree constraint among other things.
             builder.cleanup();
 
-            // No need to pass-in a feature supplier since we wrote the features incrementally
-            // using writer.writeInLine
-            writer.write(Map.of());
+            // Reread this replayable source for final FP payloads; peers were resident PQ.
+            try (var writer = new OnDiskParallelGraphIndexWriter.Builder(builder.getGraph(), graphPath)
+                    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                    .with(new InlineVectors(dim))
+                    .withMapper(new OrdinalMapper.IdentityMapper(ravv.size() - 1))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                        ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal))));
+            }
         }
 
         // PQ codebooks and vectors also need to be saved somewhere! (we'll not concern ourselves with Fused PQ)
