@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -27,7 +28,7 @@ import java.nio.Buffer;
 /**
  * VectorFloat implementation backed by an on-heap MemorySegment.
  */
-final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>
+final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>, FloatArray
 {
     private final MemorySegment segment;
 
@@ -140,5 +141,10 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public int hashCode() {
         return this.getHashCode();
+    }
+
+    @Override
+    public float[] array() {
+        return (float[])segment.heapBase().get();
     }
 }

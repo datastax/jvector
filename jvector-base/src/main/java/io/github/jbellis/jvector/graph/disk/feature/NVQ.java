@@ -88,6 +88,10 @@ public class NVQ extends AbstractFeature {
         }
     }
 
+    public NVQuantization getNVQuantization() {
+        return nvq;
+    }
+
     public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {

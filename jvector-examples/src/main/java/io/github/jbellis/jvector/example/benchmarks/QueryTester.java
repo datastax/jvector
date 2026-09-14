@@ -98,17 +98,23 @@ public class QueryTester {
             diagnostics.capturePostPhaseSnapshot("Query");
 
             // Add memory and disk metrics to results
-            var systemSnapshot = diagnostics.getLatestSystemSnapshot();
+            // Get both pre and post snapshots to calculate maximum memory usage
+            var preSnapshot = diagnostics.getPrePhaseSystemSnapshot();
+            var postSnapshot = diagnostics.getLatestSystemSnapshot();
             var diskSnapshot = diagnostics.getLatestDiskSnapshot();
 
-            if (systemSnapshot != null) {
-                // Max heap usage in MB
+            if (preSnapshot != null && postSnapshot != null) {
+                // Calculate max heap usage across pre and post snapshots
+                long maxHeapUsed = Math.max(preSnapshot.memoryStats.heapUsed,
+                                           postSnapshot.memoryStats.heapUsed);
                 results.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+                        maxHeapUsed / (1024.0 * 1024.0)));
 
-                // Max off-heap usage (direct + mapped) in MB
+                // Calculate max off-heap usage (direct + mapped) across pre and post snapshots
+                long maxOffHeapUsed = Math.max(preSnapshot.memoryStats.getTotalOffHeapMemory(),
+                                               postSnapshot.memoryStats.getTotalOffHeapMemory());
                 results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+                        maxOffHeapUsed / (1024.0 * 1024.0)));
             }
 
             if (diskSnapshot != null) {

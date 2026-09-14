@@ -234,6 +234,20 @@ public class BenchmarkDiagnostics implements AutoCloseable {
     }
 
     /**
+     * Gets the pre-phase system snapshot (second to last), or null if not available
+     */
+    public SystemMonitor.SystemSnapshot getPrePhaseSystemSnapshot() {
+        // The pre-phase snapshot is the second to last entry in the snapshots list, since the last one is the post-phase snapshot
+        var numSnapshots = snapshots.size();
+        if (numSnapshots < 2) {
+            return null;
+        } else {
+            SystemMonitor.SystemSnapshot prePhaseSnapshot = snapshots.get(numSnapshots - 2);
+            return prePhaseSnapshot;
+        }
+    }
+
+    /**
      * Gets the latest disk usage snapshot, or null if none captured
      */
     public DiskUsageMonitor.MultiDirectorySnapshot getLatestDiskSnapshot() {

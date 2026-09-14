@@ -77,6 +77,28 @@ public abstract class VectorizationProvider {
 
   // visible for tests
   static VectorizationProvider lookup(boolean testMode) {
+    String forcedProvider = System.getProperty("jvector.vectorization_provider");
+    if (forcedProvider != null) {
+      switch (forcedProvider.toLowerCase(Locale.ROOT)) {
+        case "default":
+          return new DefaultVectorizationProvider();
+        case "panama":
+          try {
+            return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProvider").getConstructor().newInstance();
+          } catch (Throwable e) {
+            throw new RuntimeException("Failed to load forced PanamaVectorizationProvider", e);
+          }
+        case "native":
+          try {
+            return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider").getConstructor().newInstance();
+          } catch (Throwable e) {
+            throw new RuntimeException("Failed to load forced NativeVectorizationProvider", e);
+          }
+        default:
+          throw new IllegalArgumentException("Unknown vectorization provider: " + forcedProvider);
+      }
+    }
+
     final int runtimeVersion = Runtime.version().feature();
     if (runtimeVersion >= 20) {
       // is locale sane (only buggy in Java 20)
@@ -106,7 +128,15 @@ public abstract class VectorizationProvider {
           Constructor<?> ctor = clazz.getConstructor();
           Object instance = ctor.newInstance();
           var provider = (VectorizationProvider) instance;
-          LOG.info("Native Vector API enabled. Using NativeVectorizationProvider.");
+          try {
+            var support = provider.getVectorUtilSupport();
+            String isa = (String) support.getClass().getMethod("getActiveIsa").invoke(support);
+            LOG.info("Native Vector API enabled. Using NativeVectorizationProvider.");
+            String maxIsa = (String) support.getClass().getMethod("getMaxIsaEnv").invoke(support);
+            LOG.info("Highway ISA tier: " + isa + ", Env variable JVECTOR_MAX_ISA: " + (maxIsa != null ? maxIsa : "(not set)"));
+          } catch (Exception e) {
+            LOG.info("Native Vector API enabled. Using NativeVectorizationProvider. (Unable to determine Highway ISA tier)");
+          }
           return provider;
         } catch (UnsupportedOperationException uoe) {
           LOG.warning("Native vector API was not enabled. " + uoe.getMessage());

@@ -36,32 +36,23 @@ public interface ScoreTracker {
         }
 
         public ScoreTracker getScoreTracker(boolean pruneSearch, int rerankK, float threshold) {
-            // track scores to predict when we are done with threshold queries
-            final ScoreTracker scoreTracker;
-
+            // Preserve legacy threshold behavior. Threshold searches used TwoPhaseTracker
+            // independent of the pruning flag, and may still do so for compatibility.
             if (threshold > 0) {
                 if (twoPhaseTracker == null) {
                     twoPhaseTracker = new ScoreTracker.TwoPhaseTracker(threshold);
                 } else {
                     twoPhaseTracker.reset(threshold);
                 }
-                scoreTracker = twoPhaseTracker;
-            } else {
-                if (pruneSearch) {
-                    if (relaxedMonotonicityTracker == null) {
-                        relaxedMonotonicityTracker = new ScoreTracker.RelaxedMonotonicityTracker(rerankK);
-                    } else {
-                        relaxedMonotonicityTracker.reset(rerankK);
-                    }
-                    scoreTracker = relaxedMonotonicityTracker;
-                } else {
-                    if (noOpTracker == null) {
-                        noOpTracker = new ScoreTracker.NoOpTracker();
-                    }
-                    scoreTracker = noOpTracker;
-                }
+                return twoPhaseTracker;
             }
-            return scoreTracker;
+
+            // TopK and filtered pruning are disabled. Do not return
+            // RelaxedMonotonicityTracker, regardless of caller preference.
+            if (noOpTracker == null) {
+                noOpTracker = new ScoreTracker.NoOpTracker();
+            }
+            return noOpTracker;
         }
     }
 

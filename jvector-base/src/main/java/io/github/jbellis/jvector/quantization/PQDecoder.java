@@ -99,9 +99,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
                 for (int m = 0; m < pq.getSubspaceCount(); ++m) {
                     int size = pq.subvectorSizesAndOffsets[m][0];
                     var codebook = pq.codebooks[m];
-                    for (int j = 0; j < pq.getClusterCount(); ++j) {
-                        partialMagnitudes.set((m * pq.getClusterCount()) + j, VectorUtil.dotProduct(codebook, j * size, codebook, j * size, size));
-                    }
+                    VectorUtil.calculatePartialSelfMagnitudes(codebook, m, size, pq.getClusterCount(), partialMagnitudes);
                 }
                 return partialMagnitudes;
             });
@@ -117,9 +115,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
                 int offset = pq.subvectorSizesAndOffsets[m][1];
                 int size = pq.subvectorSizesAndOffsets[m][0];
                 var codebook = pq.codebooks[m];
-                for (int j = 0; j < pq.getClusterCount(); ++j) {
-                    partialSums.set((m * pq.getClusterCount()) + j, VectorUtil.dotProduct(codebook, j * size, centeredQuery, offset, size));
-                }
+                VectorUtil.calculatePartialSums(codebook, m, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
             }
 
             this.bMagnitude = VectorUtil.dotProduct(centeredQuery, centeredQuery);

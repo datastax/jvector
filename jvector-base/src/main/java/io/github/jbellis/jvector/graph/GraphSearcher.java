@@ -86,7 +86,7 @@ public class GraphSearcher implements Closeable {
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
 
-        this.pruneSearch = true;
+        this.pruneSearch = false;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
     }
 
@@ -117,12 +117,25 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * When using pruning, we are using a heuristic to terminate the search earlier.
-     * In certain cases, it can lead to speedups. This is set to false by default.
-     * @param usage a boolean that determines whether we do early termination or not.
+     * Exposes the internal approximate-results queue populated by the most recent
+     * {@link #searchOneLayer} call. Intended for cross-package internal use (e.g. graph
+     * compaction); not part of the stable public API.
      */
+    public NodeQueue approximateResults() {
+        return approximateResults;
+    }
+
+    /**
+     * @deprecated TopK and filtered graph-search pruning is disabled because the
+     * existing heuristic can reduce recall and has not shown reliable production
+     * value. This method is retained for API compatibility and has no effect.
+     *
+     * Threshold searches, where {@code threshold > 0}, continue to use their
+     * legacy threshold early-termination behavior that disregards this setting.
+     */
+    @Deprecated
     public void usePruning(boolean usage) {
-        pruneSearch = usage;
+        pruneSearch = false;
     }
 
     /**
@@ -307,7 +320,8 @@ public class GraphSearcher implements Closeable {
         return search(scoreProvider, topK, 0.0f, acceptOrds);
     }
 
-    void setEntryPointsFromPreviousLayer() {
+    @Experimental
+    public void setEntryPointsFromPreviousLayer() {
         // push the candidates seen so far back onto the queue for the next layer
         // at worst we save recomputing the similarity; at best we might connect to a more distant cluster
         approximateResults.foreach(candidates::push);
@@ -316,7 +330,8 @@ public class GraphSearcher implements Closeable {
         approximateResults.clear();
     }
 
-    void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
+    @Experimental
+    public void initializeInternal(SearchScoreProvider scoreProvider, NodeAtLevel entry, Bits rawAcceptOrds) {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
@@ -339,14 +354,17 @@ public class GraphSearcher implements Closeable {
 
     private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
         float topCandidateScore = localCandidates.topScore();
+
         // we're done when we have K results and the best candidate is worse than the worst result so far
         if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
             return true;
         }
-        // when querying by threshold, also stop when we are probabilistically unlikely to find more qualifying results
+
+        // preserve legacy threshold early termination
         if (threshold > 0 && scoreTracker.shouldStop()) {
             return true;
         }
+
         return false;
     }
 
@@ -384,7 +402,8 @@ public class GraphSearcher implements Closeable {
     // incorrect and is discarded, and there is no reason to pass a rerankFloor parameter to resume().
     //
     // Finally: resume() also drives the use of CachingReranker.
-    void searchOneLayer(SearchScoreProvider scoreProvider,
+    @Experimental
+    public void searchOneLayer(SearchScoreProvider scoreProvider,
                         int rerankK,
                         float threshold,
                         int level,
@@ -394,8 +413,9 @@ public class GraphSearcher implements Closeable {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
 
-            // track scores to predict when we are done with threshold queries
-            var scoreTracker = scoreTrackerFactory.getScoreTracker(pruneSearch, rerankK, threshold);
+            // TopK and filtered pruning are disabled. Threshold searches retain their
+            // legacy threshold early-termination path inside ScoreTrackerFactory.
+            var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
             // the main search loop
             while (candidates.size() > 0) {
