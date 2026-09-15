@@ -51,6 +51,24 @@ import org.slf4j.LoggerFactory;
 
 import static java.lang.Math.*;
 
+/**
+ * Merges several {@link OnDiskGraphIndex} sources into one on-disk graph.
+ * <p>
+ * Every live node keeps its own retained edges and gains cross-source edges from a bounded
+ * search of the other sources, followed by Vamana-style diversity selection. At the base layer
+ * the sources are processed smallest first: a node searches only the sources larger than its
+ * own, and each hit is also offered back to the node it found, so the reverse direction of every
+ * source pair is supplied by propagation rather than by a second search. The largest source
+ * therefore runs no searches at all and only folds the offers it received into its retained
+ * edges. Searches traverse the target's PQ codes (fused or sidecar) with exact rescoring of the
+ * top candidates, hint the frontier's next records to the page cache while they run, and check
+ * the pairwise diversity of offered candidates through their codes so no offerer's vector is read.
+ * <p>
+ * Ordinals in the output follow the caller's {@link OrdinalMapper}s unless
+ * {@link #setReassignOrdinals} is enabled, in which case the compactor numbers nodes by locality
+ * and publishes the mapping through {@link #effectiveRemappers()}. Upper layers are merged the
+ * same way using a greedy descent to the layer followed by a beam search.
+ */
 public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
@@ -1223,8 +1241,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Recomputes exact similarity score between the base vector and a node's vector,
-     * used to refine approximate PQ-based search results.
+     * Recomputes the exact similarity between the base vector and a node's vector, used to
+     * rerank approximate PQ-scored search results.
      */
     private float rescore(OnDiskGraphIndex.View view,
                          int node,

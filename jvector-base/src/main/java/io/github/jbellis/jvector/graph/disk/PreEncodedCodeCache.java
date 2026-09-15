@@ -30,8 +30,8 @@ import java.nio.channels.FileChannel;
 /**
  * A memory-mapped array of pre-encoded fused codes, indexed by new ordinal.
  *
- * <p>Compaction pre-encodes every live node's code once, in parallel, so the write and refine
- * passes can memcpy a neighbor's code instead of re-encoding it. Because a fused graph stores
+ * <p>Compaction pre-encodes every live node's code once, in parallel, so the write pass can
+ * memcpy a neighbor's code instead of re-encoding it. Because a fused graph stores
  * each node's <em>neighbors'</em> codes inline, a code is needed once per edge rather than once
  * per node — so without this cache the encode cost is multiplied by the graph degree.
  *

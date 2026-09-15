@@ -34,8 +34,8 @@ import java.util.Arrays;
  * <p>
  * Hints are speculative and best-effort: a wasted hint costs one record-sized readahead; a
  * successful one converts a blocking ~100us device read into a page-cache hit. Used by
- * {@link OnDiskGraphIndexCompactor} for cross-source searches; enabled by setting the system
- * property {@code jvector.compaction.frontierPrefetch} to the per-expansion hint width.
+ * {@link OnDiskGraphIndexCompactor} for every cross-source search; the hint width is
+ * {@link #WIDTH}.
  */
 final class FrontierPrefetchingView extends OnDiskGraphIndex.View {
     /** Number of top-scored shadow-queue entries hinted per expansion. 3 is the measured knee:

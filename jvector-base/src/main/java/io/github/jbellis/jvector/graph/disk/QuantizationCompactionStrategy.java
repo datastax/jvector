@@ -166,7 +166,7 @@ public abstract class QuantizationCompactionStrategy {
 
     /**
      * For compaction use. Returns the precomputed code cache built by {@link #onAfterHeader},
-     * indexed by new ordinal so refinement can memcpy neighbor codes instead of re-encoding them.
+     * indexed by new ordinal so record writes can memcpy neighbor codes instead of re-encoding them.
      * Returns {@code null} when no cache is held (non-fused strategy, NONE, or a pre-encode
      * failure). The returned cache is shared across threads and safe for concurrent use.
      */
@@ -177,18 +177,6 @@ public abstract class QuantizationCompactionStrategy {
     /** For compaction use. Bytes per code in {@link #getCodeCache()}, or {@code 0} when no cache. */
     public int getCacheCodeSize() {
         return 0;
-    }
-
-    /**
-     * For compaction use. Drops the strategy's hold on the {@link CompactionContext} (and thus the
-     * source graphs) once {@code compactGraphImpl} no longer needs it, so the source graphs become
-     * GC-eligible before the refinement pass loads a second full graph. Called only from the
-     * non-sidecar {@code compact(Path)} path. No-op by default; strategies that retain a context
-     * override. Must not be called before {@code onAfterHeader}/{@code onAfterLevels} have run, and
-     * implementations must keep {@code onAfterClose} working without the context.
-     */
-    public void releaseSources() {
-        // no-op
     }
 
     /**

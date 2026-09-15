@@ -39,6 +39,20 @@ var compactor = new OnDiskGraphIndexCompactor(
 compactor.compact(Path.of("compacted.index"));
 ```
 
+### Letting the compactor choose ordinals
+
+By default the output ordinals are exactly the ones the caller's `OrdinalMapper`s assign. Callers that do not need a particular numbering can hand that choice to the compactor:
+
+```java
+compactor.setReassignOrdinals(true);
+compactor.compact(Path.of("compacted.index"));
+
+// The mapping actually used, per source: translate through it, not through the mappers passed in.
+List<OrdinalMapper> effective = compactor.effectiveRemappers();
+```
+
+The compactor then numbers each source's live nodes by locality (nodes that are close in vector space get adjacent ordinals). Records are written sequentially, similar vectors land in adjacent records, and consecutive cross-source searches walk the same neighbourhood of every target, which is where most of the merge time goes on large inputs. The caller's mappers are still used to enumerate nodes; only their ordinal values are replaced. Requires sources with PQ codes (fused, or a compressed sidecar); otherwise the caller's ordinals are kept.
+
 ### Handling Deleted Nodes
 
 Deleted nodes are excluded from the output by marking them as `false` in the corresponding `FixedBitSet`.
@@ -61,7 +75,7 @@ remappers.add(new OrdinalMapper.MapMapper(oldToNew));
 
 ### Ordinal Remapping
 
-Each source assigns its own local ordinals. The compactor maps them to a new global ordinal space using user-provided `OrdinalMapper`.
+Each source assigns its own local ordinals. The compactor maps them to a new global ordinal space using the user-provided `OrdinalMapper`s, or, with `setReassignOrdinals(true)`, a mapping of its own: sources in ascending-size order, and within a source by the region of the largest source's hierarchy each node descends to (a code-scored greedy descent through a resident copy of that source's upper layers, keyed by a breadth-first walk position over its level-1 graph). When the largest source has no hierarchy the nodes are ordered by PQ-code prefix instead.
 
 
 ### PQ Retraining
@@ -78,18 +92,20 @@ For each live node at each graph level, the compactor gathers a candidate neighb
 Iterate the node's existing neighbors in its source index. Filter out deleted nodes. Score each with the similarity function. No graph search — neighbors are already precomputed.
 
 **2. Gather from other sources** (`gatherFromOtherSource`)\
-Run a graph search in every other source index starting from that source's entry point. If FusedPQ is available, approximate PQ scoring is used during the search and top results are rescored exactly.
-
-- *Level 0*: a full hierarchical graph search is used (`GraphSearcher.search()`), descending from the entry node down to level 0.
-- *Level L > 0*: the compactor first descends greedily from the source's entry node through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
+Run a graph search in other source indexes and keep the top `searchTopK` hits per target. When PQ codes are available (fused, or a compressed sidecar) the traversal scores through a per-query lookup table over the target's codes and the top candidates are rescored exactly; otherwise the traversal is exact.
 
 ```
 searchTopK  = max(2,  ceil(degree / numSources) * 4)
 beamWidth   = max(degree, searchTopK) * 2
 ```
 
+- *Level 0* uses pair-asymmetric cross-linking. Sources are processed smallest first, one source at a time. A node searches only the sources **larger** than its own (a full hierarchical `GraphSearcher.search()` from the target's entry point). Every hit is also *offered back* to the node it found, with the exact score the searcher computed: since similarity is symmetric, the offer is exactly the candidate that node's own search of the smaller source would have produced. Each node holds up to 16 offer slots (`jvector.compaction.reverseSlots`), kept in a banded, spill-to-disk buffer so peak memory is independent of node count. When a source's turn comes, its nodes union the offers they received with their retained same-source edges and their own forward-search results before diversity selection. The largest source runs no searches at all; a node of it that received no offers keeps its retained edges unchanged and skips selection entirely.
+- *Level L > 0*: the compactor first descends greedily from the source's entry point through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
+
+While a level-0 search runs, the view it searches through hints the top entries of the candidate queue to the page cache (`posix_fadvise(WILLNEED)` through the reader), so several record reads are in flight per searching thread on cold inputs.
+
 **3. Diversity selection** (Vamana-style)\
-Candidates are sorted by score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha:
+Candidates are sorted by score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha. Candidates that arrived as offers are compared with already-selected neighbours through their PQ codes (a symmetric code-to-code similarity built once per compaction from the retrained codebook, for dot product, Euclidean and cosine), so no offerer's vector is read during selection.
 
 ```
 for alpha in [1.0, 1.2]:
@@ -99,6 +115,10 @@ for alpha in [1.0, 1.2]:
             select c
     if |selected| == maxDegree: stop
 ```
+
+### Pre-encoded codes
+
+Before level 0 is written, every live node is encoded once against the retrained codebook into a memory-mapped code cache indexed by new ordinal. Record writes copy neighbour codes from the cache instead of re-encoding them per edge, the cross-source searches score through it, and the offer diversity checks read it. For sidecar sources (`compact(graphPath, compressedPath)`) the same cache also becomes the merged compressed vectors file.
 
 ### Hierarchical Levels
 

@@ -1431,18 +1431,18 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     @Test
     public void testSidecarParityNearDuplicateMerge() throws Exception {
         // COSINE: the LUT declines unsupported metrics, so this exercises the exact-scoring
-        // fallback with the full parity stack (ordinals, cache, cluster search).
-        sidecarParityCertification(VectorSimilarityFunction.COSINE);
+        // fallback with the full parity stack (reassigned ordinals, code cache, reverse offers).
+        sidecarParityMerge(VectorSimilarityFunction.COSINE);
     }
 
     @Test
     public void testSidecarParityLutScoring() throws Exception {
         // EUCLIDEAN: traversal scores through the cache-LUT (center-adjusted PQ), the path
         // production DOT/EUCLIDEAN merges take.
-        sidecarParityCertification(VectorSimilarityFunction.EUCLIDEAN);
+        sidecarParityMerge(VectorSimilarityFunction.EUCLIDEAN);
     }
 
-    private void sidecarParityCertification(VectorSimilarityFunction vsf) throws Exception {
+    private void sidecarParityMerge(VectorSimilarityFunction vsf) throws Exception {
         int poolSize = 64;
         int perSource = 320;
         int nSrc = 3;

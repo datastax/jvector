@@ -195,7 +195,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
     }
 
     /**
-     * Reads race across threads in both the write and refine passes. Per-thread views must keep
+     * Reads race across threads in the parallel write pass. Per-thread views must keep
      * absolute-position seeks from interfering.
      */
     @Test
