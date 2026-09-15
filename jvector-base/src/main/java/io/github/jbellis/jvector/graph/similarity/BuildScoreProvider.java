@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.similarity;
 import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -126,8 +127,8 @@ public interface BuildScoreProvider {
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
         var vectorsRaw = ravv.threadLocalSupplier();
         var vectorsCopyRaw = ravv.threadLocalSupplier();
-        Supplier<RandomAccessVectorValues> vectors = () -> (RandomAccessVectorValues) vectorsRaw.get();
-        Supplier<RandomAccessVectorValues> vectorsCopy = () -> (RandomAccessVectorValues) vectorsCopyRaw.get();
+        Supplier<RandomAccessVectorValues> vectors = asRandomAccessSupplier(vectorsRaw);
+        Supplier<RandomAccessVectorValues> vectorsCopy = asRandomAccessSupplier(vectorsCopyRaw);
 
         return new BuildScoreProvider() {
             @Override
@@ -228,6 +229,16 @@ public interface BuildScoreProvider {
             public VectorFloat<?> approximateCentroid() {
                 return pqv.getCompressor().getOrComputeCentroid();
             }
+        };
+    }
+
+    private static Supplier<RandomAccessVectorValues> asRandomAccessSupplier(Supplier<VectorValues<VectorFloat<?>>> supplier) {
+        return () -> {
+            var v = supplier.get();
+            if (!(v instanceof RandomAccessVectorValues)) {
+                throw new IllegalStateException("Supplier returned VectorValues instance of " + v.getClass().getName() + " which does not implement RandomAccessVectorValues");
+            }
+            return (RandomAccessVectorValues) v;
         };
     }
 
