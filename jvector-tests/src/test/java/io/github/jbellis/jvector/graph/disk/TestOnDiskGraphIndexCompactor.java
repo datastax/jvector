@@ -1312,15 +1312,12 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
-     * Cluster certification needs consecutive similarity-ordered queries to be near-twins; the
-     * random-vector fixtures never certify, leaving the certificate paths untested. This merge
-     * of jittered copies of a small vector pool certifies heavily, and validates recall of the
-     * certified output against brute-force ground truth. When run with
-     * {@code -Djvector.compaction.intervalCertify=true}, additionally asserts the RAM-interval
-     * certificate path engaged.
+     * Merge of jittered copies of a small vector pool (near-duplicate sources): exercises the
+     * reverse-offer fold on heavily overlapping neighbourhoods and validates recall of the merged
+     * output against brute-force ground truth.
      */
     @Test
-    public void testClusterCertificationWithNearDuplicates() throws Exception {
+    public void testNearDuplicateMergeRecall() throws Exception {
         int poolSize = 64;
         int perSource = 320;
         int nSrc = 3;
@@ -1343,7 +1340,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 }
                 vecs.add(v);
             }
-            Path path = buildFusedSourceGraph(vecs, "certify_src_" + sIdx);
+            Path path = buildFusedSourceGraph(vecs, "neardup_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var lv = new FixedBitSet(perSource);
@@ -1356,17 +1353,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, similarityFunction, null);
         compactor.setSimilarityOrdinals(true);
-        var outputPath = testDirectory.resolve("certify_compacted");
+        var outputPath = testDirectory.resolve("neardup_compacted");
         compactor.compact(outputPath);
 
-        assertTrue("near-duplicate merge should certify members, got "
-                        + compactor.clusterCertified.get(),
-                compactor.clusterCertified.get() > 0);
-        assertTrue("anchor-relative certificates should engage on near-duplicate data, got "
-                        + compactor.anchorRelCertified.get(),
-                compactor.anchorRelCertified.get() > 0);
-
-        // recall of the certified output vs brute force over the union
+        // recall of the merged output vs brute force over the union
         int total = nSrc * perSource;
         var effective = compactor.effectiveRemappers();
         int[] newToDataset = new int[total];
@@ -1407,10 +1397,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     }
                 }
                 double recall = (double) hits / (queries.size() * topK);
-                System.out.printf("Certification-merge recall: %.4f (certified %d, anchor-relative %d)%n",
-                        recall, compactor.clusterCertified.get(), compactor.anchorRelCertified.get());
+                System.out.printf("Near-duplicate merge recall: %.4f%n", recall);
                 // near-duplicate pools make GT ties common; the bar is deliberately moderate
-                assertTrue("certified-merge recall should be >= 0.5, got " + recall, recall >= 0.5);
+                assertTrue("near-duplicate merge recall should be >= 0.5, got " + recall, recall >= 0.5);
             }
         }
         for (var r : rss) r.close();
@@ -1435,20 +1424,19 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
-     * Sidecar-parity counterpart of {@link #testClusterCertificationWithNearDuplicates}: sources
-     * are plain graphs with separate PQVectors sidecars (the SAI layout). With parity, similarity
-     * ordinals derive from the retrained sidecar PQ, the strategy pre-encode cache backs
-     * approximate traversal scoring, and cluster certification must engage just as in fused mode.
+     * Sidecar-parity counterpart of {@link #testNearDuplicateMergeRecall()}: sources carry no fused
+     * codes, so the merge must score cross-source hops from the pre-encoded code cache and still
+     * reach the same recall bar on near-duplicate data.
      */
     @Test
-    public void testSidecarParityCertificationWithNearDuplicates() throws Exception {
+    public void testSidecarParityNearDuplicateMerge() throws Exception {
         // COSINE: the LUT declines unsupported metrics, so this exercises the exact-scoring
         // fallback with the full parity stack (ordinals, cache, cluster search).
         sidecarParityCertification(VectorSimilarityFunction.COSINE);
     }
 
     @Test
-    public void testSidecarParityCertificationLutScoring() throws Exception {
+    public void testSidecarParityLutScoring() throws Exception {
         // EUCLIDEAN: traversal scores through the cache-LUT (center-adjusted PQ), the path
         // production DOT/EUCLIDEAN merges take.
         sidecarParityCertification(VectorSimilarityFunction.EUCLIDEAN);
@@ -1478,7 +1466,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 }
                 vecs.add(v);
             }
-            Path path = buildPlainSourceGraph(vecs, vsf, "sc_certify_src_" + sIdx);
+            Path path = buildPlainSourceGraph(vecs, vsf, "sc_neardup_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var ravv = new ListRandomAccessVectorValues(vecs, dimension);
@@ -1494,13 +1482,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, compressed, live, remappers, vsf, null);
         compactor.setSimilarityOrdinals(true);
-        var outputPath = testDirectory.resolve("sc_certify_compacted_" + vsf);
-        var pqOutPath = testDirectory.resolve("sc_certify_pq_" + vsf);
+        var outputPath = testDirectory.resolve("sc_neardup_compacted_" + vsf);
+        var pqOutPath = testDirectory.resolve("sc_neardup_pq_" + vsf);
         compactor.compact(outputPath, pqOutPath);
-
-        assertTrue("sidecar-parity near-duplicate merge should certify members, got "
-                        + compactor.clusterCertified.get(),
-                compactor.clusterCertified.get() > 0);
 
         // recall of the merged output vs brute force over the union
         int total = nSrc * perSource;
@@ -1548,8 +1532,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                     }
                 }
                 double recall = (double) hits / (queries.size() * topK);
-                System.out.printf("Sidecar-parity merge recall (tie-aware): %.4f (certified %d)%n",
-                        recall, compactor.clusterCertified.get());
+                System.out.printf("Sidecar-parity merge recall (tie-aware): %.4f%n", recall);
                 assertTrue("sidecar-parity merge tie-aware recall should be >= 0.8, got " + recall, recall >= 0.8);
             }
         }
