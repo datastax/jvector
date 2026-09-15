@@ -326,7 +326,7 @@ public class DataSetPropertiesTest {
                 DataSetProperties.KEY_IS_ZERO_VECTOR_FREE, true,
                 DataSetProperties.KEY_IS_DUPLICATE_VECTOR_FREE, true
         ));
-        var info = new DataSetInfo(base, null /* The functions in this test should not try to load the dataset */);
+        var info = new DataSetInfoMFD(base, null /* The functions in this test should not try to load the dataset */);
 
         assertEquals("delegate-test", info.getName());
         assertEquals(VectorSimilarityFunction.EUCLIDEAN, info.similarityFunction().orElse(null));

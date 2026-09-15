@@ -385,7 +385,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
     }
 
     @Override
-    public Optional<DataSetInfo> loadDataSet(String dataSetName) {
+    public Optional<DataSetInfoMFD> loadDataSet(String dataSetName) {
         var entry = catalog.get(dataSetName);
         if (entry == null) return Optional.empty();
 
@@ -422,7 +422,7 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                         String.format(
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
-        return Optional.of(new DataSetInfo(props, new DataSetFiles(
+        return Optional.of(new DataSetInfoMFD(props, new DataSetFiles(
             effectiveCacheDir.resolve(baseFile),
             effectiveCacheDir.resolve(queryFile),
             effectiveCacheDir.resolve(gtFile)

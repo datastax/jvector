@@ -52,7 +52,7 @@ public class DataSets {
     ///
     /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
     /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
-    public static Optional<DataSetInfo> loadDataSet(String dataSetName) {
+    public static Optional<? extends DataSetInfo> loadDataSet(String dataSetName) {
         return loadDataSet(dataSetName, defaultLoaders);
     }
 
@@ -61,7 +61,7 @@ public class DataSets {
     /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
     /// @param loaders     the loaders to try, in priority order
     /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
-    public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
+    public static Optional<? extends DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
         logger.info("loading dataset [{}]", dataSetName);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
@@ -69,7 +69,7 @@ public class DataSets {
 
         for (DataSetLoader loader : loaders) {
             logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
-            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
+            var dataSetLoaded = loader.loadDataSet(dataSetName);
             if (dataSetLoaded.isPresent()) {
                 logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
                 return dataSetLoaded;
