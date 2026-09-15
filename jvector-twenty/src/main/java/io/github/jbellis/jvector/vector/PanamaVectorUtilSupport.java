@@ -1054,17 +1054,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     float dotProductBytes512(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_128.length(); // 16
         final int limit  = ByteVector.SPECIES_128.loopBound(length);
         IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             acc = acc.add(va.mul(vb));
@@ -1072,24 +1070,22 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int result = acc.reduceLanes(VectorOperators.ADD);
         for (int i = limit; i < length; i++) {
-            result += a.get(aOff + i) * b.get(bOff + i);
+            result += a.get(i) * b.get(i);
         }
         return result;
     }
 
     float dotProductBytes256(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_64.length(); // 8
         final int limit  = ByteVector.SPECIES_64.loopBound(length);
         IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             acc = acc.add(va.mul(vb));
@@ -1097,7 +1093,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int result = acc.reduceLanes(VectorOperators.ADD);
         for (int i = limit; i < length; i++) {
-            result += a.get(aOff + i) * b.get(bOff + i);
+            result += a.get(i) * b.get(i);
         }
         return result;
     }
@@ -1105,11 +1101,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     float dotProductBytes128(ByteSequence<?> a, ByteSequence<?> b) {
         // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         int result = 0;
         for (int i = 0; i < length; i++) {
-            result += a.get(aOff + i) * b.get(bOff + i);
+            result += a.get(i) * b.get(i);
         }
         return result;
     }
@@ -1128,17 +1122,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     float squareDistanceBytes512(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_128.length();
         final int limit  = ByteVector.SPECIES_128.loopBound(length);
         IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va   = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_128, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb   = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_128, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             IntVector diff = va.sub(vb);
@@ -1147,7 +1139,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int result = acc.reduceLanes(VectorOperators.ADD);
         for (int i = limit; i < length; i++) {
-            int diff = a.get(aOff + i) - b.get(bOff + i);
+            int diff = a.get(i) - b.get(i);
             result += diff * diff;
         }
         return result;
@@ -1155,17 +1147,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     float squareDistanceBytes256(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_64.length();
         final int limit  = ByteVector.SPECIES_64.loopBound(length);
         IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va   = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_64, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb   = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_64, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             IntVector diff = va.sub(vb);
@@ -1174,7 +1164,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         int result = acc.reduceLanes(VectorOperators.ADD);
         for (int i = limit; i < length; i++) {
-            int diff = a.get(aOff + i) - b.get(bOff + i);
+            int diff = a.get(i) - b.get(i);
             result += diff * diff;
         }
         return result;
@@ -1183,11 +1173,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     float squareDistanceBytes128(ByteSequence<?> a, ByteSequence<?> b) {
         // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         int result = 0;
         for (int i = 0; i < length; i++) {
-            int diff = a.get(aOff + i) - b.get(bOff + i);
+            int diff = a.get(i) - b.get(i);
             result += diff * diff;
         }
         return result;
@@ -1207,8 +1195,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     float cosineBytes512(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_128.length();
         final int limit  = ByteVector.SPECIES_128.loopBound(length);
         IntVector dot    = IntVector.zero(IntVector.SPECIES_512);
@@ -1216,10 +1202,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector normB  = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, aOff + i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, bOff + i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             dot   = dot.add(va.mul(vb));
@@ -1232,7 +1218,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         long normBResult = normB.reduceLanes(VectorOperators.ADD);
 
         for (int i = limit; i < length; i++) {
-            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            int ai = a.get(i), bi = b.get(i);
             dotResult   += ai * bi;
             normAResult += ai * ai;
             normBResult += bi * bi;
@@ -1242,8 +1228,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     float cosineBytes256(ByteSequence<?> a, ByteSequence<?> b) {
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         final int step   = ByteVector.SPECIES_64.length();
         final int limit  = ByteVector.SPECIES_64.loopBound(length);
         IntVector dot    = IntVector.zero(IntVector.SPECIES_256);
@@ -1251,10 +1235,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector normB  = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, aOff + i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, bOff + i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             dot   = dot.add(va.mul(vb));
@@ -1267,7 +1251,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         long normBResult = normB.reduceLanes(VectorOperators.ADD);
 
         for (int i = limit; i < length; i++) {
-            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            int ai = a.get(i), bi = b.get(i);
             dotResult   += ai * bi;
             normAResult += ai * ai;
             normBResult += bi * bi;
@@ -1278,11 +1262,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     float cosineBytes128(ByteSequence<?> a, ByteSequence<?> b) {
         // ByteVector.SPECIES_32 does not exist; scalar is fastest at 128-bit width
         final int length = a.length();
-        final int aOff   = a.offset();
-        final int bOff   = b.offset();
         long dotResult = 0, normAResult = 0, normBResult = 0;
         for (int i = 0; i < length; i++) {
-            int ai = a.get(aOff + i), bi = b.get(bOff + i);
+            int ai = a.get(i), bi = b.get(i);
             dotResult   += ai * bi;
             normAResult += ai * ai;
             normBResult += bi * bi;
