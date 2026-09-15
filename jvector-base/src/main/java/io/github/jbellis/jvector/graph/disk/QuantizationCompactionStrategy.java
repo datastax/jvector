@@ -22,7 +22,6 @@ import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.IOException;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -83,6 +82,16 @@ public abstract class QuantizationCompactionStrategy {
     public abstract VectorCompressor<?> compressor();
 
     /**
+     * Replaces the strategy's context snapshot after the compactor re-assigns output ordinals
+     * (similarity ordinals). Strategies that place codes by output ordinal must adopt the
+     * refreshed remappers, or codes land at the caller-proposed ordinals while the graph is
+     * written at the reassigned ones. No-op for strategies that hold no context.
+     */
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        // no-op by default
+    }
+
+    /**
      * Whether this strategy writes codes inline in the graph file (FusedPQ-style). When true, the
      * compactor passes the compressor to {@link CompactWriter} and the strategy expects to drive
      * per-node code emission via the writer's inline-code path.
@@ -128,6 +137,15 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * Releases any transient resources still held after a failed compaction (pre-encode cache
+     * mappings, un-truncated scratch regions). Idempotent; a successful run releases them in its
+     * normal flow, so this only acts when a failure interrupted that flow. No-op by default.
+     */
+    public void releaseTransientState() {
+        // no-op
+    }
+
+    /**
      * Writes the merged compressed-vectors sidecar file. Called by the compactor's
      * {@code compact(graphPath, compressedPath)} entry point after the graph is fully written.
      * Throws {@link UnsupportedOperationException} by default; sidecar strategies override.
@@ -149,11 +167,10 @@ public abstract class QuantizationCompactionStrategy {
     /**
      * For compaction use. Returns the precomputed code cache built by {@link #onAfterHeader},
      * indexed by new ordinal so refinement can memcpy neighbor codes instead of re-encoding them.
-     * Returns {@code null} when no cache is held (non-fused strategy, NONE, or graph too large for
-     * a single mapping). The returned buffer is shared; callers must {@code .duplicate()} per
-     * thread before using.
+     * Returns {@code null} when no cache is held (non-fused strategy, NONE, or a pre-encode
+     * failure). The returned cache is shared across threads and safe for concurrent use.
      */
-    public MappedByteBuffer getCodeCache() {
+    public PreEncodedCodeCache getCodeCache() {
         return null;
     }
 
