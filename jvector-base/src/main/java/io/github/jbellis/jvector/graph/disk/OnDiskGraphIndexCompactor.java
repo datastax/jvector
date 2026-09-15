@@ -96,17 +96,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     private PreEncodedCodeCache orderingCache;   // non-null only while L0 runs under fused mode
 
-    // Similarity-assigned merged ordinals: the compactor replaces the caller's remappers with a
-    // mapping that numbers each source's live nodes by a locality key (region key, or PQ-code
-    // prefix; see buildSimilarityOrdinalMappers), sources in ascending-size processing order.
-    // Record write offsets follow new ordinals, so processing in the same order makes the writer
-    // sequential, and similar vectors become adjacent records in the output — locality that also
-    // benefits post-compaction searches. Callers opting in must read the mapping back via
-    // {@link #effectiveRemappers()}.
-    private static final boolean SIMILARITY_ORDINALS_DEFAULT =
-            Boolean.parseBoolean(System.getProperty("jvector.compaction.similarityOrdinals", "false"));
-    private boolean similarityOrdinals = SIMILARITY_ORDINALS_DEFAULT;
-    private boolean similarityOrdinalsActive;
+    /**
+     * Compactor-assigned ordinals (opt-in via {@link #setReassignOrdinals}): the compactor replaces
+     * the caller's remappers with a mapping that numbers each source's live nodes by region (see
+     * {@link #buildRegionOrdinalMappers}), sources in ascending-size processing order. Record write
+     * offsets follow new ordinals, so processing in the same order makes the writer sequential, and
+     * consecutive nodes of every source explore the same region of every target. Callers read the
+     * mapping back via {@link #effectiveRemappers()}.
+     */
+    private boolean reassignOrdinals;
+    private boolean ordinalsReassigned;
     private List<OrdinalMapper> effectiveRemappers;
     private int[] sizeRank;            // rank of each source in ascending live-node order
     private int[] l0ProcessOrder;      // source indices in ascending live-node order
@@ -115,26 +114,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // did not supply per-source CompressedVectors). Set by compactGraphImpl; consulted wherever
     // the fused path consults the inline strategy for codes.
     private QuantizationCompactionStrategy activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
-    /**
-     * Read-free hub pass: reverse-offer candidates keep the exact score their offerer computed, and
-     * only their pairwise diversity checks use a symmetric code-code similarity over the merged PQ
-     * (table built once per compaction). Offerers live in other sources at arbitrary positions, so
-     * this removes one random vector read per offer per check. Disable with
-     * {@code -Djvector.compaction.offerCodeDiversity=false}.
-     */
-    private static final boolean OFFER_CODE_DIV =
-            Boolean.parseBoolean(System.getProperty("jvector.compaction.offerCodeDiversity", "true"));
-
-    /**
-     * Region ordinals: when similarity ordinals are enabled, order each source's nodes by the walk
-     * position of the level-1 node they descend to in the LARGEST source's hierarchy (a shared
-     * coarse map) instead of by 4-byte PQ prefix. Consecutive queries then explore the same region
-     * of every target, so the page cache holds one region per target at a time; writes stay
-     * sequential. Falls back to the PQ-prefix key when the largest source has no hierarchy.
-     * Disable with {@code -Djvector.compaction.regionOrdinals=false}.
-     */
-    private static final boolean REGION_ORDINALS =
-            Boolean.parseBoolean(System.getProperty("jvector.compaction.regionOrdinals", "true"));
 
     /** Reverse-offer band width: peak buffer memory is O(band), independent of node count. */
     private static final int OFFER_BAND_WIDTH = 1 << 20;
@@ -365,18 +344,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * When enabled, the compactor assigns merged ordinals itself, numbering nodes in vector
-     * similarity order, and ignores the ordinal values of the caller-supplied remappers (their
-     * source/oldOrdinal structure is still used to enumerate nodes). The mapping actually used
-     * is available from {@link #effectiveRemappers()} after {@code compact(...)} begins.
-     * Requires fused-PQ sources; silently keeps caller ordinals otherwise.
+     * When enabled, the compactor chooses the merged ordinals itself and ignores the ordinal values
+     * of the caller-supplied remappers (their source/oldOrdinal structure is still used to
+     * enumerate nodes). The mapping actually used is available from {@link #effectiveRemappers()}
+     * once {@code compact(...)} has started, and callers must translate through it. Letting the
+     * compactor choose places similar vectors in adjacent records, keeps record writes sequential,
+     * and makes consecutive cross-source searches walk the same neighbourhood of every target,
+     * which is where most of the merge time goes. Requires PQ-bearing sources (fused or sidecar
+     * codes); silently keeps caller ordinals otherwise.
      */
     @Experimental
-    public void setSimilarityOrdinals(boolean enabled) {
-        this.similarityOrdinals = enabled;
+    public void setReassignOrdinals(boolean enabled) {
+        this.reassignOrdinals = enabled;
     }
 
-    /** The ordinal mappers in effect (the caller's, or the compactor-assigned similarity mapping). */
+    /** The ordinal mappers in effect: the caller's, or the compactor-assigned mapping. */
     public List<OrdinalMapper> effectiveRemappers() {
         return effectiveRemappers != null ? effectiveRemappers : remappers;
     }
@@ -495,17 +477,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
                 strategy.outputFusedFeature(maxBaseDegree);
 
-        if (similarityOrdinals) {
-            if (pq != null && pq.getSubspaceCount() >= 4) {
-                remappers = buildSimilarityOrdinalMappers(pq);
+        if (reassignOrdinals) {
+            if (pq != null) {
+                remappers = buildRegionOrdinalMappers(pq);
                 effectiveRemappers = remappers;
-                similarityOrdinalsActive = true;
+                ordinalsReassigned = true;
                 // The strategies snapshotted the caller's remappers at construction; refresh so
                 // code placement (pre-encode caches, sidecar order) matches the on-disk ordinals.
                 strategy.onRemappersUpdated(buildContext());
                 activeSidecarStrategy.onRemappersUpdated(buildContext());
             } else {
-                log.info("similarityOrdinals requested but unavailable (requires a >=4-subspace PQ codebook); keeping caller remappers");
+                log.info("Ordinal reassignment requested but the sources carry no PQ codebook; keeping caller remappers");
             }
         }
 
@@ -738,9 +720,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                  n = alive.nextSetBit(n + 1)) {
                 nodes[i++] = n;
             }
-            if (similarityOrdinalsActive && numNodes > 1) {
-                // Merged ordinals were assigned in similarity order, so ordering processing by
-                // new ordinal gives similarity locality AND sequential record writes at once.
+            if (ordinalsReassigned && numNodes > 1) {
+                // Merged ordinals were assigned in region order, so ordering processing by
+                // new ordinal gives locality AND sequential record writes at once.
                 OrdinalMapper mapper = remappers.get(s);
                 long[] keyed = new long[numNodes];
                 for (int k = 0; k < numNodes; k++) {
@@ -750,14 +732,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 for (int k = 0; k < numNodes; k++) {
                     nodes[k] = (int) keyed[k];
                 }
-                log.info("L0 source {}: {} nodes in similarity-ordinal order", s, numNodes);
+                log.info("L0 source {}: {} nodes in region-ordinal order", s, numNodes);
             }
             // Similarity-ordered scheduling: sort searching sources' nodes by the leading bytes
             // of their PQ code, so consecutive searches walk overlapping target regions. The
             // largest source runs no searches and keeps ordinal order (contiguous record
             // streaming matters more there).
             boolean searches = reverseCandidates == null || sizeRank[s] < sources.size() - 1;
-            if (!similarityOrdinalsActive && orderingCache != null && searches && orderingCache.codeSize() >= 4 && numNodes > 1) {
+            if (!ordinalsReassigned && orderingCache != null && searches && orderingCache.codeSize() >= 4 && numNodes > 1) {
                 OrdinalMapper mapper = remappers.get(s);
                 byte[] code = new byte[orderingCache.codeSize()];
                 // Two-level order: similarity-sort WITHIN coarse ordinal chunks. A record's write
@@ -851,6 +833,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return out;
     }
 
+    /**
+     * Read-free hub pass: reverse-offer candidates keep the exact score their offerer computed, and
+     * their pairwise diversity checks use a symmetric code-code similarity over the merged PQ, so
+     * folding an offer never reads the offerer's vector. Available whenever the merged codes are
+     * cached and the similarity function has a code-code form.
+     */
+    private boolean codeDiversityAvailable(CompactionParams params) {
+        return orderingCache != null && params.pq != null && SymmetricCodeSimilarity.supports(similarityFunction);
+    }
+
     /** Symmetric code-code similarity over the merged PQ, built once per compaction on first use. */
     private volatile SymmetricCodeSimilarity codeSimilarity;
 
@@ -926,7 +918,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         var selected = scratch.selectedCache;
 
         var provider = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
-        if (OFFER_CODE_DIV && orderingCache != null && params.pq != null && SymmetricCodeSimilarity.supports(similarityFunction)) {
+        if (codeDiversityAvailable(params)) {
             provider.withCodes(orderingCache, remappers, codeSimilarity(params.pq), scratch.candCodeOnly);
         }
         provider.retainDiverse(
@@ -1112,9 +1104,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int offersStart = candSize;
             candSize = reverseCandidates.appendTo(sourceIdx, remappers.get(sourceIdx).oldToNew(node),
                     scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
-            // Offers carry the exact score their offerer computed; with the read-free hub pass their
-            // pairwise diversity checks run on codes, so their vectors are never read here.
-            if (OFFER_CODE_DIV && SymmetricCodeSimilarity.supports(similarityFunction)) {
+            // Offers carry the exact score their offerer computed; their pairwise diversity checks
+            // run on codes, so their vectors are never read here.
+            if (codeDiversityAvailable(params)) {
                 Arrays.fill(scratch.candCodeOnly, offersStart, candSize, true);
             }
         }
@@ -1941,14 +1933,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Builds the compactor-assigned ordinal mapping. Live nodes are numbered source by source in
-     * ascending-size processing order, and within a source by a locality key: in region mode the
-     * walk position (breadth-first over the largest source's level-1 graph) of the level-1 node a
-     * code-scored greedy descent lands on, otherwise the node's 4-byte PQ-code prefix. Batches
+     * ascending-size processing order, and within a source by a locality key: the walk position
+     * (breadth-first over the largest source's level-1 graph) of the level-1 node a code-scored
+     * greedy descent lands on, or the node's PQ-code prefix when the largest source has no
+     * hierarchy. Batches
      * processed in the same order therefore write records sequentially, and consecutive nodes of
      * every source explore the same region of every target. Dead nodes are numbered after all
      * live nodes, preserving a total bijection.
      */
-    private List<OrdinalMapper> buildSimilarityOrdinalMappers(ProductQuantization pq) {
+    private List<OrdinalMapper> buildRegionOrdinalMappers(ProductQuantization pq) {
         long t0 = System.nanoTime();
         int numSources = sources.size();
         long totalOrdinals = 0;
@@ -1973,7 +1966,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // region mode: the largest source is the hub; every live node's key is the walk position
         // of the level-1 hub node a code-scored greedy descent lands on
         OnDiskGraphIndex hubSource = sources.get(order[numSources - 1]);
-        boolean regionMode = REGION_ORDINALS && hubSource.getMaxLevel() >= 1;
+        boolean regionMode = hubSource.getMaxLevel() >= 1;
         HubMap hubMap = null;
         int[] walkPosition = null;
         if (regionMode) {
@@ -1981,11 +1974,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             walkPosition = hubMap.walkPositions();
             log.info("Region ordinals: hub source {} (maxLevel {}), {} level-1 nodes walked",
                      order[numSources - 1], hubSource.getMaxLevel(), hubMap.nodes[1].length);
-        } else if (REGION_ORDINALS) {
-            log.info("Region ordinals requested but the largest source has no hierarchy; falling back to PQ-prefix ordinals");
+        } else {
+            log.info("Region ordinals: the largest source has no hierarchy; falling back to PQ-prefix ordinals");
         }
         HubMap hubMapRef = hubMap;
         int[] walkPositionRef = walkPosition;
+        int prefixBytes = Math.min(4, pq.getSubspaceCount());
         for (int oi = 0; oi < numSources; oi++) {
             int s = order[oi];
             OnDiskGraphIndex source = sources.get(s);
@@ -2020,8 +2014,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 key = pos & 0xFFFFFFFFL;
                             } else {
                                 pq.encodeTo(vec, code);
-                                key = ((code.get(0) & 0xFFL) << 24) | ((code.get(1) & 0xFFL) << 16)
-                                    | ((code.get(2) & 0xFFL) << 8) | (code.get(3) & 0xFFL);
+                                key = 0;
+                                for (int b = 0; b < prefixBytes; b++) {
+                                    key = (key << 8) | (code.get(b) & 0xFFL);
+                                }
                             }
                             keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
                         }
@@ -2064,7 +2060,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             long descents = Math.max(1, hubMap.descents.sum());
             log.info("Region ordinals: {} descents, {} moves/descent", descents, String.format("%.1f", hubMap.moves.sum() / (double) descents));
         }
-        log.info("Similarity ordinals assigned ({}): {} ordinals across {} sources in {} ms", regionMode ? "REGION order" : "PQ-prefix order",
+        log.info("Region ordinals assigned ({}): {} ordinals across {} sources in {} ms", regionMode ? "region order" : "PQ-prefix order",
                 next, numSources, (System.nanoTime() - t0) / 1_000_000);
         return mappers;
     }

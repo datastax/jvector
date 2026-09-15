@@ -537,12 +537,12 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
-     * Compaction with compactor-assigned similarity ordinals: verifies the effective mapping is
+     * Compaction with compactor-assigned ordinals: verifies the effective mapping is
      * a bijection with a working newToOld round-trip, and that search recall over the reordered
      * graph (results translated back through effectiveRemappers) matches the golden build.
      */
     @Test
-    public void testCompactWithSimilarityOrdinals() throws Exception {
+    public void testCompactWithReassignedOrdinals() throws Exception {
         List<OnDiskGraphIndex> graphs = new ArrayList<>();
         List<ReaderSupplier> rss = new ArrayList<>();
         List<FixedBitSet> liveNodes = new ArrayList<>();
@@ -566,7 +566,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
-        compactor.setSimilarityOrdinals(true);
+        compactor.setReassignOrdinals(true);
         int topK = 10;
 
         var outputPath = testDirectory.resolve("test_compact_simord_graph");
@@ -622,7 +622,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
         double compactRecall = (double) hits / possible;
         double goldenRecall = AccuracyMetrics.recallFromSearchResults(groundTruth, goldenResults, topK, topK);
-        System.out.printf("SimilarityOrdinals compact recall: %.4f (golden %.4f)%n", compactRecall, goldenRecall);
+        System.out.printf("ReassignedOrdinals compact recall: %.4f (golden %.4f)%n", compactRecall, goldenRecall);
         assertTrue(String.format("similarity-ordinal recall (%.4f) should be comparable to golden (%.4f)",
                         compactRecall, goldenRecall),
                 Math.abs(goldenRecall - compactRecall) < 0.2);
@@ -1352,7 +1352,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, similarityFunction, null);
-        compactor.setSimilarityOrdinals(true);
+        compactor.setReassignOrdinals(true);
         var outputPath = testDirectory.resolve("neardup_compacted");
         compactor.compact(outputPath);
 
@@ -1481,7 +1481,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         var compactor = new OnDiskGraphIndexCompactor(graphs, compressed, live, remappers, vsf, null);
-        compactor.setSimilarityOrdinals(true);
+        compactor.setReassignOrdinals(true);
         var outputPath = testDirectory.resolve("sc_neardup_compacted_" + vsf);
         var pqOutPath = testDirectory.resolve("sc_neardup_pq_" + vsf);
         compactor.compact(outputPath, pqOutPath);

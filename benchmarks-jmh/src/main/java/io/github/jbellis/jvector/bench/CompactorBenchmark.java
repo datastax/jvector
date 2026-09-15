@@ -705,6 +705,7 @@ public class CompactorBenchmark {
             globalOrdinal += size;
         }
         var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        compactor.setReassignOrdinals(Boolean.parseBoolean(System.getProperty("jvector.bench.reassignOrdinals", "true")));
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);
