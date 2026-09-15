@@ -260,6 +260,9 @@ public class CompactorBenchmark {
     private Path tempDir;
     private List<Path> storagePaths;
     private List<Integer> vectorsPerSourceCount;
+
+    /** Parsed {@link #partitionSizes}, or {@code null} when the layout comes from a distribution. */
+    private List<Integer> explicitSizes;
     private String resolvedVectorizationProvider;
 
     // Paths used during execution
@@ -304,6 +307,24 @@ public class CompactorBenchmark {
 
     @Param({"UNIFORM"})
     public TestDataPartition.Distribution splitDistribution;
+
+    /**
+     * Explicit partition sizes as a colon-separated list of absolute vector counts, with an
+     * optional {@code xN} repeat suffix. {@code 10000000:1000000x10} means one partition of
+     * 10,000,000 followed by ten of 1,000,000. When set, this overrides both
+     * {@link #numPartitions} and {@link #splitDistribution}, and {@code numPartitions} is
+     * derived from the expanded list.
+     * <p>
+     * Colon rather than comma because JMH splits a {@code -p} value on commas, treating each
+     * piece as a separate parameter value to sweep over.
+     * <p>
+     * This is the only way to express "one large index alongside many small ones", the shape
+     * that shows up when a big index is compacted against a batch of small recent segments.
+     * {@code UNIFORM} makes every partition equal, and the {@code TIERED_*} distributions put
+     * their weight in the first and last partitions while leaving every middle partition empty.
+     */
+    @Param({""})
+    public String partitionSizes;
 
     @Param({"FULLPRECISION"})
     public IndexPrecision indexPrecision;
@@ -469,10 +490,13 @@ public class CompactorBenchmark {
             }
 
             if (workloadMode == WorkloadMode.PARTITION || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
-                var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
-                vectorsPerSourceCount = partitionedData.sizes;
+                vectorsPerSourceCount = explicitSizes != null
+                        ? explicitSizes
+                        : DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution).sizes;
             } else {
-                vectorsPerSourceCount = null;
+                // COMPACT reads partitions off disk and never partitions anything, but the layout is
+                // still what the run is about -- record it so the timed result is self-describing.
+                vectorsPerSourceCount = explicitSizes;
             }
 
             if (workloadMode == WorkloadMode.PARTITION || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
@@ -491,7 +515,56 @@ public class CompactorBenchmark {
         }
     }
 
+    /**
+     * Parses {@link #partitionSizes} into absolute counts, or returns {@code null} when unset.
+     * Derives {@link #numPartitions} from the list so every downstream loop, the on-disk file
+     * naming, and the recorded params all agree with the requested layout.
+     */
+    private List<Integer> parsePartitionSizes() {
+        if (partitionSizes == null || partitionSizes.isBlank()) {
+            return null;
+        }
+        var sizes = new ArrayList<Integer>();
+        for (String part : partitionSizes.split(":")) {
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int repeat = 1;
+            int xIdx = trimmed.indexOf('x');
+            if (xIdx >= 0) {
+                repeat = parsePositive(trimmed.substring(xIdx + 1), "repeat count");
+                trimmed = trimmed.substring(0, xIdx);
+            }
+            int size = parsePositive(trimmed, "partition size");
+            for (int i = 0; i < repeat; i++) {
+                sizes.add(size);
+            }
+        }
+        if (sizes.size() < 2) {
+            throw new IllegalArgumentException("partitionSizes must describe at least two partitions, got " + sizes
+                    + " (entries are separated by ':', not ',' -- JMH consumes commas)");
+        }
+        numPartitions = sizes.size();
+        return sizes;
+    }
+
+    private static int parsePositive(String s, String what) {
+        int value;
+        try {
+            value = Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("partitionSizes " + what + " is not an integer: '" + s + "'", e);
+        }
+        if (value <= 0) {
+            throw new IllegalArgumentException("partitionSizes " + what + " must be positive, got " + value);
+        }
+        return value;
+    }
+
     private void validateParams() {
+        explicitSizes = parsePartitionSizes();
+
         if (workloadMode == WorkloadMode.BUILD) {
             log.warn("numPartitions={} ignored in BUILD mode", numPartitions);
         }
@@ -597,11 +670,14 @@ public class CompactorBenchmark {
 
     private void buildPartitions(DataSet ds, List<VectorFloat<?>> baseVectors) throws Exception {
 
-        var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
+        var partitionedData = explicitSizes != null
+                ? DataSetPartitioner.partition(baseVectors, explicitSizes)
+                : DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
         vectorsPerSourceCount = partitionedData.sizes;
 
         log.info("Building {} partitions into {} (deg={}, bw={}, split={}, splitSizes={}, precision={}, pwThreads={}, vp={})",
-                numPartitions, partitionsBaseDir.toAbsolutePath(), graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount,
+                numPartitions, partitionsBaseDir.toAbsolutePath(), graphDegree, beamWidth,
+                explicitSizes != null ? "EXPLICIT" : splitDistribution, vectorsPerSourceCount,
                 indexPrecision, parallelWriteThreads, resolvedVectorizationProvider);
 
         int dimension = baseVectors.get(0).length();
@@ -972,7 +1048,10 @@ public class CompactorBenchmark {
         params.put("beamWidth", beamWidth);
         params.put("storageDirectories", storageDirectories);
         params.put("storageClasses", storageClasses);
-        params.put("splitDistribution", splitDistribution.name());
+        params.put("splitDistribution", explicitSizes != null ? "EXPLICIT" : splitDistribution.name());
+        if (explicitSizes != null) {
+            params.put("partitionSizes", explicitSizes.toString());
+        }
         params.put("indexPrecision", indexPrecision.name());
         params.put("parallelWriteThreads", parallelWriteThreads);
         params.put("vectorizationProvider", resolvedVectorizationProvider);

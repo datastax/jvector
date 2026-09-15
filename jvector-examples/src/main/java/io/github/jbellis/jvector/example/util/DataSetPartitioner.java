@@ -43,9 +43,34 @@ public final class DataSetPartitioner {
         return partition(ds.getBaseVectors(), numParts, distribution);
     }
 
+    /**
+     * Partitions into explicitly sized, contiguous segments. Unlike the distribution-driven
+     * overload, the sizes need not consume the whole dataset — any remainder is left unused,
+     * which is what lets a fixed total be split into "one large partition plus N small ones"
+     * for a given experiment.
+     *
+     * @param sizes absolute vector counts, one per partition
+     * @throws IllegalArgumentException if the sizes sum to more vectors than are available
+     */
+    public static PartitionedData partition(List<VectorFloat<?>> baseVectors, List<Integer> sizes) {
+        long total = 0;
+        for (int size : sizes) {
+            total += size;
+        }
+        if (total > baseVectors.size()) {
+            throw new IllegalArgumentException(String.format(
+                    "partition sizes sum to %d vectors but only %d are available", total, baseVectors.size()));
+        }
+        return slice(baseVectors, sizes);
+    }
+
     public static PartitionedData partition(List<VectorFloat<?>> baseVectors, int numParts, TestDataPartition.Distribution distribution) {
         List<Integer> sizes = distribution.computeSplitSizes(baseVectors.size(), numParts);
-        List<List<VectorFloat<?>>> parts = new ArrayList<>(numParts);
+        return slice(baseVectors, sizes);
+    }
+
+    private static PartitionedData slice(List<VectorFloat<?>> baseVectors, List<Integer> sizes) {
+        List<List<VectorFloat<?>>> parts = new ArrayList<>(sizes.size());
 
         int runningStart = 0;
         for (int size : sizes) {
