@@ -43,15 +43,15 @@ public enum ByteVectorSimilarityFunction {
 
     /**
      * Dot product normalised to {@code [0, 1]}.
-     * Raw int8 dot product is divided by {@code n * 127^2} (the maximum possible magnitude)
-     * before applying the {@code (1 + x) / 2} mapping, so the result is always in [0, 1]
-     * regardless of dimension or whether the vectors are unit-norm.
+     * Raw int8 dot product is divided by {@code n * 128^2} (the maximum possible magnitude,
+     * achieved when components are -128) before applying the {@code (1 + x) / 2} mapping,
+     * so the result is always in [0, 1] regardless of dimension or whether the vectors are unit-norm.
      * For already unit-norm int8 vectors (e.g. Cohere, OpenAI reduced-precision) prefer {@link #COSINE}.
      */
     DOT_PRODUCT {
         @Override
         public float compare(ByteSequence<?> v1, ByteSequence<?> v2) {
-            float maxMagnitude = v1.length() * (127.0f * 127.0f);
+            float maxMagnitude = v1.length() * (128.0f * 128.0f);
             return (1.0f + VectorUtil.dotProduct(v1, v2) / maxMagnitude) / 2.0f;
         }
     },

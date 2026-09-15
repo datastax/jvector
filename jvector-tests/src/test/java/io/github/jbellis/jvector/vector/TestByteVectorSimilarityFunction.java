@@ -86,8 +86,8 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
     @Test
     public void testDotProductKnownValue() {
         // v1=[1,0], v2=[0,1]  dot = 0
-        // maxMag = 2 * 127^2 = 32258
-        // expected = (1 + 0/32258) / 2 = 0.5
+        // maxMag = 2 * 128^2 = 32768
+        // expected = (1 + 0/32768) / 2 = 0.5
         var v1 = seq((byte) 1, (byte) 0);
         var v2 = seq((byte) 0, (byte) 1);
         assertEquals(0.5f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(v1, v2), 1e-6f);
@@ -166,12 +166,21 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
 
     @Test
     public void testAllMaxValues() {
-        // All 127 vectors — EUCLIDEAN identity = 1, DOT_PRODUCT = 1, COSINE = 1
-        byte[] raw = new byte[8];
-        java.util.Arrays.fill(raw, (byte) 127);
-        var v = seq(raw);
-        assertEquals(1.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(v, v), 1e-5f);
-        assertEquals(1.0f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(v, v), 1e-5f);
-        assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(v, v), 1e-5f);
+        // All -128 vectors — EUCLIDEAN identity = 1, DOT_PRODUCT = 1, COSINE = 1
+        byte[] rawMin = new byte[8];
+        java.util.Arrays.fill(rawMin, (byte) -128);
+        var vMin = seq(rawMin);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(vMin, vMin), 1e-5f);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMin, vMin), 1e-5f);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(vMin, vMin), 1e-5f);
+
+        // All 127 vectors — EUCLIDEAN identity = 1, COSINE = 1
+        byte[] rawMax = new byte[8];
+        java.util.Arrays.fill(rawMax, (byte) 127);
+        var vMax = seq(rawMax);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(vMax, vMax), 1e-5f);
+        float expectedDot = (1.0f + (127.0f * 127.0f) / (128.0f * 128.0f)) / 2.0f;
+        assertEquals(expectedDot, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMax, vMax), 1e-5f);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(vMax, vMax), 1e-5f);
     }
 }
