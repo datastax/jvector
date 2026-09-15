@@ -120,7 +120,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Read-free hub pass: reverse-offer candidates keep the exact score their offerer computed, and
      * only their pairwise diversity checks use a symmetric code-code similarity over the merged PQ
      * (table built once per compaction). Offerers live in other sources at arbitrary positions, so
-     * this removes one random vector read per offer per check. DOT_PRODUCT only; disable with
+     * this removes one random vector read per offer per check. Disable with
      * {@code -Djvector.compaction.offerCodeDiversity=false}.
      */
     private static final boolean OFFER_CODE_DIV =
@@ -854,28 +854,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     private static int sortableBits(float f) { int b = Float.floatToIntBits(f); return b ^ ((b >> 31) & 0x7fffffff); }
 
-    // ---- symmetric code-code similarity over the merged PQ (built once) ----
-    private volatile float[] symTab; private float[] centTerm; private float centNorm; private int symK, symM;
-    private void ensureSymTable(ProductQuantization pq) {
-        if (symTab != null) return;
-        synchronized (this) {
-            if (symTab != null) return;
-            int M = pq.getSubspaceCount(), K = pq.getClusterCount();
-            float[] tab = new float[M * K * K]; float[] ct = new float[M * K]; float cn = 0;
-            VectorFloat<?> center = pq.getGlobalCentroid(); int off = 0;
-            for (int m = 0; m < M; m++) { int sz = pq.getSubvectorSize(m); var cb = pq.getCodebookVector(m);
-                for (int a = 0; a < K; a++) { for (int b = 0; b <= a; b++) { float d = 0; for (int i = 0; i < sz; i++) d += cb.get(a * sz + i) * cb.get(b * sz + i); tab[(m * K + a) * K + b] = d; tab[(m * K + b) * K + a] = d; }
-                    if (center != null) { float c = 0; for (int i = 0; i < sz; i++) c += center.get(off + i) * cb.get(a * sz + i); ct[m * K + a] = c; } }
-                off += sz; }
-            if (center != null) for (int i = 0; i < center.length(); i++) cn += center.get(i) * center.get(i);
-            centTerm = ct; centNorm = cn; symK = K; symM = M; symTab = tab;
-        }
-    }
-    /** approximate similarity (score scale of the similarity function) between two merged-PQ codes */
-    private float symSim(byte[] a, byte[] b) {
-        float d = centNorm; int K = symK; float[] tab = symTab, ct = centTerm;
-        for (int m = 0; m < symM; m++) { int ia = a[m] & 0xFF, ib = b[m] & 0xFF; d += tab[(m * K + ia) * K + ib] + ct[m * K + ia] + ct[m * K + ib]; }
-        return (1 + d) / 2;   // DOT_PRODUCT score convention
+    // ---- symmetric code-code similarity over the merged PQ (built once per compaction) ----
+    private volatile SymmetricCodeSimilarity codeSimilarity;
+    private SymmetricCodeSimilarity codeSimilarity(ProductQuantization pq) {
+        SymmetricCodeSimilarity c = codeSimilarity;
+        if (c == null) { synchronized (this) { c = codeSimilarity; if (c == null) codeSimilarity = c = new SymmetricCodeSimilarity(pq, similarityFunction); } }
+        return c;
     }
     private void fetchCode(int src, int node, byte[] dst) { orderingCache.get(remappers.get(src).oldToNew(node), dst); }
     interface CodeFetcher { void fetch(int src, int node, byte[] dst); }
@@ -945,9 +929,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         var selected = scratch.selectedCache;
 
         var provider = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
-        if (OFFER_CODE_DIV && orderingCache != null && params.pq != null && similarityFunction == VectorSimilarityFunction.DOT_PRODUCT) {
-            ensureSymTable(params.pq);
-            provider.withCodes(this::fetchCode, this::symSim, orderingCache.codeSize(), scratch.candCodeOnly);
+        if (OFFER_CODE_DIV && orderingCache != null && params.pq != null && SymmetricCodeSimilarity.supports(similarityFunction)) {
+            provider.withCodes(this::fetchCode, codeSimilarity(params.pq)::similarity, orderingCache.codeSize(), scratch.candCodeOnly);
         }
         provider.retainDiverse(
                         scratch.candSrc,
@@ -1143,7 +1126,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int offersStart = candSize;
             candSize = reverseCandidates.appendTo(sourceIdx, remappers.get(sourceIdx).oldToNew(node),
                     scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
-            if (OFFER_CODE_DIV && similarityFunction == VectorSimilarityFunction.DOT_PRODUCT) Arrays.fill(scratch.candCodeOnly, offersStart, candSize, true);
+            if (OFFER_CODE_DIV && SymmetricCodeSimilarity.supports(similarityFunction)) Arrays.fill(scratch.candCodeOnly, offersStart, candSize, true);
         }
 
         return candSize;
