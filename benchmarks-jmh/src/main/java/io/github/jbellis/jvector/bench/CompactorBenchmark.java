@@ -704,11 +704,21 @@ public class CompactorBenchmark {
             liveNodes.add(randomLiveNodes(size, liveNodesRate, n));
             globalOrdinal += size;
         }
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        // Optional worker pool size for the compactor (jvector.bench.compactorThreads); 0 or unset
+        // uses the compactor's default shared physical-core pool.
+        int compactorThreads = Integer.getInteger("jvector.bench.compactorThreads", 0);
+        var compactorPool = compactorThreads > 0 ? new java.util.concurrent.ForkJoinPool(compactorThreads) : null;
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, compactorPool);
         compactor.setReassignOrdinals(Boolean.parseBoolean(System.getProperty("jvector.bench.reassignOrdinals", "true")));
 
         long startNanos = System.nanoTime();
-        compactor.compact(compactOutputPath);
+        try {
+            compactor.compact(compactOutputPath);
+        } finally {
+            if (compactorPool != null) {
+                compactorPool.shutdown();
+            }
+        }
         long compactionTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         log.info("Compacted {} partitions into {} in {} ms", numPartitions, compactOutputPath.toAbsolutePath(), compactionTimeMs);
         return compactionTimeMs;
