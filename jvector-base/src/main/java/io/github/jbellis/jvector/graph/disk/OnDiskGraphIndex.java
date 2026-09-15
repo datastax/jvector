@@ -463,13 +463,17 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /**
+     * When set, every level-0 record read is preceded by a {@link #willNeedL0Record} hint for the
+     * whole record, so a cold record arrives as one device request instead of one page fault per
+     * page. Experimental; off by default.
+     */
+    static final boolean ADVISE_RECORD = Boolean.getBoolean("jvector.reader.adviseRecord");
+
+    /**
      * Hints that the L0 record of {@code node} will likely be read soon, starting an
      * asynchronous fetch into the page cache; see {@link ReaderSupplier#willNeed(long, long)}.
      * Unlike {@link #prefetchL0Records}, this does not block. Best-effort no-op when unsupported.
      */
-    /** experimental: advise the whole L0 record range right before every L0 record read, so a cold record arrives as one device request instead of one fault per page */
-    static final boolean ADVISE_RECORD = Boolean.getBoolean("jvector.reader.adviseRecord");
-
     public void willNeedL0Record(int node) {
         long blockBytes = Integer.BYTES + inlineBlockSize
                 + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
@@ -600,7 +604,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
                 if (level == 0) {
                     // For layer 0, read from disk
-                    if (ADVISE_RECORD) OnDiskGraphIndex.this.willNeedL0Record(node);
+                    if (ADVISE_RECORD) {
+                        OnDiskGraphIndex.this.willNeedL0Record(node);
+                    }
                     reader.seek(neighborsOffsetFor(level, node));
                     nodeDegree = reader.readInt();
                     assert nodeDegree <= neighbors.length
@@ -627,7 +633,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 throw new UnsupportedOperationException("Only fused features are supported with packed neighbors");
             }
 
-            if (ADVISE_RECORD) OnDiskGraphIndex.this.willNeedL0Record(node);
+            if (ADVISE_RECORD) {
+                OnDiskGraphIndex.this.willNeedL0Record(node);
+            }
             long offset = offsetFor(node, featureId);
             reader.seek(offset);
             featureConsumer.accept(reader);

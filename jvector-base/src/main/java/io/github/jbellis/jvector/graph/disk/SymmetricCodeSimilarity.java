@@ -40,65 +40,91 @@ final class SymmetricCodeSimilarity {
 
     private final ProductQuantization pq;
     private final VectorSimilarityFunction vsf;
-    private final int M, K;
-    private final VectorFloat<?> partialSums;   // packed upper-triangle centroid-pair sums (dot, or squared L2 for EUCLIDEAN)
-    private final float[] centroidTerm;         // [m*K + c] = dot(globalCentroid slice m, codebook centroid c); null when not centered
+    private final int subspaceCount;
+    private final int clusterCount;
+    // packed upper-triangle centroid-pair sums per subspace: dot products, or squared L2 for EUCLIDEAN
+    private final VectorFloat<?> partialSums;
+    // [m * clusterCount + c] = dot(global centroid slice m, centroid c of subspace m); null when the
+    // PQ is not center-adjusted or the centroid cancels (EUCLIDEAN compares a difference)
+    private final float[] centroidTerm;
     private final float centroidNorm2;
-    private final ThreadLocal<ByteSequence<?>[]> bufs;
+    private final ThreadLocal<ByteSequence<?>[]> buffers;
 
     static boolean supports(VectorSimilarityFunction vsf) {
-        return vsf == VectorSimilarityFunction.DOT_PRODUCT || vsf == VectorSimilarityFunction.EUCLIDEAN || vsf == VectorSimilarityFunction.COSINE;
+        return vsf == VectorSimilarityFunction.DOT_PRODUCT
+                || vsf == VectorSimilarityFunction.EUCLIDEAN
+                || vsf == VectorSimilarityFunction.COSINE;
     }
 
     SymmetricCodeSimilarity(ProductQuantization pq, VectorSimilarityFunction vsf) {
-        if (!supports(vsf)) throw new IllegalArgumentException("unsupported similarity " + vsf);
+        if (!supports(vsf)) {
+            throw new IllegalArgumentException("unsupported similarity " + vsf);
+        }
         this.pq = pq;
         this.vsf = vsf;
-        this.M = pq.getSubspaceCount();
-        this.K = pq.getClusterCount();
+        this.subspaceCount = pq.getSubspaceCount();
+        this.clusterCount = pq.getClusterCount();
         this.partialSums = pq.createCodebookPartialSums(vsf);
         VectorFloat<?> center = pq.getGlobalCentroid();
-        if (center != null && vsf != VectorSimilarityFunction.EUCLIDEAN) {   // the centroid cancels in a difference
-            float[] ct = new float[M * K]; int off = 0; float n2 = 0;
-            for (int m = 0; m < M; m++) {
-                int sz = pq.getSubvectorSize(m); var cb = pq.getCodebookVector(m);
-                for (int c = 0; c < K; c++) { float acc = 0; for (int i = 0; i < sz; i++) acc += center.get(off + i) * cb.get(c * sz + i); ct[m * K + c] = acc; }
-                off += sz;
+        if (center != null && vsf != VectorSimilarityFunction.EUCLIDEAN) {
+            float[] terms = new float[subspaceCount * clusterCount];
+            int offset = 0;
+            for (int m = 0; m < subspaceCount; m++) {
+                int size = pq.getSubvectorSize(m);
+                VectorFloat<?> codebook = pq.getCodebookVector(m);
+                for (int c = 0; c < clusterCount; c++) {
+                    terms[m * clusterCount + c] = VectorUtil.dotProduct(codebook, c * size, center, offset, size);
+                }
+                offset += size;
             }
-            for (int i = 0; i < center.length(); i++) n2 += center.get(i) * center.get(i);
-            this.centroidTerm = ct; this.centroidNorm2 = n2;
+            this.centroidTerm = terms;
+            this.centroidNorm2 = VectorUtil.dotProduct(center, center);
         } else {
-            this.centroidTerm = null; this.centroidNorm2 = 0f;
+            this.centroidTerm = null;
+            this.centroidNorm2 = 0f;
         }
-        this.bufs = ThreadLocal.withInitial(() -> new ByteSequence<?>[]{vts.createByteSequence(M), vts.createByteSequence(M)});
+        this.buffers = ThreadLocal.withInitial(() -> new ByteSequence<?>[]{
+                vts.createByteSequence(subspaceCount), vts.createByteSequence(subspaceCount)});
     }
 
     /** Similarity of the vectors the two codes decode to, on the score scale of the similarity function. */
     float similarity(byte[] a, byte[] b) {
-        ByteSequence<?>[] bs = bufs.get();
-        for (int m = 0; m < M; m++) { bs[0].set(m, a[m]); bs[1].set(m, b[m]); }
-        float sum = VectorUtil.assembleAndSumPQ(partialSums, M, bs[0], 0, bs[1], 0, K);
+        ByteSequence<?>[] seqs = buffers.get();
+        ByteSequence<?> seqA = seqs[0];
+        ByteSequence<?> seqB = seqs[1];
+        for (int m = 0; m < subspaceCount; m++) {
+            seqA.set(m, a[m]);
+            seqB.set(m, b[m]);
+        }
+        float sum = VectorUtil.assembleAndSumPQ(partialSums, subspaceCount, seqA, 0, seqB, 0, clusterCount);
         switch (vsf) {
             case EUCLIDEAN:
                 return 1 / (1 + sum);
             case DOT_PRODUCT:
                 return (1 + sum + centroidTerms(a) + centroidTerms(b) + centroidNorm2) / 2;
-            default: { // COSINE
+            default: // COSINE
                 float dot = sum + centroidTerms(a) + centroidTerms(b) + centroidNorm2;
-                float na = (float) Math.sqrt(Math.max(1e-12f, norm2(a, bs[0]))), nb = (float) Math.sqrt(Math.max(1e-12f, norm2(b, bs[1])));
-                return (1 + dot / (na * nb)) / 2;
-            }
+                float normA = (float) Math.sqrt(Math.max(1e-12f, norm2(a, seqA)));
+                float normB = (float) Math.sqrt(Math.max(1e-12f, norm2(b, seqB)));
+                return (1 + dot / (normA * normB)) / 2;
         }
     }
 
+    /** dot(global centroid, decoded centered vector) */
     private float centroidTerms(byte[] code) {
-        if (centroidTerm == null) return 0f;
-        float s = 0; for (int m = 0; m < M; m++) s += centroidTerm[m * K + (code[m] & 0xFF)];
+        if (centroidTerm == null) {
+            return 0f;
+        }
+        float s = 0;
+        for (int m = 0; m < subspaceCount; m++) {
+            s += centroidTerm[m * clusterCount + (code[m] & 0xFF)];
+        }
         return s;
     }
 
-    /** squared norm of the decoded vector: diagonal partial sums plus centroid terms */
+    /** squared norm of the decoded (un-centered) vector: diagonal partial sums plus centroid terms */
     private float norm2(byte[] code, ByteSequence<?> seq) {
-        return VectorUtil.assembleAndSumPQ(partialSums, M, seq, 0, seq, 0, K) + 2 * centroidTerms(code) + centroidNorm2;
+        return VectorUtil.assembleAndSumPQ(partialSums, subspaceCount, seq, 0, seq, 0, clusterCount)
+                + 2 * centroidTerms(code) + centroidNorm2;
     }
 }
