@@ -17,11 +17,11 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 public interface DataSetInfo extends DataSetProperties {
-    /// Loads and returns a {@link DataSet} corresponding to the underlying source.
+    /// Loads and returns a {@link InMemoryDataSet} corresponding to the underlying source.
     ///
     /// This method may incur an IO penalty based on the size of the dataset and it's source.
     /// Implementations are not required to cache the dataset or ensure thread-safety.
     ///
-    /// @return the ready-to-use {@link DataSet}
-    public DataSet getDataSet();
+    /// @return the ready-to-use {@link InMemoryDataSetDataSet}
+    public InMemoryDataSet getDataSet();
 }
