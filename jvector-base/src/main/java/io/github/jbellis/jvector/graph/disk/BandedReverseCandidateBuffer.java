@@ -255,14 +255,6 @@ final class BandedReverseCandidateBuffer implements AutoCloseable {
         }
     }
 
-    public long offered() {
-        return offered.sum();
-    }
-
-    public long touchedTargets() {
-        return touched.sum();
-    }
-
     public long ramBytesUsed() {
         long size = 0;
         for (int i = 0; i < numBands; i++) {
@@ -296,7 +288,7 @@ final class BandedReverseCandidateBuffer implements AutoCloseable {
         } catch (IOException e) {
             log.warn("could not fully remove offer spill dir {}", spillDir, e);
         }
-        log.info("Banded reverse offers: {} offers, {} touched targets, {} MB spilled",
-                offered.sum(), touched.sum(), spilledBytes.sum() >> 20);
+        log.info("Reverse offers: {} offers onto {} touched targets ({} slots/target), {} MB spilled",
+                offered.sum(), touched.sum(), slots, spilledBytes.sum() >> 20);
     }
 }

@@ -134,45 +134,6 @@ public interface VectorUtilSupport {
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
 
-  /**
-   * Scores {@code count} consecutive PQ codes against a query lookup table. Codes are
-   * {@code subspaceCount} bytes each, packed back to back in {@code codes} starting at
-   * {@code codesOffset}; {@code lut[m * clusterCount + c]} holds subspace {@code m}'s partial
-   * sum for centroid {@code c}. {@code out[i]} receives the sum over subspaces for code {@code i}.
-   */
-  /**
-   * The float[] backing {@code v} when it is heap-backed and contiguous from index 0, else null.
-   * Lets callers read a vector's contents without an element-wise copy.
-   */
-  default float[] backingArray(VectorFloat<?> v) {
-    return null;
-  }
-
-  /**
-   * Blocked PQ scan with an 8-bit lookup table. {@code blocks} holds {@code blockCount} blocks of
-   * 64 codes stored subspace-major (byte {@code m} of code {@code i} of a block at
-   * {@code m * 64 + i}); {@code lut[m * 256 + c]} is an unsigned 8-bit partial sum;
-   * {@code out[b * 64 + i]} receives the unsigned 16-bit sum over subspaces.
-   */
-  default void pqScanBlockedU8(byte[] blocks, int blockCount, int subspaceCount, byte[] lut, short[] out) {
-    int[] acc = new int[64];
-    for (int b = 0; b < blockCount; b++) {
-      int blk = b * subspaceCount * 64;
-      java.util.Arrays.fill(acc, 0);
-      for (int m = 0; m < subspaceCount; m++) {
-        int row = blk + m * 64;
-        int l = m * 256;
-        for (int i = 0; i < 64; i++) {
-          acc[i] += lut[l + (blocks[row + i] & 0xFF)] & 0xFF;
-        }
-      }
-      int o = b * 64;
-      for (int i = 0; i < 64; i++) {
-        out[o + i] = (short) acc[i];
-      }
-    }
-  }
-
   default void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     int codebookBase = codebookIndex * clusterCount;
     for (int i = 0; i < clusterCount; i++) {

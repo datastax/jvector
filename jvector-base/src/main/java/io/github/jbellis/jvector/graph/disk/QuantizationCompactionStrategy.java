@@ -182,11 +182,6 @@ public abstract class QuantizationCompactionStrategy {
         return null;
     }
 
-    /** For compaction use. Bytes per code in {@link #getCodeCache()}, or {@code 0} when no cache. */
-    public int getCacheCodeSize() {
-        return 0;
-    }
-
     /**
      * Convenience: returns {@link #compressor()} cast to {@link ProductQuantization}, or
      * {@code null} if no compressor is held. Kept for backward compat with code paths that still

@@ -18,14 +18,13 @@ package io.github.jbellis.jvector.graph.disk;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import org.junit.Test;
 
 import java.util.Random;
 
 import static org.junit.Assert.assertEquals;
 
-/** The blocked PQ scan (provider path and native kernel when present) against a plain reference. */
+/** The blocked PQ scan (Java loop and native kernel when present) against a plain reference. */
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestPqScanKernel extends RandomizedTest {
 
@@ -53,12 +52,12 @@ public class TestPqScanKernel extends RandomizedTest {
             short[] expected = new short[blockCount * 64];
             reference(blocks, blockCount, m, lut, expected);
 
-            short[] provider = new short[blockCount * 64];
-            VectorUtil.pqScanBlockedU8(blocks, blockCount, m, lut, provider);
+            short[] plain = new short[blockCount * 64];
+            PqScanKernel.scanJava(blocks, blockCount, m, lut, plain);
             short[] kernel = new short[blockCount * 64];
             PqScanKernel.scan(blocks, blockCount, m, lut, kernel);
             for (int i = 0; i < expected.length; i++) {
-                assertEquals("provider path, m=" + m + " code " + i, expected[i], provider[i]);
+                assertEquals("java loop, m=" + m + " code " + i, expected[i], plain[i]);
                 assertEquals("kernel (native=" + PqScanKernel.nativeAvailable() + "), m=" + m + " code " + i, expected[i], kernel[i]);
             }
         }

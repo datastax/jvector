@@ -85,16 +85,14 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     private final MappedByteBuffer[] chunks;
     private final int codeSize;
     private final int codesPerChunk;
-    private final int count;
     private final boolean blocked;
     private final ThreadLocal<ByteBuffer[]> viewsPerThread;
 
-    private PreEncodedCodeCache(MappedByteBuffer[] chunks, int codeSize, int codesPerChunk, int count, boolean blocked) {
+    private PreEncodedCodeCache(MappedByteBuffer[] chunks, int codeSize, int codesPerChunk, boolean blocked) {
         this.chunks = chunks;
         this.blocked = blocked;
         this.codeSize = codeSize;
         this.codesPerChunk = codesPerChunk;
-        this.count = count;
         this.viewsPerThread = ThreadLocal.withInitial(() -> {
             ByteBuffer[] views = new ByteBuffer[chunks.length];
             for (int i = 0; i < chunks.length; i++) {
@@ -107,39 +105,23 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     /**
      * Maps a cache for {@code count} codes of {@code codeSize} bytes each, starting at
      * {@code offset} in {@code fc}. The file must already be at least
-     * {@code offset + (long) count * codeSize} bytes long.
+     * {@code offset + sectionBytes(count, codeSize, blocked)} bytes long.
      *
      * @param fc       channel opened for read and write
      * @param offset   byte offset of the cache section within the file
      * @param count    number of codes (== maxOrdinal + 1)
      * @param codeSize bytes per code; must be positive
-     */
-    public static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize)
-            throws IOException {
-        return map(fc, offset, count, codeSize, MAX_CHUNK_BYTES, false);
-    }
-
-    /**
-     * As {@link #map(FileChannel, long, int, int)}; with {@code blocked} the codes are stored in
-     * blocks of {@link #BLOCK} ordinals, subspace-major within a block (byte {@code m} of the
-     * block's code {@code i} at {@code m * BLOCK + i}), the layout the cell-join scan kernel reads.
-     * The mapped region then covers whole blocks; size it with {@link #sectionBytes(int, int, boolean)}.
+     * @param blocked  store the codes in blocks of {@link #BLOCK} ordinals, subspace-major within a
+     *                 block (byte {@code m} of the block's code {@code i} at {@code m * BLOCK + i}),
+     *                 the layout the cell-join scan kernel reads; the mapped region then covers
+     *                 whole blocks (size it with {@link #sectionBytes})
      */
     public static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize, boolean blocked)
             throws IOException {
         return map(fc, offset, count, codeSize, MAX_CHUNK_BYTES, blocked);
     }
 
-    /**
-     * As {@link #map(FileChannel, long, int, int)}, with an explicit chunk target so tests can
-     * exercise the multi-chunk path without allocating gigabytes. Production callers use the
-     * four-argument form.
-     */
-    static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize, int maxChunkBytes)
-            throws IOException {
-        return map(fc, offset, count, codeSize, maxChunkBytes, false);
-    }
-
+    /** As {@link #map(FileChannel, long, int, int, boolean)} with an explicit chunk target, so tests can exercise the multi-chunk path. */
     static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize, int maxChunkBytes, boolean blocked)
             throws IOException {
         if (codeSize <= 0) {
@@ -173,23 +155,13 @@ public final class PreEncodedCodeCache implements AutoCloseable {
                                offset + firstCode * codeSize,
                                codesHere * codeSize);
         }
-        return new PreEncodedCodeCache(chunks, codeSize, codesPerChunk, count, blocked);
-    }
-
-    /** Total bytes spanned by the cache section, for sizing and truncation. */
-    public static long sectionBytes(int count, int codeSize) {
-        return sectionBytes(count, codeSize, false);
+        return new PreEncodedCodeCache(chunks, codeSize, codesPerChunk, blocked);
     }
 
     /** Bytes of the mapped region for {@code count} codes; the blocked layout pads to whole blocks. */
     public static long sectionBytes(int count, int codeSize, boolean blocked) {
         long codes = blocked ? (((long) count + BLOCK - 1) / BLOCK) * BLOCK : count;
         return codes * codeSize;
-    }
-
-    /** Whether codes are stored in the blocked (subspace-major, 64-code block) layout. */
-    public boolean isBlocked() {
-        return blocked;
     }
 
     /** Byte offset within its chunk of byte {@code m} of the code at chunk-relative index {@code inChunk}. */
@@ -202,7 +174,7 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     /**
      * Copies the whole blocks covering ordinals {@code [fromOrdinal, toOrdinal)} into {@code dst}
      * in blocked layout and returns the ordinal of the first code of the first block copied.
-     * Only valid when {@link #isBlocked()}.
+     * Only valid for the blocked layout.
      */
     public int copyBlocks(int fromOrdinal, int toOrdinal, byte[] dst) {
         int firstBlockOrdinal = fromOrdinal & ~(BLOCK - 1);
@@ -226,11 +198,6 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     /** Bytes per code. */
     public int codeSize() {
         return codeSize;
-    }
-
-    /** Number of codes the cache holds. */
-    public int count() {
-        return count;
     }
 
     /** Number of mappings backing this cache; exposed for logging and tests. */
@@ -270,28 +237,6 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         view.get(dst, 0, codeSize);
     }
 
-    /**
-     * Copies the code at {@code ordinal} directly into {@code dst} at its current position,
-     * advancing it by {@link #codeSize()} bytes. Saves the intermediate byte[] hop on the
-     * write path.
-     */
-    public void copyInto(int ordinal, ByteBuffer dst) {
-        int chunk = ordinal / codesPerChunk;
-        int inChunk = ordinal - chunk * codesPerChunk;
-        ByteBuffer view = viewsPerThread.get()[chunk];
-        if (blocked) {
-            for (int i = 0; i < codeSize; i++) {
-                dst.put(view.get(blockedOffset(inChunk, i)));
-            }
-            return;
-        }
-        int offset = inChunk * codeSize;
-        for (int i = 0; i < codeSize; i++) {
-            dst.put(view.get(offset + i));
-        }
-    }
-
-    /** Unmaps every chunk. Safe to call more than once. */
     @Override
     public void close() {
         if (UNSAFE == null) {

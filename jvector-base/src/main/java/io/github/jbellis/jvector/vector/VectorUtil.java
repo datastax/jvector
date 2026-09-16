@@ -182,16 +182,6 @@ public final class VectorUtil {
     impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums);
   }
 
-  /** See {@link VectorUtilSupport#backingArray}. */
-  public static float[] backingArray(VectorFloat<?> v) {
-    return impl.backingArray(v);
-  }
-
-  /** See {@link VectorUtilSupport#pqScanBlockedU8}. */
-  public static void pqScanBlockedU8(byte[] blocks, int blockCount, int subspaceCount, byte[] lut, short[] out) {
-    impl.pqScanBlockedU8(blocks, blockCount, subspaceCount, lut, out);
-  }
-
   public static void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     impl.calculatePartialSelfMagnitudes(codebook, codebookIndex, size, clusterCount, partialMagnitudes);
   }

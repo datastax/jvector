@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.vector.VectorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,9 +24,10 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 
 /**
- * Entry point for the blocked PQ scan. Uses the native Highway kernel directly when
- * the native library is available (independent of the vectorization provider in use, so the rest
- * of the compactor can stay on the Panama path), otherwise the provider's implementation.
+ * Entry point for the blocked PQ scan: 64 codes per block, codes subspace-major within the block,
+ * an 8-bit per-subspace table, 16-bit sums out. Uses the native Highway kernel directly when the
+ * native library is available (independent of the vectorization provider in use, so the rest of
+ * the compactor can stay on the Panama path), otherwise a plain Java loop.
  */
 final class PqScanKernel {
     private static final Logger log = LoggerFactory.getLogger(PqScanKernel.class);
@@ -48,7 +48,7 @@ final class PqScanKernel {
             log.info("Cell join: native blocked PQ scan kernel available");
             return mh;
         } catch (Throwable t) {
-            log.info("Cell join: native blocked PQ scan kernel unavailable ({}); using the provider path", t.toString());
+            log.info("Cell join: native blocked PQ scan kernel unavailable ({}); using the Java loop", t.toString());
             return null;
         }
     }
@@ -66,6 +66,25 @@ final class PqScanKernel {
                 throw new RuntimeException(t);
             }
         }
-        VectorUtil.pqScanBlockedU8(blocks, blockCount, subspaceCount, lut, out);
+        scanJava(blocks, blockCount, subspaceCount, lut, out);
+    }
+
+    static void scanJava(byte[] blocks, int blockCount, int subspaceCount, byte[] lut, short[] out) {
+        int[] acc = new int[64];
+        for (int b = 0; b < blockCount; b++) {
+            int blk = b * subspaceCount * 64;
+            java.util.Arrays.fill(acc, 0);
+            for (int m = 0; m < subspaceCount; m++) {
+                int row = blk + m * 64;
+                int l = m * 256;
+                for (int i = 0; i < 64; i++) {
+                    acc[i] += lut[l + (blocks[row + i] & 0xFF)] & 0xFF;
+                }
+            }
+            int o = b * 64;
+            for (int i = 0; i < 64; i++) {
+                out[o + i] = (short) acc[i];
+            }
+        }
     }
 }

@@ -100,11 +100,6 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
-    public int getCacheCodeSize() {
-        return cacheCodeSize;
-    }
-
-    @Override
     public boolean writesCodesInline() {
         return true;
     }

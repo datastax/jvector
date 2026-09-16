@@ -120,11 +120,6 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     }
 
     @Override
-    public int getCacheCodeSize() {
-        return codeCache == null ? 0 : cacheCodeSize;
-    }
-
-    @Override
     public void onAfterClose(Path graphPath) {
         // Deliberately no truncation here: writeSidecar still needs the cache region. Remember
         // the path so cleanup can truncate after the sidecar is written.

@@ -73,7 +73,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         Path p = Files.createTempFile("code-cache-", ".bin");
         p.toFile().deleteOnExit();
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.WRITE)) {
-            long bytes = PreEncodedCodeCache.sectionBytes(count, codeSize);
+            long bytes = PreEncodedCodeCache.sectionBytes(count, codeSize, false);
             fc.write(ByteBuffer.wrap(new byte[]{0}), bytes - 1);
         }
         return p;
@@ -93,7 +93,6 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         }
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
              PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes, true)) {
-            assertTrue(cache.isBlocked());
             for (int o = 0; o < count; o++) cache.put(o, codeFor(o, codeSize));
             byte[] one = new byte[codeSize];
             for (int o = 0; o < count; o++) {
@@ -124,11 +123,10 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         Path p = newCacheFile(count, codeSize);
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes, false)) {
 
             assertEquals("expected a partial trailing chunk", 72, cache.chunkCount());
             assertEquals(codeSize, cache.codeSize());
-            assertEquals(count, cache.count());
 
             for (int i = 0; i < count; i++) {
                 cache.put(i, codeFor(i, codeSize));
@@ -148,7 +146,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         Path p = newCacheFile(count, codeSize);
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, 1 << 30)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, 1 << 30, false)) {
             assertEquals(1, cache.chunkCount());
             for (int i = 0; i < count; i++) {
                 cache.put(i, codeFor(i, codeSize));
@@ -169,7 +167,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         Path p = newCacheFile(count, codeSize);
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes, false)) {
             assertEquals(150, cache.chunkCount());
             for (int i = 0; i < count; i++) {
                 cache.put(i, codeFor(i, codeSize));
@@ -190,11 +188,11 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         Path p = Files.createTempFile("code-cache-off-", ".bin");
         p.toFile().deleteOnExit();
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.WRITE)) {
-            fc.write(ByteBuffer.wrap(new byte[]{0}), offset + PreEncodedCodeCache.sectionBytes(count, codeSize) - 1);
+            fc.write(ByteBuffer.wrap(new byte[]{0}), offset + PreEncodedCodeCache.sectionBytes(count, codeSize, false) - 1);
         }
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, offset, count, codeSize, codeSize * 5)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, offset, count, codeSize, codeSize * 5, false)) {
             for (int i = 0; i < count; i++) {
                 cache.put(i, codeFor(i, codeSize));
             }
@@ -202,31 +200,6 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
             for (int i = 0; i < count; i++) {
                 cache.get(i, dst);
                 assertCodeMatches(i, codeSize, dst);
-            }
-        }
-    }
-
-    /** copyInto is the write-path accessor; it must agree with get() and advance the destination. */
-    @Test
-    public void testCopyIntoMatchesGet() throws IOException {
-        int codeSize = 24, count = 97;
-        Path p = newCacheFile(count, codeSize);
-
-        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 3)) {
-            for (int i = 0; i < count; i++) {
-                cache.put(i, codeFor(i, codeSize));
-            }
-            ByteBuffer dst = ByteBuffer.allocate(codeSize * count);
-            for (int i = 0; i < count; i++) {
-                cache.copyInto(i, dst);
-            }
-            assertEquals("copyInto must advance the destination", codeSize * count, dst.position());
-            byte[] all = dst.array();
-            byte[] one = new byte[codeSize];
-            for (int i = 0; i < count; i++) {
-                System.arraycopy(all, i * codeSize, one, 0, codeSize);
-                assertCodeMatches(i, codeSize, one);
             }
         }
     }
@@ -242,7 +215,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         ExecutorService pool = Executors.newFixedThreadPool(threads);
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 11)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 11, false)) {
 
             for (int i = 0; i < count; i++) {
                 cache.put(i, codeFor(i, codeSize));
@@ -284,7 +257,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         ExecutorService pool = Executors.newFixedThreadPool(threads);
 
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 11)) {
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 11, false)) {
 
             List<Callable<Void>> tasks = new ArrayList<>();
             for (int t = 0; t < threads; t++) {
@@ -317,7 +290,7 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         int codeSize = 8, count = 40;
         Path p = newCacheFile(count, codeSize);
         try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-            PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 3);
+            PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, codeSize * 3, false);
             cache.put(0, codeFor(0, codeSize));
             cache.close();
             cache.close();
