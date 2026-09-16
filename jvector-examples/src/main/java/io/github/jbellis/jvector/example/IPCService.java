@@ -264,7 +264,7 @@ public class IPCService
                     var rr = view instanceof ImmutableGraphIndex.ScoringView
                             ? ((ImmutableGraphIndex.ScoringView) view).rerankerFor(queryVector, ctx.similarityFunction)
                             : ctx.ravv.rerankerFor(queryVector, ctx.similarityFunction);
-                    var ssp = new DefaultSearchScoreProvider(sf, rr);
+                    var ssp = new DefaultSearchScoreProvider(sf, rr, ctx.cv instanceof io.github.jbellis.jvector.quantization.ASHVectors);
                     r = new GraphSearcher(ctx.index).search(ssp, searchEf, Bits.ALL);
                 } catch (Exception e) {
                     throw new RuntimeException(e);

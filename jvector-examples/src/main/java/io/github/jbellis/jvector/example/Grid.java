@@ -1303,7 +1303,7 @@ public class Grid {
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
             var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
-            return new DefaultSearchScoreProvider(asf, rr);
+            return new DefaultSearchScoreProvider(asf, rr, features.contains(FeatureId.FUSED_ASH) || cv instanceof ASHVectors);
         }
 
         public GraphSearcher getSearcher() {

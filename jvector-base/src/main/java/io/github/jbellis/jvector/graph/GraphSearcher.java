@@ -62,6 +62,11 @@ public class GraphSearcher implements Closeable {
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
+    private boolean adaptiveTerminationEnabled = true;
+    private float adaptiveTerminationGamma = AdaptiveTermination.DEFAULT_GAMMA;
+    private final AdaptiveTermination adaptiveTermination = new AdaptiveTermination();
+    private final NodeQueue adaptiveResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+    private final IntHashSet adaptiveResultMembers = new IntHashSet();
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
     private int visitedCount;
@@ -136,6 +141,18 @@ public class GraphSearcher implements Closeable {
     @Deprecated
     public void usePruning(boolean usage) {
         pruneSearch = false;
+    }
+
+    /** Enable or disable adaptive stopping for score providers that explicitly support it. */
+    public void useAdaptiveTermination(boolean enabled) {
+        adaptiveTerminationEnabled = enabled;
+    }
+
+    /** Configure the relative squared-distance margin for adaptive stopping. */
+    public void useAdaptiveTermination(boolean enabled, float gamma) {
+        AdaptiveTermination.validateGamma(gamma);
+        adaptiveTerminationEnabled = enabled;
+        adaptiveTerminationGamma = gamma;
     }
 
     /**
@@ -352,20 +369,17 @@ public class GraphSearcher implements Closeable {
         expandedCountBaseLayer = 0;
     }
 
-    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
-        float topCandidateScore = localCandidates.topScore();
-
-        // we're done when we have K results and the best candidate is worse than the worst result so far
-        if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
-            return true;
+    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK,
+                               float threshold, boolean adaptive) {
+        if (adaptive && approximateResults.size() >= rerankK) {
+            var decision = adaptiveTermination.shouldTerminate(localCandidates.topScore(), adaptiveResults);
+            if (decision == AdaptiveTermination.Decision.CONTINUE) return false;
+            if (decision == AdaptiveTermination.Decision.TERMINATE)
+                return !adaptiveResultMembers.contains(localCandidates.topNode());
         }
-
-        // preserve legacy threshold early termination
-        if (threshold > 0 && scoreTracker.shouldStop()) {
-            return true;
-        }
-
-        return false;
+        if (approximateResults.size() >= rerankK
+                && localCandidates.topScore() < approximateResults.topScore()) return true;
+        return threshold > 0 && scoreTracker.shouldStop();
     }
 
     /**
@@ -412,14 +426,26 @@ public class GraphSearcher implements Closeable {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
+            boolean adaptive = adaptiveTerminationEnabled
+                    && scoreProvider.supportsAdaptiveDotProductTermination()
+                    && level == 0 && threshold == 0.0f && rerankK > 0;
+            if (adaptive) resetAdaptiveTermination(rerankK, acceptOrdsThisLayer);
 
             // TopK and filtered pruning are disabled. Threshold searches retain their
             // legacy threshold early-termination path inside ScoreTrackerFactory.
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
+            var scoreFunction = scoreProvider.scoreFunction();
+            ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                if (adaptive && acceptOrdsThisLayer.get(node2)) offerAdaptiveResult(node2, score, rerankK);
+                scoreTracker.track(score);
+                candidates.push(node2, score);
+                visitedCount++;
+            };
+
             // the main search loop
             while (candidates.size() > 0) {
-                if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
+                if (stopSearch(candidates, scoreTracker, rerankK, threshold, adaptive)) {
                     break;
                 }
 
@@ -428,6 +454,7 @@ public class GraphSearcher implements Closeable {
                 int topCandidateNode = candidates.pop();
                 if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
+                    if (adaptive) offerAdaptiveResult(topCandidateNode, topCandidateScore, rerankK);
                 }
 
                 // skip edge loading if we've found a local maximum and we have enough results
@@ -441,12 +468,6 @@ public class GraphSearcher implements Closeable {
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
-                var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                    scoreTracker.track(score);
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
                 view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
             }
         } catch (Throwable t) {
@@ -509,6 +530,29 @@ public class GraphSearcher implements Closeable {
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
+    }
+
+    private void resetAdaptiveTermination(int rerankK, Bits accepted) {
+        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma);
+        adaptiveResults.clear();
+        adaptiveResults.setMaxSize(rerankK);
+        adaptiveResultMembers.clear();
+        candidates.foreach((node, score) -> {
+            if (accepted.get(node)) offerAdaptiveResult(node, score, rerankK);
+        });
+    }
+
+    private void offerAdaptiveResult(int node, float score, int rerankK) {
+        if (adaptiveResultMembers.contains(node)) return;
+        if (adaptiveResults.size() < rerankK) {
+            adaptiveResults.push(node, score);
+            adaptiveResultMembers.add(node);
+        } else if (score > adaptiveResults.topScore()) {
+            int evicted = adaptiveResults.topNode();
+            adaptiveResults.push(node, score);
+            adaptiveResultMembers.remove(evicted);
+            adaptiveResultMembers.add(node);
+        }
     }
 
     @SuppressWarnings("StatementWithEmptyBody")

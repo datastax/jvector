@@ -86,7 +86,7 @@ public class TestASHGraphSearch {
                             try (var searcher = new GraphSearcher(graph)) {
                                 searcher.usePruning(false);
                                 var scores = new DefaultSearchScoreProvider(standalone,
-                                        n -> VectorSimilarityFunction.DOT_PRODUCT.compare(query, input[n]));
+                                        n -> VectorSimilarityFunction.DOT_PRODUCT.compare(query, input[n]), true);
                                 assertEquals(10, searcher.search(scores, 10, 10, 0f, 0f, Bits.ALL).getNodes().length);
                             }
                             for (int n = 0; n < input.length; n++) {
@@ -99,7 +99,7 @@ public class TestASHGraphSearch {
                                 var fused = view.approximateScoreFunctionFor(query, VectorSimilarityFunction.DOT_PRODUCT);
                                 assertEquals(standalone.similarityTo(0), fused.similarityTo(0), 0.00005f);
                                 var scores = new DefaultSearchScoreProvider(fused,
-                                        view.rerankerFor(query, VectorSimilarityFunction.DOT_PRODUCT));
+                                        view.rerankerFor(query, VectorSimilarityFunction.DOT_PRODUCT), true);
                                 assertEquals(10, searcher.search(scores, 10, 10, 0f, 0f, Bits.ALL).getNodes().length);
                                 fused.enableSimilarityToNeighbors(0);
                                 var neighbors = view.getNeighborsIterator(0, 0);
