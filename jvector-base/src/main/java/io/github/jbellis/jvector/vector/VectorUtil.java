@@ -192,11 +192,6 @@ public final class VectorUtil {
     impl.pqScanBlockedU8(blocks, blockCount, subspaceCount, lut, out);
   }
 
-  /** See {@link VectorUtilSupport#pqScoreCodes}. */
-  public static void pqScoreCodes(byte[] codes, int codesOffset, int count, int subspaceCount, int clusterCount, float[] lut, float[] out) {
-    impl.pqScoreCodes(codes, codesOffset, count, subspaceCount, clusterCount, lut, out);
-  }
-
   public static void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     impl.calculatePartialSelfMagnitudes(codebook, codebookIndex, size, clusterCount, partialMagnitudes);
   }

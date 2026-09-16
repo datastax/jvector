@@ -87,6 +87,14 @@ public abstract class QuantizationCompactionStrategy {
      * refreshed remappers, or codes land at the caller-proposed ordinals while the graph is
      * written at the reassigned ones. No-op for strategies that hold no context.
      */
+    /** Whether the pre-encoded code cache uses the blocked layout the cell join scans; set by the compactor. */
+    protected boolean blockedCodeLayout;
+
+    /** For compaction use: chooses the code cache layout before {@link #onAfterHeader} runs. */
+    public void setBlockedCodeLayout(boolean blocked) {
+        this.blockedCodeLayout = blocked;
+    }
+
     public void onRemappersUpdated(CompactionContext refreshed) {
         // no-op by default
     }

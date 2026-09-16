@@ -220,7 +220,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     private void precomputeCodes(CompactWriter writer) throws IOException {
         cacheCodeSize = retrainedCompressor.compressedVectorSize();
         int codeCount = ctx.maxOrdinal + 1;
-        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize);
+        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize, blockedCodeLayout);
         if (codeCount <= 0 || tempSize <= 0) {
             log.info("Sidecar pre-encode skipped: degenerate cache size {} bytes for {} codes", tempSize, codeCount);
             return;
@@ -234,7 +234,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
                 java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
             java.nio.ByteBuffer pad = java.nio.ByteBuffer.wrap(new byte[]{0});
             fc.write(pad, totalSize - 1);
-            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize);
+            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize, blockedCodeLayout);
         }
 
         final int cs = cacheCodeSize;

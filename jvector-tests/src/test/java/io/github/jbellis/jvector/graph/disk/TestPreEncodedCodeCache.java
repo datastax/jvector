@@ -79,6 +79,43 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         return p;
     }
 
+    /** Blocked layout: round trip through put/get and the block copy the scan kernel consumes. */
+    @Test
+    public void testBlockedLayoutRoundTripAndCopyBlocks() throws IOException {
+        int codeSize = 48, count = 500;
+        int maxChunkBytes = codeSize * PreEncodedCodeCache.BLOCK * 3;   // 3 blocks per chunk
+        Path p = Files.createTempFile("code-cache-blocked-", ".bin");
+        p.toFile().deleteOnExit();
+        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.WRITE)) {
+            long bytes = PreEncodedCodeCache.sectionBytes(count, codeSize, true);
+            assertEquals("padded to whole blocks", (long) 512 * codeSize, bytes);
+            fc.write(ByteBuffer.wrap(new byte[]{0}), bytes - 1);
+        }
+        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, 0, count, codeSize, maxChunkBytes, true)) {
+            assertTrue(cache.isBlocked());
+            for (int o = 0; o < count; o++) cache.put(o, codeFor(o, codeSize));
+            byte[] one = new byte[codeSize];
+            for (int o = 0; o < count; o++) {
+                cache.get(o, one);
+                assertCodeMatches(o, codeSize, one);
+            }
+            // copyBlocks over a range crossing a chunk boundary (chunks hold 192 codes)
+            int lo = 150, hi = 260;
+            int blocks = ((hi - 1) >>> 6) - (lo >>> 6) + 1;
+            byte[] dst = new byte[blocks * PreEncodedCodeCache.BLOCK * codeSize];
+            int start = cache.copyBlocks(lo, hi, dst);
+            assertEquals(128, start);
+            for (int o = lo; o < hi; o++) {
+                int rel = o - start, block = rel >>> 6, within = rel & 63;
+                for (int m = 0; m < codeSize; m++) {
+                    byte expected = (byte) ((o * 31 + m * 7) & 0xff);
+                    assertEquals("ordinal " + o + " byte " + m, expected, dst[(block * codeSize + m) * PreEncodedCodeCache.BLOCK + within]);
+                }
+            }
+        }
+    }
+
     /** Round-trips every ordinal with chunks small enough that most ordinals land in a different one. */
     @Test
     public void testRoundTripAcrossChunkBoundaries() throws IOException {

@@ -178,7 +178,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     private void precomputeCodes(CompactWriter writer) throws IOException {
         cacheCodeSize = retrainedCompressor.compressedVectorSize();
         int codeCount = ctx.maxOrdinal + 1;
-        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize);
+        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize, blockedCodeLayout);
         if (codeCount <= 0 || tempSize <= 0) {
             log.info("Code pre-encode skipped: degenerate cache size {} bytes for {} codes", tempSize, codeCount);
             return;
@@ -192,7 +192,7 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
             fc.write(pad, totalSize - 1);
-            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize);
+            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize, blockedCodeLayout);
         }
 
         final int cs = cacheCodeSize;

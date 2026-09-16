@@ -1283,12 +1283,142 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
     }
     /** Builds a FusedPQ source graph from the given vectors (mirrors {@link #buildFusedPQ}). */
+    /**
+     * Cell join: sources large enough to carry a hierarchy so the reassigned ordinals define cells,
+     * merged with compactor-assigned ordinals. Checks that the level-0 candidates came from cell
+     * scans (not the graph-search fallback) and that recall against brute force stays high.
+     */
+    @Test
+    public void testCellJoinMergeRecall() throws Exception {
+        int perSource = 3000;
+        int nSrc = 3;
+        final VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;   // additive-table scan: dot or Euclidean
+        final java.util.Random rnd = new java.util.Random(20260916);              // fixed: the two merges are compared
+        List<VectorFloat<?>> all = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        int total = nSrc * perSource;
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
+            Path path = buildFusedHierarchicalSourceGraph(vecs, vsf, "celljoin_src_" + sIdx);
+            rss.add(ReaderSupplierFactory.open(path));
+            graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
+            var lv = new FixedBitSet(perSource);
+            lv.set(0, perSource);
+            live.add(lv);
+            all.addAll(vecs);
+        }
+        assertTrue("sources must have a hierarchy for cells", graphs.get(0).getMaxLevel() >= 1);
+
+        int topK = 10;
+        List<VectorFloat<?>> queries = seededVectors(rnd, 100, dimension);
+        List<List<Integer>> gt = new ArrayList<>();
+        for (var q : queries) {
+            List<Integer> idx = new ArrayList<>();
+            for (int i = 0; i < total; i++) idx.add(i);
+            idx.sort((x, y) -> Float.compare(vsf.compare(q, all.get(y)), vsf.compare(q, all.get(x))));
+            gt.add(new ArrayList<>(idx.subList(0, topK)));
+        }
+
+        // same sources merged twice: graph search (caller ordinals) and cell join (reassigned ordinals)
+        double graphRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, false, "celljoin_graph");
+        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, true, "celljoin_join");
+        System.out.printf("Cell-join merge recall: %.4f (graph search %.4f)%n", joinRecall, graphRecall);
+        assertTrue("cell-join recall " + joinRecall + " below graph search " + graphRecall, joinRecall >= graphRecall - 0.02);
+        for (var r : rss) r.close();
+    }
+
+    private List<VectorFloat<?>> seededVectors(java.util.Random rnd, int n, int dim) {
+        List<VectorFloat<?>> out = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            VectorFloat<?> v = vectorTypeSupport.createFloatVector(dim);
+            for (int d = 0; d < dim; d++) v.set(d, (float) rnd.nextGaussian());
+            out.add(v);
+        }
+        return out;
+    }
+
+    private double mergeAndRecall(List<OnDiskGraphIndex> graphs, List<FixedBitSet> live, int perSource,
+                                  VectorSimilarityFunction vsf, List<VectorFloat<?>> all,
+                                  List<VectorFloat<?>> queries, List<List<Integer>> gt, int topK,
+                                  boolean reassign, String name) throws Exception {
+        int nSrc = graphs.size();
+        int total = nSrc * perSource;
+        List<OrdinalMapper> remappers = new ArrayList<>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            remappers.add(new OrdinalMapper.OffsetMapper(sIdx * perSource, perSource));
+        }
+        var compactor = new OnDiskGraphIndexCompactor(graphs, live, remappers, vsf, null);
+        compactor.setReassignOrdinals(reassign);
+        var outputPath = testDirectory.resolve(name);
+        compactor.compact(outputPath);
+        if (reassign) {
+            assertTrue("level-0 candidates should come from cell scans", compactor.cellScanCount() > 0);
+        } else {
+            assertEquals("graph-search merge must not run cell scans", 0, compactor.cellScanCount());
+        }
+        var effective = compactor.effectiveRemappers();
+        int[] newToDataset = new int[total];
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            for (int i = 0; i < perSource; i++) {
+                newToDataset[effective.get(sIdx).oldToNew(i)] = sIdx * perSource + i;
+            }
+        }
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath)) {
+            var compactGraph = OnDiskGraphIndex.load(rs);
+            List<VectorFloat<?>> reordered = new ArrayList<>(total);
+            for (int n = 0; n < total; n++) reordered.add(all.get(newToDataset[n]));
+            var reorderedRavv = new ListRandomAccessVectorValues(reordered, dimension);
+            try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
+                int hits = 0;
+                for (int qi = 0; qi < queries.size(); qi++) {
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(queries.get(qi), vsf, reorderedRavv);
+                    SearchResult sr = searcher.search(ssp, topK, Bits.ALL);
+                    for (var ns : sr.getNodes()) {
+                        if (gt.get(qi).contains(newToDataset[ns.node])) hits++;
+                    }
+                }
+                return (double) hits / (queries.size() * topK);
+            }
+        }
+    }
+
     private Path buildFusedSourceGraph(List<VectorFloat<?>> vecs, String name) throws IOException {
         RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
         ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
         PQVectors pqv = (PQVectors) pq.encodeAll(ravv, simdExecutor);
         var bsp = BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqv);
         var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, false, true, simdExecutor, parallelExecutor);
+        var graph = builder.getGraph();
+        var outputPath = testDirectory.resolve(name);
+        Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
+        writeSuppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+        var identityMapper = new OrdinalMapper.IdentityMapper(ravv.size() - 1);
+        var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, outputPath);
+        writerBuilder.withMapper(identityMapper);
+        writerBuilder.with(new InlineVectors(dimension));
+        writerBuilder.with(new FusedPQ(graph.maxDegree(), pq));
+        var writer = writerBuilder.build();
+        for (var node = 0; node < ravv.size(); node++) {
+            var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
+            stateMap.put(FeatureId.INLINE_VECTORS, writeSuppliers.get(FeatureId.INLINE_VECTORS).apply(node));
+            writer.writeInline(node, stateMap);
+            builder.addGraphNode(node, ravv.getVector(node));
+        }
+        builder.cleanup();
+        writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(graph.getView(), pqv, ordinal));
+        writer.write(writeSuppliers);
+        return outputPath;
+    }
+
+    /** As {@link #buildFusedSourceGraph} with the hierarchy enabled (needed for cell assignment). */
+    private Path buildFusedHierarchicalSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, String name) throws IOException {
+        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(vecs, dimension);
+        ProductQuantization pq = ProductQuantization.compute(ravv, 8, 256, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv = (PQVectors) pq.encodeAll(ravv, simdExecutor);
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(vsf, pqv);
+        var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, true, true, simdExecutor, parallelExecutor);
         var graph = builder.getGraph();
         var outputPath = testDirectory.resolve(name);
         Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);

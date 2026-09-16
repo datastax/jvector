@@ -37,7 +37,6 @@ import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.ArrayVectorFloat;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -134,42 +133,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // the fused path consults the inline strategy for codes.
     private QuantizationCompactionStrategy activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
 
-    // ---- EXPERIMENT: cell join. Cross-source candidates at level 0 come from an ADC scan over
-    // the merged codes of the target's nodes in the node's hub cell and its best neighbouring
-    // cells, instead of a beam search of the target graph. Requires reassigned ordinals in
-    // region mode (cells = hub level-1 nodes; each source's nodes of a cell are a contiguous
-    // ordinal range). Flags: jvector.compaction.cellJoin, jvector.compaction.cellProbes.
-    private static final boolean CELL_JOIN = Boolean.getBoolean("jvector.compaction.cellJoin");
-    private static final int CELL_PROBES = Integer.getInteger("jvector.compaction.cellProbes", 16);          // cells scanned per target
-    // probe selection: "hop" = landing cell + its level-1 graph neighbours ranked by code score;
-    // "beam" = best-first search over the level-1 hub graph by code score, top cells of the visited set
-    private static final String CELL_SELECT = System.getProperty("jvector.compaction.cellSelect", "seed");   // seed (default) | beam | cell | hop | static
-    private static final boolean CELL_BEAM = "beam".equals(CELL_SELECT);
-    // "cell": the node's own cell (implied by its reassigned ordinal) plus that cell's level-1 graph
-    // neighbours ranked by code score; no descent and no beam at level 0
-    private static final boolean CELL_ADJ = "cell".equals(CELL_SELECT);
-    // "seed": beam over the level-1 graph seeded at the node's own cell (no descent); width below
-    private static final boolean CELL_SEED = "seed".equals(CELL_SELECT);
-    private static final int CELL_L0_EF = Integer.getInteger("jvector.compaction.cellL0Ef", 16);   // 0 = max(16, 2*probes)
-    // cell assignment in the ordinal pass: "l1" = beam at level 1 from the greedy landing;
-    // "l2" = beam at level 2 (cache-resident) from the descent's level-2 node, then one level-1 expansion
-    private static final boolean CELL_ASSIGN_L2 = "l2".equals(System.getProperty("jvector.compaction.cellAssign", "l1"));
-    // "static": probe list computed once per cell (two-hop beam by code-code similarity to the cell's
-    // representative), no per-node descent or beam at level 0
-    private static final boolean CELL_STATIC = "static".equals(CELL_SELECT);
-    // ordinal-pass scoring path: "float" = original SIMD path over the float table (single table), "byte" = 8-bit table
-    private static final boolean CELL_ORDINAL_FLOAT = "float".equals(System.getProperty("jvector.compaction.cellOrdinalScoring", "float"));
-    private int[] cellProbeLists;           // [cell * CELL_PROBES + i] -> probe cell (walk position), -1 = none
-    private int[] cellToPosition;           // cell index (walk position) -> level-1 position
-    // cap on codes scanned per (node, target): probe cells in score order until the next cell would exceed it (0 = no cap)
-    private static final int CELL_BUDGET = Integer.getInteger("jvector.compaction.cellBudget", 8192);
-    // cell assignment in the ordinal pass: "greedy" = the descent's landing (a local optimum of the
-    // level-1 graph); "beam" = best-scoring level-1 node found by a small best-first search from the landing
-    private static final int CELL_ASSIGN_EF = Integer.getInteger("jvector.compaction.cellAssignEf", 8); // 0 = greedy landing
-    private HubMap cellMap;                 // resident hub map kept after the ordinal pass
-    private int[] cellWalkPosition;         // hub node id -> cell index (walk position), MAX_VALUE if not level 1
-    private int[][] cellStart;              // [source][cell] -> first new ordinal of that source's nodes in the cell; length cells+2
-    private int cellCount;                  // number of level-1 cells (bucket cellCount holds nodes without a cell)
+    // ---- Cell join: level-0 cross-source candidates from a blocked scan of the code cache ----
+    // With compactor-assigned ordinals every source's nodes are grouped by the level-1 node of the
+    // largest source's hierarchy they descend to (their cell); each source's nodes of a cell form a
+    // contiguous ordinal range and their codes are contiguous in the pre-encoded cache. A node's
+    // candidates in another source are found by scanning that source's codes in the node's best
+    // cells with an 8-bit lookup table, then rescoring the survivors exactly. Requires reassigned
+    // ordinals with a hierarchy in the largest source and a merged code cache; otherwise level 0
+    // falls back to the graph search.
+    static final int CELL_BUDGET = 8192;      // codes scanned per (node, target) at most; governs how many cells are probed
+    static final int CELL_ASSIGN_EF = 8;      // level-1 beam width when assigning a node's cell
+    static final int CELL_PROBE_EF = 16;      // level-1 beam width when choosing a node's probe cells
+    private HubMap cellMap;                   // resident hub map kept through level 0
+    private int[] cellWalkPosition;           // hub node id -> cell (walk position); MAX_VALUE if not level 1
+    private int[] cellToPosition;             // cell -> level-1 position in the hub map
+    private int[][] cellStart;                // [source][cell] -> first new ordinal of that source's nodes in the cell
+    private int cellCount;
     private final LongAdder cellCodesScanned = new LongAdder();
     private final LongAdder cellScans = new LongAdder();
     private final LongAdder cellFallbacks = new LongAdder();
@@ -417,6 +396,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         this.reassignOrdinals = enabled;
     }
 
+    /** Number of level-0 cell scans run so far (one per node and target); for tests and diagnostics. */
+    long cellScanCount() {
+        return cellScans.sum();
+    }
+
     /** The ordinal mappers in effect: the caller's, or the compactor-assigned mapping. */
     public List<OrdinalMapper> effectiveRemappers() {
         return effectiveRemappers != null ? effectiveRemappers : remappers;
@@ -541,6 +525,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 remappers = buildRegionOrdinalMappers(pq);
                 effectiveRemappers = remappers;
                 ordinalsReassigned = true;
+                // the cell join scans the code cache by cell: store it blocked (subspace-major)
+                strategy.setBlockedCodeLayout(cellMap != null);
+                activeSidecarStrategy.setBlockedCodeLayout(cellMap != null);
                 // The strategies snapshotted the caller's remappers at construction; refresh so
                 // code placement (pre-encode caches, sidecar order) matches the on-disk ordinals.
                 strategy.onRemappersUpdated(buildContext());
@@ -695,8 +682,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         maxOrdinal + 1, REVERSE_CANDIDATE_SLOTS, retainedOnlyNodes.get());
                 if (cellMap != null) {
                     long scans = Math.max(1, cellScans.sum());
-                    log.info("Cell join: {} scans, {} codes/scan, {} fallbacks to graph search, {} probes/node ({} selection, budget {}, assignEf {})",
-                             cellScans.sum(), cellCodesScanned.sum() / scans, cellFallbacks.sum(), CELL_PROBES, CELL_SELECT, CELL_BUDGET, CELL_ASSIGN_EF);
+                    log.info("Cell join: {} scans, {} codes/scan, {} nodes without a cell (graph search)",
+                             cellScans.sum(), cellCodesScanned.sum() / scans, cellFallbacks.sum());
                 }
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
@@ -1185,18 +1172,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int gatherFromSameSource(int node, int level, int sourceIdx,
                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                      VectorFloat<?> baseVec, Scratch scratch, int candSize) {
-        // The whole candidate list is known before any vector is read, so batch-hint every
-        // record and let the reads below overlap in the device queue instead of paying one
-        // fault of latency each, serially. (The extra iterator pass re-reads adjacency the
-        // first pass just faulted in — RAM-cheap.)
-        var hintIt = searchView.getNeighborsIterator(level, node);
-        var source = sources.get(sourceIdx);
-        while (hintIt.hasNext()) {
-            int nb = hintIt.nextInt();
-            if (indexAlive.get(nb)) {
-                source.willNeedL0Record(nb);
-            }
-        }
         var it = searchView.getNeighborsIterator(level, node);
         while (it.hasNext()) {
             int nb = it.nextInt();
@@ -1231,12 +1206,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         );
 
         if (level == 0 && cellMap != null && orderingCache != null) {
-            int before = candSize;
             candSize = gatherFromOtherSourceByCells(node, nodeSourceIdx, sourceIdx, searchView, baseVec, scratch, candSize, params);
-            if (candSize > before || scratch.probeCount > 0) {
+            if (scratch.probeCount > 0) {
                 return candSize;
             }
-            cellFallbacks.increment();
+            cellFallbacks.increment();   // node without a cell: graph search below
         }
 
         if (level == 0) {
@@ -1296,165 +1270,70 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * EXPERIMENT: cross-source candidates by cell scan. Descends the hub map for the node once,
-     * selects its landing cell plus the best CELL_PROBES-1 neighbouring cells by code score,
-     * ADC-scans the target's merged codes in those cells' ordinal ranges, keeps the top
-     * searchTopK by code score and rescores them exactly. Returns the new candidate count;
-     * leaves candSize unchanged with probeCount == 0 when the node has no cell (caller falls
-     * back to the graph search).
+     * Cross-source candidates by cell scan. The node's own cell is implied by its reassigned
+     * ordinal; a small beam over the hub's level-1 graph seeded there ranks the cells it scores
+     * (once per node, shared by all targets). The target's codes in those cells are scanned best
+     * cell first with the node's 8-bit table, until {@link #CELL_BUDGET} codes, keeping the top
+     * {@code searchTopK}; those are rescored exactly.
+     * Leaves {@code probeCount == 0} when the node has no cell, in which case the caller falls
+     * back to the graph search.
      */
     private int gatherFromOtherSourceByCells(int node, int nodeSourceIdx, int targetIdx,
                                              OnDiskGraphIndex.View targetView, VectorFloat<?> baseVec,
                                              Scratch scratch, int candSize, CompactionParams params) {
         if (scratch.cellScorer == null) {
             scratch.cellScorer = cellMap.scorer();
-            scratch.cellCode = new byte[orderingCache.codeSize()];
             scratch.topIds = new int[params.searchTopK];
             scratch.topScores = new float[params.searchTopK];
-            scratch.probeCells = new int[Math.max(CELL_PROBES, 1)];
+            scratch.probeCells = new int[CELL_PROBE_EF * cellMap.degree[1] + 1];
         }
         HubMap.Scorer scorer = scratch.cellScorer;
         if (scratch.probeNode != node || scratch.probeSrc != nodeSourceIdx) {
-            // one probe-set computation per node; shared by all targets
             scratch.probeNode = node;
             scratch.probeSrc = nodeSourceIdx;
             scratch.probeCount = 0;
             scorer.setQuery(baseVec);
-            int landingPos;
-            if (CELL_STATIC) {
-                int ownCell = cellOf(nodeSourceIdx, remappers.get(nodeSourceIdx).oldToNew(node));
-                if (ownCell < 0 || ownCell >= cellCount || cellProbeLists == null) {
-                    return candSize;
-                }
-                int n = 0;
-                for (int i = 0; i < CELL_PROBES; i++) {
-                    int c = cellProbeLists[ownCell * CELL_PROBES + i];
-                    if (c >= 0) scratch.probeCells[n++] = c;
-                }
-                scratch.probeCount = n;
-                landingPos = -1;
-            } else if (CELL_ADJ || CELL_SEED) {
-                // the node's cell is implied by its reassigned ordinal: no descent needed
-                int ownCell = cellOf(nodeSourceIdx, remappers.get(nodeSourceIdx).oldToNew(node));
-                if (ownCell < 0 || ownCell >= cellCount) {
-                    return candSize;
-                }
-                landingPos = cellToPosition[ownCell];
-            } else {
-                int landing = cellMap.descend(scorer);
-                landingPos = cellMap.position(1, landing);
-                if (landingPos < 0) {
-                    return candSize;
-                }
+            int ownCell = cellOf(nodeSourceIdx, remappers.get(nodeSourceIdx).oldToNew(node));
+            if (ownCell < 0) {
+                return candSize;
             }
-            int stride = cellMap.degree[1];
-            int[] adj = cellMap.adjacency[1];
-            if (CELL_STATIC) {
-                // probe list already set
-            } else if (CELL_BEAM || CELL_SEED) {
-                selectCellsByBeam(scratch, scorer, landingPos, stride, adj);
-            } else {
-                // candidates: landing + its level-1 neighbours, ranked by code score to the query
-                int maxCand = stride + 1;
-                int[] candPos = new int[maxCand];
-                float[] candScore = new float[maxCand];
-                int n = 0;
-                candPos[n] = landingPos;
-                candScore[n++] = Float.POSITIVE_INFINITY; // landing always first
-                for (int j = 0; j < stride; j++) {
-                    int nb = adj[landingPos * stride + j];
-                    if (nb < 0) break;
-                    int p = cellMap.position(1, nb);
-                    if (p < 0) continue;
-                    candPos[n] = p;
-                    candScore[n++] = scorer.score(1, p);
-                }
-                int probes = Math.min(CELL_PROBES, n);
-                for (int i = 0; i < probes; i++) {
-                    int best = i;
-                    for (int j = i + 1; j < n; j++) {
-                        if (candScore[j] > candScore[best]) best = j;
-                    }
-                    int tp = candPos[best]; candPos[best] = candPos[i]; candPos[i] = tp;
-                    float ts = candScore[best]; candScore[best] = candScore[i]; candScore[i] = ts;
-                    scratch.probeCells[i] = cellWalkPosition[cellMap.nodes[1][candPos[i]]];
-                }
-                scratch.probeCount = probes;
-            }
+            selectCellsByBeam(scratch, scorer, cellToPosition[ownCell]);
         }
         if (scratch.probeCount == 0) {
             return candSize;
         }
 
-        // ADC scan of the target's nodes in the probed cells; bounded min-heap of the top K
-        int[] starts = cellStart[targetIdx];
-        int k = params.searchTopK;
-        int[] ids = scratch.topIds;
-        float[] sc = scratch.topScores;
-        int size = 0;
-        long scanned = 0;
+        final int[] starts = cellStart[targetIdx];
+        final int k = params.searchTopK;
+        final int[] ids = scratch.topIds;
+        final float[] sc = scratch.topScores;
         final int codeSize = orderingCache.codeSize();
         final int msub = cellMap.subspaceCount;
-        final int clusters = cellMap.clusterCount;
-        final boolean negate = cellMap.euclidean;
-        final float[] lut = scorer.lut();
+        final byte[] lut8 = scorer.lut8();
+        int size = 0;
+        long scanned = 0;
         for (int i = 0; i < scratch.probeCount; i++) {
             int cell = scratch.probeCells[i];
-            if (cell < 0 || cell >= cellCount) continue;
             int lo = starts[cell], hi = starts[cell + 1];
             int n = hi - lo;
             if (n <= 0) continue;
-            if (CELL_BUDGET > 0 && scanned > 0 && scanned + n > CELL_BUDGET) {
+            if (scanned > 0 && scanned + n > CELL_BUDGET) {
                 break;
             }
-            if (orderingCache.isBlocked()) {
-                // whole 64-code blocks covering [lo, hi): the kernel scores every code in them,
-                // only the in-range ones are ranked
-                int blockCount = ((hi - 1) >>> 6) - (lo >>> 6) + 1;
-                int needBytes = blockCount * PreEncodedCodeCache.BLOCK * codeSize;
-                if (scratch.cellBlock.length < needBytes) {
-                    scratch.cellBlock = new byte[Math.max(needBytes, scratch.cellBlock.length * 2)];
-                    scratch.cellBlockSums = new short[scratch.cellBlock.length / codeSize];
-                }
-                int blockStart = orderingCache.copyBlocks(lo, hi, scratch.cellBlock);
-                PqScanKernel.scan(scratch.cellBlock, blockCount, msub, scorer.lut8(), scratch.cellBlockSums);
-                final short[] sums = scratch.cellBlockSums;
-                scanned += n;
-                for (int newOrd = lo; newOrd < hi; newOrd++) {
-                    float score = sums[newOrd - blockStart] & 0xFFFF;
-                    if (size < k) {
-                        int pos = size++;
-                        while (pos > 0) {
-                            int parent = (pos - 1) >>> 1;
-                            if (sc[parent] <= score) break;
-                            sc[pos] = sc[parent]; ids[pos] = ids[parent]; pos = parent;
-                        }
-                        sc[pos] = score; ids[pos] = newOrd;
-                    } else if (score > sc[0]) {
-                        int pos = 0;
-                        while (true) {
-                            int child = 2 * pos + 1;
-                            if (child >= size) break;
-                            if (child + 1 < size && sc[child + 1] < sc[child]) child++;
-                            if (sc[child] >= score) break;
-                            sc[pos] = sc[child]; ids[pos] = ids[child]; pos = child;
-                        }
-                        sc[pos] = score; ids[pos] = newOrd;
-                    }
-                }
-                continue;
+            // whole 64-code blocks covering [lo, hi): the kernel scores every code in them,
+            // only the in-range ones are ranked
+            int blockCount = ((hi - 1) >>> 6) - (lo >>> 6) + 1;
+            int needBytes = blockCount * PreEncodedCodeCache.BLOCK * codeSize;
+            if (scratch.cellBlock.length < needBytes) {
+                scratch.cellBlock = new byte[Math.max(needBytes, scratch.cellBlock.length * 2)];
+                scratch.cellBlockSums = new short[scratch.cellBlock.length / codeSize];
             }
-            if (scratch.cellBlock.length < n * codeSize) {
-                scratch.cellBlock = new byte[Math.max(n * codeSize, scratch.cellBlock.length * 2)];
-                scratch.cellBlockScores = new float[scratch.cellBlock.length / codeSize];
-            }
-            orderingCache.copyRange(lo, n, scratch.cellBlock, 0);
-            VectorUtil.pqScoreCodes(scratch.cellBlock, 0, n, msub, clusters, lut, scratch.cellBlockScores);
-            final float[] blockScores = scratch.cellBlockScores;
+            int blockStart = orderingCache.copyBlocks(lo, hi, scratch.cellBlock);
+            PqScanKernel.scan(scratch.cellBlock, blockCount, msub, lut8, scratch.cellBlockSums);
+            final short[] sums = scratch.cellBlockSums;
             scanned += n;
-            for (int j = 0; j < n; j++) {
-                int newOrd = lo + j;
-                float score = negate ? -blockScores[j] : blockScores[j];
+            for (int newOrd = lo; newOrd < hi; newOrd++) {
+                float score = sums[newOrd - blockStart] & 0xFFFF;   // higher is better (table oriented that way)
                 if (size < k) {
                     int pos = size++;
                     while (pos > 0) {
@@ -1490,6 +1369,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return candSize;
     }
 
+
     /** Cell (walk position) whose ordinal range of {@code source} contains {@code newOrdinal}; -1 if none. */
     private int cellOf(int source, int newOrdinal) {
         int[] starts = cellStart[source];
@@ -1502,32 +1382,36 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * EXPERIMENT: best-first search over the hub's level-1 graph by code score, starting at the
-     * descent's landing; the top CELL_PROBES nodes of the visited set (by score) become the probe
-     * cells, in score order. Beam width is 2 * CELL_PROBES, at least 16.
+     * Best-first search over the hub's level-1 graph from {@code startPos}, width
+     * {@link #CELL_PROBE_EF}. Every level-1 node it scores becomes a probe cell, best first; the
+     * scan then takes cells in that order until {@link #CELL_BUDGET} codes, so the number of cells
+     * probed adapts to their size.
      */
-    private void selectCellsByBeam(Scratch scratch, HubMap.Scorer scorer, int landingPos, int stride, int[] adj) {
-        int ef = CELL_L0_EF > 0 ? Math.max(CELL_L0_EF, CELL_PROBES) : Math.max(16, 2 * CELL_PROBES);
-        if (scratch.beamPos == null || scratch.beamPos.length != ef) {
+    private void selectCellsByBeam(Scratch scratch, HubMap.Scorer scorer, int startPos) {
+        final int ef = CELL_PROBE_EF;
+        final int stride = cellMap.degree[1];
+        final int[] adj = cellMap.adjacency[1];
+        if (scratch.beamPos == null) {
             scratch.beamPos = new int[ef];
             scratch.beamScore = new float[ef];
             scratch.beamExpanded = new boolean[ef];
-        }
-        int visitCap = Integer.highestOneBit(Math.max(64, 4 * (ef * stride + 1)) - 1) << 1;
-        if (scratch.l1Visited == null || scratch.l1Visited.length != visitCap) {
-            scratch.l1Visited = new int[visitCap];
+            scratch.l1Visited = new int[visitedCapacity(ef, stride)];
+            scratch.scoredKeys = new long[ef * stride + 1];
         }
         final int[] visited = scratch.l1Visited;
         Arrays.fill(visited, -1);
-        final int mask = visitCap - 1;
+        final int mask = visited.length - 1;
         int[] pos = scratch.beamPos;
         float[] sc = scratch.beamScore;
         boolean[] expanded = scratch.beamExpanded;
+        long[] scored = scratch.scoredKeys;   // (sortable score << 32 | position) for every scored cell
+        int scoredCount = 0;
         int size = 0;
-        pos[0] = landingPos; sc[0] = scorer.score(1, landingPos); expanded[0] = false; size = 1;
-        visitedAdd(visited, mask, landingPos);
+        float s0 = scorer.score(1, startPos);
+        pos[0] = startPos; sc[0] = s0; expanded[0] = false; size = 1;
+        visitedAdd(visited, mask, startPos);
+        scored[scoredCount++] = packScored(s0, startPos);
         while (true) {
-            // best unexpanded
             int bi = -1;
             for (int i = 0; i < size; i++) {
                 if (!expanded[i] && (bi < 0 || sc[i] > sc[bi])) bi = i;
@@ -1541,10 +1425,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 int np = cellMap.position(1, nb);
                 if (np < 0 || !visitedAdd(visited, mask, np)) continue;
                 float score = scorer.score(1, np);
+                scored[scoredCount++] = packScored(score, np);
                 if (size < ef) {
                     pos[size] = np; sc[size] = score; expanded[size] = false; size++;
                 } else {
-                    // replace the worst if better
                     int wi = 0;
                     for (int i = 1; i < size; i++) if (sc[i] < sc[wi]) wi = i;
                     if (score > sc[wi]) {
@@ -1553,30 +1437,31 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
             }
         }
-        // top CELL_PROBES by score -> cells
-        int probes = Math.min(CELL_PROBES, size);
-        for (int i = 0; i < probes; i++) {
-            int best = i;
-            for (int j = i + 1; j < size; j++) if (sc[j] > sc[best]) best = j;
-            int tp = pos[best]; pos[best] = pos[i]; pos[i] = tp;
-            float ts = sc[best]; sc[best] = sc[i]; sc[i] = ts;
-            boolean te = expanded[best]; expanded[best] = expanded[i]; expanded[i] = te;
-            scratch.probeCells[i] = cellWalkPosition[cellMap.nodes[1][pos[i]]];
+        Arrays.sort(scored, 0, scoredCount);
+        int n = 0;
+        for (int i = scoredCount - 1; i >= 0; i--) {   // best first
+            int cell = cellWalkPosition[cellMap.nodes[1][(int) scored[i]]];
+            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
         }
-        scratch.probeCount = probes;
+        scratch.probeCount = n;
     }
 
-    /**
-     * EXPERIMENT: best-first search over the level-1 hub graph by code score from {@code landingPos};
-     * returns the best-scoring level-1 position visited. {@code scratch} must hold ef*8 + 2*ef ints.
-     */
-    private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int landingPos, int ef, int[] visited) {
-        return bestByBeam(map, scorer, 1, landingPos, ef, visited);
+    /** Packs a float score into a sortable long key with the position in the low 32 bits. */
+    private static long packScored(float score, int position) {
+        int bits = Float.floatToIntBits(score);
+        int sortable = bits ^ ((bits >> 31) & 0x7fffffff);   // order-preserving int for floats
+        return ((long) sortable << 32) | (position & 0xFFFFFFFFL);
     }
+
+    /** Power-of-two capacity for a visited set holding at most {@code ef * stride + 1} entries at low load. */
+    private static int visitedCapacity(int ef, int stride) {
+        return Integer.highestOneBit(Math.max(64, 4 * (ef * stride + 1)) - 1) << 1;
+    }
+
 
     /** Best-scoring position at {@code level} found by a best-first beam of width {@code ef} from {@code startPos}. */
     private static int bestByBeam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, int[] visited) {
-        int landingPos = startPos;
+        final int landingPos = startPos;
         int stride = map.degree[level];
         int[] adj = map.adjacency[level];
         int[] pos = new int[ef];
@@ -1623,117 +1508,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
         return bestPos;
-    }
-
-    /** Best-scoring level-1 position among {@code pos} and its level-1 neighbours (one expansion). */
-    private static int bestOfNeighbourhood(HubMap map, HubMap.Scorer scorer, int pos) {
-        int stride = map.degree[1];
-        int[] adj = map.adjacency[1];
-        int best = pos;
-        float bestScore = scorer.score(1, pos);
-        for (int j = 0; j < stride; j++) {
-            int nb = adj[pos * stride + j];
-            if (nb < 0) break;
-            int np = map.position(1, nb);
-            if (np < 0) continue;
-            float sc = scorer.score(1, np);
-            if (sc > bestScore) { bestScore = sc; best = np; }
-        }
-        return best;
-    }
-
-    /**
-     * EXPERIMENT: static probe lists. For every cell, a beam over the level-1 graph ranked by the
-     * symmetric code-code similarity to the cell's own representative code; the top CELL_PROBES
-     * cells (walk positions) are stored, so level 0 needs neither descent nor beam per node.
-     */
-    private void buildStaticProbeLists(ProductQuantization pq) {
-        long t0 = System.nanoTime();
-        final int probes = CELL_PROBES;
-        final int ef = Math.max(16, 2 * probes);
-        final SymmetricCodeSimilarity sim = codeSimilarity(pq);
-        final byte[] codes1 = cellMap.codeBytes[1];
-        final int msub = cellMap.subspaceCount;
-        final int stride = cellMap.degree[1];
-        final int[] adj = cellMap.adjacency[1];
-        cellProbeLists = new int[cellCount * probes];
-        Arrays.fill(cellProbeLists, -1);
-        int chunks = Math.max(1, Math.min(4096, cellCount / 512));
-        int chunk = (cellCount + chunks - 1) / chunks;
-        List<Callable<Void>> tasks = new ArrayList<>();
-        for (int c = 0; c < chunks; c++) {
-            final int lo = c * chunk, hi = Math.min(cellCount, lo + chunk);
-            if (lo >= hi) continue;
-            tasks.add(() -> {
-                int cap = Integer.highestOneBit(Math.max(64, 4 * (ef * stride + 1)) - 1) << 1;
-                int[] visited = new int[cap];
-                int[] pos = new int[ef]; float[] sc = new float[ef]; boolean[] expanded = new boolean[ef];
-                byte[] q = new byte[msub]; byte[] o = new byte[msub];
-                for (int p = lo; p < hi; p++) {
-                    System.arraycopy(codes1, p * msub, q, 0, msub);
-                    Arrays.fill(visited, -1);
-                    int mask = cap - 1;
-                    int size = 0;
-                    pos[0] = p; sc[0] = Float.POSITIVE_INFINITY; expanded[0] = false; size = 1;
-                    visitedAdd(visited, mask, p);
-                    while (true) {
-                        int bi = -1;
-                        for (int i = 0; i < size; i++) if (!expanded[i] && (bi < 0 || sc[i] > sc[bi])) bi = i;
-                        if (bi < 0) break;
-                        expanded[bi] = true;
-                        int x = pos[bi];
-                        for (int j = 0; j < stride; j++) {
-                            int nb = adj[x * stride + j];
-                            if (nb < 0) break;
-                            int np = cellMap.position(1, nb);
-                            if (np < 0 || !visitedAdd(visited, mask, np)) continue;
-                            System.arraycopy(codes1, np * msub, o, 0, msub);
-                            float score = sim.similarity(q, o);
-                            if (size < ef) {
-                                pos[size] = np; sc[size] = score; expanded[size] = false; size++;
-                            } else {
-                                int wi = 0;
-                                for (int i = 1; i < size; i++) if (sc[i] < sc[wi]) wi = i;
-                                if (score > sc[wi]) { pos[wi] = np; sc[wi] = score; expanded[wi] = false; }
-                            }
-                        }
-                    }
-                    // top `probes` by score (the cell itself first: +inf)
-                    int n = Math.min(probes, size);
-                    int cell = cellWalkPosition[cellMap.nodes[1][p]];
-                    for (int i = 0; i < n; i++) {
-                        int best = i;
-                        for (int j = i + 1; j < size; j++) if (sc[j] > sc[best]) best = j;
-                        int tp = pos[best]; pos[best] = pos[i]; pos[i] = tp;
-                        float ts = sc[best]; sc[best] = sc[i]; sc[i] = ts;
-                        if (cell >= 0 && cell < cellCount) {
-                            cellProbeLists[cell * probes + i] = cellWalkPosition[cellMap.nodes[1][pos[i]]];
-                        }
-                    }
-                }
-                return null;
-            });
-        }
-        joinAll(tasks);
-        log.info("Cell join: static probe lists built for {} cells ({} probes each) in {} ms", cellCount, probes, (System.nanoTime() - t0) / 1_000_000);
-    }
-
-    /** Logs the cell-size distribution of each source (node-weighted mean shows the skew a random node sees). */
-    private void logCellSizes() {
-        for (int s = 0; s < cellStart.length; s++) {
-            int[] st = cellStart[s];
-            if (st == null) continue;
-            int[] sizes = new int[cellCount];
-            long weighted = 0, total = 0; int max = 0;
-            for (int c = 0; c < cellCount; c++) {
-                int n = st[c + 1] - st[c];
-                sizes[c] = n; total += n; weighted += (long) n * n; if (n > max) max = n;
-            }
-            Arrays.sort(sizes);
-            log.info("Cell join: source {} cells: mean {}, p50 {}, p90 {}, p99 {}, max {}, node-weighted mean {}",
-                     s, total / Math.max(1, cellCount), sizes[cellCount / 2], sizes[(int) (cellCount * 0.9)], sizes[(int) (cellCount * 0.99)],
-                     max, total > 0 ? weighted / total : 0);
-        }
     }
 
     /** Adds {@code key} to the open-addressing set (power-of-two length, -1 = empty); false if present. */
@@ -2238,7 +2012,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final int[][] nodes;
         final int[][] adjacency;
         final ByteSequence<?>[] codes;
-        final byte[][] codeBytes;       // same codes as plain arrays: scored with the flat LUT, no per-code downcall
         // node id -> position: a flat array for level 1 (the bulk of the upper layers), maps above it
         int[] level1Position;
         final Map<Integer, Integer>[] upperPosition;
@@ -2261,16 +2034,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.nodes = new int[topLevel + 1][];
             this.adjacency = new int[topLevel + 1][];
             this.codes = new ByteSequence<?>[topLevel + 1];
-            this.codeBytes = new byte[topLevel + 1][];
             this.upperPosition = new Map[topLevel + 1];
         }
 
         /** Per-thread query state: the query's partial-sum table over the codebooks. */
         final class Scorer {
-            int level2Position = -1;   // position at level 2 where the last descent left that level
-            // true: score hub-map codes with the SIMD float path (assembleAndSum over partialSums), no
-            // 8-bit table is built; false: score through the 8-bit table (level 0, where the scan needs it)
-            boolean floatScoring;
             private final VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
             private float[] lutArray;   // flat copy of partialSums for the code scan kernel (built on demand)
             private boolean lutArrayValid;
@@ -2280,7 +2048,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             private final float[] lut8Mins = new float[subspaceCount];
 
             /**
-             * 8-bit quantized table for the blocked scan kernel: per subspace the values are shifted
+             * 8-bit table for the scan kernel: per subspace the values are shifted
              * by their minimum (a per-query constant) and all subspaces share one scale, so sums of
              * table entries rank codes like sums of the float table. Higher is better; for EUCLIDEAN
              * the distances are negated before quantization.
@@ -2335,51 +2103,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             void setQuery(VectorFloat<?> query) {
                 lutArrayValid = false;
                 lut8Valid = false;
+                // A center-adjusted PQ encodes (v - globalCentroid). For EUCLIDEAN the query must be
+                // centered so per-subspace distances compose; for the dot-product ranking the raw
+                // query is correct (dot(q, centroid) is a per-query constant), and centering it
+                // would make the partial sums code-dependent.
                 VectorFloat<?> center = pq.getGlobalCentroid();
-                VectorFloat<?> centered = center == null ? query : VectorUtil.sub(query, center);
+                VectorFloat<?> q = center != null && lutFunction == VectorSimilarityFunction.EUCLIDEAN
+                        ? VectorUtil.sub(query, center) : query;
                 int offset = 0;
                 for (int m = 0; m < subspaceCount; m++) {
                     int size = pq.getSubvectorSize(m);
-                    VectorUtil.calculatePartialSums(pq.getCodebookVector(m), m, size, clusterCount, centered, offset, lutFunction, partialSums);
+                    VectorUtil.calculatePartialSums(pq.getCodebookVector(m), m, size, clusterCount, q, offset, lutFunction, partialSums);
                     offset += size;
                 }
             }
 
-            /**
-             * Higher is closer. Ranking-only: sums the 8-bit quantized table (12 KB, L1-resident)
-             * over the node's code bytes; used by the descent and the level-1 beams.
-             */
+                    /** Higher is closer. */
             float score(int level, int position) {
-                if (floatScoring) {
-                    float sum = VectorUtil.assembleAndSum(partialSums, clusterCount, codes[level], position * subspaceCount, subspaceCount);
-                    return lutFunction == VectorSimilarityFunction.EUCLIDEAN ? -sum : sum;
-                }
-                final byte[] l = lut8();
-                final byte[] cb = codeBytes[level];
-                int base = position * subspaceCount;
-                int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-                int m = 0;
-                for (; m + 4 <= subspaceCount; m += 4) {
-                    s0 += l[m * clusterCount + (cb[base + m] & 0xFF)] & 0xFF;
-                    s1 += l[(m + 1) * clusterCount + (cb[base + m + 1] & 0xFF)] & 0xFF;
-                    s2 += l[(m + 2) * clusterCount + (cb[base + m + 2] & 0xFF)] & 0xFF;
-                    s3 += l[(m + 3) * clusterCount + (cb[base + m + 3] & 0xFF)] & 0xFF;
-                }
-                for (; m < subspaceCount; m++) {
-                    s0 += l[m * clusterCount + (cb[base + m] & 0xFF)] & 0xFF;
-                }
-                return (s0 + s1) + (s2 + s3);   // lut8 is already oriented higher-is-better
-            }
-
-            /** Ranking-only score of an arbitrary merged-PQ code under the current query. */
-            float scoreCode(byte[] code) {
-                float sum = 0;
-                for (int m = 0; m < subspaceCount; m++) {
-                    sum += partialSums.get(m * clusterCount + (code[m] & 0xFF));
-                }
+                float sum = VectorUtil.assembleAndSum(partialSums, clusterCount, codes[level], position * subspaceCount, subspaceCount);
                 return lutFunction == VectorSimilarityFunction.EUCLIDEAN ? -sum : sum;
             }
-        }
+
+
+                }
 
         Scorer scorer() {
             return new Scorer();
@@ -2430,9 +2176,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             moved++;
                         }
                     }
-                }
-                if (level == 2) {
-                    scorer.level2Position = position;
                 }
             }
             descents.increment();
@@ -2551,11 +2294,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             joinAll(tasks);
             h.adjacency[level] = adj;
             h.codes[level] = codes;
-            byte[] flat = new byte[n * subspaceCount];
-            for (int i = 0; i < flat.length; i++) {
-                flat[i] = codes.get(i);
-            }
-            h.codeBytes[level] = flat;
         }
         log.info("Region ordinals: resident hub map built (levels 1..{}, {} level-1 nodes) in {} ms",
                  h.topLevel, h.nodes[1].length, (System.nanoTime() - t0) / 1_000_000);
@@ -2611,7 +2349,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         HubMap hubMapRef = hubMap;
         int[] walkPositionRef = walkPosition;
         int prefixBytes = Math.min(4, pq.getSubspaceCount());
-        if (CELL_JOIN && regionMode) {
+        if (regionMode && lutSupported(similarityFunction)) {
+            // the scan ranks by an additive lookup table: dot product and Euclidean only (cosine
+            // needs per-code norms and keeps the graph search)
             cellMap = hubMap;
             cellWalkPosition = walkPosition;
             cellCount = hubMap.nodes[1].length;
@@ -2644,12 +2384,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
                     ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
                     HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
-                    if (scorer != null) scorer.floatScoring = CELL_ORDINAL_FLOAT;
-                    int[] beamVisited = null;
-                    if (regionMode && CELL_ASSIGN_EF > 0) {
-                        int cap = Integer.highestOneBit(Math.max(64, 4 * (CELL_ASSIGN_EF * hubMapRef.degree[1] + 1)) - 1) << 1;
-                        beamVisited = new int[cap];
-                    }
+                    int[] beamVisited = regionMode ? new int[visitedCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
                     try (var view = (OnDiskGraphIndex.View) source.getView()) {
                         for (int node = lo; node < hi; node++) {
                             if (!alive.get(node)) continue;
@@ -2657,22 +2392,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             long key;
                             if (regionMode) {
                                 scorer.setQuery(vec);
-                                scorer.level2Position = -1;
+                                // cell = best level-1 node found by a small beam from the descent's landing
                                 int landing = hubMapRef.descend(scorer);
-                                if (CELL_ASSIGN_EF > 0) {
-                                    if (CELL_ASSIGN_L2 && scorer.level2Position >= 0) {
-                                        // beam over the small level-2 layer, then one level-1 expansion around its winner
-                                        int best2 = bestByBeam(hubMapRef, scorer, 2, scorer.level2Position, CELL_ASSIGN_EF, beamVisited);
-                                        int lp = hubMapRef.position(1, hubMapRef.nodes[2][best2]);
-                                        if (lp >= 0) {
-                                            landing = hubMapRef.nodes[1][bestOfNeighbourhood(hubMapRef, scorer, lp)];
-                                        }
-                                    } else {
-                                        int lp = hubMapRef.position(1, landing);
-                                        if (lp >= 0) {
-                                            landing = hubMapRef.nodes[1][bestLevel1ByBeam(hubMapRef, scorer, lp, CELL_ASSIGN_EF, beamVisited)];
-                                        }
-                                    }
+                                int lp = hubMapRef.position(1, landing);
+                                if (lp >= 0) {
+                                    landing = hubMapRef.nodes[1][bestByBeam(hubMapRef, scorer, 1, lp, CELL_ASSIGN_EF, beamVisited)];
                                 }
                                 int pos = landing >= 0 && landing < walkPositionRef.length ? walkPositionRef[landing] : Integer.MAX_VALUE;
                                 key = pos & 0xFFFFFFFFL;
@@ -2731,12 +2455,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         this.maxOrdinal = next - 1;
-        if (cellStart != null) {
-            logCellSizes();
-            if (CELL_STATIC) {
-                buildStaticProbeLists(pq);
-            }
-        }
         List<OrdinalMapper> mappers = new ArrayList<>(numSources);
         for (int s = 0; s < numSources; s++) {
             mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
@@ -2773,16 +2491,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final ByteSequence<?> pqCode;
         // cell-join experiment state (allocated lazily)
         HubMap.Scorer cellScorer;
-        byte[] cellCode;
-        byte[] cellBlock = new byte[0];      // packed codes of the cell slice being scanned
-        float[] cellBlockScores = new float[0];
-        short[] cellBlockSums = new short[0];  // blocked-kernel output (u16 per code)
+        byte[] cellBlock = new byte[0];        // blocked codes of the cell slice being scanned
+        short[] cellBlockSums = new short[0];  // scan-kernel output (u16 per code)
         int[] probeCells = new int[0];
         int probeCount;
         // level-1 beam state (beam probe selection): generation-stamped visited marks over level-1 positions
         int[] beamPos;
         float[] beamScore;
         boolean[] beamExpanded;
+        long[] scoredKeys; // scored cells of the current beam, packed for sorting
         int[] l1Visited;   // open-addressing set of level-1 positions, sized 4x the beam's maximum visit count
         int probeNode = -1, probeSrc = -1;
         int[] topIds;
@@ -2803,7 +2520,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             this.gs = new GraphSearcher[sources.size()];
             for (int i = 0; i < sources.size(); i++) {
-                gs[i] = new GraphSearcher.Builder(FrontierPrefetchingView.wrap(sources.get(i))).build();
+                gs[i] = new GraphSearcher.Builder(sources.get(i).getView()).build();
                 gs[i].usePruning(false);
             }
         }

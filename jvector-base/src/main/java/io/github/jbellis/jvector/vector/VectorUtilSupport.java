@@ -173,24 +173,6 @@ public interface VectorUtilSupport {
     }
   }
 
-  default void pqScoreCodes(byte[] codes, int codesOffset, int count, int subspaceCount, int clusterCount, float[] lut, float[] out) {
-    for (int i = 0; i < count; i++) {
-      int base = codesOffset + i * subspaceCount;
-      float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-      int m = 0;
-      for (; m + 4 <= subspaceCount; m += 4) {
-        s0 += lut[m * clusterCount + (codes[base + m] & 0xFF)];
-        s1 += lut[(m + 1) * clusterCount + (codes[base + m + 1] & 0xFF)];
-        s2 += lut[(m + 2) * clusterCount + (codes[base + m + 2] & 0xFF)];
-        s3 += lut[(m + 3) * clusterCount + (codes[base + m + 3] & 0xFF)];
-      }
-      for (; m < subspaceCount; m++) {
-        s0 += lut[m * clusterCount + (codes[base + m] & 0xFF)];
-      }
-      out[i] = (s0 + s1) + (s2 + s3);
-    }
-  }
-
   default void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     int codebookBase = codebookIndex * clusterCount;
     for (int i = 0; i < clusterCount; i++) {

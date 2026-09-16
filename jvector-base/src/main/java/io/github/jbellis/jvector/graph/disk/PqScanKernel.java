@@ -25,14 +25,13 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 
 /**
- * EXPERIMENT: entry point for the blocked PQ scan. Uses the native Highway kernel directly when
+ * Entry point for the blocked PQ scan. Uses the native Highway kernel directly when
  * the native library is available (independent of the vectorization provider in use, so the rest
  * of the compactor can stay on the Panama path), otherwise the provider's implementation.
  */
 final class PqScanKernel {
     private static final Logger log = LoggerFactory.getLogger(PqScanKernel.class);
-    private static final boolean USE_NATIVE = Boolean.parseBoolean(System.getProperty("jvector.compaction.cellNativeScan", "true"));
-    private static final MethodHandle NATIVE = USE_NATIVE ? lookupNative() : null;
+    private static final MethodHandle NATIVE = lookupNative();
 
     private PqScanKernel() {}
 
