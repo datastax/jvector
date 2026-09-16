@@ -24,4 +24,7 @@ public interface SearchScoreProvider {
     ScoreFunction.ExactScoreFunction reranker();
 
     ScoreFunction.ExactScoreFunction exactScoreFunction();
+
+    /** Approximate scores use graph DOT_PRODUCT similarity and support adaptive termination. */
+    default boolean supportsAdaptiveDotProductTermination() { return false; }
 }
