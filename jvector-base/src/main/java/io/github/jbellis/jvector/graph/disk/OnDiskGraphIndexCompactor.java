@@ -143,7 +143,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // cells with an 8-bit lookup table, then rescoring the survivors exactly. Requires reassigned
     // ordinals with a hierarchy in the largest source and a merged code cache; otherwise level 0
     // falls back to the graph search.
-    static final int CELL_BUDGET = 8192;      // codes scanned per (node, target) at most; governs how many cells are probed
+    static final int CELL_BUDGET = 4096;      // codes scanned per (node, target) at most; governs how many cells are probed
     static final int CELL_ASSIGN_EF = 8;      // level-1 beam width when assigning a node's cell
     static final int CELL_PROBE_EF = 16;      // level-1 beam width when choosing a node's probe cells
     private HubMap cellMap;                   // resident hub map kept through level 0
