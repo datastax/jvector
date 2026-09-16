@@ -102,7 +102,10 @@ import java.util.stream.IntStream;
  * -- and {@code usePruningGrid}'s value has no effect, since {@link MultiGraphSearcher} doesn't expose
  * a way to configure per-shard pruning and the underlying heuristic is permanently disabled anyway
  * (see {@code GraphSearcher#usePruning}); it's still accepted and recorded per result so a caller
- * driving both benchmarks from the same config doesn't need special-case handling.
+ * driving both benchmarks from the same config doesn't need special-case handling. Since it has no
+ * effect on the search itself, {@link #runOneConstructionConfig} runs the actual search once per
+ * (topK, overquery) pair and reuses that one result for every {@code usePruningGrid} value's row,
+ * rather than re-running an identical search per pruning label.
  */
 public final class MultiShardBench {
     private static final Logger logger = LoggerFactory.getLogger(MultiShardBench.class);
@@ -248,13 +251,17 @@ public final class MultiShardBench {
                 CompressedVectors[] searchCvs = trainSearchCompressors(shardHandles, features, searchCompressor);
                 String searchCompressorLabel = searchCompressor.getClass().getSimpleName();
 
-                for (boolean usePruning : usePruningGrid) {
-                    for (int topK : topKGrid.keySet()) {
-                        for (double overquery : topKGrid.get(topK)) {
-                            int rerankK = (int) (topK * overquery);
-                            results.add(searchAndReport(ds, shardHandles, shardOffsets, searchCvs, features, vsf, numShards,
-                                    M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, buildCompressorLabel,
-                                    searchCompressorLabel, usePruning, topK, overquery, rerankK));
+                for (int topK : topKGrid.keySet()) {
+                    for (double overquery : topKGrid.get(topK)) {
+                        int rerankK = (int) Math.round(topK * overquery);
+                        // usePruning has no effect on MultiGraphSearcher (see class javadoc), so the
+                        // search itself runs once per (topK, overquery) and its stats are reused for
+                        // every usePruning label below, instead of paying for an identical search twice.
+                        SearchStats stats = search(ds, shardHandles, shardOffsets, searchCvs, features, vsf, topK, rerankK);
+                        for (boolean usePruning : usePruningGrid) {
+                            results.add(reportResult(ds, features, numShards, M, efConstruction, neighborOverflow,
+                                    addHierarchy, refineFinalGraph, buildCompressorLabel, searchCompressorLabel,
+                                    usePruning, topK, overquery, rerankK, stats));
                         }
                     }
                 }
@@ -289,15 +296,17 @@ public final class MultiShardBench {
         return cvs;
     }
 
-    private static BenchResult searchAndReport(DataSet ds, List<ShardHandle> shardHandles, int[] shardOffsets,
-                                                CompressedVectors[] searchCvs, Set<FeatureId> features, VectorSimilarityFunction vsf,
-                                                int numShards, int M, int efConstruction, float neighborOverflow,
-                                                boolean addHierarchy, boolean refineFinalGraph, String buildCompressorLabel,
-                                                String searchCompressorLabel, boolean usePruning, int topK,
-                                                double overquery, int rerankK) throws Exception
+    /**
+     * Builds a {@link BenchResult} row from an already-computed {@link SearchStats}. Split out from the
+     * actual {@link #search} call so a single search's stats can be reused across every
+     * {@code usePruningGrid} label -- see the class javadoc for why that's safe (pruning has no effect
+     * on {@link MultiGraphSearcher}).
+     */
+    private static BenchResult reportResult(DataSet ds, Set<FeatureId> features, int numShards, int M, int efConstruction,
+                                              float neighborOverflow, boolean addHierarchy, boolean refineFinalGraph,
+                                              String buildCompressorLabel, String searchCompressorLabel, boolean usePruning,
+                                              int topK, double overquery, int rerankK, SearchStats stats)
     {
-        SearchStats stats = search(ds, shardHandles, shardOffsets, searchCvs, features, vsf, topK, rerankK);
-
         logger.info(String.format(
                 "%n" +
                 "  ┌─ Multi-shard result: %s [numShards=%d, features=%s, M=%d, efC=%d, overflow=%.2f, " +
