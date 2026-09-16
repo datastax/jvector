@@ -1,7 +1,7 @@
 jvector-100k:
+#  - ada002-100k
 #  - openai-v3-large-3072-100k
 #  - openai-v3-large-1536-100k
-#  - ada002-100k
 #  - openai-v3-small-1536-100k
 #  - gecko-100k
 #  - cohere-english-v3-100k
@@ -19,9 +19,17 @@ jvector-100k:
 #  - glove-200-angular
 #  - nytimes-256-angular
 #  - sift-128-euclidean
-#other-datasets:
+#regression-tests:
+#  - cap-1M
+#  - cap-6M
+#  - cohere-english-v3-1M
+#  - cohere-english-v3-10M
 #  - dpr-gemma-1m
-#  - dpr-10M
+#  - dpr-gemma-10m
+#openai-unconfigured:
+#  - openai-3072-1m
+#  - openai-1536-1m
+#other-datasets:
 #  - cap-1M
 #  - cap-6M
 #  - cohere-english-v3-1M
