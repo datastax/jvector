@@ -80,6 +80,9 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         }
     }
 
+    /** EXPERIMENT: blocked layout (blocks of 64 codes, subspace-major) for the cell-join scan kernel. */
+    static final boolean BLOCKED = Boolean.getBoolean("jvector.compaction.cellJoin");
+    public static final int BLOCK = 64;
     private final MappedByteBuffer[] chunks;
     private final int codeSize;
     private final int codesPerChunk;
@@ -137,12 +140,18 @@ public final class PreEncodedCodeCache implements AutoCloseable {
             // A single code larger than the chunk target; give it a chunk of its own.
             codesPerChunk = 1;
         }
+        if (BLOCKED) {
+            codesPerChunk = Math.max(BLOCK, (codesPerChunk / BLOCK) * BLOCK);
+        }
         int numChunks = (int) (((long) count + codesPerChunk - 1) / codesPerChunk);
 
         MappedByteBuffer[] chunks = new MappedByteBuffer[numChunks];
         for (int i = 0; i < numChunks; i++) {
             long firstCode = (long) i * codesPerChunk;
             long codesHere = Math.min(codesPerChunk, count - firstCode);
+            if (BLOCKED) {
+                codesHere = ((codesHere + BLOCK - 1) / BLOCK) * BLOCK;   // whole blocks, padded
+            }
             chunks[i] = fc.map(FileChannel.MapMode.READ_WRITE,
                                offset + firstCode * codeSize,
                                codesHere * codeSize);
@@ -152,7 +161,44 @@ public final class PreEncodedCodeCache implements AutoCloseable {
 
     /** Total bytes spanned by the cache section, for sizing and truncation. */
     public static long sectionBytes(int count, int codeSize) {
-        return (long) count * codeSize;
+        long codes = BLOCKED ? (((long) count + BLOCK - 1) / BLOCK) * BLOCK : count;
+        return codes * codeSize;
+    }
+
+    /** Whether codes are stored in the blocked (subspace-major, 64-code block) layout. */
+    public boolean isBlocked() {
+        return BLOCKED;
+    }
+
+    /** Byte offset within its chunk of byte {@code m} of the code at chunk-relative index {@code inChunk}. */
+    private int blockedOffset(int inChunk, int m) {
+        int block = inChunk >>> 6;
+        int within = inChunk & (BLOCK - 1);
+        return (block * codeSize + m) * BLOCK + within;
+    }
+
+    /**
+     * Copies the whole blocks covering ordinals {@code [fromOrdinal, toOrdinal)} into {@code dst}
+     * in blocked layout and returns the ordinal of the first code of the first block copied.
+     * Only valid when {@link #isBlocked()}.
+     */
+    public int copyBlocks(int fromOrdinal, int toOrdinal, byte[] dst) {
+        int firstBlockOrdinal = fromOrdinal & ~(BLOCK - 1);
+        int ordinal = firstBlockOrdinal;
+        int out = 0;
+        ByteBuffer[] views = viewsPerThread.get();
+        while (ordinal < toOrdinal) {
+            int chunk = ordinal / codesPerChunk;
+            int inChunk = ordinal - chunk * codesPerChunk;
+            int blocksHere = Math.min((toOrdinal - ordinal + BLOCK - 1) / BLOCK, (codesPerChunk - inChunk) / BLOCK);
+            int bytes = blocksHere * BLOCK * codeSize;
+            ByteBuffer view = views[chunk];
+            view.position((inChunk >>> 6) * BLOCK * codeSize);
+            view.get(dst, out, bytes);
+            out += bytes;
+            ordinal += blocksHere * BLOCK;
+        }
+        return firstBlockOrdinal;
     }
 
     /** Bytes per code. */
@@ -173,8 +219,15 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     /** Writes {@code code} at {@code ordinal}. Callers must not write the same ordinal twice concurrently. */
     public void put(int ordinal, ByteSequence<?> code) {
         int chunk = ordinal / codesPerChunk;
-        int offset = (ordinal - chunk * codesPerChunk) * codeSize;
+        int inChunk = ordinal - chunk * codesPerChunk;
         ByteBuffer buf = viewsPerThread.get()[chunk];
+        if (BLOCKED) {
+            for (int i = 0; i < codeSize; i++) {
+                buf.put(blockedOffset(inChunk, i), code.get(i));
+            }
+            return;
+        }
+        int offset = inChunk * codeSize;
         for (int i = 0; i < codeSize; i++) {
             buf.put(offset + i, code.get(i));
         }
@@ -183,10 +236,46 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     /** Copies the code at {@code ordinal} into {@code dst}, which must hold at least {@link #codeSize()} bytes. */
     public void get(int ordinal, byte[] dst) {
         int chunk = ordinal / codesPerChunk;
-        int offset = (ordinal - chunk * codesPerChunk) * codeSize;
+        int inChunk = ordinal - chunk * codesPerChunk;
         ByteBuffer view = viewsPerThread.get()[chunk];
-        view.position(offset);
+        if (BLOCKED) {
+            for (int i = 0; i < codeSize; i++) {
+                dst[i] = view.get(blockedOffset(inChunk, i));
+            }
+            return;
+        }
+        view.position(inChunk * codeSize);
         view.get(dst, 0, codeSize);
+    }
+
+    /**
+     * Copies the codes of {@code count} consecutive ordinals starting at {@code fromOrdinal} into
+     * {@code dst} at {@code dstOffset}, packed back to back ({@code count * codeSize()} bytes).
+     */
+    public void copyRange(int fromOrdinal, int count, byte[] dst, int dstOffset) {
+        if (BLOCKED) {
+            byte[] one = new byte[codeSize];
+            for (int i = 0; i < count; i++) {
+                get(fromOrdinal + i, one);
+                System.arraycopy(one, 0, dst, dstOffset + i * codeSize, codeSize);
+            }
+            return;
+        }
+        ByteBuffer[] views = viewsPerThread.get();
+        int ordinal = fromOrdinal;
+        int remaining = count;
+        int out = dstOffset;
+        while (remaining > 0) {
+            int chunk = ordinal / codesPerChunk;
+            int inChunk = ordinal - chunk * codesPerChunk;
+            int n = Math.min(remaining, codesPerChunk - inChunk);
+            ByteBuffer view = views[chunk];
+            view.position(inChunk * codeSize);
+            view.get(dst, out, n * codeSize);
+            ordinal += n;
+            remaining -= n;
+            out += n * codeSize;
+        }
     }
 
     /**
@@ -196,8 +285,15 @@ public final class PreEncodedCodeCache implements AutoCloseable {
      */
     public void copyInto(int ordinal, ByteBuffer dst) {
         int chunk = ordinal / codesPerChunk;
-        int offset = (ordinal - chunk * codesPerChunk) * codeSize;
+        int inChunk = ordinal - chunk * codesPerChunk;
         ByteBuffer view = viewsPerThread.get()[chunk];
+        if (BLOCKED) {
+            for (int i = 0; i < codeSize; i++) {
+                dst.put(view.get(blockedOffset(inChunk, i)));
+            }
+            return;
+        }
+        int offset = inChunk * codeSize;
         for (int i = 0; i < codeSize; i++) {
             dst.put(view.get(offset + i));
         }

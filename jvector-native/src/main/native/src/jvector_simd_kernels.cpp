@@ -1640,4 +1640,29 @@ HWY_FLATTEN int64_t nvq_cosine_8bit_packed(const float   *HWY_RESTRICT vector,
     return ((int64_t)bmag_bits << 32) | (int64_t)(uint32_t)sum_bits;
 }
 
+// Portable blocked PQ scan. Each block holds 64 codes subspace-major, so for a fixed
+// subspace the 64 code bytes are contiguous. This generic version accumulates per lane in
+// scalar code; the AVX3_DL override does the 256-entry table lookup with VBMI permutes.
+HWY_FLATTEN void pq_scan_blocked_u8(const unsigned char *blocks,
+                                    size_t blockCount,
+                                    int subspaceCount,
+                                    const unsigned char *lut,
+                                    unsigned short *out)
+{
+    for (size_t b = 0; b < blockCount; b++) {
+        const unsigned char *blk = blocks + b * (size_t)subspaceCount * 64;
+        unsigned short acc[64];
+        for (int i = 0; i < 64; i++) acc[i] = 0;
+        for (int m = 0; m < subspaceCount; m++) {
+            const unsigned char *row = blk + (size_t)m * 64;
+            const unsigned char *L = lut + (size_t)m * 256;
+            for (int i = 0; i < 64; i++) {
+                acc[i] = (unsigned short)(acc[i] + L[row[i]]);
+            }
+        }
+        unsigned short *o = out + b * 64;
+        for (int i = 0; i < 64; i++) o[i] = acc[i];
+    }
+}
+
 }  // namespace JV_ISA

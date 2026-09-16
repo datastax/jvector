@@ -116,6 +116,10 @@ for alpha in [1.0, 1.2]:
     if |selected| == maxDegree: stop
 ```
 
+### Cell join (experimental)
+
+With `-Djvector.compaction.cellJoin=true` (requires `setReassignOrdinals(true)` and a source with a hierarchy), the level-0 cross-source search is replaced by a scan. The reassigned ordinals already group every source's nodes by the level-1 node of the largest source they descend to (the *cell*); a node's cross-source candidates are found by scanning the pre-encoded codes of the other source's nodes in the node's own cell and the best-scoring nearby cells (a small beam over the level-1 graph, `cellProbes` cells, at most `cellBudget` codes), keeping the top `searchTopK` by an 8-bit lookup-table score and rescoring them exactly. The scan runs through a Google Highway kernel (`pq_scan_blocked_u8`) over a blocked, subspace-major layout of the code cache when the native library is available. Everything after candidate generation (offers, diversity, hub pass) is unchanged.
+
 ### Pre-encoded codes
 
 Before level 0 is written, every live node is encoded once against the retrained codebook into a memory-mapped code cache indexed by new ordinal. Record writes copy neighbour codes from the cache instead of re-encoding them per edge, the cross-source searches score through it, and the offer diversity checks read it. For sidecar sources (`compact(graphPath, compressedPath)`) the same cache also becomes the merged compressed vectors file.

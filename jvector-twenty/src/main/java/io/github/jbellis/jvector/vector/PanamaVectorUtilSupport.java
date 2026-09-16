@@ -42,6 +42,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     static final ThreadLocal<int[]> scratchInt512 = ThreadLocal.withInitial(() -> new int[IntVector.SPECIES_512.length()]);
     static final ThreadLocal<int[]> scratchInt256 = ThreadLocal.withInitial(() -> new int[IntVector.SPECIES_256.length()]);
 
+    @Override
+    public float[] backingArray(VectorFloat<?> v) {
+        return v instanceof ArrayVectorFloat ? ((ArrayVectorFloat) v).get() : null;
+    }
+
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
         return FloatVector.fromArray(SPEC, ((ArrayVectorFloat) vector).get(), offset);
     }

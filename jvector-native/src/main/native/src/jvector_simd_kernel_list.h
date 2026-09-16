@@ -50,6 +50,9 @@
     KERNEL_ENTRY(float, pq_decoded_cosine_similarity_f32, (const unsigned char *baseOffsets, int baseOffsetsOffset, size_t baseOffsetsLength, int clusterCount, const float *partialSums, const float *aMagnitude, float bMagnitude), (baseOffsets, baseOffsetsOffset, baseOffsetsLength, clusterCount, partialSums, aMagnitude, bMagnitude)) \
     KERNEL_ENTRY(void, calculate_partial_sums_dot_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_euclidean_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
+    /* Blocked PQ code scan: blocks of 64 codes stored subspace-major (byte m of code i at [m*64 + i]); \
+       lut is subspaceCount x 256 unsigned 8-bit partial sums; out[b*64 + i] = sum over m of lut[m*256 + code]. */ \
+    KERNEL_ENTRY(void, pq_scan_blocked_u8, (const unsigned char *blocks, size_t blockCount, int subspaceCount, const unsigned char *lut, unsigned short *out), (blocks, blockCount, subspaceCount, lut, out)) \
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
     /* NVQ kernels */ \
     KERNEL_ENTRY(void, nvq_quantize_8bit, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, unsigned char *destination), (vector, length, alpha, x0, minValue, maxValue, destination)) \

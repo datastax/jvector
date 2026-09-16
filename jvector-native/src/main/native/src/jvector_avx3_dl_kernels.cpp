@@ -34,4 +34,37 @@ namespace hn = hwy::HWY_NAMESPACE;
 
 namespace AVX3_DL {
 
+// Blocked PQ code scan with VBMI: for each subspace, the 64 code bytes of a block index a
+// 256-entry 8-bit table. Two vpermi2b lookups (entries 0..127 and 128..255) selected by the
+// index's high bit, then widened into two u16 accumulators. About 7 instructions per subspace
+// per 64 codes.
+HWY_FLATTEN void pq_scan_blocked_u8(const unsigned char *blocks,
+                                    size_t blockCount,
+                                    int subspaceCount,
+                                    const unsigned char *lut,
+                                    unsigned short *out)
+{
+    const hn::ScalableTag<uint8_t>  d8;
+    const hn::ScalableTag<uint16_t> d16;
+    static_assert(hn::MaxLanes(hn::ScalableTag<uint8_t>()) == 64, "AVX3_DL build must have 64 u8 lanes");
+    const auto v127 = hn::Set(d8, uint8_t{127});
+    for (size_t b = 0; b < blockCount; b++) {
+        const uint8_t *blk = blocks + b * (size_t)subspaceCount * 64;
+        auto accLo = hn::Zero(d16);
+        auto accHi = hn::Zero(d16);
+        for (int m = 0; m < subspaceCount; m++) {
+            const auto idx = hn::LoadU(d8, blk + (size_t)m * 64);
+            const uint8_t *L = lut + (size_t)m * 256;
+            const auto ind = hn::IndicesFromVec(d8, hn::And(idx, v127));
+            const auto t0 = hn::TwoTablesLookupLanes(hn::LoadU(d8, L), hn::LoadU(d8, L + 64), ind);
+            const auto t1 = hn::TwoTablesLookupLanes(hn::LoadU(d8, L + 128), hn::LoadU(d8, L + 192), ind);
+            const auto v  = hn::IfThenElse(hn::Gt(idx, v127), t1, t0);
+            accLo = hn::Add(accLo, hn::PromoteLowerTo(d16, v));
+            accHi = hn::Add(accHi, hn::PromoteUpperTo(d16, v));
+        }
+        hn::StoreU(accLo, d16, out + b * 64);
+        hn::StoreU(accHi, d16, out + b * 64 + 32);
+    }
+}
+
 } // namespace AVX3_DL

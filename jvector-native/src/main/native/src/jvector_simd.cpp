@@ -87,6 +87,7 @@ static const KernelVTable AVX3_vtable = {
 // The implementation must exist in jvector_avx3_dl_kernels.cpp.
 static const KernelVTable AVX3_DL_vtable = []() {
     KernelVTable t = AVX3_vtable;
+    t.pq_scan_blocked_u8 = AVX3_DL::pq_scan_blocked_u8;
     return t;
 }();
 

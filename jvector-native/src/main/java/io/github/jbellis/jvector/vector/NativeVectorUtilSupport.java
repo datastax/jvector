@@ -20,6 +20,7 @@ import java.lang.foreign.MemorySegment;
 import java.nio.ByteOrder;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.vector.cnative.NativeScanOps;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -89,6 +90,27 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset, VectorMask<Byte> mask) {
         vector.intoMemorySegment(((MemorySegmentByteSequence) v).get(), offset, ByteOrder.LITTLE_ENDIAN, mask);
+    }
+
+    @Override
+    public float[] backingArray(VectorFloat<?> v) {
+        if (v instanceof MemorySegmentVectorFloat) {
+            var seg = ((MemorySegmentVectorFloat) v).get();
+            var base = seg.heapBase();
+            if (base.isPresent() && base.get() instanceof float[] && seg.address() == 0
+                    && ((float[]) base.get()).length == v.length()) {
+                return (float[]) base.get();
+            }
+            return null;
+        }
+        return super.backingArray(v);
+    }
+
+    @Override
+    public void pqScanBlockedU8(byte[] blocks, int blockCount, int subspaceCount, byte[] lut, short[] out) {
+        // critical(true) permits heap segments; the kernel only reads/writes within the arrays
+        NativeScanOps.pq_scan_blocked_u8(MemorySegment.ofArray(blocks), blockCount, subspaceCount,
+                                         MemorySegment.ofArray(lut), MemorySegment.ofArray(out));
     }
 
     @Override
