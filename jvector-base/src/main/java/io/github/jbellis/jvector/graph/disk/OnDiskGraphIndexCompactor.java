@@ -98,7 +98,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final int taskWindowSize;
     private final VectorSimilarityFunction similarityFunction;
 
-
     // ---- Pair-asymmetric cross-linking (reverse-edge propagation) ----
     // L0 sources are processed in ascending live-size order with a barrier between sources, and a
     // node searches only sources LARGER than its own. The reverse direction of each source pair is
@@ -1355,25 +1354,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 } else {
                     score = sums[rel] & 0xFFFF;   // higher is better (table oriented that way)
                 }
-                if (size < k) {
-                    int pos = size++;
-                    while (pos > 0) {
-                        int parent = (pos - 1) >>> 1;
-                        if (sc[parent] <= score) break;
-                        sc[pos] = sc[parent]; ids[pos] = ids[parent]; pos = parent;
-                    }
-                    sc[pos] = score; ids[pos] = newOrd;
-                } else if (score > sc[0]) {
-                    int pos = 0;
-                    while (true) {
-                        int child = 2 * pos + 1;
-                        if (child >= size) break;
-                        if (child + 1 < size && sc[child + 1] < sc[child]) child++;
-                        if (sc[child] >= score) break;
-                        sc[pos] = sc[child]; ids[pos] = ids[child]; pos = child;
-                    }
-                    sc[pos] = score; ids[pos] = newOrd;
-                }
+                size = heapOffer(ids, sc, size, k, newOrd, score);
             }
         }
         cellCodesScanned.add(scanned);
@@ -1390,6 +1371,29 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return candSize;
     }
 
+    /** Bounded min-heap of the best {@code k} (id, score): offers one entry, returns the new size. */
+    private static int heapOffer(int[] ids, float[] sc, int size, int k, int id, float score) {
+        if (size < k) {
+            int pos = size++;
+            while (pos > 0) {
+                int parent = (pos - 1) >>> 1;
+                if (sc[parent] <= score) break;
+                sc[pos] = sc[parent]; ids[pos] = ids[parent]; pos = parent;
+            }
+            sc[pos] = score; ids[pos] = id;
+        } else if (score > sc[0]) {
+            int pos = 0;
+            while (true) {
+                int child = 2 * pos + 1;
+                if (child >= size) break;
+                if (child + 1 < size && sc[child + 1] < sc[child]) child++;
+                if (sc[child] >= score) break;
+                sc[pos] = sc[child]; ids[pos] = ids[child]; pos = child;
+            }
+            sc[pos] = score; ids[pos] = id;
+        }
+        return size;
+    }
 
     /** Cell (walk position) whose ordinal range of {@code source} contains {@code newOrdinal}; -1 if none. */
     private int cellOf(int source, int newOrdinal) {
@@ -1403,37 +1407,56 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * Best-first search over the hub's level-1 graph from {@code startPos}, width
-     * {@link #CELL_PROBE_EF}. Every level-1 node it scores becomes a probe cell, best first; the
-     * scan then takes cells in that order until {@link #CELL_BUDGET} codes, so the number of cells
-     * probed adapts to their size.
+     * Probe cells for the current node: a beam from {@code startPos} over the level-1 graph; every
+     * level-1 node it scores becomes a probe cell, best first. The scan takes cells in that order
+     * until {@link #CELL_BUDGET} codes, so the number of cells probed adapts to their size.
      */
     private void selectCellsByBeam(Scratch scratch, HubMap.Scorer scorer, int startPos) {
-        final int ef = CELL_PROBE_EF;
         final int stride = cellMap.degree[1];
-        final int[] adj = cellMap.adjacency[1];
-        if (scratch.beamPos == null) {
-            scratch.beamPos = new int[ef];
-            scratch.beamScore = new float[ef];
-            scratch.beamExpanded = new boolean[ef];
-            scratch.l1Visited = new int[visitedCapacity(ef, stride)];
-            scratch.scoredKeys = new long[beamScoredCapacity(ef, stride)];
+        if (scratch.l1Visited == null) {
+            scratch.l1Visited = new int[visitedCapacity(CELL_PROBE_EF, stride)];
+            scratch.scoredKeys = new long[beamScoredCapacity(CELL_PROBE_EF, stride)];
         }
-        final int[] visited = scratch.l1Visited;
+        long[] scored = scratch.scoredKeys;
+        int scoredCount = beam(cellMap, scorer, 1, startPos, CELL_PROBE_EF, scratch.l1Visited, scored);
+        Arrays.sort(scored, 0, scoredCount);
+        int n = 0;
+        for (int i = scoredCount - 1; i >= 0; i--) {   // best first
+            int cell = cellWalkPosition[cellMap.nodes[1][(int) scored[i]]];
+            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
+        }
+        scratch.probeCount = n;
+    }
+
+    /** The best-scoring level-1 position a beam of width {@code ef} from {@code startPos} scores. */
+    private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, int[] visited, long[] scored) {
+        int count = beam(map, scorer, 1, startPos, ef, visited, scored);
+        long best = scored[0];
+        for (int i = 1; i < count; i++) if (scored[i] > best) best = scored[i];
+        return (int) best;
+    }
+
+    /**
+     * Best-first search over {@code level} of the hub map by code score, width {@code ef}. Every
+     * scored position is appended to {@code scored} as a sortable key (score in the high bits,
+     * position in the low 32); returns how many. Replaced beam entries re-enter as unexpanded, so
+     * expansions are capped at {@code 2 * ef} (the beam has converged long before) and the caller
+     * sizes {@code scored} and {@code visited} for that bound.
+     */
+    private static int beam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, int[] visited, long[] scored) {
+        final int stride = map.degree[level];
+        final int[] adj = map.adjacency[level];
+        int[] pos = new int[ef];
+        float[] sc = new float[ef];
+        boolean[] expanded = new boolean[ef];
+        int[] nbPos = new int[stride];
         Arrays.fill(visited, -1);
         final int mask = visited.length - 1;
-        int[] pos = scratch.beamPos;
-        float[] sc = scratch.beamScore;
-        boolean[] expanded = scratch.beamExpanded;
-        long[] scored = scratch.scoredKeys;   // (sortable score << 32 | position) for every scored cell
-        int scoredCount = 0;
-        int size = 0;
-        float s0 = scorer.score(1, startPos);
-        pos[0] = startPos; sc[0] = s0; expanded[0] = false; size = 1;
+        int size = 0, scoredCount = 0;
+        float s0 = scorer.score(level, startPos);
+        pos[0] = startPos; sc[0] = s0; size = 1;
         visitedAdd(visited, mask, startPos);
         scored[scoredCount++] = packScored(s0, startPos);
-        // replaced entries re-enter as unexpanded, so bound the expansions (2 * ef is ample: the
-        // beam has converged long before) and size every array for that bound
         for (int expansions = 0; expansions < 2 * ef; expansions++) {
             int bi = -1;
             for (int i = 0; i < size; i++) {
@@ -1442,13 +1465,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (bi < 0) break;
             expanded[bi] = true;
             int p = pos[bi];
+            // score the unvisited neighbours in one tight loop first (their cache misses overlap)
+            int cnt = 0;
             for (int j = 0; j < stride; j++) {
                 int nb = adj[p * stride + j];
                 if (nb < 0) break;
-                int np = cellMap.position(1, nb);
-                if (np < 0 || !visitedAdd(visited, mask, np)) continue;
-                float score = scorer.score(1, np);
-                scored[scoredCount++] = packScored(score, np);
+                int np = map.position(level, nb);
+                if (np >= 0 && visitedAdd(visited, mask, np)) nbPos[cnt++] = np;
+            }
+            for (int j = 0; j < cnt; j++) {
+                scored[scoredCount + j] = packScored(scorer.score(level, nbPos[j]), nbPos[j]);
+            }
+            for (int j = 0; j < cnt; j++) {
+                long key = scored[scoredCount + j];
+                int np = nbPos[j];
+                float score = unpackScore(key);
                 if (size < ef) {
                     pos[size] = np; sc[size] = score; expanded[size] = false; size++;
                 } else {
@@ -1459,14 +1490,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                 }
             }
+            scoredCount += cnt;
         }
-        Arrays.sort(scored, 0, scoredCount);
-        int n = 0;
-        for (int i = scoredCount - 1; i >= 0; i--) {   // best first
-            int cell = cellWalkPosition[cellMap.nodes[1][(int) scored[i]]];
-            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
-        }
-        scratch.probeCount = n;
+        return scoredCount;
     }
 
     /** Packs a float score into a sortable long key with the position in the low 32 bits. */
@@ -1476,66 +1502,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return ((long) sortable << 32) | (position & 0xFFFFFFFFL);
     }
 
-    /** Most nodes a beam of width {@code ef} can score: {@code 2 * ef} expansions of {@code stride} plus the seed. */
+    private static float unpackScore(long key) {
+        int sortable = (int) (key >>> 32);
+        return Float.intBitsToFloat(sortable ^ ((sortable >> 31) & 0x7fffffff));
+    }
+
+    /** Most positions a beam of width {@code ef} can score: {@code 2 * ef} expansions of {@code stride} plus the seed. */
     private static int beamScoredCapacity(int ef, int stride) {
         return 2 * ef * stride + 1;
     }
 
-    /** Power-of-two capacity for a visited set holding a beam's scored nodes at low load. */
+    /** Power-of-two capacity for a visited set holding a beam's scored positions at low load. */
     private static int visitedCapacity(int ef, int stride) {
         return Integer.highestOneBit(Math.max(64, 4 * beamScoredCapacity(ef, stride)) - 1) << 1;
-    }
-
-
-    /** Best-scoring position at {@code level} found by a best-first beam of width {@code ef} from {@code startPos}. */
-    private static int bestByBeam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, int[] visited) {
-        final int landingPos = startPos;
-        int stride = map.degree[level];
-        int[] adj = map.adjacency[level];
-        int[] pos = new int[ef];
-        float[] sc = new float[ef];
-        boolean[] expanded = new boolean[ef];
-        Arrays.fill(visited, -1);
-        final int mask = visited.length - 1;
-        int size = 0;
-        pos[0] = landingPos; sc[0] = scorer.score(level, landingPos); size = 1;
-        visitedAdd(visited, mask, landingPos);
-        int bestPos = landingPos; float bestScore = sc[0];
-        int[] nbPos = new int[stride];
-        float[] nbScore = new float[stride];
-        for (int expansions = 0; expansions < 2 * ef; expansions++) {
-            int bi = -1;
-            for (int i = 0; i < size; i++) if (!expanded[i] && (bi < 0 || sc[i] > sc[bi])) bi = i;
-            if (bi < 0) break;
-            expanded[bi] = true;
-            int p = pos[bi];
-            // phase 1: collect unvisited neighbours and score them in a tight loop (misses overlap)
-            int cnt = 0;
-            for (int j = 0; j < stride; j++) {
-                int nb = adj[p * stride + j];
-                if (nb < 0) break;
-                int np = map.position(level, nb);
-                if (np < 0 || !visitedAdd(visited, mask, np)) continue;
-                nbPos[cnt++] = np;
-            }
-            for (int j = 0; j < cnt; j++) {
-                nbScore[j] = scorer.score(level, nbPos[j]);
-            }
-            // phase 2: beam bookkeeping
-            for (int j = 0; j < cnt; j++) {
-                int np = nbPos[j];
-                float score = nbScore[j];
-                if (score > bestScore) { bestScore = score; bestPos = np; }
-                if (size < ef) {
-                    pos[size] = np; sc[size] = score; expanded[size] = false; size++;
-                } else {
-                    int wi = 0;
-                    for (int i = 1; i < size; i++) if (sc[i] < sc[wi]) wi = i;
-                    if (score > sc[wi]) { pos[wi] = np; sc[wi] = score; expanded[wi] = false; }
-                }
-            }
-        }
-        return bestPos;
     }
 
     /** Adds {@code key} to the open-addressing set (power-of-two length, -1 = empty); false if present. */
@@ -2032,7 +2011,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         private final VectorSimilarityFunction lutFunction;
         final int subspaceCount;
         final int clusterCount;
-        final boolean euclidean;
         final boolean cosine;
         // COSINE: squared norm of the decoded vector is additive over subspaces too. magnitudes[m*K+c]
         // = |centroid|^2 (+ 2 dot(globalCentroid_m, centroid) when center-adjusted); centerNorm2 is the
@@ -2066,7 +2044,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     ? VectorSimilarityFunction.EUCLIDEAN : VectorSimilarityFunction.DOT_PRODUCT;
             this.subspaceCount = pq.getSubspaceCount();
             this.clusterCount = pq.getClusterCount();
-            this.euclidean = lutFunction == VectorSimilarityFunction.EUCLIDEAN;
             this.cosine = similarityFunction == VectorSimilarityFunction.COSINE;
             if (cosine) {
                 magnitudes = vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
@@ -2085,32 +2062,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     offset += size;
                 }
                 centerNorm2 = center == null ? 0f : VectorUtil.dotProduct(center, center);
-                // quantize once: sum of quantized entries q_m relates to the float sum as
-                // sum_m (q_m / scale + min_m)  =>  float = N / scale + offset
-                mag8 = new byte[subspaceCount * clusterCount];
-                float maxRange = 0, offsetSum = 0;
-                float[] mins = new float[subspaceCount];
-                for (int m = 0; m < subspaceCount; m++) {
-                    float mn = Float.POSITIVE_INFINITY, mx = Float.NEGATIVE_INFINITY;
-                    for (int c = 0; c < clusterCount; c++) {
-                        float v = magnitudes.get(m * clusterCount + c);
-                        mn = Math.min(mn, v);
-                        mx = Math.max(mx, v);
-                    }
-                    mins[m] = mn;
-                    offsetSum += mn;
-                    maxRange = Math.max(maxRange, mx - mn);
-                }
-                float scale = maxRange > 0 ? 255f / maxRange : 0f;
-                for (int m = 0; m < subspaceCount; m++) {
-                    float off = 0.5f - mins[m] * scale;
-                    for (int c = 0; c < clusterCount; c++) {
-                        int q = (int) (magnitudes.get(m * clusterCount + c) * scale + off);
-                        mag8[m * clusterCount + c] = (byte) (q > 255 ? 255 : q);
-                    }
-                }
-                mag8Scale = scale;
-                mag8Offset = offsetSum;
+                float[] mags = new float[subspaceCount * clusterCount];
+                for (int i = 0; i < mags.length; i++) mags[i] = magnitudes.get(i);
+                mag8 = new byte[mags.length];
+                float[] scaleAndOffset = quantizeTable(mags, false, mag8, subspaceCount, clusterCount);
+                mag8Scale = scaleAndOffset[0];
+                mag8Offset = scaleAndOffset[1];
             } else {
                 magnitudes = null;
                 centerNorm2 = 0f;
@@ -2129,73 +2086,45 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         /** Per-thread query state: the query's partial-sum table over the codebooks. */
         final class Scorer {
             private final VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
-            private float[] lutArray;   // flat copy of partialSums for the code scan kernel (built on demand)
-            private boolean lutArrayValid;
-
-            private byte[] lut8;
+            private float[] table;          // partialSums as a flat float[] (m * clusterCount + c); no copy when heap-backed
+            private boolean tableValid;
+            private byte[] lut8;            // the table quantized for the scan kernel
             private boolean lut8Valid;
-            float lut8Scale, lut8Offset;   // float sum = D / lut8Scale + lut8Offset (D = sum of table bytes)
-            private final float[] lut8Mins = new float[subspaceCount];
+            float lut8Scale, lut8Offset;    // float sum of a code = D / lut8Scale + lut8Offset, D = its sum of table bytes
 
             /**
-             * 8-bit table for the scan kernel: per subspace the values are shifted
-             * by their minimum (a per-query constant) and all subspaces share one scale, so sums of
-             * table entries rank codes like sums of the float table. Higher is better; for EUCLIDEAN
-             * the distances are negated before quantization.
+             * The current query's table quantized to 8 bits for the scan kernel: per subspace the
+             * values are shifted by their minimum (a per-query constant) and all subspaces share one
+             * scale, so sums of table bytes rank codes like sums of the float table. Higher is
+             * better; for EUCLIDEAN the distances are negated first.
              */
             byte[] lut8() {
                 if (!lut8Valid) {
-                    float[] f = lut();
                     if (lut8 == null) lut8 = new byte[subspaceCount * clusterCount];
-                    boolean neg = lutFunction == VectorSimilarityFunction.EUCLIDEAN;
-                    float maxRange = 0;
-                    final float sign = neg ? -1f : 1f;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        float mn = Float.POSITIVE_INFINITY, mx = Float.NEGATIVE_INFINITY;
-                        int base = m * clusterCount;
-                        for (int c = 0; c < clusterCount; c++) {
-                            float v = sign * f[base + c];
-                            mn = Math.min(mn, v);
-                            mx = Math.max(mx, v);
-                        }
-                        lut8Mins[m] = mn;
-                        maxRange = Math.max(maxRange, mx - mn);
-                    }
-                    final float scale = maxRange > 0 ? 255f / maxRange : 0f;
-                    float offsetSum = 0;
-                    for (int m = 0; m < subspaceCount; m++) offsetSum += lut8Mins[m];
-                    lut8Scale = scale;
-                    lut8Offset = offsetSum;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int base = m * clusterCount;
-                        float off = 0.5f - lut8Mins[m] * scale;
-                        for (int c = 0; c < clusterCount; c++) {
-                            int q = (int) (sign * f[base + c] * scale + off);
-                            lut8[base + c] = (byte) (q > 255 ? 255 : q);   // q >= 0 by construction
-                        }
-                    }
+                    float[] scaleAndOffset = quantizeTable(table(), lutFunction == VectorSimilarityFunction.EUCLIDEAN, lut8, subspaceCount, clusterCount);
+                    lut8Scale = scaleAndOffset[0];
+                    lut8Offset = scaleAndOffset[1];
                     lut8Valid = true;
                 }
                 return lut8;
             }
 
-            /** The current query's lookup table as a flat float[] ({@code m * clusterCount + c}). */
-            float[] lut() {
-                if (!lutArrayValid) {
+            private float[] table() {
+                if (!tableValid) {
                     float[] backing = VectorUtil.backingArray(partialSums);
                     if (backing != null) {
-                        lutArray = backing;                       // no copy: heap-backed under both providers
+                        table = backing;
                     } else {
-                        if (lutArray == null) lutArray = new float[subspaceCount * clusterCount];
-                        for (int i = 0; i < lutArray.length; i++) lutArray[i] = partialSums.get(i);
+                        if (table == null) table = new float[subspaceCount * clusterCount];
+                        for (int i = 0; i < table.length; i++) table[i] = partialSums.get(i);
                     }
-                    lutArrayValid = true;
+                    tableValid = true;
                 }
-                return lutArray;
+                return table;
             }
 
             void setQuery(VectorFloat<?> query) {
-                lutArrayValid = false;
+                tableValid = false;
                 lut8Valid = false;
                 // A center-adjusted PQ encodes (v - globalCentroid). For EUCLIDEAN the query must be
                 // centered so per-subspace distances compose; for the dot-product ranking the raw
@@ -2212,7 +2141,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
             }
 
-                    /** Higher is closer. */
+            /** Higher is closer. */
             float score(int level, int position) {
                 int off = position * subspaceCount;
                 float sum = VectorUtil.assembleAndSum(partialSums, clusterCount, codes[level], off, subspaceCount);
@@ -2222,9 +2151,40 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
                 return lutFunction == VectorSimilarityFunction.EUCLIDEAN ? -sum : sum;
             }
+        }
 
-
+        /**
+         * Quantizes a per-subspace table to bytes: entries of subspace {@code m} are shifted by that
+         * subspace's minimum and all subspaces share one scale, so the sum of bytes over a code is an
+         * affine image of the float sum. Returns {scale, sum of minimums}: float sum = D / scale + offset.
+         */
+        static float[] quantizeTable(float[] src, boolean negate, byte[] dst, int subspaceCount, int clusterCount) {
+            final float sign = negate ? -1f : 1f;
+            float[] mins = new float[subspaceCount];
+            float maxRange = 0, offset = 0;
+            for (int m = 0; m < subspaceCount; m++) {
+                float mn = Float.POSITIVE_INFINITY, mx = Float.NEGATIVE_INFINITY;
+                int base = m * clusterCount;
+                for (int c = 0; c < clusterCount; c++) {
+                    float v = sign * src[base + c];
+                    mn = Math.min(mn, v);
+                    mx = Math.max(mx, v);
                 }
+                mins[m] = mn;
+                offset += mn;
+                maxRange = Math.max(maxRange, mx - mn);
+            }
+            final float scale = maxRange > 0 ? 255f / maxRange : 0f;
+            for (int m = 0; m < subspaceCount; m++) {
+                int base = m * clusterCount;
+                float off = 0.5f - mins[m] * scale;
+                for (int c = 0; c < clusterCount; c++) {
+                    int q = (int) (sign * src[base + c] * scale + off);
+                    dst[base + c] = (byte) (q > 255 ? 255 : q);   // q >= 0 by construction
+                }
+            }
+            return new float[]{scale, offset};
+        }
 
         Scorer scorer() {
             return new Scorer();
@@ -2483,6 +2443,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
                     HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
                     int[] beamVisited = regionMode ? new int[visitedCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
+                    long[] beamScored = regionMode ? new long[beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
                     try (var view = (OnDiskGraphIndex.View) source.getView()) {
                         for (int node = lo; node < hi; node++) {
                             if (!alive.get(node)) continue;
@@ -2494,7 +2455,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 int landing = hubMapRef.descend(scorer);
                                 int lp = hubMapRef.position(1, landing);
                                 if (lp >= 0) {
-                                    landing = hubMapRef.nodes[1][bestByBeam(hubMapRef, scorer, 1, lp, CELL_ASSIGN_EF, beamVisited)];
+                                    landing = hubMapRef.nodes[1][bestLevel1ByBeam(hubMapRef, scorer, lp, CELL_ASSIGN_EF, beamVisited, beamScored)];
                                 }
                                 int pos = landing >= 0 && landing < walkPositionRef.length ? walkPositionRef[landing] : Integer.MAX_VALUE;
                                 key = pos & 0xFFFFFFFFL;
@@ -2587,7 +2548,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final VectorFloat<?> tmpVec, baseVec;
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
-        // cell-join experiment state (allocated lazily)
+        // cell join state (allocated on first use)
         HubMap.Scorer cellScorer;
         byte[] cellBlock = new byte[0];        // blocked codes of the cell slice being scanned
         short[] cellBlockSums = new short[0];  // scan-kernel output (u16 per code)
@@ -2595,11 +2556,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] probeCells = new int[0];
         int probeCount;
         // level-1 beam state (beam probe selection): generation-stamped visited marks over level-1 positions
-        int[] beamPos;
-        float[] beamScore;
-        boolean[] beamExpanded;
-        long[] scoredKeys; // scored cells of the current beam, packed for sorting
-        int[] l1Visited;   // open-addressing set of level-1 positions, sized 4x the beam's maximum visit count
+        long[] scoredKeys; // positions scored by the current probe beam, packed with their scores
+        int[] l1Visited;   // visited set for the probe beam
         int probeNode = -1, probeSrc = -1;
         int[] topIds;
         float[] topScores;
