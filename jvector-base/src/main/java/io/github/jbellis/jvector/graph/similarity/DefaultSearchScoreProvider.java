@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     private final ScoreFunction scoreFunction;
     private final ScoreFunction.ExactScoreFunction reranker;
+    private final boolean adaptiveDotProductTermination;
 
     /**
      * @param scoreFunction the primary, fast scoring function
@@ -44,10 +45,18 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * or `ScoringView.rerankerFor`.
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
+        this(scoreFunction, reranker, false);
+    }
+
+    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker, boolean adaptiveDotProductTermination) {
         assert scoreFunction != null;
         this.scoreFunction = scoreFunction;
         this.reranker = reranker;
+        this.adaptiveDotProductTermination = adaptiveDotProductTermination;
     }
+
+    @Override
+    public boolean supportsAdaptiveDotProductTermination() { return adaptiveDotProductTermination; }
 
     public ScoreFunction scoreFunction() {
         return scoreFunction;

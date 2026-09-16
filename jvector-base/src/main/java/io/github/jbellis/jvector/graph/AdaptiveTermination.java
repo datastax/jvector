@@ -1,18 +1,18 @@
 package io.github.jbellis.jvector.graph;
 
 /**
- * Distance-adaptive base-layer termination.
+ * Adaptive termination for graph DOT_PRODUCT similarity scores.
  *
  * <p>The adaptive rule stops when the best unexpanded candidate is farther than
  * the kth-best discovered result by a relative factor:
  *
  * <pre>
- *   d(q, candidate) >= (1 + gamma) * d_k
+ *   d(q, candidate) > (1 + gamma) * d_k
  * </pre>
  *
  * <p>GraphSearcher works with higher-is-better normalized scores. We convert
- * those scores back to a distance-like scale using the common bounded-score
- * convention {@code score = 1 / (1 + distance)}. If a query produces scores
+ * those scores back to a squared-L2-like scale for normalized vectors using
+ * {@code distance = 1 - score}. If a query produces scores
  * outside the supported range, callers must fall back to standard termination.
  */
 final class AdaptiveTermination {
@@ -85,7 +85,7 @@ final class AdaptiveTermination {
         }
 
         double cutoff = (1.0d + gamma) * kthDistance;
-        return candidateDistance + EPSILON >= cutoff
+        return candidateDistance > cutoff + EPSILON
                 ? Decision.TERMINATE
                 : Decision.CONTINUE;
     }
@@ -98,10 +98,10 @@ final class AdaptiveTermination {
             return Double.NaN;
         }
         if (score <= EPSILON) {
-            return Double.POSITIVE_INFINITY;
+            return 1.0d;
         }
 
         double boundedScore = Math.min(MAX_SCORE, Math.max(MIN_SCORE, score));
-        return (1.0d / boundedScore) - 1.0d;
+        return 1.0d - boundedScore;
     }
 }
