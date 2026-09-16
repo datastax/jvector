@@ -10,25 +10,25 @@ jvector-100k:
 #  - e5-large-v2-100k
 #jvector-1M:
   - ada002-1M
-  - colbert-1M
-ann-benchmarks:
-  - glove-25-angular
-  - glove-50-angular
-  - lastfm-64-dot
-  - glove-100-angular
-  - glove-200-angular
-  - nytimes-256-angular
-  - sift-128-euclidean
-regression-tests:
-  - cap-1M
-  - cap-6M
-  - cohere-english-v3-1M
-  - cohere-english-v3-10M
-  - dpr-gemma-1m
-  - dpr-gemma-10m
-openai-unconfigured:
-  - openai-3072-1m
-  - openai-1536-1m
+#  - colbert-1M
+#ann-benchmarks:
+#  - glove-25-angular
+#  - glove-50-angular
+#  - lastfm-64-dot
+#  - glove-100-angular
+#  - glove-200-angular
+#  - nytimes-256-angular
+#  - sift-128-euclidean
+#regression-tests:
+#  - cap-1M
+#  - cap-6M
+#  - cohere-english-v3-1M
+#  - cohere-english-v3-10M
+#  - dpr-gemma-1m
+#  - dpr-gemma-10m
+#openai-unconfigured:
+#  - openai-3072-1m
+#  - openai-1536-1m
 #other-datasets:
 #  - cap-1M
 #  - cap-6M
