@@ -1289,10 +1289,19 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
      * scans (not the graph-search fallback) and that recall against brute force stays high.
      */
     @Test
-    public void testCellJoinMergeRecall() throws Exception {
+    public void testCellJoinMergeRecallEuclidean() throws Exception {
+        cellJoinMergeRecall(VectorSimilarityFunction.EUCLIDEAN);
+    }
+
+    /** Cosine on unnormalized vectors: the scan's second pass over decoded norms must rank like cosine. */
+    @Test
+    public void testCellJoinMergeRecallCosine() throws Exception {
+        cellJoinMergeRecall(VectorSimilarityFunction.COSINE);
+    }
+
+    private void cellJoinMergeRecall(VectorSimilarityFunction vsf) throws Exception {
         int perSource = 3000;
         int nSrc = 3;
-        final VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;   // additive-table scan: dot or Euclidean
         final java.util.Random rnd = new java.util.Random(20260916);              // fixed: the two merges are compared
         List<VectorFloat<?>> all = new ArrayList<>();
         List<OnDiskGraphIndex> graphs = new ArrayList<>();
@@ -1301,7 +1310,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         int total = nSrc * perSource;
         for (int sIdx = 0; sIdx < nSrc; sIdx++) {
             List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
-            Path path = buildFusedHierarchicalSourceGraph(vecs, vsf, "celljoin_src_" + sIdx);
+            Path path = buildFusedHierarchicalSourceGraph(vecs, vsf, "celljoin_" + vsf + "_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var lv = new FixedBitSet(perSource);
@@ -1322,9 +1331,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         // same sources merged twice: graph search (caller ordinals) and cell join (reassigned ordinals)
-        double graphRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, false, "celljoin_graph");
-        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, true, "celljoin_join");
-        System.out.printf("Cell-join merge recall: %.4f (graph search %.4f)%n", joinRecall, graphRecall);
+        double graphRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, false, "celljoin_" + vsf + "_graph");
+        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, true, "celljoin_" + vsf + "_join");
+        System.out.printf("Cell-join merge recall (%s): %.4f (graph search %.4f)%n", vsf, joinRecall, graphRecall);
         assertTrue("cell-join recall " + joinRecall + " below graph search " + graphRecall, joinRecall >= graphRecall - 0.02);
         for (var r : rss) r.close();
     }
