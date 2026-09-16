@@ -20,13 +20,17 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.FusedASHDecoder;
 import io.github.jbellis.jvector.quantization.FusedASHLayout;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -93,6 +97,28 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
 
     public AsymmetricHashing getASH() {
         return ash;
+    }
+
+    // ASH uses QuantizedVector codes and a block-packed layout that the current
+    // byte-sequence compaction pipeline does not support.
+    @Override
+    public int codeSize() {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public VectorCompressor<ByteSequence<?>> getCompressor() {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree) {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
     }
 
     public int blockSize() {
