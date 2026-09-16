@@ -31,6 +31,7 @@ final class AdaptiveTermination {
     private int k;
     private float gamma;
     private boolean unsupportedScoreObserved;
+    private boolean rawDotProductScores;
 
     AdaptiveTermination() {
         reset(1, DEFAULT_GAMMA);
@@ -41,6 +42,10 @@ final class AdaptiveTermination {
     }
 
     void reset(int k, float gamma) {
+        reset(k, gamma, false);
+    }
+
+    void reset(int k, float gamma, boolean rawDotProductScores) {
         if (k <= 0) {
             throw new IllegalArgumentException("k must be > 0");
         }
@@ -49,6 +54,7 @@ final class AdaptiveTermination {
         this.k = k;
         this.gamma = gamma;
         this.unsupportedScoreObserved = false;
+        this.rawDotProductScores = rawDotProductScores;
     }
 
     static void validateGamma(float gamma) {
@@ -90,18 +96,14 @@ final class AdaptiveTermination {
                 : Decision.CONTINUE;
     }
 
-    private static double scoreToDistance(float score) {
+    private double scoreToDistance(float score) {
         if (!Float.isFinite(score)) {
             return Double.NaN;
         }
-        if (score < MIN_SCORE - EPSILON || score > MAX_SCORE + EPSILON) {
+        if (score < (rawDotProductScores ? -1.0d : MIN_SCORE) - EPSILON || score > MAX_SCORE + EPSILON) {
             return Double.NaN;
         }
-        if (score <= EPSILON) {
-            return 1.0d;
-        }
-
-        double boundedScore = Math.min(MAX_SCORE, Math.max(MIN_SCORE, score));
-        return 1.0d - boundedScore;
+        double boundedScore = Math.min(MAX_SCORE, Math.max(rawDotProductScores ? -1.0d : MIN_SCORE, score));
+        return rawDotProductScores ? (1.0d - boundedScore) / 2.0d : 1.0d - boundedScore;
     }
 }

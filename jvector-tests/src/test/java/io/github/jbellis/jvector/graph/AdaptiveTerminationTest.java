@@ -43,4 +43,12 @@ class AdaptiveTerminationTest {
         assertEquals(AdaptiveTermination.Decision.TERMINATE,
                 termination.shouldTerminate(0.88f, results(0.9f)));
     }
+    @Test void rawDotProductBuildScoresUseTheSameDistanceRule() {
+        var t = new AdaptiveTermination();
+        t.reset(1, 0.1f, true);
+        assertEquals(AdaptiveTermination.Decision.CONTINUE, t.shouldTerminate(0.78f, results(0.8f)));
+        assertEquals(AdaptiveTermination.Decision.TERMINATE, t.shouldTerminate(0.76f, results(0.8f)));
+        assertEquals(AdaptiveTermination.Decision.FALL_BACK_TO_STANDARD, t.shouldTerminate(-1.1f, results(0.8f)));
+    }
+
 }
