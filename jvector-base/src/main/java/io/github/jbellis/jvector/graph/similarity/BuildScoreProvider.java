@@ -302,7 +302,7 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 // Query-time asymmetric scoring is already implemented by ASHVectors.
-                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf));
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, true);
             }
 
             @Override
@@ -356,7 +356,7 @@ public interface BuildScoreProvider {
                         // so centered term becomes: scale_x * scale_y * <g_x, g_y>
                         return (v1.scale * v2.scale) * signDot + v1.offset + v2.offset + muNormSq;
                     }
-                });
+                }, null, true, true);
             }
 
             @Override

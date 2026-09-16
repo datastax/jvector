@@ -27,4 +27,7 @@ public interface SearchScoreProvider {
 
     /** Approximate scores use graph DOT_PRODUCT similarity and support adaptive termination. */
     default boolean supportsAdaptiveDotProductTermination() { return false; }
+
+    /** Whether the supported ASH score is a raw dot product in [-1, 1]. */
+    default boolean adaptiveScoresAreRawDotProducts() { return false; }
 }

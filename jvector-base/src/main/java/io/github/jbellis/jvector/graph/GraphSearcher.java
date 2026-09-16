@@ -533,7 +533,7 @@ public class GraphSearcher implements Closeable {
     }
 
     private void resetAdaptiveTermination(int rerankK, Bits accepted) {
-        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma);
+        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
         adaptiveResults.clear();
         adaptiveResults.setMaxSize(rerankK);
         adaptiveResultMembers.clear();
