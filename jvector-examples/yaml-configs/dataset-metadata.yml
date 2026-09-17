@@ -118,3 +118,18 @@ tahoe-x1-1m:
 personahub-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+cap-10M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+cohere-10M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+esmc-600-1M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+esmc-600-6M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB

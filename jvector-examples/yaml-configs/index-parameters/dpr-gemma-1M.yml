@@ -1,7 +1,7 @@
 yamlSchemaVersion: 2
 onDiskIndexVersion: 7
 
-dataset: dpr-gemma-1M
+dataset: dpr-gemma-1m
 
 construction:
   outDegree: [64]
@@ -13,28 +13,16 @@ construction:
   compression:
     - type: ASH
       parameters:
-        encodedBits: 776
-        optimizer: itq
+        compressionRatio: 32
+        optimizer: ITQ
         landmarkCount: 1
-    - type: ASH
-      parameters:
-        encodedBits: 392
-        optimizer: itq
-        landmarkCount: 1
-    - type: PQ
-      parameters:
-        m: 97 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
-    - type: PQ
-      parameters:
-        m: 49 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
+#    - type: PQ
+#      parameters:
+#        mFactor: 8
+#        k: 256
+#        anisotropicThreshold: -1.0
   reranking:
     - FP
   useSavedIndexIfExists: Yes # If yes, the system will attempt to locate a cached copy of the index instead of constructing
@@ -47,26 +35,13 @@ search:
   compression:
     - type: ASH
       parameters:
-        encodedBits: 776
-        optimizer: itq
+        compressionRatio: 32
+        optimizer: ITQ
         landmarkCount: 1
-    - type: ASH
-      parameters:
-        encodedBits: 392
-        optimizer: itq
-        landmarkCount: 1
-    - type: PQ
-      parameters:
-        m: 97 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
-    - type: PQ
-      parameters:
-        m: 49 # we can either specify the integer m or the integer mFactor. In this case, m will be set to the data dimensionality divided by mFactor
-        # mFactor: 8
-        # k: 256 # optional parameter. By default, k=256
-        centerData: No
-        anisotropicThreshold: -1.0 # optional parameter. By default, anisotropicThreshold=-1 (i.e., no anisotropy)
-# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
+#    - type: PQ
+#      parameters:
+#        mFactor: 8
+#        k: 256
+#        anisotropicThreshold: -1.0
