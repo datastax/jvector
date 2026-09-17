@@ -39,11 +39,23 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             ? ByteVector.SPECIES_64 : ByteVector.SPECIES_128;
     private static final int[] ASH_TWO_BIT_QUERY_INDICES = ashQueryIndices(4);
     private static final int[] ASH_FOUR_BIT_QUERY_INDICES = ashQueryIndices(2);
+    private static final int[][] ASH_TWO_BIT_TAIL_INDICES = ashTailQueryIndices(4);
+    private static final int[][] ASH_FOUR_BIT_TAIL_INDICES = ashTailQueryIndices(2);
 
     private static int[] ashQueryIndices(int dimensionsPerByte) {
         int[] indices = new int[ASH_FLOATS.length()];
         for (int i = 0; i < indices.length; i++) indices[i] = i * dimensionsPerByte;
         return indices;
+    }
+
+    private static int[][] ashTailQueryIndices(int dimensionsPerByte) {
+        int[][] tails = new int[ASH_FLOATS.length()][];
+        for (int active = 1; active < tails.length; active++) {
+            int[] indices = new int[ASH_FLOATS.length()];
+            for (int lane = 0; lane < active; lane++) indices[lane] = lane * dimensionsPerByte;
+            tails[active] = indices;
+        }
+        return tails;
     }
 
     @Override
@@ -95,7 +107,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                         .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
                 var values = magnitude.blend(magnitude.neg(), fields.and(sign)
                         .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
-                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, indices, 0, mask);
+                // A masked gather may bounds-check inactive indices. Point those lanes at
+                // the first valid query element for a partial final block.
+                int[] gatherIndices = active == ASH_FLOATS.length() ? indices
+                        : (bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES)[active];
+                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, gatherIndices, 0, mask);
                 sum = sum.add(q.mul(values));
             }
         }
