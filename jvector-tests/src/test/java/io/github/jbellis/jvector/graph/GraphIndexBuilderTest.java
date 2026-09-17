@@ -129,6 +129,55 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     }
 
     @Test
+    public void testRescoreMarksCopiedNodesComplete() {
+        testRescoreMarksCopiedNodesComplete(false);
+        testRescoreMarksCopiedNodesComplete(true);
+    }
+
+    /**
+     * Regression test: {@link GraphIndexBuilder#rescore} is used to refine the PQ
+     * codebook mid-build, without pausing insertion of the remaining rows. rescore() copies each
+     * node's edges into the new builder via connectNode(), which does not mark the node complete
+     * in the new builder's CompletionTracker. A node stuck at the tracker's default completion
+     * time (Integer.MAX_VALUE) is filtered out of every ConcurrentGraphIndexView taken on the new
+     * graph from then on, including the entry node's own neighbor list, which is exactly the
+     * view addGraphNode() and cleanup() use while the graph is still mutable (allMutationsCompleted
+     * == false). So a fresh concurrent view taken right after rescore() must already see every
+     * copied edge, not an empty/filtered list.
+     */
+    public void testRescoreMarksCopiedNodesComplete(boolean addHierarchy) {
+        int dimension = 8;
+        int count = 50;
+
+        var vectors = createRandomFloatVectors(count, dimension, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.COSINE);
+
+        var builder = new GraphIndexBuilder(bsp, dimension, 8, 30, 1.2f, 1.2f, addHierarchy);
+        for (int i = 0; i < count; i++) {
+            builder.addGraphNode(i, ravv.getVector(i));
+        }
+
+        // Simulates calling application refining its PQ codebook mid-build
+        var rescored = GraphIndexBuilder.rescore(builder, bsp);
+        var rescoredGraph = (OnHeapGraphIndex) rescored.getGraph();
+
+        // The graph is still mutable at this point (cleanup() hasn't run), so getView() returns a
+        // ConcurrentGraphIndexView that filters on completion time.
+        assertTrue(!rescoredGraph.allMutationsCompleted());
+        var view = rescoredGraph.getView();
+
+        int entry = view.entryNode().node;
+        int rawEntryDegree = rescoredGraph.getNeighbors(0, entry).size();
+        assertTrue("test setup: entry node should have neighbors after rescore", rawEntryDegree > 0);
+
+        int visibleEntryDegree = view.getNeighborsIterator(0, entry).size();
+        assertEquals("entry node's neighbors are hidden from a fresh concurrent view after rescore -- " +
+                     "rescore() must mark copied nodes complete",
+                     rawEntryDegree, visibleEntryDegree);
+    }
+
+    @Test
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
         int size = randomIntBetween(10, 100);
