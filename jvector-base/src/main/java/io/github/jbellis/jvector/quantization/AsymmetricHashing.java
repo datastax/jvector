@@ -787,12 +787,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             double[] absNorm;
 
             void ensureCapacity(int originalDim, int quantizedDim) {
-                if (x == null || x.length < originalDim) {
+                if (x == null || x.length != originalDim) {
                     x = new float[originalDim];
                     muArr = new float[originalDim];
                     xhat = new float[originalDim];
                 }
-                if (proj == null || proj.length < quantizedDim) {
+                if (proj == null || proj.length != quantizedDim) {
                     proj = new float[quantizedDim];
                     absNorm = new double[quantizedDim];
                 }
