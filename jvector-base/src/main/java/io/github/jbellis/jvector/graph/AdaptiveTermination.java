@@ -16,7 +16,7 @@ package io.github.jbellis.jvector.graph;
  * outside the supported range, callers must fall back to standard termination.
  */
 final class AdaptiveTermination {
-    static final float DEFAULT_GAMMA = 0.005f;
+    static final float DEFAULT_GAMMA = 0.01f;
 
     private static final double MIN_SCORE = 0.0d;
     private static final double MAX_SCORE = 1.0d;
