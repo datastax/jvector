@@ -117,6 +117,76 @@ public class DistancesASH {
         return "UNKNOWN(" + optimizer + ")";
     }
 
+    private static void validateRecallScorers(ASHVectors vectors, List<VectorFloat<?>> queries, int blockSize) {
+        float maxBlockVsScalar = 0f;
+        float maxBlockVsSingle = 0f;
+        for (int qi : new int[]{0, queries.size() / 2}) {
+            VectorFloat<?> query = queries.get(qi);
+            ASHBlockScorer block = vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, blockSize);
+            ASHBlockScorer scalar = vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT);
+            ScoreFunction.ApproximateScoreFunction single =
+                    vectors.scoreFunctionFor(query, VectorSimilarityFunction.DOT_PRODUCT);
+            printScorerInfo("recall-block", block);
+            float[] blockScores = new float[blockSize];
+            float[] scalarScores = new float[blockSize];
+            for (int start = 0; start < vectors.count(); start += blockSize) {
+                int count = Math.min(blockSize, vectors.count() - start);
+                block.scoreRange(start, count, blockScores);
+                scalar.scoreRange(start, count, scalarScores);
+                for (int lane = 0; lane < count; lane++) {
+                    float actual = blockScores[lane];
+                    float reference = scalarScores[lane];
+                    float singleScore = single.similarityTo(start + lane);
+                    if (!Float.isFinite(actual) || !Float.isFinite(reference) || !Float.isFinite(singleScore)) {
+                        throw new AssertionError("Non-finite ASH score at query=" + qi + " ordinal=" + (start + lane));
+                    }
+                    maxBlockVsScalar = Math.max(maxBlockVsScalar, Math.abs(actual - reference));
+                    maxBlockVsSingle = Math.max(maxBlockVsSingle, Math.abs(actual - singleScore));
+                }
+            }
+        }
+        System.out.printf(java.util.Locale.ROOT,
+                "\tRecall scorer validation: max block/scalar=%.8f, max block/single=%.8f%n",
+                maxBlockVsScalar, maxBlockVsSingle);
+        if (maxBlockVsScalar > 0.005f || maxBlockVsSingle > 0.005f) {
+            throw new AssertionError("ASH block recall scorer disagrees with scalar or single scoring");
+        }
+    }
+
+    private static void offerTop(java.util.PriorityQueue<long[]> candidates, int capacity,
+                                 float score, int ordinal) {
+        if (candidates.size() < capacity) {
+            candidates.add(new long[]{Float.floatToRawIntBits(score), ordinal});
+        } else if (score > Float.intBitsToFloat((int) candidates.peek()[0])) {
+            candidates.poll();
+            candidates.add(new long[]{Float.floatToRawIntBits(score), ordinal});
+        }
+    }
+
+    private static int[] rankedOrdinals(java.util.PriorityQueue<long[]> candidates) {
+        int[] ranked = new int[candidates.size()];
+        for (int rank = ranked.length - 1; rank >= 0; rank--) ranked[rank] = (int) candidates.poll()[1];
+        return ranked;
+    }
+
+    private static void addRecall(int[] ranked, int[] groundTruth, int[] newToOld,
+                                  int recallK, int[] atValues, double[] totals, int offset) {
+        for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+            int at = atValues[aIdx];
+            java.util.Set<Integer> topAtSet = new java.util.HashSet<>();
+            for (int rank = 0; rank < Math.min(at, ranked.length); rank++) {
+                topAtSet.add(newToOld == null ? ranked[rank] : newToOld[ranked[rank]]);
+            }
+            int matches = 0;
+            java.util.HashSet<Integer> gtSeen = new java.util.HashSet<>(recallK * 2);
+            for (int g = 0; g < recallK; g++) {
+                int gtId = groundTruth[g];
+                if (gtSeen.add(gtId) && topAtSet.contains(gtId)) matches++;
+            }
+            totals[offset + aIdx] += (double) matches / recallK;
+        }
+    }
+
     public static void testASHEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
@@ -126,6 +196,22 @@ public class DistancesASH {
 
         final boolean RUN_RECALL_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+
+        final boolean RUN_BLOCK_RECALL =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall.block-scoring", "false"));
+
+        final boolean COMPARE_ALL_RECALL =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall.compare-all", "false"));
+
+        final boolean RECALL_ONLY_TEN =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.recall.only10", "false"));
+
+        if (COMPARE_ALL_RECALL && !RUN_BLOCK_RECALL) {
+            throw new IllegalArgumentException("compare-all requires recall.block-scoring=true");
+        }
+
+        final boolean RUN_BLOCK_TIMING =
+                Boolean.parseBoolean(System.getProperty("jvector.bench.block-scoring", "true"));
 
         final int RECALL_K =
                 Integer.getInteger("jvector.bench.recall.k", 10);
@@ -147,7 +233,7 @@ public class DistancesASH {
         final int[] BLOCK_SIZES = {32}; // Supported fused/multi-bit block capacities: 8, 16, 32.
 
         // How many ASH landmarks to use, C = [1, 64]
-        final int landmarkCount = 1;
+        final int landmarkCount = Integer.getInteger("jvector.ash.landmarkCount", 1);
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
         List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
@@ -399,69 +485,87 @@ public class DistancesASH {
         // [1b] Recall@K run (Parallelized)
         // ==================================================================
         if (RUN_RECALL_CHECK) {
-            int[] atValues = {10, 15, 20, 30, 40, 50};
-            int maxAt = 50;
+            int[] atValues = RECALL_ONLY_TEN ? new int[]{10} : new int[]{10, 15, 20, 30, 40, 50};
+            int maxAt = atValues[atValues.length - 1];
             List<ForkJoinTask<double[]>> recallTasks = new ArrayList<>();
 
-            logProgress("\t[stage] Computing " + RECALL_K + "-Recall@K...");
+            if (RUN_BLOCK_RECALL) {
+                validateRecallScorers(ashVectorsFinal, finalQueries, BLOCK_SIZES[0]);
+            }
+
+            logProgress("\t[stage] Computing " + RECALL_K + "-Recall@K with "
+                    + (COMPARE_ALL_RECALL ? "ASH LUT block, single-vector and scalar"
+                    : RUN_BLOCK_RECALL ? "ASH LUT block" : "ASH single-vector") + " scoring...");
             for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, queries.size());
 
                 recallTasks.add(simdExecutor.submit(() -> {
-                    double[] localTotalRecall = new double[atValues.length];
+                    double[] localTotalRecall = new double[atValues.length * (COMPARE_ALL_RECALL ? 3 : 1)];
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
-                        ScoreFunction.ApproximateScoreFunction f = ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                        ScoreFunction.ApproximateScoreFunction f = RUN_BLOCK_RECALL && !COMPARE_ALL_RECALL ? null
+                                : ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                        ASHBlockScorer block = RUN_BLOCK_RECALL
+                                ? ashVectorsFinal.blockScorerFor(q, VectorSimilarityFunction.DOT_PRODUCT, BLOCK_SIZES[0])
+                                : null;
+                        ASHBlockScorer scalar = COMPARE_ALL_RECALL
+                                ? ashVectorsFinal.blockScorerFor(q, VectorSimilarityFunction.DOT_PRODUCT)
+                                : null;
+                        float[] blockScores = RUN_BLOCK_RECALL ? new float[BLOCK_SIZES[0]] : null;
+                        float[] scalarScores = COMPARE_ALL_RECALL ? new float[BLOCK_SIZES[0]] : null;
 
-                        // Min-heap to keep top 50 results (storing score as int bits and ordinal as long)
+                        // Min-heaps retain the top candidates from each scoring path.
                         var topCandidates = new java.util.PriorityQueue<long[]>((a, b) -> Float.compare(Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0])));
-                        for (int j = 0; j < vectors.size(); j++) {
-                            float score = f.similarityTo(j);
-                            if (topCandidates.size() < maxAt) {
-                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
-                            } else if (score > Float.intBitsToFloat((int) topCandidates.peek()[0])) {
-                                topCandidates.poll();
-                                topCandidates.add(new long[]{Float.floatToRawIntBits(score), j});
+                        java.util.PriorityQueue<long[]> singleCandidates = COMPARE_ALL_RECALL
+                                ? new java.util.PriorityQueue<>((a, b) -> Float.compare(Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0]))) : null;
+                        java.util.PriorityQueue<long[]> scalarCandidates = COMPARE_ALL_RECALL
+                                ? new java.util.PriorityQueue<>((a, b) -> Float.compare(Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0]))) : null;
+                        for (int startOrdinal = 0; startOrdinal < vectors.size(); startOrdinal += BLOCK_SIZES[0]) {
+                            int count = Math.min(BLOCK_SIZES[0], vectors.size() - startOrdinal);
+                            if (RUN_BLOCK_RECALL) block.scoreRange(startOrdinal, count, blockScores);
+                            if (COMPARE_ALL_RECALL) scalar.scoreRange(startOrdinal, count, scalarScores);
+                            for (int lane = 0; lane < count; lane++) {
+                                int ordinal = startOrdinal + lane;
+                                float score = RUN_BLOCK_RECALL ? blockScores[lane] : f.similarityTo(ordinal);
+                                offerTop(topCandidates, maxAt, score, ordinal);
+                                if (COMPARE_ALL_RECALL) {
+                                    offerTop(singleCandidates, maxAt, f.similarityTo(ordinal), ordinal);
+                                    offerTop(scalarCandidates, maxAt, scalarScores[lane], ordinal);
+                                }
                             }
                         }
-
-                        int[] topIndices = new int[topCandidates.size()];
-                        for (int rank = topCandidates.size() - 1; rank >= 0; rank--) topIndices[rank] = (int) topCandidates.poll()[1];
 
                         int[] queryGT = groundTruth.get(i).stream()
                                 .mapToInt(Integer::intValue)
                                 .toArray();
-                        for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
-                            int at = atValues[aIdx];
-                            java.util.Set<Integer> topAtSet = new java.util.HashSet<>();
-                            for (int r = 0; r < Math.min(at, topIndices.length); r++) {
-                                topAtSet.add((newToOldFinal == null) ? topIndices[r] : newToOldFinal[topIndices[r]]);
-                            }
-                            int matches = 0;
-                            java.util.HashSet<Integer> gtSeen = new java.util.HashSet<>(RECALL_K * 2);
-                            // Compute and don't count duplicates (if present in GT or retrieved IDs)
-                            for (int g = 0; g < RECALL_K; g++) {
-                                int gtId = queryGT[g];
-                                if (gtSeen.add(gtId) && topAtSet.contains(gtId)) {
-                                    matches++;
-                                }
-                            }
-                            localTotalRecall[aIdx] += (double) matches / RECALL_K;
+                        addRecall(rankedOrdinals(topCandidates), queryGT, newToOldFinal,
+                                RECALL_K, atValues, localTotalRecall, 0);
+                        if (COMPARE_ALL_RECALL) {
+                            addRecall(rankedOrdinals(singleCandidates), queryGT, newToOldFinal,
+                                    RECALL_K, atValues, localTotalRecall, atValues.length);
+                            addRecall(rankedOrdinals(scalarCandidates), queryGT, newToOldFinal,
+                                    RECALL_K, atValues, localTotalRecall, 2 * atValues.length);
                         }
                     }
                     return localTotalRecall;
                 }));
             }
 
-            double[] totalRecall = new double[atValues.length];
+            double[] totalRecall = new double[atValues.length * (COMPARE_ALL_RECALL ? 3 : 1)];
             for (ForkJoinTask<double[]> t : recallTasks) {
                 double[] local = t.join();
-                for (int aIdx = 0; aIdx < atValues.length; aIdx++) totalRecall[aIdx] += local[aIdx];
+                for (int aIdx = 0; aIdx < totalRecall.length; aIdx++) totalRecall[aIdx] += local[aIdx];
             }
 
-            for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
-                System.out.format("\tASH %d-recall@%d = %.4f%n", RECALL_K, atValues[aIdx], totalRecall[aIdx] / queries.size());
+            String[] scorerNames = COMPARE_ALL_RECALL ? new String[]{"LUT-block", "single", "scalar"}
+                    : new String[]{RUN_BLOCK_RECALL ? "LUT-block" : "single"};
+            for (int scorer = 0; scorer < scorerNames.length; scorer++) {
+                for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
+                    System.out.format(java.util.Locale.ROOT, "\tASH %s %d-recall@%d = %.6f%n",
+                            scorerNames[scorer], RECALL_K, atValues[aIdx],
+                            totalRecall[scorer * atValues.length + aIdx] / queries.size());
+                }
             }
         }
 
@@ -570,7 +674,7 @@ public class DistancesASH {
         final String kernelMode =
                 System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
 
-        for (int blockSize : BLOCK_SIZES) {
+        if (RUN_BLOCK_TIMING) for (int blockSize : BLOCK_SIZES) {
 
             // Print scorer implementation once per blockSize (diagnostic)
             {
@@ -747,6 +851,13 @@ public class DistancesASH {
     }
 
     public static void main(String[] args) throws IOException {
+        if (args.length == 3) {
+            testASHEncodings(args[0], args[1], args[2]);
+            return;
+        }
+        if (args.length != 0) {
+            throw new IllegalArgumentException("Expected base.fvecs query.fvecs ground-truth.ivecs");
+        }
 //        runSIFT();
 //        runGIST();
 //        runColbert();
