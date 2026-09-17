@@ -47,6 +47,24 @@ public class TestASHScoringDispatch {
     private static final String SINGLE = "jvector.ash.singleKernel";
 
     @Test
+    public void projectionSimdHandlesPartialBlocks() {
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        if (!backend.supportsAshProjectionScoring()) return;
+        Random random = new Random(84621);
+        for (int bits : new int[]{2, 4}) {
+            for (int dimensions = 1; dimensions <= 748; dimensions++) {
+                float[] query = new float[dimensions];
+                byte[] code = new byte[(dimensions * bits + 7) / 8];
+                for (int i = 0; i < dimensions; i++) query[i] = random.nextFloat() - 0.5f;
+                random.nextBytes(code);
+                float expected = AsymmetricHashing.dotProjectionCode(query, code, dimensions, bits);
+                assertEquals("bits=" + bits + " dimensions=" + dimensions, expected,
+                        backend.ashProjectionDot(query, code, dimensions, bits), 0.0002f);
+            }
+        }
+    }
+
+    @Test
     public void standaloneAndFusedUseSelectedKernels() throws Exception {
         String oldBlock = System.getProperty(BLOCK), oldSingle = System.getProperty(SINGLE);
         try {
