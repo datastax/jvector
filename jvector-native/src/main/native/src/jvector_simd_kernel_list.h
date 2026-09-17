@@ -58,7 +58,11 @@
     KERNEL_ENTRY(float, nvq_square_l2_distance_8bit, (const float *vector, const unsigned char *quantized, size_t length, float alpha, float x0, float minValue, float maxValue), (vector, quantized, length, alpha, x0, minValue, maxValue)) \
     KERNEL_ENTRY(float, nvq_dot_product_8bit, (const float *vector, const unsigned char *quantized, size_t length, float alpha, float x0, float minValue, float maxValue), (vector, quantized, length, alpha, x0, minValue, maxValue)) \
     KERNEL_ENTRY(int64_t, nvq_cosine_8bit_packed, (const float *vector, const unsigned char *quantized, size_t length, float alpha, float x0, float minValue, float maxValue, const float *centroid), (vector, quantized, length, alpha, x0, minValue, maxValue, centroid)) \
-    KERNEL_ENTRY(void, nvq_shuffle_query_in_place_8bit, (float *vector, size_t length), (vector, length))
+    KERNEL_ENTRY(void, nvq_shuffle_query_in_place_8bit, (float *vector, size_t length), (vector, length)) \
+    /* Int8 byte-vector similarity (VNNI-accelerated on AVX3_DL+) */ \
+    KERNEL_ENTRY(float, dot_product_i8, (const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
+    KERNEL_ENTRY(float, euclidean_i8, (const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
+    KERNEL_ENTRY(float, cosine_i8, (const int8_t *a, size_t aoffset, const int8_t *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length))
     /* ── ADD NEW KERNEL_ENTRY LINES ABOVE THIS LINE ── */
 // clang-format on
 
