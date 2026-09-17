@@ -135,12 +135,12 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
     }
 
     /**
-     * Regression test: {@link GraphIndexBuilder#rescore} is used by Cassandra to refine the PQ
+     * Regression test: {@link GraphIndexBuilder#rescore} is used to refine the PQ
      * codebook mid-build, without pausing insertion of the remaining rows. rescore() copies each
      * node's edges into the new builder via connectNode(), which does not mark the node complete
      * in the new builder's CompletionTracker. A node stuck at the tracker's default completion
      * time (Integer.MAX_VALUE) is filtered out of every ConcurrentGraphIndexView taken on the new
-     * graph from then on -- including the entry node's own neighbor list -- which is exactly the
+     * graph from then on, including the entry node's own neighbor list, which is exactly the
      * view addGraphNode() and cleanup() use while the graph is still mutable (allMutationsCompleted
      * == false). So a fresh concurrent view taken right after rescore() must already see every
      * copied edge, not an empty/filtered list.
@@ -158,7 +158,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             builder.addGraphNode(i, ravv.getVector(i));
         }
 
-        // Simulates CassandraOnHeapGraph/CompactionGraph refining its PQ codebook mid-build
+        // Simulates calling application refining its PQ codebook mid-build
         var rescored = GraphIndexBuilder.rescore(builder, bsp);
         var rescoredGraph = (OnHeapGraphIndex) rescored.getGraph();
 
