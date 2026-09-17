@@ -58,7 +58,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /**
      * training_size = min(N, D * training_factor).
      */
-    private static final int ITQ_TRAINING_FACTOR = 100;
+    private static final int ITQ_TRAINING_FACTOR = 20;
 
     /** Final setting TBD. */
     private static final int TRAINING_ITERS = 25;
@@ -1653,6 +1653,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         logProgress("\t[stage] ITQ training iterations started...");
         long startTime = System.nanoTime();
 
+        double[] recentLosses = new double[3];
         for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
             rCol = orthogonalize(mCol, d, d);
 
@@ -1665,6 +1666,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             // C++-style cheap loss: trace(R^T M) / N.
             ProjectionTrainingLoss loss = computeTrainingLossFromUpdateMatrix(rCol, mCol, N);
             printTrainingLoss(epoch, loss);
+            if (epoch >= 8 && recentLosses[(epoch - 3) % 3] - loss.loss <= 0.01 * loss.loss) {
+                logProgress("ITQ early stop at epoch " + epoch);
+                break;
+            }
+            recentLosses[epoch % 3] = loss.loss;
         }
 
         // Final polar step after the last update.
