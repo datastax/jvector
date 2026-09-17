@@ -55,7 +55,6 @@ final class CompactWriter implements AutoCloseable {
     private final long startOffset;
     private final int headerSize;
     private final Header header;
-    private final int version;
     private final FusedFeature fusedFeature;
     private final int baseDegree;
     private final int maxOrdinal;
@@ -91,7 +90,18 @@ final class CompactWriter implements AutoCloseable {
             throws IOException {
         this.fusedFeature = fusedFeature;
         this.fusedPQEnabled = fusedFeature != null;
-        this.version = OnDiskGraphIndex.CURRENT_VERSION;
+        // This writer only ever targets the current on-disk format -- unlike AbstractGraphIndexWriter,
+        // there is no builder/version parameter that lets a caller pick an older version. Because of
+        // that, `fusedPQEnabled` alone is a safe stand-in for "the format supports fused PQ" everywhere
+        // below: there's no other version this class could be writing. We still check the format here,
+        // once, instead of just assuming it, so that if this class is ever changed to support writing
+        // older versions, or a future version drops fused PQ support, this fails loudly at construction
+        // instead of silently omitting the fused-PQ footer/packed-neighbor data later on.
+        int version = OnDiskGraphIndex.CURRENT_VERSION;
+        if (fusedPQEnabled && !GraphIndexFormatFactory.forVersion(version).supportsFeature(FeatureId.FUSED_PQ)) {
+            throw new IllegalStateException(
+                    "Fused PQ requires a format version that supports it; version " + version + " does not");
+        }
         this.outputPath = outputPath;
         this.writer = new BufferedRandomAccessWriter(outputPath);
         this.startOffset = startOffset;
@@ -117,7 +127,7 @@ final class CompactWriter implements AutoCloseable {
         this.recordSize = rsize;
 
         this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
-        var commonHeader = new CommonHeader(this.version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
+        var commonHeader = new CommonHeader(version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
         this.header = new Header(commonHeader, featureMap);
         this.headerSize = header.size();
 
@@ -159,7 +169,10 @@ final class CompactWriter implements AutoCloseable {
     }
 
     void writeFooter() throws IOException {
-        if (fusedPQEnabled && version == 6) {
+        // No "&& version == 6" here: the constructor already verified that the format this writer
+        // targets supports fused PQ whenever fusedPQEnabled is true, so that's the only condition
+        // this needs to check. See the constructor for why that's a safe simplification.
+        if (fusedPQEnabled) {
             if (!level1FeatureRecords.isEmpty()) {
                 // Hierarchy is enabled: write PQ source feature for every level-1 node.
                 // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel >= 1 branch).
@@ -213,10 +226,12 @@ final class CompactWriter implements AutoCloseable {
             int count = configuredLayerInfo.get(level).size;
             total += (long) count * (Integer.BYTES * 2L + (long) degree * Integer.BYTES);
         }
-        // PQ feature records written at the start of writeFooter() when v6 + fused PQ:
+        // PQ feature records written at the start of writeFooter() when fused PQ is enabled:
         //   - hierarchy enabled: one [ord, code] record per level-1 node;
         //   - no hierarchy:      one [entryOrd, code] record for the entry node only.
-        if (fusedPQEnabled && version == 6) {
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled) {
             int pqSize = fusedFeature.codeSize();
             if (configuredLayerInfo.size() > 1) {
                 int level1Count = configuredLayerInfo.get(1).size;
@@ -241,7 +256,9 @@ final class CompactWriter implements AutoCloseable {
         for (; n < degree; n++) {
             writer.writeInt(-1);
         }
-        if (fusedPQEnabled && version == 6 && level == 1 && level1PqCode != null) {
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled && level == 1 && level1PqCode != null) {
             level1FeatureRecords.add(new UpperLayerFeatureRecord(ordinal, level1PqCode.copy()));
         }
     }

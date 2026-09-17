@@ -378,6 +378,50 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     }
 
     @Test
+    public void testVersionRoundTrip() throws Exception {
+        // Versions 3-5 predate V6's feature-reordering/footer-format changes but still need to
+        // round-trip correctly. Version 2 is covered separately by testV0Read/testV0Write, and
+        // version 6 (current) is exercised throughout the rest of this test class.
+        for (int version : new int[]{3, 4, 5}) {
+            versionRoundTrip(version, false);
+        }
+        // Only versions 4 and 5 (of the ones under test here) support multi-layer graphs.
+        for (int version : new int[]{4, 5}) {
+            versionRoundTrip(version, true);
+        }
+    }
+
+    private void versionRoundTrip(int version, boolean hierarchical) throws Exception {
+        ImmutableGraphIndex graph = hierarchical
+                ? new TestUtil.RandomlyConnectedGraphIndex(
+                        List.of(new CommonHeader.LayerInfo(50, 8), new CommonHeader.LayerInfo(5, 3)),
+                        getRandom())
+                : new TestUtil.RandomlyConnectedGraphIndex(50, 8, getRandom());
+        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+        var outputPath = testDirectory.resolve("version_" + version + (hierarchical ? "_multilayer" : "_single"));
+
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .withVersion(version)
+                .with(new InlineVectors(ravv.dimension()))
+                .build())
+        {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                    nodeId -> new InlineVectors.State(ravv.getVector(nodeId))));
+        }
+
+        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
+             var onDiskView = onDiskGraph.getView())
+        {
+            assertEquals("version", version, onDiskGraph.version);
+            assertEquals("max level", graph.getMaxLevel(), onDiskGraph.getMaxLevel());
+            assertEquals(EnumSet.of(FeatureId.INLINE_VECTORS), onDiskGraph.features.keySet());
+            TestUtil.assertGraphEquals(graph, onDiskGraph);
+            validateVectors(onDiskView, ravv);
+        }
+    }
+
+    @Test
     public void testMultiLayerFullyConnected() throws Exception {
         // Suppose we have 3 layers of sizes 5, 4, 3
         var graph = new TestUtil.FullyConnectedGraphIndex(1, List.of(5, 4, 3));
