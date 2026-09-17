@@ -2133,23 +2133,24 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         double[] vt = new double[k * cols];
         double[] s = new double[k];
         intW info = new intW(0);
+        int[] iwork = new int[8 * k];
 
         // Workspace query
         double[] a = mCol.clone(); // dgesvd overwrites input
         double[] workQuery = new double[1];
-        LAPACK.getInstance().dgesvd(
-                "S", "S",
+        LAPACK.getInstance().dgesdd(
+                "S",
                 rows, cols,
                 a, rows,
                 s,
                 u, rows,
                 vt, k,
-                workQuery, -1,
+                workQuery, -1, iwork,
                 info
         );
 
         if (info.val != 0) {
-            throw new RuntimeException("LAPACK dgesvd workspace query failed with info=" + info.val);
+            throw new RuntimeException("LAPACK dgesdd workspace query failed with info=" + info.val);
         }
 
         int lwork = (int) workQuery[0];
@@ -2157,19 +2158,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         // Actual call
         a = mCol.clone();
-        LAPACK.getInstance().dgesvd(
-                "S", "S",
+        LAPACK.getInstance().dgesdd(
+                "S",
                 rows, cols,
                 a, rows,
                 s,
                 u, rows,
                 vt, k,
-                work, lwork,
+                work, lwork, iwork,
                 info
         );
 
         if (info.val != 0) {
-            throw new RuntimeException("LAPACK dgesvd failed with info=" + info.val);
+            throw new RuntimeException("LAPACK dgesdd failed with info=" + info.val);
         }
 
         return nativeMultiply(u, rows, k, vt, cols);
