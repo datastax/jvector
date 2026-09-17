@@ -36,6 +36,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.Random;
+import java.util.stream.IntStream;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.netlib.util.intW;
@@ -2209,39 +2210,43 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final int excessBits = bitsPerDimension - 1;
         final int maxCode = (1 << excessBits) - 1;
 
-        double[] absNorm = new double[dims];
-        double[] mag = new double[dims];
+        // Each task owns a contiguous range of training rows and its scratch arrays.
+        // computeOptimalScalingFactor already keeps its event buffers thread-local.
+        final int workers = Math.min(rows, Math.min(16, Runtime.getRuntime().availableProcessors()));
+        IntStream.range(0, workers).parallel().forEach(worker -> {
+            double[] absNorm = new double[dims];
+            double[] mag = new double[dims];
+            int start = worker * rows / workers;
+            int end = (worker + 1) * rows / workers;
 
-        for (int r = 0; r < rows; r++) {
-            double norm2 = 0.0;
-            for (int j = 0; j < dims; j++) {
-                double v = xCol[r + j * rows];
-                norm2 += v * v;
+            for (int r = start; r < end; r++) {
+                double norm2 = 0.0;
+                for (int j = 0; j < dims; j++) {
+                    double v = xCol[r + j * rows];
+                    norm2 += v * v;
+                }
+
+                double invNorm = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
+                for (int j = 0; j < dims; j++) {
+                    absNorm[j] = Math.abs(xCol[r + j * rows]) * invNorm;
+                }
+
+                double t = computeOptimalScalingFactor(absNorm, dims, bitsPerDimension);
+                double encodedNorm2 = 0.0;
+                for (int j = 0; j < dims; j++) {
+                    int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
+                    double m = q + 0.5;
+                    mag[j] = m;
+                    encodedNorm2 += m * m;
+                }
+
+                double encodedInvNorm = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
+                for (int j = 0; j < dims; j++) {
+                    double signed = xCol[r + j * rows] < 0.0 ? -mag[j] : mag[j];
+                    outCol[r + j * rows] = signed * encodedInvNorm;
+                }
             }
-
-            double invNorm = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
-
-            for (int j = 0; j < dims; j++) {
-                absNorm[j] = Math.abs(xCol[r + j * rows]) * invNorm;
-            }
-
-            double t = computeOptimalScalingFactor(absNorm, dims, bitsPerDimension);
-
-            double encodedNorm2 = 0.0;
-            for (int j = 0; j < dims; j++) {
-                int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
-                double m = q + 0.5;
-                mag[j] = m;
-                encodedNorm2 += m * m;
-            }
-
-            double encodedInvNorm = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
-
-            for (int j = 0; j < dims; j++) {
-                double signed = xCol[r + j * rows] < 0.0 ? -mag[j] : mag[j];
-                outCol[r + j * rows] = signed * encodedInvNorm;
-            }
-        }
+        });
     }
 
     private static void writeStiefelTransform(IndexWriter out, StiefelTransform st) throws IOException {
