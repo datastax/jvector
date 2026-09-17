@@ -1,0 +1,12 @@
+[package]
+name        = "jvector"
+version     = "0.1.0"
+edition     = "2021"
+description = "Rust bindings for libjvector.so (JVector native SIMD library)"
+links       = "jvector"
+
+# build.rs locates libjvector.so and emits the rustc-link-* directives.
+build = "build.rs"
+
+[lib]
+name = "jvector"

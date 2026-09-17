@@ -115,13 +115,6 @@ vectorutil_dep = declare_dependency(
   include_directories: include_directories('src'),
 )
 
-## Example driver that exercises the runtime-dispatch API.
-#executable(
-#  'cpp_driver',
-#  sources     : 'examples/cpp_driver.cpp',
-#  dependencies: vectorutil_dep,
-#)
-
 # ---- Tests -----------------------------------------------------------------
 gtest_dep = dependency('gtest_main', required: false)
 
