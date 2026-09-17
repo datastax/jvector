@@ -1,3 +1,4 @@
+# ASH configuration for DOT_PRODUCT datasets only.
 yamlSchemaVersion: 2
 onDiskIndexVersion: 7
 
@@ -6,43 +7,42 @@ dataset: ada002-1M
 construction:
   outDegree: [64]
   efConstruction: [200]
-  neighborOverflow: [1.6f]
+  neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
   fusedGraph: [Yes]
   compression:
     - type: ASH
       parameters:
-        encodedBits: 1576
-        bitsPerDimension: 2
-        optimizer: itq
+        compressionRatio: 32
+        optimizer: ITQ
         landmarkCount: 1
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
 #    - type: PQ
 #      parameters:
-#        m: 197
+#        mFactor: 8
 #        k: 256
-#        centerData: No
 #        anisotropicThreshold: -1.0
   reranking:
-    - FP
-  useSavedIndexIfExists: Yes # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+    - NVQ
+  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:
-    10: [1.0, 2.0, 3.0, 4.0]
-#    100: [1.0]
+    10: [1.0, 2.0, 5.0, 10.0]
+#    100: [1.0, 2.0]
   useSearchPruning: [No]
   compression:
     - type: ASH
       parameters:
-        encodedBits: 1576
-        bitsPerDimension: 2
-        optimizer: itq
+        compressionRatio: 32
+        optimizer: ITQ
         landmarkCount: 1
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
 #    - type: PQ
 #      parameters:
-#        m: 197
+#        mFactor: 8
 #        k: 256
-#        centerData: No
 #        anisotropicThreshold: -1.0
-# Run-level controls, such as benchmarks, console, and logging, are in run.yml.
