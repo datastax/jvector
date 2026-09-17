@@ -22,6 +22,6 @@ public interface DataSetInfo extends DataSetProperties {
     /// This method may incur an IO penalty based on the size of the dataset and it's source.
     /// Implementations are not required to cache the dataset or ensure thread-safety.
     ///
-    /// @return the ready-to-use {@link InMemoryDataSetDataSet}
+    /// @return the ready-to-use {@link InMemoryDataSet}
     public InMemoryDataSet getDataSet();
 }
