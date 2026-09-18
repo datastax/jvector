@@ -83,6 +83,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final float DIVERSITY_ALPHA_STEP = 0.2f;
     private static final int TARGET_BATCHES_PER_SOURCE = 40;
     private static final int TARGET_NODES_PER_BATCH = 128;
+    // full-precision merges scan cells for a whole batch at once; larger batches share each cell's vector loads among more nodes
+    private static final int EXACT_NODES_PER_BATCH = 1024;
     private static final int MIN_SEARCH_TOP_K = 2;
     private static final int SEARCH_TOP_K_MULTIPLIER = 4;
 
@@ -141,6 +143,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // join reranks its candidates and scores the node's retained edges from it, and the diversity checks
     // compare it, so no record but the node's own is read.
     private ProductQuantization pqWide;
+    // Full-precision sources (no quantization anywhere): the scratch holds the vectors themselves, the
+    // hub map holds the upper layers' vectors, and level 0 scans, scores and diversifies on vectors.
+    private boolean exactMode;
     private PreEncodedCodeCache wideCache;   // non-null only while level 0 runs
     private final LongAdder l0WideScores = new LongAdder();
     static final int WIDE_MAX_SUBSPACES = 192;
@@ -429,7 +434,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // cell join their codes; nothing quantized reaches the output.
         QuantizationCompactionStrategy scratch = QuantizationCompactionStrategy.NONE;
         if (reassignOrdinals && strategy == QuantizationCompactionStrategy.NONE && sourceCompressed == null) {
-            var s = SidecarCompactionStrategy.scratch(buildContext(), Math.min(dimension, Math.max(8, dimension / 8)));
+            // Full-precision sources: the scratch holds the vectors themselves and the whole merge is exact.
+            var s = SidecarCompactionStrategy.scratchVectors(buildContext());
             s.retrain(similarityFunction);
             if (s.compressor() != null) {
                 scratch = s;
@@ -546,12 +552,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
                 strategy.outputFusedFeature(maxBaseDegree);
 
+        exactMode = activeSidecarStrategy.compressor() instanceof RawVectorCode;
         if (reassignOrdinals) {
-            if (pq != null) {
+            if (pq != null || exactMode) {
                 remappers = buildRegionOrdinalMappers(pq);
                 effectiveRemappers = remappers;
                 ordinalsReassigned = true;
-                if (cellMap != null) {
+                if (cellMap != null && exactMode) {
+                    log.info("Full-precision merge: level-0 candidates are scanned, scored and diversified on the vectors themselves ({} B per node in scratch)",
+                             4 * dimension);
+                } else if (cellMap != null) {
                     // The cell join evaluates every level-0 candidate from the wide code; the two
                     // come and go together. Only a merge too small for 256 centroids has no wide
                     // code, and it takes the graph search.
@@ -569,8 +579,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     }
                 }
                 // the cell join scans the code cache by cell: store it blocked (subspace-major)
-                strategy.setBlockedCodeLayout(cellMap != null);
-                activeSidecarStrategy.setBlockedCodeLayout(cellMap != null);
+                strategy.setBlockedCodeLayout(cellMap != null && !exactMode);
+                activeSidecarStrategy.setBlockedCodeLayout(cellMap != null && !exactMode);
                 // The strategies snapshotted the caller's remappers at construction; refresh so
                 // code placement (pre-encode caches, sidecar order) matches the on-disk ordinals.
                 strategy.onRemappersUpdated(buildContext());
@@ -675,6 +685,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         setupCrossLink();
         orderingCache = fusedPQEnabled ? writer.pqCodeCache() : activeSidecarStrategy.getCodeCache();
+        if (exactMode && cellMap != null) {
+            wideCache = orderingCache;   // the scratch of a full-precision merge is the vector store itself
+        }
 
         for (int level = 0; level < maxDegrees.size(); level++) {
             int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
@@ -898,7 +911,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
-        int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
+        int perBatch = exactMode && level == 0 ? EXACT_NODES_PER_BATCH : TARGET_NODES_PER_BATCH;
+        int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + perBatch - 1) / perBatch);
         if (numBatches > numNodes) numBatches = numNodes;
         int batchSize = numBatches == 0 ? 0 : (numNodes + numBatches - 1) / numBatches;
         for (int b = 0; b < numBatches; ++b) {
@@ -938,12 +952,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
+        final boolean batched = exactMode && cellMap != null && wideCache != null && sizeRank[bs.sourceIdx] < sources.size() - 1;
+        if (batched) {
+            scanBatchExact(bs, scratch, params);
+        }
         for (int i = bs.start; i < bs.end; i++) {
             int node = bs.nodes[i];
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
-
+            scratch.batchNodeIndex = batched ? i - bs.start : -1;
             out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params));
         }
+        scratch.batchNodeIndex = -1;
 
         return out;
     }
@@ -1228,7 +1247,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
             // Offers carry the exact score their offerer computed; their pairwise diversity checks
             // run on codes, so their vectors are never read here.
-            if (codeDiversityAvailable(params)) {
+            if (exactMode && wideCache != null) {
+                // full-precision merge: the offerer's vector comes from the vector store
+                for (int i = offersStart; i < candSize; i++) {
+                    scratch.wide.decode(remappers.get(scratch.candSrc[i]).oldToNew(scratch.candNode[i]), scratch.candVec[i]);
+                    scratch.candHasVec[i] = true;
+                }
+            } else if (codeDiversityAvailable(params)) {
                 Arrays.fill(scratch.candCodeOnly, offersStart, candSize, true);
             }
         }
@@ -1360,6 +1385,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private int gatherFromOtherSourceByCells(int node, int nodeSourceIdx, int targetIdx,
                                              OnDiskGraphIndex.View targetView, VectorFloat<?> baseVec,
                                              Scratch scratch, int candSize, CompactionParams params) {
+        if (exactMode) {
+            // full-precision merge: the survivors were computed for the whole batch by scanBatchExact
+            NodeQueue top = scratch.batch.tops[targetIdx][scratch.batchNodeIndex];
+            OrdinalMapper mapper = remappers.get(targetIdx);
+            while (top.size() > 0) {
+                float score = top.topScore();
+                int newOrd = top.pop();
+                scratch.candSrc[candSize] = targetIdx;
+                scratch.candNode[candSize] = mapper.newToOld(newOrd);
+                scratch.wide.decode(newOrd, scratch.candVec[candSize]);
+                scratch.candHasVec[candSize] = true;
+                scratch.candScore[candSize] = score;
+                l0WideScores.increment();
+                candSize++;
+            }
+            return candSize;
+        }
         if (scratch.cellScorer == null) {
             scratch.cellScorer = cellMap.scorer();
             scratch.top = new NodeQueue(new BoundedLongHeap(params.searchTopK), NodeQueue.Order.MIN_HEAP);
@@ -2049,16 +2091,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] level1Position;
         final Int2IntHashMap[] upperPosition;   // levels >= 2: node id -> position (level 1 uses level1Position)
         @SuppressWarnings("unchecked")
-        HubMap(OnDiskGraphIndex hub, ProductQuantization pq, VectorSimilarityFunction similarityFunction) {
+        // full-precision merge (pq == null): the upper layers' vectors themselves, position-major per level
+        final boolean exact;
+        final VectorSimilarityFunction exactFunction;
+        final VectorFloat<?>[] vectors;
+        final float[][] norms;          // COSINE only: |v| per position
+        final int dimension;
+        HubMap(OnDiskGraphIndex hub, ProductQuantization pq, VectorSimilarityFunction similarityFunction, int dimension) {
             this.pq = pq;
+            this.exact = pq == null;
+            this.exactFunction = similarityFunction;
+            this.dimension = dimension;
             // squared distance for EUCLIDEAN, dot product otherwise; COSINE divides the dot product by
             // the decoded norm from the magnitude table below
             this.lutFunction = similarityFunction == VectorSimilarityFunction.EUCLIDEAN
                     ? VectorSimilarityFunction.EUCLIDEAN : VectorSimilarityFunction.DOT_PRODUCT;
-            this.subspaceCount = pq.getSubspaceCount();
-            this.clusterCount = pq.getClusterCount();
+            this.subspaceCount = exact ? 0 : pq.getSubspaceCount();
+            this.clusterCount = exact ? 0 : pq.getClusterCount();
             this.cosine = similarityFunction == VectorSimilarityFunction.COSINE;
-            if (cosine) {
+            this.vectors = new VectorFloat<?>[hub.getMaxLevel() + 1];
+            this.norms = new float[hub.getMaxLevel() + 1][];
+            if (cosine && !exact) {
                 magnitudes = vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
                 VectorFloat<?> center = pq.getGlobalCentroid();
                 int offset = 0;
@@ -2098,7 +2151,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         /** Per-thread query state: the query's partial-sum table over the codebooks. */
         final class Scorer {
-            private final VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
+            private VectorFloat<?> exactQuery;      // exact mode: the query itself
+            private float exactQueryNorm;
+            private final VectorFloat<?> partialSums = exact ? null : vectorTypeSupport.createFloatVector(subspaceCount * clusterCount);
             private float[] table;          // partialSums as a flat float[] (m * clusterCount + c); no copy when heap-backed
             private boolean tableValid;
             private byte[] lut8;            // the table quantized for the scan kernel
@@ -2138,6 +2193,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             void setQuery(VectorFloat<?> query) {
                 tableValid = false;
                 lut8Valid = false;
+                if (exact) {
+                    if (exactQuery == null) exactQuery = vectorTypeSupport.createFloatVector(dimension);
+                    exactQuery.copyFrom(query, 0, 0, dimension);
+                    exactQueryNorm = cosine ? (float) Math.sqrt(VectorUtil.dotProduct(query, query)) : 1f;
+                    return;
+                }
                 // A center-adjusted PQ encodes (v - globalCentroid). For EUCLIDEAN the query must be
                 // centered so per-subspace distances compose; for the dot-product ranking the raw
                 // query is correct (dot(q, centroid) is a per-query constant), and centering it
@@ -2155,6 +2216,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             /** Higher is closer. */
             float score(int level, int position) {
+                if (exact) {
+                    VectorFloat<?> v = vectors[level];
+                    int o = position * dimension;
+                    switch (exactFunction) {
+                        case EUCLIDEAN:
+                            return -VectorUtil.squareL2Distance(exactQuery, 0, v, o, dimension);
+                        case COSINE:
+                            return VectorUtil.dotProduct(exactQuery, 0, v, o, dimension) / Math.max(1e-12f, norms[level][position] * exactQueryNorm);
+                        default:
+                            return VectorUtil.dotProduct(exactQuery, 0, v, o, dimension);
+                    }
+                }
                 int off = position * subspaceCount;
                 float sum = VectorUtil.assembleAndSum(partialSums, clusterCount, codes[level], off, subspaceCount);
                 if (cosine) {
@@ -2277,13 +2350,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Loads the largest source's upper layers into a {@link HubMap}, encoding every upper-layer node with {@code pq}. */
     private HubMap buildHubMap(OnDiskGraphIndex hub, ProductQuantization pq) {
         long t0 = System.nanoTime();
-        HubMap h = new HubMap(hub, pq, similarityFunction);
+        HubMap h = new HubMap(hub, pq, similarityFunction, dimension);
         try (var view = hub.getView()) {
             h.entryNode = view.entryNode().node;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        int subspaceCount = pq.getSubspaceCount();
+        int subspaceCount = pq == null ? 0 : pq.getSubspaceCount();
         for (int level = 1; level <= h.topLevel; level++) {
             NodesIterator it = hub.getNodes(level);
             int[] nodes = new int[it.size()];
@@ -2308,7 +2381,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             h.degree[level] = stride;
             int[] adj = new int[n * stride];
             Arrays.fill(adj, -1);
-            ByteSequence<?> codes = vectorTypeSupport.createByteSequence(n * subspaceCount);
+            ByteSequence<?> codes = pq == null ? null : vectorTypeSupport.createByteSequence(n * subspaceCount);
+            final VectorFloat<?> exactVectors;
+            final float[] exactNorms;
+            if (pq == null) {
+                if ((long) n * dimension > Integer.MAX_VALUE - 8) {
+                    throw new IllegalStateException("exact hub map: level " + level + " too large (" + n + " nodes x " + dimension + ")");
+                }
+                exactVectors = vectorTypeSupport.createFloatVector(n * dimension);
+                exactNorms = h.cosine ? new float[n] : null;
+            } else {
+                exactVectors = null;
+                exactNorms = null;
+            }
             int lvl = level;
             int chunks = Math.max(1, Math.min(1024, n / 4096));
             int chunk = (n + chunks - 1) / chunks;
@@ -2321,7 +2406,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
                 tasks.add(() -> {
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(subspaceCount);
+                    ByteSequence<?> code = pq == null ? null : vectorTypeSupport.createByteSequence(subspaceCount);
                     try (var view = hub.getView()) {
                         for (int i = lo; i < hi; i++) {
                             var neighbors = view.getNeighborsIterator(lvl, nodes[i]);
@@ -2330,8 +2415,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 adj[i * stride + j++] = neighbors.nextInt();
                             }
                             view.getVectorInto(nodes[i], vec, 0);
-                            pq.encodeTo(vec, code);
-                            codes.copyFrom(code, 0, i * subspaceCount, subspaceCount);
+                            if (pq == null) {
+                                exactVectors.copyFrom(vec, 0, i * dimension, dimension);
+                                if (exactNorms != null) exactNorms[i] = (float) Math.sqrt(VectorUtil.dotProduct(vec, vec));
+                            } else {
+                                pq.encodeTo(vec, code);
+                                codes.copyFrom(code, 0, i * subspaceCount, subspaceCount);
+                            }
                         }
                     }
                     return null;
@@ -2340,6 +2430,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             joinAll(tasks);
             h.adjacency[level] = adj;
             h.codes[level] = codes;
+            h.vectors[level] = exactVectors;
+            h.norms[level] = exactNorms;
         }
         log.info("Region ordinals: resident hub map built (levels 1..{}, {} level-1 nodes) in {} ms",
                  h.topLevel, h.nodes[1].length, (System.nanoTime() - t0) / 1_000_000);
@@ -2394,7 +2486,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         HubMap hubMapRef = hubMap;
         int[] walkPositionRef = walkPosition;
-        int prefixBytes = Math.min(4, pq.getSubspaceCount());
+        int prefixBytes = pq == null ? 0 : Math.min(4, pq.getSubspaceCount());
         if (regionMode && SymmetricCodeSimilarity.supports(similarityFunction)) {
             // dot product, Euclidean and cosine (cosine adds a second additive pass over decoded norms)
             cellMap = hubMap;
@@ -2427,7 +2519,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 tasks.add(() -> {
                     source.prefetchL0Records(lo, hi - 1);
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    ByteSequence<?> code = pq == null ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
                     HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
                     IntHashSet beamVisited = regionMode ? new IntHashSet(2 * beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])) : null;
                     long[] beamScored = regionMode ? new long[beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
@@ -2447,10 +2539,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 int pos = landing >= 0 && landing < walkPositionRef.length ? walkPositionRef[landing] : Integer.MAX_VALUE;
                                 key = pos & 0xFFFFFFFFL;
                             } else {
-                                pq.encodeTo(vec, code);
                                 key = 0;
-                                for (int b = 0; b < prefixBytes; b++) {
-                                    key = (key << 8) | (code.get(b) & 0xFFL);
+                                if (pq != null) {
+                                    pq.encodeTo(vec, code);
+                                    for (int b = 0; b < prefixBytes; b++) {
+                                        key = (key << 8) | (code.get(b) & 0xFFL);
+                                    }
                                 }
                             }
                             keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
@@ -2531,8 +2625,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Vectors that expose no heap array ({@link FloatArray}) take the generic decode.
      */
     private final class WideDecoder {
-        private final int m = pqWide.getSubspaceCount();
-        private final int clusterCount = pqWide.getClusterCount();
+        private final boolean raw = pqWide == null;   // full-precision merge: the store holds the vectors themselves
+        private final int m = raw ? 4 * dimension : pqWide.getSubspaceCount();
+        private final int clusterCount = raw ? 0 : pqWide.getClusterCount();
         private final ByteSequence<?> code = vectorTypeSupport.createByteSequence(m);
         private final byte[] codeBytes = new byte[m];
         private final float[] codebooks;      // every subspace's codebook, subspace sub at codebookBase[sub]; null without heap arrays
@@ -2541,6 +2636,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         private final float[] center;
 
         WideDecoder() {
+            if (raw) {
+                sizes = offsets = codebookBase = null;
+                codebooks = null;
+                pairs = null;
+                center = null;
+                return;
+            }
             sizes = new int[m];
             offsets = new int[m];
             codebookBase = new int[m];
@@ -2594,6 +2696,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         void decode(int newOrdinal, VectorFloat<?> dst) {
+            if (raw) {
+                if (dst instanceof FloatArray) {
+                    wideCache.getFloats(newOrdinal, ((FloatArray) dst).array(), dimension);
+                } else {
+                    wideCache.get(newOrdinal, codeBytes);
+                    RawVectorCode.decodeInto(codeBytes, dst, dimension);
+                }
+                return;
+            }
             wideCache.get(newOrdinal, codeBytes);
             if (codebooks != null && dst instanceof FloatArray) {
                 float[] out = ((FloatArray) dst).array();
@@ -2631,6 +2742,157 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /** A level-0 batch of a full-precision merge: the nodes' vectors and, per larger target and node, the scan's top-k. */
+    private final class ExactBatch {
+        static final int QUERY_CHUNK = 32;   // queries scored together against each vector; 32 x 1.5 KB stays in L1
+        final int capacity;
+        final VectorFloat<?>[] queries;
+        final float[] queryNorm2;          // EUCLIDEAN and COSINE: |q|^2 per node
+        final NodeQueue[][] tops;          // [target][node index in batch]
+        final float[][] thresholds;        // [target][node index]: k-th best score so far, -inf until the heap is full
+        final VectorFloat<?>[] chunkQueries = new VectorFloat<?>[QUERY_CHUNK];
+        final float[] chunkScores = new float[QUERY_CHUNK];
+        int[] cellIndex = new int[256];    // node indices probing the current cell
+
+        ExactBatch(int capacity, int searchTopK) {
+            this.capacity = capacity;
+            this.queries = new VectorFloat<?>[capacity];
+            this.queryNorm2 = new float[capacity];
+            this.tops = new NodeQueue[sources.size()][capacity];
+            this.thresholds = new float[sources.size()][capacity];
+            for (int i = 0; i < capacity; i++) {
+                queries[i] = vectorTypeSupport.createFloatVector(dimension);
+                for (int t = 0; t < sources.size(); t++) {
+                    tops[t][i] = new NodeQueue(new BoundedLongHeap(searchTopK), NodeQueue.Order.MIN_HEAP);
+                }
+            }
+        }
+    }
+
+    /**
+     * The cell scan of a full-precision merge, for a whole level-0 batch. Every node's probe cells
+     * are chosen as in {@link #gatherFromOtherSourceByCells}; then, per larger target, each probed
+     * cell is streamed once from the vector store and every vector in it is scored against all the
+     * batch's nodes that probe that cell. The per-node top-k are those of a per-node scan; only the
+     * vector loads are shared.
+     */
+    private void scanBatchExact(BatchSpec bs, Scratch scratch, CompactionParams params) {
+        final int src = bs.sourceIdx;
+        final int n = bs.end - bs.start;
+        if (scratch.batch == null || scratch.batch.capacity < n) {
+            scratch.batch = new ExactBatch(Math.max(n, EXACT_NODES_PER_BATCH), params.searchTopK);
+        }
+        if (scratch.cellScorer == null) {
+            scratch.cellScorer = cellMap.scorer();
+            scratch.top = new NodeQueue(new BoundedLongHeap(params.searchTopK), NodeQueue.Order.MIN_HEAP);
+            scratch.probeCells = new int[beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1])];
+        }
+        if (scratch.wide == null) {
+            scratch.wide = new WideDecoder();
+        }
+        final ExactBatch b = scratch.batch;
+        final FixedBitSet alive = liveNodes.get(src);
+        final OrdinalMapper mapper = remappers.get(src);
+        final HubMap.Scorer scorer = scratch.cellScorer;
+        final boolean needNorms = similarityFunction != VectorSimilarityFunction.DOT_PRODUCT;
+        // per larger target: (cell << 32 | node index) for every cell a node scans
+        final int[] pairCount = new int[sources.size()];
+        final long[][] pairsPerTarget = new long[sources.size()][];
+        for (int t = 0; t < sources.size(); t++) {
+            if (t == src || sizeRank[t] <= sizeRank[src]) continue;
+            pairsPerTarget[t] = new long[Math.max(64, n * 8)];
+            for (int i = 0; i < n; i++) b.tops[t][i].clear();
+            Arrays.fill(b.thresholds[t], 0, n, Float.NEGATIVE_INFINITY);
+        }
+        var view = (OnDiskGraphIndex.View) scratch.gs[src].getView();
+        for (int i = 0; i < n; i++) {
+            int node = bs.nodes[bs.start + i];
+            if (!alive.get(node)) continue;
+            view.getVectorInto(node, b.queries[i], 0);
+            b.queryNorm2[i] = needNorms ? VectorUtil.dotProduct(b.queries[i], b.queries[i]) : 0f;
+            int ownCell = cellOf(src, mapper.oldToNew(node));
+            if (ownCell < 0) continue;
+            scorer.setQuery(b.queries[i]);
+            scratch.probeCount = 0;
+            selectCellsByBeam(scratch, scorer, cellToPosition[ownCell]);
+            scratch.probeNode = -1;
+            for (int t = 0; t < sources.size(); t++) {
+                if (pairsPerTarget[t] == null) continue;
+                final int[] starts = cellStart[t];
+                long scanned = 0;
+                for (int k = 0; k < scratch.probeCount; k++) {
+                    int cell = scratch.probeCells[k];
+                    int cn = starts[cell + 1] - starts[cell];
+                    if (cn <= 0) continue;
+                    if (scanned > 0 && scanned + cn > CELL_BUDGET) break;
+                    scanned += cn;
+                    if (pairCount[t] == pairsPerTarget[t].length) {
+                        pairsPerTarget[t] = Arrays.copyOf(pairsPerTarget[t], pairsPerTarget[t].length * 2);
+                    }
+                    pairsPerTarget[t][pairCount[t]++] = ((long) cell << 32) | i;
+                }
+                cellCodesScanned.add(scanned);
+                cellScans.increment();
+            }
+        }
+        final VectorFloat<?> tmp = scratch.tmpVec;
+        final int k = params.searchTopK;
+        for (int t = 0; t < sources.size(); t++) {
+            long[] pairs = pairsPerTarget[t];
+            if (pairs == null || pairCount[t] == 0) continue;
+            Arrays.sort(pairs, 0, pairCount[t]);
+            final int[] starts = cellStart[t];
+            final NodeQueue[] tops = b.tops[t];
+            final float[] thresholds = b.thresholds[t];
+            int p = 0;
+            while (p < pairCount[t]) {
+                int cell = (int) (pairs[p] >>> 32);
+                int q = p;
+                while (q < pairCount[t] && (int) (pairs[q] >>> 32) == cell) q++;
+                final int probers = q - p;
+                if (b.cellIndex.length < probers) {
+                    b.cellIndex = new int[probers * 2];
+                }
+                for (int r = p; r < q; r++) {
+                    b.cellIndex[r - p] = (int) pairs[r];
+                }
+                final int lo = starts[cell], hi = starts[cell + 1];
+                // the cell's vectors are streamed once per chunk of queries; a chunk stays in L1
+                for (int c0 = 0; c0 < probers; c0 += ExactBatch.QUERY_CHUNK) {
+                    final int cn = Math.min(ExactBatch.QUERY_CHUNK, probers - c0);
+                    for (int r = 0; r < cn; r++) {
+                        b.chunkQueries[r] = b.queries[b.cellIndex[c0 + r]];
+                    }
+                    for (int newOrd = lo; newOrd < hi; newOrd++) {
+                        scratch.wide.decode(newOrd, tmp);
+                        VectorUtil.dotProductMulti(tmp, b.chunkQueries, cn, b.chunkScores);
+                        float vNorm2 = needNorms ? VectorUtil.dotProduct(tmp, tmp) : 0f;
+                        for (int r = 0; r < cn; r++) {
+                            int i = b.cellIndex[c0 + r];
+                            float dot = b.chunkScores[r];
+                            float score;
+                            if (!needNorms) {
+                                score = (1 + dot) / 2;
+                            } else if (similarityFunction == VectorSimilarityFunction.EUCLIDEAN) {
+                                score = 1 / (1 + Math.max(0f, b.queryNorm2[i] + vNorm2 - 2 * dot));
+                            } else {
+                                score = (1 + dot / (float) Math.sqrt(Math.max(1e-12, (double) b.queryNorm2[i] * vNorm2))) / 2;
+                            }
+                            if (score > thresholds[i]) {
+                                NodeQueue top = tops[i];
+                                top.push(newOrd, score);
+                                if (top.size() >= k) {
+                                    thresholds[i] = top.topScore();
+                                }
+                            }
+                        }
+                    }
+                }
+                p = q;
+            }
+        }
+    }
+
     private static final class Scratch implements AutoCloseable {
         final int[] candSrc, candNode;
         final float[] candScore;
@@ -2653,6 +2915,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         IntHashSet l1Visited;   // visited set for the probe beam
         int probeNode = -1, probeSrc = -1;
         NodeQueue top;          // best searchTopK codes of the current scan
+        ExactBatch batch;       // full-precision merge: the batch's queries and per-node scan results
+        int batchNodeIndex = -1;
 
         /**
          * Constructs scratch space with buffers sized for the maximum expected candidates and degree.

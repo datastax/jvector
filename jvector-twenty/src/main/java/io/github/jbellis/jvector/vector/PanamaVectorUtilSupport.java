@@ -398,6 +398,56 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
+    @Override
+    public void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+        if (!(vector instanceof FloatArray)) {
+            VectorUtilSupport.super.dotProductMulti(vector, queries, count, out);
+            return;
+        }
+        final VectorSpecies<Float> FS = FloatVector.SPECIES_PREFERRED;
+        final float[] v = ((FloatArray) vector).array();
+        final int dim = vector.length();
+        final int bound = FS.loopBound(dim);
+        int i = 0;
+        // eight queries per pass: one vector chunk load feeds eight FMAs into eight accumulators
+        for (; i + 8 <= count; i += 8) {
+            boolean heap = true;
+            for (int j = 0; j < 8; j++) heap &= queries[i + j] instanceof FloatArray;
+            if (!heap) break;
+            final float[] q0 = ((FloatArray) queries[i]).array(), q1 = ((FloatArray) queries[i + 1]).array();
+            final float[] q2 = ((FloatArray) queries[i + 2]).array(), q3 = ((FloatArray) queries[i + 3]).array();
+            final float[] q4 = ((FloatArray) queries[i + 4]).array(), q5 = ((FloatArray) queries[i + 5]).array();
+            final float[] q6 = ((FloatArray) queries[i + 6]).array(), q7 = ((FloatArray) queries[i + 7]).array();
+            FloatVector a0 = FloatVector.zero(FS), a1 = a0, a2 = a0, a3 = a0, a4 = a0, a5 = a0, a6 = a0, a7 = a0;
+            int k = 0;
+            for (; k < bound; k += FS.length()) {
+                FloatVector vv = FloatVector.fromArray(FS, v, k);
+                a0 = FloatVector.fromArray(FS, q0, k).fma(vv, a0);
+                a1 = FloatVector.fromArray(FS, q1, k).fma(vv, a1);
+                a2 = FloatVector.fromArray(FS, q2, k).fma(vv, a2);
+                a3 = FloatVector.fromArray(FS, q3, k).fma(vv, a3);
+                a4 = FloatVector.fromArray(FS, q4, k).fma(vv, a4);
+                a5 = FloatVector.fromArray(FS, q5, k).fma(vv, a5);
+                a6 = FloatVector.fromArray(FS, q6, k).fma(vv, a6);
+                a7 = FloatVector.fromArray(FS, q7, k).fma(vv, a7);
+            }
+            float s0 = a0.reduceLanes(VectorOperators.ADD), s1 = a1.reduceLanes(VectorOperators.ADD);
+            float s2 = a2.reduceLanes(VectorOperators.ADD), s3 = a3.reduceLanes(VectorOperators.ADD);
+            float s4 = a4.reduceLanes(VectorOperators.ADD), s5 = a5.reduceLanes(VectorOperators.ADD);
+            float s6 = a6.reduceLanes(VectorOperators.ADD), s7 = a7.reduceLanes(VectorOperators.ADD);
+            for (; k < dim; k++) {
+                float x = v[k];
+                s0 += x * q0[k]; s1 += x * q1[k]; s2 += x * q2[k]; s3 += x * q3[k];
+                s4 += x * q4[k]; s5 += x * q5[k]; s6 += x * q6[k]; s7 += x * q7[k];
+            }
+            out[i] = s0; out[i + 1] = s1; out[i + 2] = s2; out[i + 3] = s3;
+            out[i + 4] = s4; out[i + 5] = s5; out[i + 6] = s6; out[i + 7] = s7;
+        }
+        for (; i < count; i++) {
+            out[i] = dotProduct(vector, queries[i]);
+        }
+    }
+
     // byte species holding one lane per preferred-float lane; a static constant so the narrowing
     // conversion stays on the intrinsic path (a species built per call is not constant-folded)
     private static final VectorSpecies<Byte> QUANTIZE_BYTE_SPECIES =

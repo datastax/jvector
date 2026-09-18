@@ -78,9 +78,9 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
      * its code cache for the compactor's own use (ordinal assignment, cell join, approximate
      * traversal); nothing quantized is written and the cache region is truncated afterwards.
      */
-    static SidecarCompactionStrategy scratch(CompactionContext ctx, int subspaceCount) {
-        return new SidecarCompactionStrategy(ctx, null,
-                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension).train(subspaceCount));
+    /** Full-precision sources: the scratch holds the vectors themselves, so nothing is trained and the merge is exact. */
+    static SidecarCompactionStrategy scratchVectors(CompactionContext ctx) {
+        return new SidecarCompactionStrategy(ctx, null, vsf -> new RawVectorCode(ctx.dimension));
     }
 
     @Override
@@ -91,7 +91,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     @Override
     public void retrain(VectorSimilarityFunction vsf) {
         if (formatHandle == null) {
-            log.info("Training a merge-time PQ on full-precision sources (scratch codes, nothing quantized is written)");
+            log.info("Full-precision sources: the scratch region holds the vectors in merged order (nothing is trained, nothing quantized is written)");
         } else {
             log.info("Retraining sidecar compressor ({}) on merged sources", formatHandle.getClass().getSimpleName());
         }

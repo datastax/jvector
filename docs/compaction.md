@@ -83,7 +83,7 @@ Each source assigns its own local ordinals. The compactor maps them to a new glo
 If the source indexes use FusedPQ, the compactor retrains the Product Quantization codebook on the combined dataset before writing the output. This is done by `PQRetrainer`, which
 performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source).
 
-Sources without any quantization (full-precision graphs) get a merge-time codebook as well when the compactor assigns the ordinals: it is used for the ordinal assignment, the cell join and the pre-encoded codes, lives only in a scratch region of the output file, and is truncated at the end, so nothing quantized is written to a full-precision output.
+Sources without any quantization (full-precision graphs) are merged without any: when the compactor assigns the ordinals, the scratch region holds the vectors themselves in merged order, the resident copy of the largest source's upper layers holds their vectors, and every comparison of the merge — ordinal assignment, probe selection, the cell scan, candidate scoring, offers and diversity — is exact. Nothing is trained and nothing quantized is written. See "Full-precision sources" below.
 
 
 ### Neighbor Selection (per node)
@@ -118,7 +118,7 @@ for alpha in [1.0, 1.2]:
 
 ### Cell join
 
-With `setReassignOrdinals(true)` and a hierarchy in the largest source, the level-0 cross-source search is replaced by a scan. The reassigned ordinals group every source's nodes by the level-1 node of the largest source they descend to, their *cell* (the best-scoring level-1 node found by a small beam from the greedy descent's landing); each source's nodes of a cell form a contiguous ordinal range, and their codes are contiguous in the pre-encoded cache, which is stored in 64-code, subspace-major blocks for this purpose. For a node, a beam over the level-1 graph seeded at its own cell picks the 16 best cells; for each larger source the node's 8-bit lookup table is applied to that source's codes in those cells (in score order, at most 4,096 codes), the top `searchTopK` by table score are rescored on vectors decoded from the wide code (below), and they enter the unchanged pipeline (reverse offers, diversity, write). The scan runs through a Google Highway kernel (`pq_scan_blocked_u8`) when the native library is available, otherwise through a plain Java loop. Nodes without a cell, and merges where the largest source has no hierarchy, use the graph search.
+With `setReassignOrdinals(true)` and a hierarchy in the largest source, the level-0 cross-source search is replaced by a scan. The reassigned ordinals group every source's nodes by the level-1 node of the largest source they descend to, their *cell* (the best-scoring level-1 node found by a small beam from the greedy descent's landing); each source's nodes of a cell form a contiguous ordinal range, and their codes are contiguous in the pre-encoded cache, which is stored in 64-code, subspace-major blocks for this purpose. For a node, a beam over the level-1 graph seeded at its own cell picks the 16 best cells; for each larger source the node's 8-bit lookup table is applied to that source's codes in those cells (in score order, at most 4,096 codes), the top `searchTopK` by table score are rescored on vectors decoded from the wide code (below; on full-precision sources the scan itself is exact, see "Full-precision sources"), and they enter the unchanged pipeline (reverse offers, diversity, write). The scan runs through a Google Highway kernel (`pq_scan_blocked_u8`) when the native library is available, otherwise through a plain Java loop. Nodes without a cell, and merges where the largest source has no hierarchy, use the graph search.
 
 ### Pre-encoded codes
 
@@ -127,6 +127,10 @@ Before level 0 is written, every live node is encoded once against the retrained
 ### Wide code
 
 When the cell join is active the compactor also trains a second, finer product quantization — two dimensions per subspace, 256 centroids, i.e. 192 bytes per node at 384 dimensions — and encodes every live node into a second scratch cache in the same pass as the pre-encoded codes. At level 0 the vector of a candidate (a scanned candidate that survived the table ranking, or one of the node's retained edges) is decoded from this code instead of being read from a record: each two-dimensional centroid is one packed `long`, so a decode is one table read per subspace plus the global centroid. Scoring against the node's exact vector and the diversity checks run on the decoded vectors, which are near-exact for this purpose (merged recall within 0.2 pt of exact reranks at 3×8M). No record other than the node's own is read during level 0. The second cache is truncated together with the code cache.
+
+### Full-precision sources
+
+When no source carries codes, the cell join runs on vectors end to end. The pre-encode pass writes each live vector into the scratch region at its merged ordinal, so every cell's vectors are contiguous (the inverted lists of an IVF index). Level 0 is processed in batches of 1,024 consecutive ordinals: for each node of a batch the probe beam picks its cells exactly, then, per larger source, each probed cell is streamed once and every vector in it is scored against all the batch's nodes that probe it (eight queries per pass, the queries kept in L1), keeping each node's best `searchTopK` by exact score. Survivors, retained edges and offered candidates take their vectors from the scratch, so records are never read for candidates and the output is written from exact scores throughout. The wide code is not built in this mode.
 
 ### Hierarchical Levels
 

@@ -145,6 +145,16 @@ public interface VectorUtilSupport {
   float min(VectorFloat<?> v);
 
   /**
+   * Dot products of one vector against {@code count} query vectors: {@code out[i] = dot(vector, queries[i])}.
+   * Implementations tile several queries per pass so the vector is loaded once per tile.
+   */
+  default void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+    for (int i = 0; i < count; i++) {
+      out[i] = dotProduct(vector, queries[i]);
+    }
+  }
+
+  /**
    * Quantizes a per-subspace table to unsigned bytes: the {@code clusterCount} entries of subspace
    * {@code m} (at {@code m * clusterCount}) are shifted by that subspace's minimum and every subspace
    * shares one scale, so a sum of bytes over one entry per subspace is an affine image of the float

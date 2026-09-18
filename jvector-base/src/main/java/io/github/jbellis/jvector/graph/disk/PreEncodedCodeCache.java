@@ -228,6 +228,15 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         }
     }
 
+    /** Reads the code at {@code ordinal} as little-endian floats straight from the mapping (plain layout only). */
+    public void getFloats(int ordinal, float[] dst, int count) {
+        int chunk = ordinal / codesPerChunk;
+        int inChunk = ordinal - chunk * codesPerChunk;
+        ByteBuffer view = viewsPerThread.get()[chunk];
+        view.position(inChunk * codeSize);
+        view.order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(dst, 0, count);
+    }
+
     /** Copies the code at {@code ordinal} into {@code dst}, which must hold at least {@link #codeSize()} bytes. */
     public void get(int ordinal, byte[] dst) {
         int chunk = ordinal / codesPerChunk;

@@ -142,6 +142,11 @@ public final class VectorUtil {
     impl.subInPlace(v1, v2);
   }
 
+  /** @see VectorUtilSupport#dotProductMulti */
+  public static void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+    impl.dotProductMulti(vector, queries, count, out);
+  }
+
   /** @see VectorUtilSupport#quantizeTableU8 */
   public static void quantizeTableU8(VectorFloat<?> table, int subspaceCount, int clusterCount, boolean negate,
                                      ByteSequence<?> dst, float[] scaleAndOffset) {
