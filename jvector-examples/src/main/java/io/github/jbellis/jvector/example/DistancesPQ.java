@@ -23,7 +23,6 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -40,10 +39,10 @@ public class DistancesPQ {
      * PQ benchmark aligned with DistancesASH:
      *
      *  - Same datasets
-     *  - Same query normalization
+     *  - Same loaded query vectors
      *  - Same brute-force scan pattern
-     *  - Same parallel executor
-     *  - Same compression budget (≈ d/32 bytes per vector)
+     *  - Configurable training and single-thread scoring executors
+     *  - Compression budget selected with jvector.pq.mFactor
      *
      * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
      */
@@ -63,7 +62,11 @@ public class DistancesPQ {
                 Boolean.parseBoolean(System.getProperty("jvector.bench.float-scoring", "false"));
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
-        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+        List<VectorFloat<?>> allQueries = SiftLoader.readFvecs(filenameQueries);
+        int maxQueries = Integer.getInteger("jvector.bench.maxQueries", allQueries.size());
+        if (maxQueries <= 0) throw new IllegalArgumentException("maxQueries must be positive");
+        final List<VectorFloat<?>> queries = allQueries.subList(0, Math.min(maxQueries, allQueries.size()));
+        System.out.format("\t%d base and %d measured query vectors loaded%n", vectors.size(), queries.size());
 
         final List<List<Integer>> groundTruth;
         if (RUN_RECALL_CHECK) {
@@ -98,10 +101,14 @@ public class DistancesPQ {
         // ------------------------------------------------------------
         // Parallel executor (identical to DistancesASH)
         // ------------------------------------------------------------
-//        ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool(); // For production
-        ForkJoinPool simdExecutor = new ForkJoinPool(180); // For profiling
+        int trainingThreads = Integer.getInteger("jvector.bench.trainingThreads", 48);
+        int scoringThreads = Integer.getInteger("jvector.bench.scoringThreads", 1);
+        if (trainingThreads <= 0 || scoringThreads <= 0) throw new IllegalArgumentException("Thread counts must be positive");
+        ForkJoinPool trainingExecutor = new ForkJoinPool(trainingThreads);
+        ForkJoinPool simdExecutor = new ForkJoinPool(scoringThreads);
         int parallelism = simdExecutor.getParallelism();
         int chunkSize = Math.max(1, (queries.size() + parallelism - 1) / parallelism);
+        System.out.println("\tTraining parallelism = " + trainingThreads + "; scoring parallelism = " + parallelism);
 
         // ------------------------------------------------------------
         // PQ parameters
@@ -135,7 +142,7 @@ public class DistancesPQ {
         final int M = dimension / mFactor;
         final int K = 256;                 // 1 byte per subspace
         final boolean globallyCenter = false;
-        final float anisotropicThreshold = 0.0f;
+        final float anisotropicThreshold = -1.0f;
 
         final int inputBytesPerVector = dimension * Float.BYTES;
         final int compressedBytesPerVector = M;
@@ -168,16 +175,17 @@ public class DistancesPQ {
                 K,
                 globallyCenter,
                 anisotropicThreshold,
-                simdExecutor,
+                trainingExecutor,
                 ForkJoinPool.commonPool()
         );
         long pqTrainEnd = System.nanoTime();
 
         long pqEncodeStart = System.nanoTime();
-        CompressedVectors pqAny = pq.encodeAll(ravv, simdExecutor);
+        CompressedVectors pqAny = pq.encodeAll(ravv, trainingExecutor);
         long pqEncodeEnd = System.nanoTime();
 
         PQVectors pqVecs = (PQVectors) pqAny;
+        trainingExecutor.shutdown();
 
         System.out.println("\tPQ training took " + (pqTrainEnd - pqTrainStart) / 1e9 + " seconds");
         System.out.println("\tPQ encoding took " + (pqEncodeEnd - pqEncodeStart) / 1e9 + " seconds");
@@ -338,6 +346,15 @@ public class DistancesPQ {
         // ============================================================
         // [2] Fast PQ scan timing (PQDecoder / ADC)
         // ============================================================
+        int warmupQueries = Integer.getInteger("jvector.bench.scoringWarmupQueries", 32);
+        if (warmupQueries < 0) throw new IllegalArgumentException("scoringWarmupQueries must be nonnegative");
+        double warmupSum = 0;
+        for (int i = 0; i < Math.min(warmupQueries, queries.size()); i++) {
+            var f = pqVecs.precomputedScoreFunctionFor(queries.get(i), VectorSimilarityFunction.DOT_PRODUCT);
+            for (int j = 0; j < vectors.size(); j++) warmupSum += f.similarityTo(j);
+        }
+        System.out.printf(java.util.Locale.ROOT, "\tPQ warmup: %d queries, checksum=%.6f (excluded from timing)%n",
+                Math.min(warmupQueries, queries.size()), warmupSum);
         List<ForkJoinTask<Double>> pqTasks = new ArrayList<>();
         long pqStart = System.nanoTime();
 
@@ -365,11 +382,10 @@ public class DistancesPQ {
         for (ForkJoinTask<Double> t : pqTasks) {
             pqDummy += t.join();
         }
-        // Prevent dead-code elimination
+        long pqEnd = System.nanoTime();
+        // Prevent dead-code elimination outside the measured interval.
         System.out.println("\tdummyAccumulator = " + (float) (pqDummy));
         System.out.println("--");
-
-        long pqEnd = System.nanoTime();
         System.out.println("\tPQDecoder scan took " + (pqEnd - pqStart) / 1e9 + " seconds");
 
         double blockSeconds = (pqEnd - pqStart) / 1e9;
@@ -498,6 +514,11 @@ public class DistancesPQ {
     }
 
     public static void main(String[] args) throws IOException {
+        if (args.length == 3) {
+            testPQEncodings(args[0], args[1], args[2]);
+            return;
+        }
+        if (args.length != 0) throw new IllegalArgumentException("Expected base, query, ground-truth paths");
 //        runCohere100k();
 //        runADA();
 //        runADANoZeros();

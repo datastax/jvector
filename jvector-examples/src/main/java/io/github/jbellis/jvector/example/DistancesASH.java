@@ -236,7 +236,10 @@ public class DistancesASH {
         final int landmarkCount = Integer.getInteger("jvector.ash.landmarkCount", 1);
 
         List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
-        List<VectorFloat<?>> queries = SiftLoader.readFvecs(filenameQueries);
+        List<VectorFloat<?>> allQueries = SiftLoader.readFvecs(filenameQueries);
+        int maxQueries = Integer.getInteger("jvector.bench.maxQueries", allQueries.size());
+        if (maxQueries <= 0) throw new IllegalArgumentException("maxQueries must be positive");
+        List<VectorFloat<?>> queries = allQueries.subList(0, Math.min(maxQueries, allQueries.size()));
         final List<List<Integer>> groundTruth;
         if (RUN_RECALL_CHECK) {
             if (filenameGT == null || filenameGT.isBlank()) {
