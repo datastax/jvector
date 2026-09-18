@@ -145,6 +145,45 @@ public interface VectorUtilSupport {
   float min(VectorFloat<?> v);
 
   /**
+   * Quantizes a per-subspace table to unsigned bytes: the {@code clusterCount} entries of subspace
+   * {@code m} (at {@code m * clusterCount}) are shifted by that subspace's minimum and every subspace
+   * shares one scale, so a sum of bytes over one entry per subspace is an affine image of the float
+   * sum: {@code floatSum = byteSum / scale + offset}. With {@code negate} the table is read negated.
+   * Writes {@code scale} and {@code offset} (the sum of the minimums) into {@code scaleAndOffset}.
+   */
+  default void quantizeTableU8(VectorFloat<?> table, int subspaceCount, int clusterCount, boolean negate,
+                               ByteSequence<?> dst, float[] scaleAndOffset) {
+    float sign = negate ? -1f : 1f;
+    float maxRange = 0, offset = 0;
+    for (int m = 0; m < subspaceCount; m++) {
+      float mn = Float.POSITIVE_INFINITY, mx = Float.NEGATIVE_INFINITY;
+      int base = m * clusterCount;
+      for (int c = 0; c < clusterCount; c++) {
+        float v = sign * table.get(base + c);
+        mn = Math.min(mn, v);
+        mx = Math.max(mx, v);
+      }
+      offset += mn;
+      maxRange = Math.max(maxRange, mx - mn);
+    }
+    float scale = maxRange > 0 ? 255f / maxRange : 0f;
+    for (int m = 0; m < subspaceCount; m++) {
+      int base = m * clusterCount;
+      float mn = Float.POSITIVE_INFINITY;
+      for (int c = 0; c < clusterCount; c++) {
+        mn = Math.min(mn, sign * table.get(base + c));
+      }
+      float off = 0.5f - mn * scale;
+      for (int c = 0; c < clusterCount; c++) {
+        int q = (int) (sign * table.get(base + c) * scale + off);
+        dst.set(base + c, (byte) (q > 255 ? 255 : q));   // q >= 0 by construction
+      }
+    }
+    scaleAndOffset[0] = scale;
+    scaleAndOffset[1] = offset;
+  }
+
+  /**
    * Index of the centroid nearest, in squared L2 distance, to the subvector
    * {@code vector[offset, offset + size)}. The codebook is dimension-major: dimension {@code i} of
    * centroid {@code j} is at {@code transposedCodebook[i * clusterCount + j]}, so the distance to

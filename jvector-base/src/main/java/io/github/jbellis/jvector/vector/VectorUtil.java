@@ -142,6 +142,12 @@ public final class VectorUtil {
     impl.subInPlace(v1, v2);
   }
 
+  /** @see VectorUtilSupport#quantizeTableU8 */
+  public static void quantizeTableU8(VectorFloat<?> table, int subspaceCount, int clusterCount, boolean negate,
+                                     ByteSequence<?> dst, float[] scaleAndOffset) {
+    impl.quantizeTableU8(table, subspaceCount, clusterCount, negate, dst, scaleAndOffset);
+  }
+
   /** @see VectorUtilSupport#closestCentroid */
   public static int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
     return impl.closestCentroid(vector, offset, transposedCodebook, size, clusterCount);

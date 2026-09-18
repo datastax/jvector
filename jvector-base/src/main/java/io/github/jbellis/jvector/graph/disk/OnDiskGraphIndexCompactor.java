@@ -49,6 +49,7 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
+import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.IntHashSet;
 
 import org.slf4j.Logger;
@@ -2043,7 +2044,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final ByteSequence<?>[] codes;
         // node id -> position: a flat array for level 1 (the bulk of the upper layers), maps above it
         int[] level1Position;
-        final Map<Integer, Integer>[] upperPosition;
+        final Int2IntHashMap[] upperPosition;   // levels >= 2: node id -> position (level 1 uses level1Position)
         @SuppressWarnings("unchecked")
         HubMap(OnDiskGraphIndex hub, ProductQuantization pq, VectorSimilarityFunction similarityFunction) {
             this.pq = pq;
@@ -2089,7 +2090,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.nodes = new int[topLevel + 1][];
             this.adjacency = new int[topLevel + 1][];
             this.codes = new ByteSequence<?>[topLevel + 1];
-            this.upperPosition = new Map[topLevel + 1];
+            this.upperPosition = new Int2IntHashMap[topLevel + 1];
         }
 
         /** Per-thread query state: the query's partial-sum table over the codebooks. */
@@ -2167,31 +2168,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
          * affine image of the float sum. Returns {scale, sum of minimums}: float sum = D / scale + offset.
          */
         static float[] quantizeTable(float[] src, boolean negate, byte[] dst, int subspaceCount, int clusterCount) {
-            final float sign = negate ? -1f : 1f;
-            float[] mins = new float[subspaceCount];
-            float maxRange = 0, offset = 0;
-            for (int m = 0; m < subspaceCount; m++) {
-                float mn = Float.POSITIVE_INFINITY, mx = Float.NEGATIVE_INFINITY;
-                int base = m * clusterCount;
-                for (int c = 0; c < clusterCount; c++) {
-                    float v = sign * src[base + c];
-                    mn = Math.min(mn, v);
-                    mx = Math.max(mx, v);
-                }
-                mins[m] = mn;
-                offset += mn;
-                maxRange = Math.max(maxRange, mx - mn);
-            }
-            final float scale = maxRange > 0 ? 255f / maxRange : 0f;
-            for (int m = 0; m < subspaceCount; m++) {
-                int base = m * clusterCount;
-                float off = 0.5f - mins[m] * scale;
-                for (int c = 0; c < clusterCount; c++) {
-                    int q = (int) (sign * src[base + c] * scale + off);
-                    dst[base + c] = (byte) (q > 255 ? 255 : q);   // q >= 0 by construction
-                }
-            }
-            return new float[]{scale, offset};
+            float[] scaleAndOffset = new float[2];
+            VectorUtil.quantizeTableU8(vectorTypeSupport.createFloatVector(src), subspaceCount, clusterCount, negate,
+                                       vectorTypeSupport.createByteSequence(dst), scaleAndOffset);
+            return scaleAndOffset;
         }
 
         Scorer scorer() {
@@ -2202,8 +2182,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (level == 1) {
                 return node >= 0 && node < level1Position.length ? level1Position[node] : -1;
             }
-            Integer p = upperPosition[level].get(node);
-            return p == null ? -1 : p;
+            return upperPosition[level].get(node);   // missing value is -1
         }
 
         /**
@@ -2404,7 +2383,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     h.level1Position[nodes[i]] = i;
                 }
             } else {
-                h.upperPosition[level] = new HashMap<>(n * 2);
+                h.upperPosition[level] = new Int2IntHashMap(n * 2, 0.65f, -1);
                 for (int i = 0; i < n; i++) {
                     h.upperPosition[level].put(nodes[i], i);
                 }

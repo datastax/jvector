@@ -27,6 +27,7 @@ import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
+import jdk.incubator.vector.VectorShape;
 
 import java.util.List;
 
@@ -397,6 +398,78 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
+    // byte species holding one lane per preferred-float lane; a static constant so the narrowing
+    // conversion stays on the intrinsic path (a species built per call is not constant-folded)
+    private static final VectorSpecies<Byte> QUANTIZE_BYTE_SPECIES =
+            VectorSpecies.of(byte.class, VectorShape.forBitSize(FloatVector.SPECIES_PREFERRED.vectorBitSize() / 4));
+
+    @Override
+    public void quantizeTableU8(VectorFloat<?> table, int subspaceCount, int clusterCount, boolean negate,
+                                ByteSequence<?> dst, float[] scaleAndOffset) {
+        if (!(table instanceof FloatArray) || !(dst.get() instanceof byte[]) || dst.offset() != 0) {
+            VectorUtilSupport.super.quantizeTableU8(table, subspaceCount, clusterCount, negate, dst, scaleAndOffset);
+            return;
+        }
+        final float[] src = ((FloatArray) table).array();
+        final byte[] out = (byte[]) dst.get();
+        final VectorSpecies<Float> FS = FloatVector.SPECIES_PREFERRED;
+        final int L = FS.length();
+        final int bound = clusterCount - clusterCount % L;
+        final float sign = negate ? -1f : 1f;
+        final FloatVector signV = FloatVector.broadcast(FS, sign);
+        float maxRange = 0, offset = 0;
+        for (int m = 0; m < subspaceCount; m++) {
+            int base = m * clusterCount;
+            FloatVector mnV = FloatVector.broadcast(FS, Float.POSITIVE_INFINITY);
+            FloatVector mxV = FloatVector.broadcast(FS, Float.NEGATIVE_INFINITY);
+            int c = 0;
+            for (; c < bound; c += L) {
+                FloatVector v = FloatVector.fromArray(FS, src, base + c).mul(signV);
+                mnV = mnV.min(v);
+                mxV = mxV.max(v);
+            }
+            float mn = mnV.reduceLanes(VectorOperators.MIN);
+            float mx = mxV.reduceLanes(VectorOperators.MAX);
+            for (; c < clusterCount; c++) {
+                float v = sign * src[base + c];
+                mn = Math.min(mn, v);
+                mx = Math.max(mx, v);
+            }
+            offset += mn;
+            maxRange = Math.max(maxRange, mx - mn);
+        }
+        final float scale = maxRange > 0 ? 255f / maxRange : 0f;
+        final FloatVector scaleV = FloatVector.broadcast(FS, scale * sign);
+        final IntVector cap = IntVector.broadcast(IntVector.SPECIES_PREFERRED, 255);
+        final VectorSpecies<Byte> BS = QUANTIZE_BYTE_SPECIES;
+        for (int m = 0; m < subspaceCount; m++) {
+            int base = m * clusterCount;
+            // the subspace minimum again (cheaper than keeping an array of them)
+            FloatVector mnV = FloatVector.broadcast(FS, Float.POSITIVE_INFINITY);
+            int c = 0;
+            for (; c < bound; c += L) {
+                mnV = mnV.min(FloatVector.fromArray(FS, src, base + c).mul(signV));
+            }
+            float mn = mnV.reduceLanes(VectorOperators.MIN);
+            for (; c < clusterCount; c++) {
+                mn = Math.min(mn, sign * src[base + c]);
+            }
+            float off = 0.5f - mn * scale;
+            FloatVector offV = FloatVector.broadcast(FS, off);
+            for (c = 0; c < bound; c += L) {
+                IntVector q = FloatVector.fromArray(FS, src, base + c).fma(scaleV, offV)
+                        .convert(VectorOperators.F2I, 0).reinterpretAsInts().min(cap);
+                q.convertShape(VectorOperators.I2B, BS, 0).reinterpretAsBytes().intoArray(out, base + c);
+            }
+            for (; c < clusterCount; c++) {
+                int q = (int) (sign * src[base + c] * scale + off);
+                out[base + c] = (byte) (q > 255 ? 255 : q);
+            }
+        }
+        scaleAndOffset[0] = scale;
+        scaleAndOffset[1] = offset;
+    }
+
     @Override
     public int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
         if (!(vector instanceof FloatArray) || !(transposedCodebook instanceof FloatArray)) {
@@ -407,17 +480,19 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         final float[] q = ((FloatArray) vector).array();
         final float[] t = ((FloatArray) transposedCodebook).array();
         final VectorSpecies<Float> FS = FloatVector.SPECIES_PREFERRED;
-        final VectorSpecies<Integer> IS = IntVector.SPECIES_PREFERRED; // same lane count as FS
         final int L = FS.length();
-        // two independent running-minimum chains (blocks A and B) so the compare/blend latency
-        // of one block overlaps the distance accumulation of the other
+        // Two independent running-minimum chains (blocks A and B) so the compare/blend latency of
+        // one block overlaps the distance accumulation of the other. Lane indices are tracked as
+        // floats (exact below 2^24) so the blends use the float compare mask directly: a mask cast
+        // to an int species is the one operation here the JIT sometimes fails to intrinsify, and
+        // then the whole kernel runs on the Vector API's slow path.
         FloatVector bestA = FloatVector.broadcast(FS, Float.MAX_VALUE);
         FloatVector bestB = bestA;
-        IntVector indexA = IntVector.zero(IS);
-        IntVector indexB = indexA;
-        IntVector laneA = IntVector.zero(IS).addIndex(1);
-        IntVector laneB = laneA.add(L);
-        final IntVector twoBlocks = IntVector.broadcast(IS, 2 * L);
+        FloatVector indexA = FloatVector.zero(FS);
+        FloatVector indexB = indexA;
+        FloatVector laneA = FloatVector.zero(FS).addIndex(1);
+        FloatVector laneB = laneA.add(L);
+        final FloatVector twoBlocks = FloatVector.broadcast(FS, 2 * L);
         int j = 0;
         for (; j + 2 * L <= clusterCount; j += 2 * L) {
             FloatVector x = FloatVector.broadcast(FS, q[offset]);
@@ -435,17 +510,17 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             }
             VectorMask<Float> lessA = accA.compare(VectorOperators.LT, bestA);
             bestA = bestA.blend(accA, lessA);
-            indexA = indexA.blend(laneA, lessA.cast(IS));
+            indexA = indexA.blend(laneA, lessA);
             laneA = laneA.add(twoBlocks);
             VectorMask<Float> lessB = accB.compare(VectorOperators.LT, bestB);
             bestB = bestB.blend(accB, lessB);
-            indexB = indexB.blend(laneB, lessB.cast(IS));
+            indexB = indexB.blend(laneB, lessB);
             laneB = laneB.add(twoBlocks);
         }
         // fold B into A; A's lanes hold the lower indices, so a strict compare keeps them on ties
         VectorMask<Float> lessB = bestB.compare(VectorOperators.LT, bestA);
         bestA = bestA.blend(bestB, lessB);
-        indexA = indexA.blend(indexB, lessB.cast(IS));
+        indexA = indexA.blend(indexB, lessB);
         if (j + L <= clusterCount) {
             FloatVector x = FloatVector.broadcast(FS, q[offset]);
             FloatVector d = x.sub(FloatVector.fromArray(FS, t, j));
@@ -457,12 +532,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             }
             VectorMask<Float> less = acc.compare(VectorOperators.LT, bestA);
             bestA = bestA.blend(acc, less);
-            indexA = indexA.blend(laneA, less.cast(IS));
+            indexA = indexA.blend(laneA, less);
             j += L;
         }
         float best = bestA.reduceLanes(VectorOperators.MIN);
-        int bestIndex = indexA.blend(Integer.MAX_VALUE, bestA.compare(VectorOperators.NE, best).cast(IS))
-                              .reduceLanes(VectorOperators.MIN);
+        int bestIndex = (int) indexA.blend(Float.MAX_VALUE, bestA.compare(VectorOperators.NE, best))
+                                   .reduceLanes(VectorOperators.MIN);
         // scalar tail when clusterCount is not a multiple of the lane count
         for (; j < clusterCount; j++) {
             float distance = 0;
