@@ -19,9 +19,6 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorUtil;
-import io.github.jbellis.jvector.vector.VectorUtilSupport;
-import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 
@@ -130,7 +127,11 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
                 inlineSourceAccessor,
                 "inlineSourceAccessor"
         );
-        this.sourceScorer = new ASHScorer(ash).scoreFunctionFor(query, similarityFunction);
+        // Upper-layer source scoring and L0 block scoring use the same Aq and
+        // <q, landmark> values. Prepare them once, then build each scoring form.
+        var scorer = new ASHScorer(ash);
+        var preparedQuery = scorer.precomputeQuery(query);
+        this.sourceScorer = scorer.scoreFunctionFor(preparedQuery);
 
         FusedASHLayout.validateBitsPerDimension(ash.bitsPerDimension);
         FusedASHLayout.validateBlockSize(blockSize);
@@ -168,9 +169,8 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
         int groups = FusedASHLayout.codeGroups(quantizedDim, bitsPerDimension);
         this.queryLut = new float[groups * 16];
-        this.dotQMuByLandmark = new float[ash.landmarkCount];
-
-        precomputeQuery(query, queryLut, dotQMuByLandmark);
+        this.dotQMuByLandmark = preparedQuery.dotQMuByLandmark;
+        FusedASHLayout.buildQueryLut(preparedQuery.qProj, quantizedDim, bitsPerDimension, queryLut);
     }
 
     public static FusedASHDecoder newDecoder(
@@ -279,28 +279,4 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
     @Override
     public String toString() { return "FusedASHDecoder[" + kernel + "]"; }
-
-    private void precomputeQuery(VectorFloat<?> query, float[] lut, float[] dotQMu) {
-        final int D = ash.originalDimension;
-        final int d = ash.quantizedDim;
-        final float[][] A = ash.stiefelTransform.AFloat;
-
-        final VectorUtilSupport vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
-
-        float[] qArr = new float[D];
-        for (int i = 0; i < D; i++) {
-            qArr[i] = query.get(i);
-        }
-
-        float[] qProj = new float[d];
-        for (int j = 0; j < d; j++) {
-            qProj[j] = vecUtil.ashDotRow(A[j], qArr);
-        }
-
-        FusedASHLayout.buildQueryLut(qProj, d, bitsPerDimension, lut);
-
-        for (int c = 0; c < ash.landmarkCount; c++) {
-            dotQMu[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
-        }
-    }
 }
