@@ -551,6 +551,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 remappers = buildRegionOrdinalMappers(pq);
                 effectiveRemappers = remappers;
                 ordinalsReassigned = true;
+                if (cellMap != null) {
+                    // The cell join evaluates every level-0 candidate from the wide code; the two
+                    // come and go together. Only a merge too small for 256 centroids has no wide
+                    // code, and it takes the graph search.
+                    int subspaces = Math.max(8, Math.min(WIDE_MAX_SUBSPACES, dimension / 2));
+                    long t0 = System.nanoTime();
+                    pqWide = new PQRetrainer(sources, liveNodes, dimension).train(subspaces);
+                    if (pqWide == null) {
+                        cellMap = null;
+                        log.info("Too few vectors to train the wide code; level 0 uses the graph search");
+                    } else {
+                        strategy.setSecondaryCompressor(pqWide);
+                        activeSidecarStrategy.setSecondaryCompressor(pqWide);
+                        log.info("Wide code: {}-subspace PQ trained in {} ms; level-0 candidates are decoded from it instead of read",
+                                 pqWide.getSubspaceCount(), (System.nanoTime() - t0) / 1_000_000);
+                    }
+                }
                 // the cell join scans the code cache by cell: store it blocked (subspace-major)
                 strategy.setBlockedCodeLayout(cellMap != null);
                 activeSidecarStrategy.setBlockedCodeLayout(cellMap != null);
@@ -558,17 +575,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 // code placement (pre-encode caches, sidecar order) matches the on-disk ordinals.
                 strategy.onRemappersUpdated(buildContext());
                 activeSidecarStrategy.onRemappersUpdated(buildContext());
-                if (cellMap != null) {
-                    int subspaces = Math.max(8, Math.min(WIDE_MAX_SUBSPACES, dimension / 2));
-                    long t0 = System.nanoTime();
-                    pqWide = new PQRetrainer(sources, liveNodes, dimension).train(subspaces);
-                    if (pqWide != null) {
-                        strategy.setSecondaryCompressor(pqWide);
-                        activeSidecarStrategy.setSecondaryCompressor(pqWide);
-                        log.info("Wide code: {}-subspace PQ trained in {} ms; level-0 candidates are decoded from it instead of read",
-                                 pqWide.getSubspaceCount(), (System.nanoTime() - t0) / 1_000_000);
-                    }
-                }
             } else {
                 log.info("Ordinal reassignment requested but the sources carry no PQ codebook; keeping caller remappers");
             }
@@ -1436,15 +1442,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int newOrd = top.pop();
             scratch.candSrc[candSize] = targetIdx;
             scratch.candNode[candSize] = mapper.newToOld(newOrd);
-            if (wideCache != null) {
-                VectorFloat<?> v = scratch.candVec[candSize];
-                scratch.wide.decode(newOrd, v);
-                scratch.candHasVec[candSize] = true;
-                scratch.candScore[candSize] = similarityFunction.compare(baseVec, v);
-                l0WideScores.increment();
-            } else {
-                scratch.candScore[candSize] = rescore(targetView, scratch.candNode[candSize], baseVec, scratch.tmpVec);
-            }
+            // the cell join always comes with the wide code: the survivor's vector is decoded, never read
+            VectorFloat<?> v = scratch.candVec[candSize];
+            scratch.wide.decode(newOrd, v);
+            scratch.candHasVec[candSize] = true;
+            scratch.candScore[candSize] = similarityFunction.compare(baseVec, v);
+            l0WideScores.increment();
             candSize++;
         }
         return candSize;
@@ -2226,16 +2229,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         /**
-         * Breadth-first order of the nodes of {@code level}, restarting at the lowest unvisited
-         * position when a component is exhausted.
+         * Breadth-first walk over the level-1 graph, restarting at the lowest unvisited position
+         * when a component is exhausted.
          *
-         * @return rank per position at that level
+         * @return walk position per node id (Integer.MAX_VALUE for nodes not on level 1)
          */
-        int[] bfsRanks(int level) {
-            int n = nodes[level].length;
-            int stride = degree[level];
-            int[] adj = adjacency[level];
-            int[] rank = new int[n];
+        int[] walkPositions() {
+            int[] l1 = nodes[1];
+            int n = l1.length;
+            int stride = degree[1];
+            int[] adj = adjacency[1];
+            int[] positionOf = new int[level1Position.length];
+            Arrays.fill(positionOf, Integer.MAX_VALUE);
             boolean[] seen = new boolean[n];
             int[] queue = new int[n];
             int head = 0, tail = 0, emitted = 0, nextUnseen = 0;
@@ -2251,112 +2256,23 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     queue[tail++] = nextUnseen;
                 }
                 int x = queue[head++];
-                rank[x] = emitted++;
+                positionOf[l1[x]] = emitted++;
                 for (int j = 0; j < stride; j++) {
                     int neighbor = adj[x * stride + j];
                     if (neighbor < 0) {
                         break;
                     }
-                    int y = position(level, neighbor);
+                    int y = position(1, neighbor);
                     if (y >= 0 && !seen[y]) {
                         seen[y] = true;
                         queue[tail++] = y;
                     }
                 }
             }
-            return rank;
-        }
-
-        /** As {@link #descend}, recording the node the descent lands on at every level ({@code landing[level]}). */
-        int[] descendPath(Scorer scorer) {
-            int[] landing = new int[topLevel + 1];
-            int current = entryNode;
-            for (int level = topLevel; level >= 1; level--) {
-                int position = position(level, current);
-                if (position >= 0) {
-                    float currentScore = scorer.score(level, position);
-                    int stride = degree[level];
-                    int[] adj = adjacency[level];
-                    boolean improved = true;
-                    while (improved) {
-                        improved = false;
-                        for (int j = 0; j < stride; j++) {
-                            int neighbor = adj[position * stride + j];
-                            if (neighbor < 0) {
-                                break;
-                            }
-                            int neighborPosition = position(level, neighbor);
-                            if (neighborPosition < 0) {
-                                continue;
-                            }
-                            float score = scorer.score(level, neighborPosition);
-                            if (score > currentScore) {
-                                currentScore = score;
-                                current = neighbor;
-                                position = neighborPosition;
-                                improved = true;
-                            }
-                        }
-                    }
-                }
-                landing[level] = current;
-            }
-            return landing;
+            return positionOf;
         }
     }
 
-    /**
-     * The cell order: level-1 nodes sorted by the breadth-first ranks of the upper-level nodes a
-     * greedy descent of their own (decoded) code lands on, top level first, then by their own
-     * breadth-first rank. Cells that share hierarchy ancestors are the ones a node's probe beam
-     * and its graph neighbours fall into, so they end up adjacent in ordinal space.
-     *
-     * @return walk position per hub node id (Integer.MAX_VALUE for nodes not on level 1)
-     */
-    private int[] hierarchicalWalkPositions(HubMap h) {
-        final int n = h.nodes[1].length;
-        final int[][] ranks = new int[h.topLevel + 1][];
-        for (int level = 1; level <= h.topLevel; level++) {
-            ranks[level] = h.bfsRanks(level);
-        }
-        final long[] key = new long[n];
-        final int m = h.subspaceCount;
-        int chunks = Math.max(1, Math.min(1024, n / 4096));
-        int chunk = (n + chunks - 1) / chunks;
-        List<Callable<Void>> tasks = new ArrayList<>();
-        for (int c = 0; c < chunks; c++) {
-            int lo = c * chunk, hi = Math.min(n, lo + chunk);
-            if (lo >= hi) continue;
-            tasks.add(() -> {
-                HubMap.Scorer scorer = h.scorer();
-                ByteSequence<?> code = vectorTypeSupport.createByteSequence(m);
-                VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
-                for (int i = lo; i < hi; i++) {
-                    code.copyFrom(h.codes[1], i * m, 0, m);
-                    h.pq.decode(code, vec);
-                    scorer.setQuery(vec);
-                    int[] landing = h.descendPath(scorer);
-                    long k = 0;
-                    for (int level = h.topLevel; level >= 2; level--) {
-                        int p = h.position(level, landing[level]);
-                        k = k * (h.nodes[level].length + 1) + (p < 0 ? 0 : ranks[level][p] + 1);
-                    }
-                    key[i] = k * (n + 1) + ranks[1][i];
-                }
-                return null;
-            });
-        }
-        joinAll(tasks);
-        Integer[] order = new Integer[n];
-        for (int i = 0; i < n; i++) order[i] = i;
-        Arrays.parallelSort(order, Comparator.comparingLong(i -> key[i]));
-        int[] positionOf = new int[h.level1Position.length];
-        Arrays.fill(positionOf, Integer.MAX_VALUE);
-        for (int r = 0; r < n; r++) {
-            positionOf[h.nodes[1][order[r]]] = r;
-        }
-        return positionOf;
-    }
 
     /** Loads the largest source's upper layers into a {@link HubMap}, encoding every upper-layer node with {@code pq}. */
     private HubMap buildHubMap(OnDiskGraphIndex hub, ProductQuantization pq) {
@@ -2470,7 +2386,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] walkPosition = null;
         if (regionMode) {
             hubMap = buildHubMap(hubSource, pq);
-            walkPosition = hierarchicalWalkPositions(hubMap);
+            walkPosition = hubMap.walkPositions();
             log.info("Region ordinals: hub source {} (maxLevel {}), {} level-1 nodes walked",
                      order[numSources - 1], hubSource.getMaxLevel(), hubMap.nodes[1].length);
         } else {
