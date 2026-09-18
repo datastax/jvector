@@ -16,12 +16,17 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-public interface DataSetInfo extends DataSetProperties {
-    /// Loads and returns a {@link InMemoryDataSet} corresponding to the underlying source.
-    ///
-    /// This method may incur an IO penalty based on the size of the dataset and it's source.
-    /// Implementations are not required to cache the dataset or ensure thread-safety.
-    ///
-    /// @return the ready-to-use {@link InMemoryDataSet}
-    public InMemoryDataSet getDataSet();
+import java.util.List;
+
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
+/**
+ * A {@link DataSet} which allows for fetching the entire base vector corpus as a list
+ */
+public interface InMemoryDataSet extends DataSet {
+    /**
+     * The base vectors as a list.
+     * @return a list of base vectors
+     */
+    List<VectorFloat<?>> getBaseVectors();
 }

@@ -53,12 +53,6 @@ public interface DataSet {
     VectorSimilarityFunction getSimilarityFunction();
 
     /**
-     * The base vectors as a list.
-     * @return a list of base vectors
-     */
-    List<VectorFloat<?>> getBaseVectors();
-
-    /**
      * The query vectors as a list.
      * Each major index corresponds to the self-same index from {@link #getGroundTruth()}.
      * Ideally, the query vectors are disjoint with respect to the base vectors to improve testing integrity.
@@ -69,7 +63,7 @@ public interface DataSet {
     /**
      * The ground truth as a list.
      * Each major index corresponds to the self-same index from {@link #getQueryVectors()}.
-     * Each minor index within represents the corresponding ordinal from {@link #getBaseVectors()} and {@link #getBaseRavv()}.
+     * Each minor index within represents the corresponding ordinal from {@link #getBaseRavv()}.
      * @return a list of query vectors.
      */
     List<? extends List<Integer>> getGroundTruth();

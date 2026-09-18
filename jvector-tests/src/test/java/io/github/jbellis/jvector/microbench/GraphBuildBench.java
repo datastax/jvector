@@ -15,9 +15,8 @@
  */
 package io.github.jbellis.jvector.microbench;
 
-
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.benchmarks.datasets.InMemoryDataSet;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -31,6 +30,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
+import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 @Warmup(iterations = 1, time = 5)
@@ -40,7 +40,7 @@ public class GraphBuildBench {
 
     @State(Scope.Benchmark)
     public static class Parameters {
-        final DataSet ds;
+        final InMemoryDataSet ds;
         final ListRandomAccessVectorValues ravv;
 
         public Parameters() {
@@ -54,10 +54,11 @@ public class GraphBuildBench {
     @Benchmark
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
-    public void testGraphBuild(Blackhole bh, Parameters p) {
+    public void testGraphBuild(Blackhole bh, Parameters p) throws IOException {
         long start = System.nanoTime();
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, false);
-        graphIndexBuilder.build(p.ravv);
+        try (GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, false)) {
+            graphIndexBuilder.build(p.ravv);
+        }
         System.out.format("Build M=%d ef=%d in %.2fs%n",
                 32, 600, (System.nanoTime() - start) / 1_000_000_000.0);
     }
@@ -65,10 +66,11 @@ public class GraphBuildBench {
     @Benchmark
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
-    public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) {
+    public void testGraphBuildWithHierarchy(Blackhole bh, Parameters p) throws IOException {
         long start = System.nanoTime();
-        GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, true);
-        graphIndexBuilder.build(p.ravv);
+        try (GraphIndexBuilder graphIndexBuilder =  new GraphIndexBuilder(p.ravv, p.ds.getSimilarityFunction(), 8, 60, 1.2f, 1.4f, true)) {
+            graphIndexBuilder.build(p.ravv);
+        }
         System.out.format("Build M=%d ef=%d in %.2fs%n",
                 32, 600, (System.nanoTime() - start) / 1_000_000_000.0);
     }

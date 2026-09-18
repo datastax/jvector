@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetInfo;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.benchmarks.datasets.InMemoryDataSet;
 import io.github.jbellis.jvector.example.reporting.GitInfo;
 import io.github.jbellis.jvector.example.reporting.JfrRecorder;
 import io.github.jbellis.jvector.example.reporting.JsonlWriter;
@@ -251,7 +252,7 @@ public class CompactorBenchmark {
     private List<VectorFloat<?>> queryVectors;
     private List<VectorFloat<?>> baseVectors;
     private List<? extends List<Integer>> groundTruth;
-    private DataSet ds;
+    private InMemoryDataSet ds;
     private VectorSimilarityFunction similarityFunction;
 
     private final List<OnDiskGraphIndex> graphs = new ArrayList<>();
