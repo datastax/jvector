@@ -245,9 +245,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     }
 
     private static void writeBytes(IndexWriter out, byte[] bytes, int length) throws IOException {
-        for (int i = 0; i < length; i++) {
-            out.writeByte(bytes[i]);
-        }
+        out.write(bytes, 0, length);
     }
 
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
