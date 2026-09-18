@@ -98,15 +98,13 @@ public final class ASHScorer {
                     "ASH scorer supports DOT_PRODUCT only (requested " + similarityFunction + ")"
             );
         }
-        return dotProductScoreFunctionFor(query);
+        return scoreFunctionFor(precomputeQuery(query));
     }
 
     /**
      * Scorer for dot product approximation.
      */
-    private ASHScoreFunction dotProductScoreFunctionFor(VectorFloat<?> query) {
-        QueryPrecompute qp = precomputeQuery(query);
-
+    ASHScoreFunction scoreFunctionFor(QueryPrecompute qp) {
         if (ash.bitsPerDimension == 1) {
             return oneBitDotProductScoreFunction(qp);
         }
@@ -239,7 +237,8 @@ public final class ASHScorer {
         };
     }
 
-    private QueryPrecompute precomputeQuery(VectorFloat<?> query) {
+    /** Prepares the projection and landmark terms shared by source and fused scorers. */
+    QueryPrecompute precomputeQuery(VectorFloat<?> query) {
         final int d = ash.quantizedDim;
         final int D = ash.originalDimension;
         final int C = ash.landmarkCount;
@@ -289,7 +288,7 @@ public final class ASHScorer {
         return new QueryPrecompute(d, C, qProj, tildeQPool, sumTildeQByLandmark, dotQMuByLandmark);
     }
 
-    private static final class QueryPrecompute {
+    static final class QueryPrecompute {
         final int d;
         final int C;
         final float[] qProj;                   // [d], Aq
