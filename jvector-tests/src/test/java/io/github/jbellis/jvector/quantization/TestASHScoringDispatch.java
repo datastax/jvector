@@ -199,6 +199,27 @@ public class TestASHScoringDispatch {
     }
 
     @Test
+    public void fusedGraphWith64LandmarksMatchesStandalone() throws Exception {
+        var provider = VectorizationProvider.getInstance();
+        VectorFloat<?>[] input = new VectorFloat<?>[97];
+        Random random = new Random(64256);
+        for (int n = 0; n < input.length; n++) {
+            input[n] = provider.getVectorTypeSupport().createFloatVector(128);
+            for (int d = 0; d < 128; d++) input[n].set(d, random.nextFloat() - 0.5f);
+            VectorUtil.l2normalize(input[n]);
+        }
+        var values = MockVectorValues.fromValues(input);
+        var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + 90, 64, 2);
+        var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
+        var scorer = encoded.scoreFunctionFor(input[3], VectorSimilarityFunction.DOT_PRODUCT);
+        float[] expected = new float[input.length];
+        for (int i = 0; i < input.length; i++) expected[i] = scorer.similarityTo(i);
+        for (int size : new int[]{8, 16, 32}) checkFused(ash, encoded, input[3], expected, size);
+        checkDiskGraph(encoded, input);
+    }
+
+    @Test
     public void forcedSimdCannotSilentlyFallBack() {
         String old = System.getProperty(BLOCK);
         try {
