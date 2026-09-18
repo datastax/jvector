@@ -16,12 +16,28 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-public interface DataSetInfo extends DataSetProperties {
-    /// Loads and returns a {@link DataSet} corresponding to the underlying source.
-    ///
-    /// This method may incur an IO penalty based on the size of the dataset and it's source.
-    /// Implementations are not required to cache the dataset or ensure thread-safety.
-    ///
-    /// @return the ready-to-use {@link DataSet}
-    public DataSet getDataSet();
+import java.nio.file.Path;
+
+class DataSetFiles {
+    private final Path baseFvecsPath;
+    private final Path queryFvecsPath;
+    private final Path gtIvecsPath;
+
+    DataSetFiles(Path baseFvecsPath, Path queryFvecsPath, Path gtIvecsPath) {
+        this.baseFvecsPath = baseFvecsPath;
+        this.queryFvecsPath = queryFvecsPath;
+        this.gtIvecsPath = gtIvecsPath;
+    }
+
+    Path getBaseFvecsPath() {
+        return baseFvecsPath;
+    }
+
+    Path getQueryFvecsPath() {
+        return queryFvecsPath;
+    }
+
+    Path getGtIvecsPath() {
+        return gtIvecsPath;
+    }
 }
