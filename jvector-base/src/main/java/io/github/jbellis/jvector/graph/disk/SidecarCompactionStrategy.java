@@ -73,6 +73,16 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         this.retrainer = retrainer;
     }
 
+    /**
+     * For sources without any PQ (full-precision merges): trains a merge-time codebook and keeps
+     * its code cache for the compactor's own use (ordinal assignment, cell join, approximate
+     * traversal); nothing quantized is written and the cache region is truncated afterwards.
+     */
+    static SidecarCompactionStrategy scratch(CompactionContext ctx, int subspaceCount) {
+        return new SidecarCompactionStrategy(ctx, null,
+                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension).train(subspaceCount));
+    }
+
     @Override
     public void onRemappersUpdated(CompactionContext refreshed) {
         this.ctx = refreshed;
@@ -80,8 +90,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public void retrain(VectorSimilarityFunction vsf) {
-        log.info("Retraining sidecar compressor ({}) on merged sources",
-                formatHandle.getClass().getSimpleName());
+        if (formatHandle == null) {
+            log.info("Training a merge-time PQ on full-precision sources (scratch codes, nothing quantized is written)");
+        } else {
+            log.info("Retraining sidecar compressor ({}) on merged sources", formatHandle.getClass().getSimpleName());
+        }
         this.retrainedCompressor = retrainer.retrain(vsf);
     }
 
@@ -92,7 +105,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public boolean writesCodesSidecar() {
-        return true;
+        return formatHandle != null;
     }
 
     /**
@@ -107,7 +120,12 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             throw new IllegalStateException("retrain() must be called before onAfterHeader()");
         }
         try {
-            precomputeCodes(writer);
+            cacheCodeSize = retrainedCompressor.compressedVectorSize();
+            codeCache = precomputeCodeCache(ctx, writer, retrainedCompressor,
+                                            formatHandle == null ? "Merge-time code pre-encode" : "Sidecar code pre-encode");
+            if (codeCache != null) {
+                cacheTruncateAt = writer.projectedOutputSize();
+            }
         } catch (IOException e) {
             log.warn("Sidecar code pre-encode failed, falling back to re-encode at writeSidecar: {}", e.getMessage());
             closeCache();
@@ -128,8 +146,8 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public void writeSidecar(Path compressedPath) throws IOException {
-        if (retrainedCompressor == null) {
-            throw new IllegalStateException("retrain() must be called before writeSidecar()");
+        if (retrainedCompressor == null || formatHandle == null) {
+            throw new IllegalStateException("writeSidecar() needs a retrained sidecar compressor");
         }
         final int vectorsPerChunk = formatHandle.sidecarVectorsPerChunk();
         final int codeSize = retrainedCompressor.compressedVectorSize();
@@ -192,6 +210,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             codeCache.close();
             codeCache = null;
         }
+        closeSecondaryCache();
     }
 
     private void releaseCacheAndTruncate() {
@@ -209,73 +228,6 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         }
     }
 
-    /** Mirrors {@code FusedCompactionStrategy.precomputeCodes}; kept separate so the fused path
-     *  stays untouched. */
-    @SuppressWarnings("unchecked")
-    private void precomputeCodes(CompactWriter writer) throws IOException {
-        cacheCodeSize = retrainedCompressor.compressedVectorSize();
-        int codeCount = ctx.maxOrdinal + 1;
-        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, cacheCodeSize, blockedCodeLayout);
-        if (codeCount <= 0 || tempSize <= 0) {
-            log.info("Sidecar pre-encode skipped: degenerate cache size {} bytes for {} codes", tempSize, codeCount);
-            return;
-        }
-
-        long tempOffset = writer.projectedOutputSize();
-        cacheTruncateAt = tempOffset;
-        long totalSize = tempOffset + tempSize;
-
-        try (java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(writer.getOutputPath(),
-                java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
-            java.nio.ByteBuffer pad = java.nio.ByteBuffer.wrap(new byte[]{0});
-            fc.write(pad, totalSize - 1);
-            codeCache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, cacheCodeSize, blockedCodeLayout);
-        }
-
-        final int cs = cacheCodeSize;
-        final VectorCompressor<ByteSequence<?>> compressor = (VectorCompressor<ByteSequence<?>>) retrainedCompressor;
-        List<Callable<Long>> tasks = new ArrayList<>();
-        int targetTasks = Math.max(ctx.taskWindowSize * 4, 16);
-        for (int s = 0; s < ctx.sources.size(); s++) {
-            final int sIdx = s;
-            final var source = ctx.sources.get(s);
-            final var alive = ctx.liveNodes.get(s);
-            final int upper = alive.length();
-            int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
-            for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
-                final int cStart = chunkStart;
-                final int cEnd = Math.min(chunkStart + chunkSize, upper);
-                tasks.add(() -> {
-                    source.prefetchL0Records(cStart, cEnd - 1);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
-                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
-                    long count = 0;
-                    try (var view = source.getView()) {
-                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                            if (!alive.get(oldOrd)) continue;
-                            view.getVectorInto(oldOrd, vec, 0);
-                            code.zero();
-                            compressor.encodeTo(vec, code);
-                            int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                            codeCache.put(newOrd, code);
-                            count++;
-                        }
-                    }
-                    return count;
-                });
-            }
-        }
-        try {
-            long total = 0;
-            for (var f : ctx.executor.invokeAll(tasks)) {
-                total += f.get();
-            }
-            log.info("Sidecar code pre-encode: {} nodes encoded into {} MB in-output cache ({} mapping(s), offset {})",
-                    total, tempSize / (1024 * 1024), codeCache.chunkCount(), tempOffset);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Sidecar code pre-encode failed", e);
-        }
-    }
 
     @SuppressWarnings("unchecked")
     private ByteSequence<?> encodeChunk(int chunkStart, int chunkEnd, int codeSize, VectorCompressor<?> compressor) throws IOException {

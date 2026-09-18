@@ -134,6 +134,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // did not supply per-source CompressedVectors). Set by compactGraphImpl; consulted wherever
     // the fused path consults the inline strategy for codes.
     private QuantizationCompactionStrategy activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+    // Wide code: a second, near-lossless PQ (2 dimensions per subspace) trained at merge time and kept in a
+    // scratch cache by new ordinal, encoded by the same pre-encode pass as the scan code. At level 0 the cell
+    // join reranks its candidates and scores the node's retained edges from it, and the diversity checks
+    // compare it, so no record but the node's own is read.
+    private ProductQuantization pqWide;
+    private PreEncodedCodeCache wideCache;   // non-null only while level 0 runs
+    private final LongAdder l0WideScores = new LongAdder();
+    static final int WIDE_MAX_SUBSPACES = 192;
 
     // ---- Cell join: level-0 cross-source candidates from a blocked scan of the code cache ----
     // With compactor-assigned ordinals every source's nodes are grouped by the level-1 node of the
@@ -415,10 +423,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
         QuantizationCompactionStrategy strategy = detectInlineStrategy();
+        // Full-precision sources: a merge-time PQ gives the compactor-assigned ordinals and the
+        // cell join their codes; nothing quantized reaches the output.
+        QuantizationCompactionStrategy scratch = QuantizationCompactionStrategy.NONE;
+        if (reassignOrdinals && strategy == QuantizationCompactionStrategy.NONE && sourceCompressed == null) {
+            var s = SidecarCompactionStrategy.scratch(buildContext(), Math.min(dimension, Math.max(8, dimension / 8)));
+            s.retrain(similarityFunction);
+            if (s.compressor() != null) {
+                scratch = s;
+            }
+        }
         try {
+            activeSidecarStrategy = scratch;
             compactGraphImpl(outputPath, strategy);
         } finally {
+            activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
             strategy.onAfterClose(outputPath);
+            scratch.onAfterClose(outputPath);
+            scratch.releaseTransientState();
         }
     }
 
@@ -534,6 +556,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 // code placement (pre-encode caches, sidecar order) matches the on-disk ordinals.
                 strategy.onRemappersUpdated(buildContext());
                 activeSidecarStrategy.onRemappersUpdated(buildContext());
+                if (cellMap != null) {
+                    int subspaces = Math.max(8, Math.min(WIDE_MAX_SUBSPACES, dimension / 2));
+                    long t0 = System.nanoTime();
+                    pqWide = new PQRetrainer(sources, liveNodes, dimension).train(subspaces);
+                    if (pqWide != null) {
+                        strategy.setSecondaryCompressor(pqWide);
+                        activeSidecarStrategy.setSecondaryCompressor(pqWide);
+                        log.info("Wide code: {}-subspace PQ trained in {} ms; level-0 candidates are decoded from it instead of read",
+                                 pqWide.getSubspaceCount(), (System.nanoTime() - t0) / 1_000_000);
+                    }
+                }
             } else {
                 log.info("Ordinal reassignment requested but the sources carry no PQ codebook; keeping caller remappers");
             }
@@ -555,6 +588,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // Approximate cross-source scoring is available whenever a merged code cache exists:
             // fused (inline codes) or sidecar (strategy pre-encode cache built just above).
             boolean compressedPrecision = fusedPQEnabled || activeSidecarStrategy.getCodeCache() != null;
+            wideCache = strategy.getSecondaryCache() != null ? strategy.getSecondaryCache() : activeSidecarStrategy.getSecondaryCache();
             compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
 
             strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
@@ -655,15 +689,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
                 var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
                 try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
+                    // A batch's records are consecutive ordinals, hence adjacent on disk: gather each
+                    // contiguous run into one positional write instead of one syscall per record.
+                    final ByteBuffer run = ByteBuffer.allocateDirect(4 << 20);
                     java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
                         try {
+                            long runStart = -1, runEnd = -1;
                             for (WriteResult r : results) {
-                                ByteBuffer b = r.data;
-                                long pos = r.fileOffset;
-                                while (b.hasRemaining()) {
-                                    int n = fc.write(b, pos);
-                                    pos += n;
+                                int len = r.data.remaining();
+                                if (runStart >= 0 && (r.fileOffset != runEnd || run.remaining() < len)) {
+                                    run.flip();
+                                    writeFully(fc, run, runStart);
+                                    run.clear();
+                                    runStart = -1;
                                 }
+                                if (len > run.capacity()) {
+                                    writeFully(fc, r.data, r.fileOffset);
+                                    continue;
+                                }
+                                if (runStart < 0) {
+                                    runStart = runEnd = r.fileOffset;
+                                }
+                                run.put(r.data);
+                                runEnd += len;
+                            }
+                            if (runStart >= 0) {
+                                run.flip();
+                                writeFully(fc, run, runStart);
+                                run.clear();
                             }
                         } catch (IOException e) {
                             throw new RuntimeException(e);
@@ -687,6 +740,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 reverseCandidates.close();
                 reverseCandidates = null; // consumed entirely within L0; scales with node count
                 orderingCache = null;
+                if (wideCache != null) {
+                    log.info("Wide code: {} candidate scores from the wide cache", l0WideScores.sum());
+                    wideCache = null;   // the strategy unmaps it with its own cache
+                }
                 writer.offsetAfterInline();
 
             } else {
@@ -959,6 +1016,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
         sourceView.getVectorInto(node, scratch.baseVec, 0);
+        if (wideCache != null && scratch.wide == null) {
+            scratch.wide = new WideDecoder();
+        }
 
         int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
 
@@ -970,6 +1030,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         var provider = new CompactVamanaDiversityProvider(similarityFunction, 1.2f);
         if (codeDiversityAvailable(params)) {
             provider.withCodes(orderingCache, remappers, codeSimilarity(params.pq), scratch.candCodeOnly);
+        }
+        if (wideCache != null) {
+            provider.withCandidateVectors(scratch.candVec, scratch.candHasVec);
         }
         provider.retainDiverse(
                 scratch.candSrc,
@@ -1130,6 +1193,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     ) {
         int candSize = 0;
         Arrays.fill(scratch.candCodeOnly, false);
+        Arrays.fill(scratch.candHasVec, false);
 
         for (int ss = 0; ss < sources.size(); ss++) {
             var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
@@ -1172,15 +1236,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
                                      VectorFloat<?> baseVec, Scratch scratch, int candSize) {
         var it = searchView.getNeighborsIterator(level, node);
+        final boolean wide = level == 0 && wideCache != null;
+        final OrdinalMapper mapper = wide ? remappers.get(sourceIdx) : null;
         while (it.hasNext()) {
             int nb = it.nextInt();
             if (!indexAlive.get(nb)) continue;
 
-            searchView.getVectorInto(nb, scratch.tmpVec, 0);
-
+            if (wide) {
+                VectorFloat<?> v = scratch.candVec[candSize];
+                scratch.wide.decode(mapper.oldToNew(nb), v);
+                scratch.candHasVec[candSize] = true;
+                scratch.candScore[candSize] = similarityFunction.compare(baseVec, v);
+                l0WideScores.increment();
+            } else {
+                searchView.getVectorInto(nb, scratch.tmpVec, 0);
+                scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            }
             scratch.candSrc[candSize] = sourceIdx;
             scratch.candNode[candSize] = nb;
-            scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
             candSize++;
         }
         return candSize;
@@ -1358,10 +1431,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         OrdinalMapper mapper = remappers.get(targetIdx);
         while (top.size() > 0) {
-            int old = mapper.newToOld(top.pop());
+            int newOrd = top.pop();
             scratch.candSrc[candSize] = targetIdx;
-            scratch.candNode[candSize] = old;
-            scratch.candScore[candSize] = rescore(targetView, old, baseVec, scratch.tmpVec);
+            scratch.candNode[candSize] = mapper.newToOld(newOrd);
+            if (wideCache != null) {
+                VectorFloat<?> v = scratch.candVec[candSize];
+                scratch.wide.decode(newOrd, v);
+                scratch.candHasVec[candSize] = true;
+                scratch.candScore[candSize] = similarityFunction.compare(baseVec, v);
+                l0WideScores.increment();
+            } else {
+                scratch.candScore[candSize] = rescore(targetView, scratch.candNode[candSize], baseVec, scratch.tmpVec);
+            }
             candSize++;
         }
         return candSize;
@@ -1497,6 +1578,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * overwhelming memory by limiting the number of in-flight tasks while maintaining high
      * throughput via the completion service.
      */
+    private static void writeFully(FileChannel fc, ByteBuffer b, long pos) throws IOException {
+        while (b.hasRemaining()) {
+            pos += fc.write(b, pos);
+        }
+    }
+
     private <T> void runBatchesWithBackpressure(
             List<BatchSpec> batches,
             ExecutorCompletionService<List<T>> ecs,
@@ -2160,18 +2247,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         /**
-         * Breadth-first walk over the level-1 graph, restarting at the lowest unvisited position
-         * when a component is exhausted.
+         * Breadth-first order of the nodes of {@code level}, restarting at the lowest unvisited
+         * position when a component is exhausted.
          *
-         * @return walk position per node id (Integer.MAX_VALUE for nodes not on level 1)
+         * @return rank per position at that level
          */
-        int[] walkPositions() {
-            int[] l1 = nodes[1];
-            int n = l1.length;
-            int stride = degree[1];
-            int[] adj = adjacency[1];
-            int[] positionOf = new int[level1Position.length];
-            Arrays.fill(positionOf, Integer.MAX_VALUE);
+        int[] bfsRanks(int level) {
+            int n = nodes[level].length;
+            int stride = degree[level];
+            int[] adj = adjacency[level];
+            int[] rank = new int[n];
             boolean[] seen = new boolean[n];
             int[] queue = new int[n];
             int head = 0, tail = 0, emitted = 0, nextUnseen = 0;
@@ -2187,21 +2272,111 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     queue[tail++] = nextUnseen;
                 }
                 int x = queue[head++];
-                positionOf[l1[x]] = emitted++;
+                rank[x] = emitted++;
                 for (int j = 0; j < stride; j++) {
                     int neighbor = adj[x * stride + j];
                     if (neighbor < 0) {
                         break;
                     }
-                    int y = position(1, neighbor);
+                    int y = position(level, neighbor);
                     if (y >= 0 && !seen[y]) {
                         seen[y] = true;
                         queue[tail++] = y;
                     }
                 }
             }
-            return positionOf;
+            return rank;
         }
+
+        /** As {@link #descend}, recording the node the descent lands on at every level ({@code landing[level]}). */
+        int[] descendPath(Scorer scorer) {
+            int[] landing = new int[topLevel + 1];
+            int current = entryNode;
+            for (int level = topLevel; level >= 1; level--) {
+                int position = position(level, current);
+                if (position >= 0) {
+                    float currentScore = scorer.score(level, position);
+                    int stride = degree[level];
+                    int[] adj = adjacency[level];
+                    boolean improved = true;
+                    while (improved) {
+                        improved = false;
+                        for (int j = 0; j < stride; j++) {
+                            int neighbor = adj[position * stride + j];
+                            if (neighbor < 0) {
+                                break;
+                            }
+                            int neighborPosition = position(level, neighbor);
+                            if (neighborPosition < 0) {
+                                continue;
+                            }
+                            float score = scorer.score(level, neighborPosition);
+                            if (score > currentScore) {
+                                currentScore = score;
+                                current = neighbor;
+                                position = neighborPosition;
+                                improved = true;
+                            }
+                        }
+                    }
+                }
+                landing[level] = current;
+            }
+            return landing;
+        }
+    }
+
+    /**
+     * The cell order: level-1 nodes sorted by the breadth-first ranks of the upper-level nodes a
+     * greedy descent of their own (decoded) code lands on, top level first, then by their own
+     * breadth-first rank. Cells that share hierarchy ancestors are the ones a node's probe beam
+     * and its graph neighbours fall into, so they end up adjacent in ordinal space.
+     *
+     * @return walk position per hub node id (Integer.MAX_VALUE for nodes not on level 1)
+     */
+    private int[] hierarchicalWalkPositions(HubMap h) {
+        final int n = h.nodes[1].length;
+        final int[][] ranks = new int[h.topLevel + 1][];
+        for (int level = 1; level <= h.topLevel; level++) {
+            ranks[level] = h.bfsRanks(level);
+        }
+        final long[] key = new long[n];
+        final int m = h.subspaceCount;
+        int chunks = Math.max(1, Math.min(1024, n / 4096));
+        int chunk = (n + chunks - 1) / chunks;
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int c = 0; c < chunks; c++) {
+            int lo = c * chunk, hi = Math.min(n, lo + chunk);
+            if (lo >= hi) continue;
+            tasks.add(() -> {
+                HubMap.Scorer scorer = h.scorer();
+                ByteSequence<?> code = vectorTypeSupport.createByteSequence(m);
+                VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                for (int i = lo; i < hi; i++) {
+                    code.copyFrom(h.codes[1], i * m, 0, m);
+                    h.pq.decode(code, vec);
+                    scorer.setQuery(vec);
+                    int[] landing = h.descendPath(scorer);
+                    long k = 0;
+                    for (int level = h.topLevel; level >= 2; level--) {
+                        int p = h.position(level, landing[level]);
+                        k = k * (h.nodes[level].length + 1) + (p < 0 ? 0 : ranks[level][p] + 1);
+                    }
+                    key[i] = k * (n + 1) + ranks[1][i];
+                }
+                return null;
+            });
+        }
+        joinAll(tasks);
+        Integer[] order = new Integer[n];
+        for (int i = 0; i < n; i++) order[i] = i;
+        Arrays.parallelSort(order, Comparator.comparingLong(i -> key[i]));
+        int[] positionOf = new int[h.level1Position.length];
+        Arrays.fill(positionOf, Integer.MAX_VALUE);
+        for (int r = 0; r < n; r++) {
+            positionOf[h.nodes[1][order[r]]] = r;
+        }
+        return positionOf;
     }
 
     /** Loads the largest source's upper layers into a {@link HubMap}, encoding every upper-layer node with {@code pq}. */
@@ -2316,7 +2491,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int[] walkPosition = null;
         if (regionMode) {
             hubMap = buildHubMap(hubSource, pq);
-            walkPosition = hubMap.walkPositions();
+            walkPosition = hierarchicalWalkPositions(hubMap);
             log.info("Region ordinals: hub source {} (maxLevel {}), {} level-1 nodes walked",
                      order[numSources - 1], hubSource.getMaxLevel(), hubMap.nodes[1].length);
         } else {
@@ -2453,6 +2628,69 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
+    /**
+     * Per-thread decoder for the wide code: a candidate's code becomes a near-exact vector, scored
+     * and compared like one. With heap-backed vectors (the Panama and default providers) the
+     * decode is a flat copy of {@code m} short centroid slices plus the global centroid.
+     */
+    private final class WideDecoder {
+        private final int m = pqWide.getSubspaceCount();
+        private final ByteSequence<?> code = vectorTypeSupport.createByteSequence(m);
+        private final byte[] codeBytes = code.get() instanceof byte[] ? (byte[]) code.get() : new byte[m];
+        private final float[][] codebooks;    // per subspace, or null when the provider's vectors are not float[]-backed
+        private final int[] sizes, offsets;
+        private final float[] center;
+
+        WideDecoder() {
+            float[][] cbs = new float[m][];
+            sizes = new int[m];
+            offsets = new int[m];
+            boolean flat = true;
+            int offset = 0;
+            for (int sub = 0; sub < m; sub++) {
+                Object raw = pqWide.getCodebookVector(sub).get();
+                if (!(raw instanceof float[])) {
+                    flat = false;
+                    break;
+                }
+                cbs[sub] = (float[]) raw;
+                sizes[sub] = pqWide.getSubvectorSize(sub);
+                offsets[sub] = offset;
+                offset += sizes[sub];
+            }
+            VectorFloat<?> c = pqWide.getGlobalCentroid();
+            float[] centerArr = null;
+            if (c != null) {
+                Object raw = c.get();
+                if (raw instanceof float[]) centerArr = (float[]) raw;
+                else flat = false;
+            }
+            codebooks = flat ? cbs : null;
+            center = centerArr;
+        }
+
+        void decode(int newOrdinal, VectorFloat<?> dst) {
+            wideCache.get(newOrdinal, codeBytes);
+            Object rawDst = dst.get();
+            if (codebooks != null && rawDst instanceof float[]) {
+                float[] out = (float[]) rawDst;
+                for (int sub = 0; sub < m; sub++) {
+                    int size = sizes[sub];
+                    int from = (codeBytes[sub] & 0xFF) * size;
+                    System.arraycopy(codebooks[sub], from, out, offsets[sub], size);
+                }
+                if (center != null) {
+                    for (int i = 0; i < dimension; i++) out[i] += center[i];
+                }
+                return;
+            }
+            if (codeBytes != code.get()) {
+                for (int i = 0; i < m; i++) code.set(i, codeBytes[i]);
+            }
+            pqWide.decode(code, dst);
+        }
+    }
+
     private static final class Scratch implements AutoCloseable {
         final int[] candSrc, candNode;
         final float[] candScore;
@@ -2461,6 +2699,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final VectorFloat<?> tmpVec, baseVec;
         final GraphSearcher[] gs;
         final ByteSequence<?> pqCode;
+        WideDecoder wide;               // decodes wide codes into candVec slots
+        final VectorFloat<?>[] candVec; // per-candidate decoded vector (wide code), used for scoring and diversity
+        final boolean[] candHasVec;
         // cell join state (allocated on first use)
         HubMap.Scorer cellScorer;
         byte[] cellBlock = new byte[0];        // blocked codes of the cell slice being scanned
@@ -2481,6 +2722,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             this.candNode = new int[maxCandidateSize];
             this.candScore = new float[maxCandidateSize];
             this.candCodeOnly = new boolean[maxCandidateSize];
+            this.candVec = new VectorFloat<?>[maxCandidateSize];
+            for (int i = 0; i < maxCandidateSize; i++) {
+                candVec[i] = vectorTypeSupport.createFloatVector(dimension);
+            }
+            this.candHasVec = new boolean[maxCandidateSize];
             this.selectedCache = new SelectedVecCache(maxDegree, dimension);
             this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
             this.baseVec = vectorTypeSupport.createFloatVector(dimension);
@@ -2550,6 +2796,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         private SymmetricCodeSimilarity codeSimilarity;
         private boolean[] codeOnly;
         private byte[] candCode;
+        // candidates whose vector the gather step already holds (decoded wide codes)
+        private VectorFloat<?>[] candVecs;
+        private boolean[] candHasVec;
+
+        CompactVamanaDiversityProvider withCandidateVectors(VectorFloat<?>[] vecs, boolean[] has) {
+            this.candVecs = vecs;
+            this.candHasVec = has;
+            return this;
+        }
 
         CompactVamanaDiversityProvider withCodes(PreEncodedCodeCache cache, List<OrdinalMapper> remappers,
                                                  SymmetricCodeSimilarity similarity, boolean[] codeOnlyFlags) {
@@ -2588,8 +2843,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
                     OnDiskGraphIndex.View cView = (OnDiskGraphIndex.View) gs[cSrc].getView();
                     boolean codeOnlyCandidate = codeSimilarity != null && codeOnly[ci];
+                    VectorFloat<?> cVec = tmp;
                     if (!codeOnlyCandidate) {
-                        cView.getVectorInto(cNode, tmp, 0);
+                        if (candVecs != null && candHasVec[ci]) {
+                            cVec = candVecs[ci];
+                        } else {
+                            cView.getVectorInto(cNode, tmp, 0);
+                        }
                     }
                     // The candidate's code is needed whenever a code-based comparison can occur: the
                     // candidate itself has no vector, or a selected neighbour has none.
@@ -2597,8 +2857,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     if (codeFetched) {
                         fetchCode(cSrc, cNode);
                     }
-                    if (isDiverse(cView, cNode, tmp, cScore, currentAlpha, selectedCache, codeOnlyCandidate)) {
-                        selectedCache.add(cSrc, cView, cNode, cScore, tmp);
+                    if (isDiverse(cView, cNode, cVec, cScore, currentAlpha, selectedCache, codeOnlyCandidate)) {
+                        selectedCache.add(cSrc, cView, cNode, cScore, cVec);
                         if (codeSimilarity != null) {
                             if (!codeFetched) {
                                 fetchCode(cSrc, cNode);

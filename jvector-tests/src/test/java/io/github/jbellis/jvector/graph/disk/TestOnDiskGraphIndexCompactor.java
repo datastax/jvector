@@ -1290,16 +1290,25 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
      */
     @Test
     public void testCellJoinMergeRecallEuclidean() throws Exception {
-        cellJoinMergeRecall(VectorSimilarityFunction.EUCLIDEAN);
+        cellJoinMergeRecall(VectorSimilarityFunction.EUCLIDEAN, true);
+    }
+
+    /**
+     * Full-precision sources (no PQ anywhere): the compactor trains a merge-time codebook for the
+     * ordinals and the cell join, and the output carries no quantized feature.
+     */
+    @Test
+    public void testCellJoinMergeRecallFullPrecisionSources() throws Exception {
+        cellJoinMergeRecall(VectorSimilarityFunction.DOT_PRODUCT, false);
     }
 
     /** Cosine on unnormalized vectors: the scan's second pass over decoded norms must rank like cosine. */
     @Test
     public void testCellJoinMergeRecallCosine() throws Exception {
-        cellJoinMergeRecall(VectorSimilarityFunction.COSINE);
+        cellJoinMergeRecall(VectorSimilarityFunction.COSINE, true);
     }
 
-    private void cellJoinMergeRecall(VectorSimilarityFunction vsf) throws Exception {
+    private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources) throws Exception {
         int perSource = 3000;
         int nSrc = 3;
         final java.util.Random rnd = new java.util.Random(20260916);              // fixed: the two merges are compared
@@ -1310,7 +1319,9 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         int total = nSrc * perSource;
         for (int sIdx = 0; sIdx < nSrc; sIdx++) {
             List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
-            Path path = buildFusedSourceGraph(vecs, vsf, true, "celljoin_" + vsf + "_src_" + sIdx);
+            Path path = fusedSources
+                    ? buildFusedSourceGraph(vecs, vsf, true, "celljoin_" + vsf + "_src_" + sIdx)
+                    : buildPlainSourceGraph(vecs, vsf, true, "celljoin_plain_" + vsf + "_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var lv = new FixedBitSet(perSource);
@@ -1335,8 +1346,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
         // same sources merged twice: graph search (caller ordinals) and cell join (reassigned ordinals)
         double graphRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, false, "celljoin_" + vsf + "_graph");
-        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, true, "celljoin_" + vsf + "_join");
-        System.out.printf("Cell-join merge recall (%s): %.4f (graph search %.4f)%n", vsf, joinRecall, graphRecall);
+        String joinName = "celljoin_" + (fusedSources ? "" : "plain_") + vsf + "_join";
+        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, true, joinName);
+        System.out.printf("Cell-join merge recall (%s, %s sources): %.4f (graph search %.4f)%n",
+                          vsf, fusedSources ? "fused" : "full-precision", joinRecall, graphRecall);
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(testDirectory.resolve(joinName))) {
+            var merged = OnDiskGraphIndex.load(rs);
+            assertEquals("quantized feature in the output", fusedSources, merged.getFeatures().containsKey(FeatureId.FUSED_PQ));
+        }
         assertTrue("cell-join recall " + joinRecall + " below graph search " + graphRecall, joinRecall >= graphRecall - 0.03);
         for (var r : rss) r.close();
     }
@@ -1382,6 +1399,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             List<VectorFloat<?>> reordered = new ArrayList<>(total);
             for (int n = 0; n < total; n++) reordered.add(all.get(newToDataset[n]));
             var reorderedRavv = new ListRandomAccessVectorValues(reordered, dimension);
+            // the two-phase write must leave every output vector intact
+            try (var view = compactGraph.getView()) {
+                var v = vectorTypeSupport.createFloatVector(dimension);
+                for (int n = 0; n < total; n++) {
+                    view.getVectorInto(n, v, 0);
+                    for (int d = 0; d < dimension; d++) {
+                        assertEquals("output vector " + n, reordered.get(n).get(d), v.get(d), 0f);
+                    }
+                }
+            }
             try (GraphSearcher searcher = new GraphSearcher(compactGraph)) {
                 int hits = 0;
                 for (int qi = 0; qi < queries.size(); qi++) {
@@ -1521,10 +1548,10 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /** Inline-vectors-only source graph with the same build parameters as
      *  {@link #buildFusedSourceGraph}, so sidecar-vs-fused comparisons share source quality. */
-    private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, String name) throws IOException {
+    private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, boolean hierarchy, String name) throws IOException {
         var ravv = new ListRandomAccessVectorValues(vecs, dimension);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
-        var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, false, true, simdExecutor, parallelExecutor);
+        var builder = new GraphIndexBuilder(bsp, dimension, 16, 100, 1.2f, 1.2f, hierarchy, true, simdExecutor, parallelExecutor);
         var graph = builder.build(ravv);
         Path path = testDirectory.resolve(name);
         var writerBuilder = new OnDiskGraphIndexWriter.Builder(graph, path);
@@ -1580,7 +1607,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 }
                 vecs.add(v);
             }
-            Path path = buildPlainSourceGraph(vecs, vsf, "sc_neardup_src_" + sIdx);
+            Path path = buildPlainSourceGraph(vecs, vsf, false, "sc_neardup_src_" + sIdx);
             rss.add(ReaderSupplierFactory.open(path));
             graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
             var ravv = new ListRandomAccessVectorValues(vecs, dimension);

@@ -18,6 +18,20 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -49,6 +63,9 @@ import java.util.List;
  * and {@code ASHVectors} just return appropriately-parameterized instances of these two strategies.
  */
 public abstract class QuantizationCompactionStrategy {
+    private static final Logger log = LoggerFactory.getLogger(QuantizationCompactionStrategy.class);
+    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+
 
     /**
      * Singleton strategy for sources that ship no quantization at all (no FUSED_PQ, no sidecar).
@@ -89,6 +106,27 @@ public abstract class QuantizationCompactionStrategy {
      */
     /** Whether the pre-encoded code cache uses the blocked layout the cell join scans; set by the compactor. */
     protected boolean blockedCodeLayout;
+    // Optional second compressor whose codes are written to a second scratch cache, right after the
+    // first, by the same pre-encode pass (the compactor's wide code). Truncated away with the first.
+    protected VectorCompressor<?> secondaryCompressor;
+    protected PreEncodedCodeCache secondaryCache;
+
+    /** For compaction use: a second code per node, encoded in the same pre-encode pass. */
+    public void setSecondaryCompressor(VectorCompressor<?> compressor) {
+        this.secondaryCompressor = compressor;
+    }
+
+    /** For compaction use. The secondary code cache, or null. */
+    public PreEncodedCodeCache getSecondaryCache() {
+        return secondaryCache;
+    }
+
+    protected void closeSecondaryCache() {
+        if (secondaryCache != null) {
+            secondaryCache.close();
+            secondaryCache = null;
+        }
+    }
 
     /** For compaction use: chooses the code cache layout before {@link #onAfterHeader} runs. */
     public void setBlockedCodeLayout(boolean blocked) {
@@ -190,5 +228,90 @@ public abstract class QuantizationCompactionStrategy {
     protected ProductQuantization compressorAsPQ() {
         VectorCompressor<?> c = compressor();
         return (c instanceof ProductQuantization) ? (ProductQuantization) c : null;
+    }
+
+    /**
+     * Encodes every live node with {@code compressor} into a code cache keyed by new ordinal,
+     * memory-mapped past the projected end of the output file (the caller truncates the file back
+     * to {@link CompactWriter#projectedOutputSize()} when done). Returns null for a degenerate
+     * (empty) merge.
+     */
+    @SuppressWarnings("unchecked")
+    protected PreEncodedCodeCache precomputeCodeCache(CompactionContext ctx, CompactWriter writer,
+                                                      VectorCompressor<?> compressor, String label) throws IOException {
+        final int codeSize = compressor.compressedVectorSize();
+        int codeCount = ctx.maxOrdinal + 1;
+        long tempSize = PreEncodedCodeCache.sectionBytes(codeCount, codeSize, blockedCodeLayout);
+        if (codeCount <= 0 || tempSize <= 0) {
+            log.info("{} skipped: degenerate cache size {} bytes for {} codes", label, tempSize, codeCount);
+            return null;
+        }
+        long tempOffset = writer.projectedOutputSize();
+        final int secondarySize = secondaryCompressor == null ? 0 : secondaryCompressor.compressedVectorSize();
+        final long secondaryOffset = tempOffset + tempSize;
+        final long secondaryBytes = secondarySize == 0 ? 0 : PreEncodedCodeCache.sectionBytes(codeCount, secondarySize, false);
+        final PreEncodedCodeCache cache;
+        try (FileChannel fc = FileChannel.open(writer.getOutputPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            fc.write(ByteBuffer.wrap(new byte[]{0}), secondaryOffset + secondaryBytes - 1);
+            cache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, codeSize, blockedCodeLayout);
+            if (secondarySize > 0) {
+                secondaryCache = PreEncodedCodeCache.map(fc, secondaryOffset, codeCount, secondarySize, false);
+            }
+        }
+        final VectorCompressor<ByteSequence<?>> enc = (VectorCompressor<ByteSequence<?>>) compressor;
+        final VectorCompressor<ByteSequence<?>> enc2 = (VectorCompressor<ByteSequence<?>>) secondaryCompressor;
+        final PreEncodedCodeCache cache2 = secondaryCache;
+        List<Callable<Long>> tasks = new ArrayList<>();
+        int targetTasks = Math.max(ctx.taskWindowSize * 4, 16);
+        for (int s = 0; s < ctx.sources.size(); s++) {
+            final int sIdx = s;
+            final var source = ctx.sources.get(s);
+            final var alive = ctx.liveNodes.get(s);
+            final int upper = alive.length();
+            int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
+            for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
+                final int cStart = chunkStart;
+                final int cEnd = Math.min(chunkStart + chunkSize, upper);
+                tasks.add(() -> {
+                    // stream the chunk's records into the page cache before the encode loop
+                    source.prefetchL0Records(cStart, cEnd - 1);
+                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(codeSize);
+                    ByteSequence<?> code2 = enc2 == null ? null : vectorTypeSupport.createByteSequence(secondarySize);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
+                    long count = 0;
+                    try (var view = source.getView()) {
+                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
+                            if (!alive.get(oldOrd)) continue;
+                            view.getVectorInto(oldOrd, vec, 0);
+                            int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
+                            code.zero();
+                            enc.encodeTo(vec, code);
+                            cache.put(newOrd, code);
+                            if (enc2 != null) {
+                                code2.zero();
+                                enc2.encodeTo(vec, code2);
+                                cache2.put(newOrd, code2);
+                            }
+                            count++;
+                        }
+                    }
+                    return count;
+                });
+            }
+        }
+        try {
+            long total = 0;
+            for (Future<Long> f : ctx.executor.invokeAll(tasks)) {
+                total += f.get();
+            }
+            log.info("{}: {} nodes encoded into {} MB in-output cache across {} mapping(s) (offset {}){}",
+                     label, total, tempSize / (1024 * 1024), cache.chunkCount(), tempOffset,
+                     secondarySize == 0 ? "" : String.format(", plus %d MB of %d-byte secondary codes", secondaryBytes >> 20, secondarySize));
+        } catch (InterruptedException | ExecutionException e) {
+            cache.close();
+            closeSecondaryCache();
+            throw new IOException(label + " failed", e);
+        }
+        return cache;
     }
 }
