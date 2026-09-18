@@ -84,6 +84,15 @@ public class SimpleMappedReader extends ByteBufferReader {
             return new SimpleMappedReader((MappedByteBuffer) buffer.duplicate());
         }
 
+        /**
+         * Unmaps the shared mapping <b>immediately</b> (via {@code Unsafe.invokeCleaner}), with
+         * no coordination with outstanding readers — the raw-release family of
+         * {@link ReaderSupplier#close()}. Any reader vended by {@link #get()} that touches the
+         * mapping after this call faults natively (SIGSEGV) rather than throwing an exception,
+         * so close only once every vended reader is provably done. Where JDK 22+ is available,
+         * prefer the jvector-native {@code MemorySegmentReader}, whose close degrades to
+         * {@code IllegalStateException} instead.
+         */
         @Override
         public void close() {
             if (unsafe != null) {
