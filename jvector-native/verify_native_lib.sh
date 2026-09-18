@@ -14,16 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Sanity-checks the libjvector.so that actually ships inside the built
+# Sanity-checks the libjvector-<arch>.so that actually ships inside the built
 # jvector-native jar (not the loose copy in src/main/resources): correct
 # architecture, resolvable dynamic dependencies, and presence of the expected
 # exported symbols. Non-fatal (warns and skips) for any check whose tool isn't
 # available on the current OS (e.g. readelf/ldd on macOS).
+#
+# Usage: verify_native_lib.sh [<jar>] [x86_64|aarch64]
+# Defaults: jar auto-detected from target/; arch defaults to x86_64.
 
 set -euo pipefail
 
 MODULE_ROOT="$(cd "$(dirname "$0")" && pwd)"
 JAR="${1:-}"
+ARCH="${2:-x86_64}"
 
 if [ -z "${JAR}" ]; then
   JAR=$(find "${MODULE_ROOT}/target" -maxdepth 1 -name 'jvector-native-*.jar' \
@@ -35,16 +39,15 @@ if [ -z "${JAR}" ] || [ ! -f "${JAR}" ]; then
   exit 1
 fi
 
-LIBNAME="libjvector.so"
+LIBNAME="libjvector-${ARCH}.so"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "${WORKDIR}"' EXIT
 
 if ! unzip -p "${JAR}" "${LIBNAME}" > "${WORKDIR}/${LIBNAME}" 2>/dev/null || [ ! -s "${WORKDIR}/${LIBNAME}" ]; then
   echo "ERROR: ${LIBNAME} not found (or empty) inside ${JAR}." >&2
-  echo "       This is expected if ${JAR} was not built on a unix/amd64 host: the native" >&2
-  echo "       library is only compiled and packaged there (see unix-amd64-profile in" >&2
-  echo "       jvector-native/pom.xml). On e.g. Apple Silicon (arm64) Macs, the native" >&2
-  echo "       build is skipped entirely, so the jar never contains ${LIBNAME}." >&2
+  echo "       The x86_64 library is built during a normal Linux build." >&2
+  echo "       The aarch64 library requires cross-compilation: pass -Dnative.cross.aarch64" >&2
+  echo "       to Maven (see unix-amd64-profile in jvector-native/pom.xml)." >&2
   exit 1
 fi
 
@@ -60,8 +63,13 @@ echo "-- architecture (readelf -h) --"
 if command -v readelf &>/dev/null; then
   MACHINE_LINE=$(readelf -h "${LIB}" | grep -i 'Machine:')
   echo "${MACHINE_LINE}"
-  if [[ "${MACHINE_LINE}" != *"X86-64"* ]]; then
-    echo "ERROR: expected an x86-64 shared object, got: ${MACHINE_LINE}" >&2
+  if [ "${ARCH}" = "aarch64" ]; then
+    EXPECTED_MACHINE="AArch64"
+  else
+    EXPECTED_MACHINE="X86-64"
+  fi
+  if [[ "${MACHINE_LINE}" != *"${EXPECTED_MACHINE}"* ]]; then
+    echo "ERROR: expected a ${EXPECTED_MACHINE} shared object, got: ${MACHINE_LINE}" >&2
     FAIL=1
   fi
 else
@@ -110,8 +118,8 @@ fi
 
 echo
 if [ "${FAIL}" -ne 0 ]; then
-  echo "libjvector.so verification FAILED" >&2
+  echo "${LIBNAME} verification FAILED" >&2
   exit 1
 fi
 
-echo "libjvector.so verification passed"
+echo "${LIBNAME} verification passed"
