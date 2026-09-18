@@ -156,6 +156,26 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
   }
 
   @Override
+  public int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
+    float[] v = ((ArrayVectorFloat) vector).get();
+    float[] t = ((ArrayVectorFloat) transposedCodebook).get();
+    int best = 0;
+    float bestDistance = Float.MAX_VALUE;
+    for (int j = 0; j < clusterCount; j++) {
+      float distance = 0;
+      for (int i = 0; i < size; i++) {
+        float d = v[offset + i] - t[i * clusterCount + j];
+        distance += d * d;
+      }
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = j;
+      }
+    }
+    return best;
+  }
+
+  @Override
   public float squareDistance(VectorFloat<?> av, VectorFloat<?> bv) {
     float[] a = ((ArrayVectorFloat) av).get();
     float[] b = ((ArrayVectorFloat) bv).get();

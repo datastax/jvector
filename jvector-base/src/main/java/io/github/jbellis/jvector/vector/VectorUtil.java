@@ -142,6 +142,11 @@ public final class VectorUtil {
     impl.subInPlace(v1, v2);
   }
 
+  /** @see VectorUtilSupport#closestCentroid */
+  public static int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
+    return impl.closestCentroid(vector, offset, transposedCodebook, size, clusterCount);
+  }
+
   public static void subInPlace(VectorFloat<?> vector, float value) {
     impl.subInPlace(vector, value);
   }

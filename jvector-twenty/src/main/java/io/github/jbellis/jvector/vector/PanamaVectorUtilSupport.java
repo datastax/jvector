@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.util.MathUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
@@ -394,6 +395,87 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
         return squareDistance(v1, 0, v2, 0, v1.length());
+    }
+
+    @Override
+    public int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
+        if (!(vector instanceof FloatArray) || !(transposedCodebook instanceof FloatArray)) {
+            return VectorUtilSupport.super.closestCentroid(vector, offset, transposedCodebook, size, clusterCount);
+        }
+        // both providers' vectors expose their heap array; reading through it keeps the loop free of
+        // interface calls, which would otherwise force the vector values to be boxed around them
+        final float[] q = ((FloatArray) vector).array();
+        final float[] t = ((FloatArray) transposedCodebook).array();
+        final VectorSpecies<Float> FS = FloatVector.SPECIES_PREFERRED;
+        final VectorSpecies<Integer> IS = IntVector.SPECIES_PREFERRED; // same lane count as FS
+        final int L = FS.length();
+        // two independent running-minimum chains (blocks A and B) so the compare/blend latency
+        // of one block overlaps the distance accumulation of the other
+        FloatVector bestA = FloatVector.broadcast(FS, Float.MAX_VALUE);
+        FloatVector bestB = bestA;
+        IntVector indexA = IntVector.zero(IS);
+        IntVector indexB = indexA;
+        IntVector laneA = IntVector.zero(IS).addIndex(1);
+        IntVector laneB = laneA.add(L);
+        final IntVector twoBlocks = IntVector.broadcast(IS, 2 * L);
+        int j = 0;
+        for (; j + 2 * L <= clusterCount; j += 2 * L) {
+            FloatVector x = FloatVector.broadcast(FS, q[offset]);
+            FloatVector dA = x.sub(FloatVector.fromArray(FS, t, j));
+            FloatVector dB = x.sub(FloatVector.fromArray(FS, t, j + L));
+            FloatVector accA = dA.mul(dA);
+            FloatVector accB = dB.mul(dB);
+            for (int i = 1; i < size; i++) {
+                x = FloatVector.broadcast(FS, q[offset + i]);
+                int base = i * clusterCount + j;
+                dA = x.sub(FloatVector.fromArray(FS, t, base));
+                dB = x.sub(FloatVector.fromArray(FS, t, base + L));
+                accA = dA.fma(dA, accA);
+                accB = dB.fma(dB, accB);
+            }
+            VectorMask<Float> lessA = accA.compare(VectorOperators.LT, bestA);
+            bestA = bestA.blend(accA, lessA);
+            indexA = indexA.blend(laneA, lessA.cast(IS));
+            laneA = laneA.add(twoBlocks);
+            VectorMask<Float> lessB = accB.compare(VectorOperators.LT, bestB);
+            bestB = bestB.blend(accB, lessB);
+            indexB = indexB.blend(laneB, lessB.cast(IS));
+            laneB = laneB.add(twoBlocks);
+        }
+        // fold B into A; A's lanes hold the lower indices, so a strict compare keeps them on ties
+        VectorMask<Float> lessB = bestB.compare(VectorOperators.LT, bestA);
+        bestA = bestA.blend(bestB, lessB);
+        indexA = indexA.blend(indexB, lessB.cast(IS));
+        if (j + L <= clusterCount) {
+            FloatVector x = FloatVector.broadcast(FS, q[offset]);
+            FloatVector d = x.sub(FloatVector.fromArray(FS, t, j));
+            FloatVector acc = d.mul(d);
+            for (int i = 1; i < size; i++) {
+                x = FloatVector.broadcast(FS, q[offset + i]);
+                d = x.sub(FloatVector.fromArray(FS, t, i * clusterCount + j));
+                acc = d.fma(d, acc);
+            }
+            VectorMask<Float> less = acc.compare(VectorOperators.LT, bestA);
+            bestA = bestA.blend(acc, less);
+            indexA = indexA.blend(laneA, less.cast(IS));
+            j += L;
+        }
+        float best = bestA.reduceLanes(VectorOperators.MIN);
+        int bestIndex = indexA.blend(Integer.MAX_VALUE, bestA.compare(VectorOperators.NE, best).cast(IS))
+                              .reduceLanes(VectorOperators.MIN);
+        // scalar tail when clusterCount is not a multiple of the lane count
+        for (; j < clusterCount; j++) {
+            float distance = 0;
+            for (int i = 0; i < size; i++) {
+                float d = q[offset + i] - t[i * clusterCount + j];
+                distance += d * d;
+            }
+            if (distance < best) {
+                best = distance;
+                bestIndex = j;
+            }
+        }
+        return bestIndex;
     }
 
     @Override

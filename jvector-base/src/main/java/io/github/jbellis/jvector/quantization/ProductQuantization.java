@@ -67,6 +67,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     final int M; // codebooks.length, redundantly reproduced for convenience
     private final int clusterCount; // codebooks[0].length, redundantly reproduced for convenience
     final int originalDimension;
+    private volatile VectorFloat<?>[] transposedCodebooks; // lazily built, see transposedCodebooks()
+    private static final ThreadLocal<VectorFloat<?>> CENTERED_SCRATCH = new ThreadLocal<>();
     final VectorFloat<?> globalCentroid;
     final int[][] subvectorSizesAndOffsets;
     final float anisotropicThreshold; // parallel cost multiplier
@@ -435,9 +437,50 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     private void encodeUnweighted(VectorFloat<?> vector, ByteSequence<?> dest) {
+        VectorFloat<?>[] transposed = transposedCodebooks();
         for (int m = 0; m < M; m++) {
-            dest.set(m, (byte) closestCentroidIndex(vector, m, codebooks[m]));
+            int size = subvectorSizesAndOffsets[m][0];
+            int offset = subvectorSizesAndOffsets[m][1];
+            dest.set(m, (byte) VectorUtil.closestCentroid(vector, offset, transposed[m], size, clusterCount));
         }
+    }
+
+    /**
+     * Dimension-major copies of the codebooks (dimension {@code i} of centroid {@code j} of
+     * subspace {@code m} at {@code [m][i * clusterCount + j]}), built on first use, so the nearest
+     * centroid is found with contiguous passes over the codebook instead of one distance call per
+     * centroid.
+     */
+    private VectorFloat<?>[] transposedCodebooks() {
+        VectorFloat<?>[] transposed = transposedCodebooks;
+        if (transposed == null) {
+            transposed = new VectorFloat<?>[M];
+            for (int m = 0; m < M; m++) {
+                int size = subvectorSizesAndOffsets[m][0];
+                VectorFloat<?> codebook = codebooks[m];
+                VectorFloat<?> t = vectorTypeSupport.createFloatVector(size * clusterCount);
+                for (int j = 0; j < clusterCount; j++) {
+                    for (int i = 0; i < size; i++) {
+                        t.set(i * clusterCount + j, codebook.get(j * size + i));
+                    }
+                }
+                transposed[m] = t;
+            }
+            transposedCodebooks = transposed;
+        }
+        return transposed;
+    }
+
+    /** Per-thread copy of a vector with the global centroid subtracted, so unweighted encoding allocates nothing per call. */
+    private VectorFloat<?> centered(VectorFloat<?> vector) {
+        VectorFloat<?> scratch = CENTERED_SCRATCH.get();
+        if (scratch == null || scratch.length() != vector.length()) {
+            scratch = vectorTypeSupport.createFloatVector(vector.length());
+            CENTERED_SCRATCH.set(scratch);
+        }
+        scratch.copyFrom(vector, 0, 0, vector.length());
+        VectorUtil.subInPlace(scratch, globalCentroid);
+        return scratch;
     }
 
     /**
@@ -453,14 +496,17 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     @Override
     public void encodeTo(VectorFloat<?> vector, ByteSequence<?> dest) {
-        if (globalCentroid != null) {
-            vector = sub(vector, globalCentroid);
-        }
-
-        if (anisotropicThreshold > UNWEIGHTED)
+        if (anisotropicThreshold > UNWEIGHTED) {
+            if (globalCentroid != null) {
+                vector = sub(vector, globalCentroid);
+            }
             encodeAnisotropic(vector, dest);
-        else
+        } else {
+            if (globalCentroid != null) {
+                vector = centered(vector);
+            }
             encodeUnweighted(vector, dest);
+        }
     }
 
     /**
@@ -517,21 +563,6 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return vectors.stream()
                 .map(vector -> getSubVector(vector, m, subvectorSizeAndOffset))
                 .toArray(VectorFloat<?>[]::new);
-    }
-
-    int closestCentroidIndex(VectorFloat<?> subvector, int m, VectorFloat<?> codebook) {
-        int index = 0;
-        float minDist = Float.MAX_VALUE;
-        int subvectorSize = subvectorSizesAndOffsets[m][0];
-        int subvectorOffset = subvectorSizesAndOffsets[m][1];
-        for (int i = 0; i < clusterCount; i++) {
-            float dist = VectorUtil.squareL2Distance(subvector, subvectorOffset, codebook, i * subvectorSize, subvectorSize);
-            if (dist < minDist) {
-                minDist = dist;
-                index = i;
-            }
-        }
-        return index;
     }
 
     /**

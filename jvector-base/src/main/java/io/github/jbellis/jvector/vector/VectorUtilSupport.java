@@ -144,6 +144,30 @@ public interface VectorUtilSupport {
   float max(VectorFloat<?> v);
   float min(VectorFloat<?> v);
 
+  /**
+   * Index of the centroid nearest, in squared L2 distance, to the subvector
+   * {@code vector[offset, offset + size)}. The codebook is dimension-major: dimension {@code i} of
+   * centroid {@code j} is at {@code transposedCodebook[i * clusterCount + j]}, so the distance to
+   * every centroid accumulates in contiguous passes over the codebook. Ties resolve to the lowest
+   * index up to floating-point summation order.
+   */
+  default int closestCentroid(VectorFloat<?> vector, int offset, VectorFloat<?> transposedCodebook, int size, int clusterCount) {
+    int best = 0;
+    float bestDistance = Float.MAX_VALUE;
+    for (int j = 0; j < clusterCount; j++) {
+      float distance = 0;
+      for (int i = 0; i < size; i++) {
+        float d = vector.get(offset + i) - transposedCodebook.get(i * clusterCount + j);
+        distance += d * d;
+      }
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = j;
+      }
+    }
+    return best;
+  }
+
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
     return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);

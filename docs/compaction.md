@@ -83,6 +83,8 @@ Each source assigns its own local ordinals. The compactor maps them to a new glo
 If the source indexes use FusedPQ, the compactor retrains the Product Quantization codebook on the combined dataset before writing the output. This is done by `PQRetrainer`, which
 performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source).
 
+Sources without any quantization (full-precision graphs) get a merge-time codebook as well when the compactor assigns the ordinals: it is used for the ordinal assignment, the cell join and the pre-encoded codes, lives only in a scratch region of the output file, and is truncated at the end, so nothing quantized is written to a full-precision output.
+
 
 ### Neighbor Selection (per node)
 
@@ -116,11 +118,15 @@ for alpha in [1.0, 1.2]:
 
 ### Cell join
 
-With `setReassignOrdinals(true)` and a hierarchy in the largest source, the level-0 cross-source search is replaced by a scan. The reassigned ordinals group every source's nodes by the level-1 node of the largest source they descend to, their *cell* (the best-scoring level-1 node found by a small beam from the greedy descent's landing); each source's nodes of a cell form a contiguous ordinal range, and their codes are contiguous in the pre-encoded cache, which is stored in 64-code, subspace-major blocks for this purpose. For a node, a beam over the level-1 graph seeded at its own cell picks the 16 best cells; for each larger source the node's 8-bit lookup table is applied to that source's codes in those cells (in score order, at most 4,096 codes), the top `searchTopK` by table score are rescored exactly from the source's records, and they enter the unchanged pipeline (reverse offers, diversity, write). The scan runs through a Google Highway kernel (`pq_scan_blocked_u8`) when the native library is available, otherwise through a plain Java loop. Nodes without a cell, and merges where the largest source has no hierarchy, use the graph search.
+With `setReassignOrdinals(true)` and a hierarchy in the largest source, the level-0 cross-source search is replaced by a scan. The reassigned ordinals group every source's nodes by the level-1 node of the largest source they descend to, their *cell* (the best-scoring level-1 node found by a small beam from the greedy descent's landing); each source's nodes of a cell form a contiguous ordinal range, and their codes are contiguous in the pre-encoded cache, which is stored in 64-code, subspace-major blocks for this purpose. For a node, a beam over the level-1 graph seeded at its own cell picks the 16 best cells; for each larger source the node's 8-bit lookup table is applied to that source's codes in those cells (in score order, at most 4,096 codes), the top `searchTopK` by table score are rescored on vectors decoded from the wide code (below), and they enter the unchanged pipeline (reverse offers, diversity, write). The scan runs through a Google Highway kernel (`pq_scan_blocked_u8`) when the native library is available, otherwise through a plain Java loop. Nodes without a cell, and merges where the largest source has no hierarchy, use the graph search.
 
 ### Pre-encoded codes
 
 Before level 0 is written, every live node is encoded once against the retrained codebook into a memory-mapped code cache indexed by new ordinal. Record writes copy neighbour codes from the cache instead of re-encoding them per edge, the cross-source searches score through it, and the offer diversity checks read it. For sidecar sources (`compact(graphPath, compressedPath)`) the same cache also becomes the merged compressed vectors file.
+
+### Wide code
+
+When the cell join is active the compactor also trains a second, finer product quantization — two dimensions per subspace, 256 centroids, i.e. 192 bytes per node at 384 dimensions — and encodes every live node into a second scratch cache in the same pass as the pre-encoded codes. At level 0 the vector of a candidate (a scanned candidate that survived the table ranking, or one of the node's retained edges) is decoded from this code instead of being read from a record: each two-dimensional centroid is one packed `long`, so a decode is one table read per subspace plus the global centroid. Scoring against the node's exact vector and the diversity checks run on the decoded vectors, which are near-exact for this purpose (merged recall within 0.2 pt of exact reranks at 3×8M). No record other than the node's own is read during level 0. The second cache is truncated together with the code cache.
 
 ### Hierarchical Levels
 

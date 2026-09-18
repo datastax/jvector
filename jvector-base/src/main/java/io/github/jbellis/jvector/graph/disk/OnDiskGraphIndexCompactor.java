@@ -46,6 +46,7 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
 import org.agrona.collections.IntHashSet;
@@ -2119,9 +2120,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
             private float[] table() {
                 if (!tableValid) {
-                    Object raw = partialSums.get();
-                    if (raw instanceof float[]) {
-                        table = (float[]) raw;   // heap-backed: no copy
+                    if (partialSums instanceof FloatArray) {
+                        table = ((FloatArray) partialSums).array();   // heap-backed: no copy
                     } else {
                         if (table == null) table = new float[subspaceCount * clusterCount];
                         for (int i = 0; i < table.length; i++) table[i] = partialSums.get(i);
@@ -2630,62 +2630,107 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Per-thread decoder for the wide code: a candidate's code becomes a near-exact vector, scored
-     * and compared like one. With heap-backed vectors (the Panama and default providers) the
-     * decode is a flat copy of {@code m} short centroid slices plus the global centroid.
+     * and compared like one. With two-dimensional subspaces (every dimension up to 384) each
+     * centroid is one packed {@code long}, so a decode is {@code m} table reads plus one centroid
+     * add and no per-subspace bookkeeping; other subspace sizes take a flat per-subspace copy.
+     * Vectors that expose no heap array ({@link FloatArray}) take the generic decode.
      */
     private final class WideDecoder {
         private final int m = pqWide.getSubspaceCount();
+        private final int clusterCount = pqWide.getClusterCount();
         private final ByteSequence<?> code = vectorTypeSupport.createByteSequence(m);
-        private final byte[] codeBytes = code.get() instanceof byte[] ? (byte[]) code.get() : new byte[m];
-        private final float[][] codebooks;    // per subspace, or null when the provider's vectors are not float[]-backed
-        private final int[] sizes, offsets;
+        private final byte[] codeBytes = new byte[m];
+        private final float[] codebooks;      // every subspace's codebook, subspace sub at codebookBase[sub]; null without heap arrays
+        private final long[] pairs;           // two-dimensional subspaces only: centroid (sub, c) packed at [sub * clusterCount + c]
+        private final int[] codebookBase, sizes, offsets;
         private final float[] center;
 
         WideDecoder() {
-            float[][] cbs = new float[m][];
             sizes = new int[m];
             offsets = new int[m];
-            boolean flat = true;
-            int offset = 0;
+            codebookBase = new int[m];
+            boolean flat = true, allPairs = true;
+            int total = 0, offset = 0;
             for (int sub = 0; sub < m; sub++) {
-                Object raw = pqWide.getCodebookVector(sub).get();
-                if (!(raw instanceof float[])) {
-                    flat = false;
-                    break;
-                }
-                cbs[sub] = (float[]) raw;
+                VectorFloat<?> codebook = pqWide.getCodebookVector(sub);
+                flat &= codebook instanceof FloatArray;
                 sizes[sub] = pqWide.getSubvectorSize(sub);
+                allPairs &= sizes[sub] == 2;
                 offsets[sub] = offset;
                 offset += sizes[sub];
+                codebookBase[sub] = total;
+                total += codebook.length();
             }
-            VectorFloat<?> c = pqWide.getGlobalCentroid();
-            float[] centerArr = null;
-            if (c != null) {
-                Object raw = c.get();
-                if (raw instanceof float[]) centerArr = (float[]) raw;
-                else flat = false;
+            VectorFloat<?> globalCentroid = pqWide.getGlobalCentroid();
+            flat &= globalCentroid == null || globalCentroid instanceof FloatArray;
+            if (flat) {
+                codebooks = new float[total];
+                for (int sub = 0; sub < m; sub++) {
+                    VectorFloat<?> codebook = pqWide.getCodebookVector(sub);
+                    for (int i = 0; i < codebook.length(); i++) {
+                        codebooks[codebookBase[sub] + i] = codebook.get(i);
+                    }
+                }
+                if (allPairs) {
+                    pairs = new long[m * clusterCount];
+                    for (int sub = 0; sub < m; sub++) {
+                        for (int c = 0; c < clusterCount; c++) {
+                            int at = codebookBase[sub] + 2 * c;
+                            pairs[sub * clusterCount + c] = (Float.floatToRawIntBits(codebooks[at]) & 0xFFFFFFFFL)
+                                    | ((long) Float.floatToRawIntBits(codebooks[at + 1]) << 32);
+                        }
+                    }
+                } else {
+                    pairs = null;
+                }
+                if (globalCentroid == null) {
+                    center = null;
+                } else {
+                    center = new float[dimension];
+                    for (int i = 0; i < dimension; i++) {
+                        center[i] = globalCentroid.get(i);
+                    }
+                }
+            } else {
+                codebooks = null;
+                pairs = null;
+                center = null;
             }
-            codebooks = flat ? cbs : null;
-            center = centerArr;
         }
 
         void decode(int newOrdinal, VectorFloat<?> dst) {
             wideCache.get(newOrdinal, codeBytes);
-            Object rawDst = dst.get();
-            if (codebooks != null && rawDst instanceof float[]) {
-                float[] out = (float[]) rawDst;
-                for (int sub = 0; sub < m; sub++) {
-                    int size = sizes[sub];
-                    int from = (codeBytes[sub] & 0xFF) * size;
-                    System.arraycopy(codebooks[sub], from, out, offsets[sub], size);
+            if (codebooks != null && dst instanceof FloatArray) {
+                float[] out = ((FloatArray) dst).array();
+                if (pairs != null) {
+                    long[] table = pairs;
+                    int k = clusterCount;
+                    for (int sub = 0; sub < m; sub++) {
+                        long pair = table[sub * k + (codeBytes[sub] & 0xFF)];
+                        out[2 * sub] = Float.intBitsToFloat((int) pair);
+                        out[2 * sub + 1] = Float.intBitsToFloat((int) (pair >>> 32));
+                    }
+                } else {
+                    float[] cb = codebooks;
+                    for (int sub = 0; sub < m; sub++) {
+                        int size = sizes[sub];
+                        int from = codebookBase[sub] + (codeBytes[sub] & 0xFF) * size;
+                        int to = offsets[sub];
+                        for (int i = 0; i < size; i++) {
+                            out[to + i] = cb[from + i];
+                        }
+                    }
                 }
                 if (center != null) {
-                    for (int i = 0; i < dimension; i++) out[i] += center[i];
+                    float[] c = center;
+                    for (int i = 0; i < dimension; i++) {
+                        out[i] += c[i];
+                    }
                 }
                 return;
             }
-            if (codeBytes != code.get()) {
-                for (int i = 0; i < m; i++) code.set(i, codeBytes[i]);
+            for (int i = 0; i < m; i++) {
+                code.set(i, codeBytes[i]);
             }
             pqWide.decode(code, dst);
         }

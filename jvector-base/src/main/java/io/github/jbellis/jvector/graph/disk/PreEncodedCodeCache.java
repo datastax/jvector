@@ -217,6 +217,12 @@ public final class PreEncodedCodeCache implements AutoCloseable {
             return;
         }
         int offset = inChunk * codeSize;
+        Object raw = code.get();
+        if (raw instanceof byte[] && code.offset() == 0) {
+            buf.position(offset);
+            buf.put((byte[]) raw, 0, codeSize);
+            return;
+        }
         for (int i = 0; i < codeSize; i++) {
             buf.put(offset + i, code.get(i));
         }

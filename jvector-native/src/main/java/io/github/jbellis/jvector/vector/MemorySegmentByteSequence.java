@@ -64,7 +64,7 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
     @Override
     public void copyFrom(ByteSequence<?> src, int srcOffset, int destOffset, int length) {
         MemorySegmentByteSequence csrc = (MemorySegmentByteSequence) src;
-        segment.asSlice(destOffset, length).copyFrom(csrc.segment.asSlice(srcOffset));
+        MemorySegment.copy(csrc.segment, srcOffset, segment, destOffset, length);
     }
 
     @Override
