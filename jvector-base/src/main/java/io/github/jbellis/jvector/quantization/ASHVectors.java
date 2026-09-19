@@ -51,6 +51,7 @@ public class ASHVectors implements CompressedVectors {
     final AsymmetricHashing ash;
     final AsymmetricHashing.QuantizedVector[] compressedVectors;
     final ASHScorer scorer;
+    private volatile ASHSymmetricScorer diversityScorer;
 
     enum AshSingleKernel {
         AUTO,
@@ -1085,17 +1086,21 @@ public class ASHVectors implements CompressedVectors {
         return scoreFunctionFor(query, similarityFunction);
     }
 
-    /**
-     * Diversity-aware scoring is not supported for ASH at this stage.
-     *
-     * <p>
-     * TODO: Define how diversity should be measured.
-     */
+    /** Symmetric node-to-node dot-product similarity from the stored encoded vectors. */
     @Override
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(
             int node1,
             VectorSimilarityFunction similarityFunction) {
-        throw new UnsupportedOperationException("ASH diversity scoring not implemented");
+        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT)
+            throw new UnsupportedOperationException("ASH diversity scoring supports DOT_PRODUCT only");
+        ASHSymmetricScorer symmetric = diversityScorer;
+        if (symmetric == null) {
+            synchronized (this) {
+                symmetric = diversityScorer;
+                if (symmetric == null) diversityScorer = symmetric = new ASHSymmetricScorer(this);
+            }
+        }
+        return symmetric.scoreFunctionFor(node1);
     }
 
     public AsymmetricHashing.QuantizedVector get(int ordinal) {
