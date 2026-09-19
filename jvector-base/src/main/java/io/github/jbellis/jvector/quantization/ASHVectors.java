@@ -464,6 +464,32 @@ public class ASHVectors implements CompressedVectors {
         );
     }
 
+    // Package-private prepared-state entry points shared by symmetric scoring.
+    ScoreFunction.ApproximateScoreFunction scoreFunctionFor(ASHScorer.QueryPrecompute qp, boolean simd) {
+        if (ash.bitsPerDimension == 1 && simd) {
+            return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.tildeQPool,
+                    qp.sumTildeQByLandmark, qp.dotQMuByLandmark));
+        }
+        var f = scorer.scoreFunctionFor(qp, simd);
+        return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
+    }
+
+    ASHBlockScorer blockScorerFor(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
+        if (blockSize <= 0) throw new IllegalArgumentException("blockSize must be > 0");
+        if (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) {
+            FusedASHLayout.validateBlockSize(blockSize);
+            return new LutASHBlockScorer(prepared, blockSize, simd);
+        }
+        if (ash.bitsPerDimension != 1) {
+            return new LegacyASHBlockScorer(scorer.scoreFunctionFor(prepared, simd), compressedVectors);
+        }
+        var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.tildeQPool,
+                prepared.sumTildeQByLandmark, prepared.dotQMuByLandmark);
+        if (!simd) return new ScalarASHBlockScorer(compressedVectors, scales, offsets, landmarks, qp);
+        ensurePackedBits(blockSize);
+        return new SimdASHBlockScorer(compressedVectors, scales, offsets, landmarks, packedBits, blockSize, qp);
+    }
+
     private byte[][] packProjectionBlocks(int blockSize) {
         int count = compressedVectors.length;
         int bytes = FusedASHLayout.canonicalCodeBytes(d, ash.bitsPerDimension);
@@ -483,9 +509,14 @@ public class ASHVectors implements CompressedVectors {
         return blocks;
     }
 
+    byte[][] symmetricProjectionBlocks(int blockSize) {
+        if (blockSize <= 0) throw new IllegalArgumentException("blockSize must be positive");
+        return projectionBlocks.computeIfAbsent(blockSize, this::packProjectionBlocks);
+    }
+
     /** Query-local LUT and dispatch over immutable, container-owned packed blocks. */
     private final class LutASHBlockScorer implements ASHBlockScorer {
-        private final ASHLutKernel kernel = new ASHLutKernel();
+        private final ASHLutKernel kernel;
         private final int blockSize;
         private final byte[][] blocks;
         private final float[] lut;
@@ -493,6 +524,7 @@ public class ASHVectors implements CompressedVectors {
         private final int groups = FusedASHLayout.codeGroups(d, ash.bitsPerDimension);
 
         LutASHBlockScorer(VectorFloat<?> query, int blockSize) {
+            this.kernel = new ASHLutKernel();
             this.blockSize = blockSize;
             this.blocks = projectionBlocks.computeIfAbsent(blockSize, ASHVectors.this::packProjectionBlocks);
             float[] q = new float[ash.originalDimension];
@@ -504,6 +536,15 @@ public class ASHVectors implements CompressedVectors {
             FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
             dotQMu = new float[ash.landmarkCount];
             for (int i = 0; i < dotQMu.length; i++) dotQMu[i] = VectorUtil.dotProduct(query, ash.landmarks[i]);
+        }
+
+        LutASHBlockScorer(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
+            this.kernel = new ASHLutKernel(simd);
+            this.blockSize = blockSize;
+            this.blocks = projectionBlocks.computeIfAbsent(blockSize, ASHVectors.this::packProjectionBlocks);
+            this.lut = new float[Math.multiplyExact(groups, 16)];
+            FusedASHLayout.buildQueryLut(prepared.qProj, d, ash.bitsPerDimension, lut);
+            this.dotQMu = prepared.dotQMuByLandmark;
         }
 
         @Override
@@ -910,7 +951,7 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
-     * Stable, linear-time reorder by landmark id (C <= 64).
+     * Stable, linear-time reorder by landmark id (C <= 256).
      * Fills reordered header arrays in the same pass (no second constructor scan).
      */
     public LandmarkOrder reorderByLandmarkFast() {

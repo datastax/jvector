@@ -59,6 +59,149 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
+    public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                      short[] lut, float[] out, int outOffset) {
+        var shorts = jdk.incubator.vector.ShortVector.SPECIES_PREFERRED;
+        if (shorts.length() < 16 || shorts.length() > 32) {
+            VectorUtilSupport.super.ashSymmetricLutScore(codes, groups, stride, lane, count, lut, out, outOffset);
+            return;
+        }
+        var bytes = VectorSpecies.of(byte.class, jdk.incubator.vector.VectorShape.forBitSize(shorts.vectorBitSize() / 2));
+        var ints = IntVector.SPECIES_PREFERRED;
+        var floats = FloatVector.SPECIES_PREFERRED;
+        for (int i = 0; i < count; i += shorts.length()) {
+            int active = Math.min(shorts.length(), count - i);
+            var mask = bytes.indexInRange(0, active);
+            var sum0 = FloatVector.zero(floats);
+            var sum1 = FloatVector.zero(floats);
+            for (int first = 0; first < groups; first += 64) {
+                var subtotal = jdk.incubator.vector.ShortVector.zero(shorts);
+                int end = Math.min(groups, first + 64);
+                for (int g = first; g < end; g += 2) {
+                    var packed = ByteVector.fromArray(bytes, codes, (g / 2) * stride + lane + i, mask);
+                    var fields = (jdk.incubator.vector.ShortVector) packed.convertShape(VectorOperators.B2S, shorts, 0);
+                    var low = jdk.incubator.vector.ShortVector.fromArray(shorts, lut, g * 32)
+                            .rearrange(fields.and((short)15).toShuffle());
+                    if (g + 1 < end) {
+                        var high = jdk.incubator.vector.ShortVector.fromArray(shorts, lut, (g + 1) * 32)
+                                .rearrange(fields.lanewise(VectorOperators.LSHR, 4).and((short)15).toShuffle());
+                        low = low.add(high);
+                    }
+                    subtotal = subtotal.add(low);
+                }
+                var lo = (IntVector) subtotal.convertShape(VectorOperators.S2I, ints, 0);
+                var hi = (IntVector) subtotal.convertShape(VectorOperators.S2I, ints, 1);
+                sum0 = sum0.add((FloatVector)lo.convertShape(VectorOperators.I2F, floats, 0));
+                sum1 = sum1.add((FloatVector)hi.convertShape(VectorOperators.I2F, floats, 0));
+            }
+            sum0.mul(.25f).intoArray(out, outOffset + i, floats.indexInRange(0, active));
+            if (active > floats.length()) sum1.mul(.25f).intoArray(out, outOffset + i + floats.length(), floats.indexInRange(floats.length(), active));
+        }
+    }
+
+    @Override
+    public boolean supportsAshSymmetricScoring() { return true; }
+
+    @Override
+    public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                  int dimensions, int bits) {
+        var longs = LongVector.SPECIES_PREFERRED;
+        if (bits == 1) {
+            long mismatches = 0;
+            int words = dimensions >>> 6;
+            for (int w = 0; w < words; w += longs.length()) {
+                var mask = longs.indexInRange(w, words);
+                var a = LongVector.fromArray(longs, aBits, w, mask);
+                var b = LongVector.fromArray(longs, bBits, w, mask);
+                mismatches += a.lanewise(VectorOperators.XOR, b)
+                        .lanewise(VectorOperators.BIT_COUNT).reduceLanes(VectorOperators.ADD);
+            }
+            int tail = dimensions & 63;
+            if (tail != 0) mismatches += Long.bitCount((aBits[words] ^ bBits[words]) & ((1L << tail) - 1));
+            return dimensions - 2f * mismatches;
+        }
+        if (bits == 2) {
+            // The doubled signed code is sign * (1 + 2*magnitudeBit).
+            // Weighted popcounts evaluate its product without unpacking components.
+            final long slots = 0x5555555555555555L;
+            int words = dimensions / 32;
+            long sum = (long) words * 32;
+            for (int word = 0; word < words; word += longs.length()) {
+                var byteSpecies = VectorSpecies.of(byte.class, longs.vectorShape());
+                var byteMask = byteSpecies.indexInRange(word * 8, words * 8);
+                var a = ByteVector.fromArray(byteSpecies, aCodes, word * 8, byteMask).reinterpretAsLongs();
+                var b = ByteVector.fromArray(byteSpecies, bCodes, word * 8, byteMask).reinterpretAsLongs();
+                var negative = a.lanewise(VectorOperators.XOR, b).lanewise(VectorOperators.LSHR, 1).and(slots);
+                var ma = a.and(slots);
+                var mb = b.and(slots);
+                var both = ma.and(mb);
+                var delta = negative.lanewise(VectorOperators.BIT_COUNT).mul(-2)
+                        .add(ma.lanewise(VectorOperators.BIT_COUNT).mul(2))
+                        .add(mb.lanewise(VectorOperators.BIT_COUNT).mul(2))
+                        .add(ma.and(negative).lanewise(VectorOperators.BIT_COUNT).mul(-4))
+                        .add(mb.and(negative).lanewise(VectorOperators.BIT_COUNT).mul(-4))
+                        .add(both.lanewise(VectorOperators.BIT_COUNT).mul(4))
+                        .add(both.and(negative).lanewise(VectorOperators.BIT_COUNT).mul(-8));
+                sum += delta.reduceLanes(VectorOperators.ADD);
+            }
+            int tail = dimensions % 32;
+            if (tail != 0) {
+                long a = 0, b = 0;
+                for (int j = 0; j < (tail + 3) / 4; j++) {
+                    a |= (long) (aCodes[words * 8 + j] & 255) << (8 * j);
+                    b |= (long) (bCodes[words * 8 + j] & 255) << (8 * j);
+                }
+                long valid = slots & ((1L << (2 * tail)) - 1);
+                long negative = ((a ^ b) >>> 1) & valid;
+                long ma = a & valid, mb = b & valid, both = ma & mb;
+                sum += tail - 2 * Long.bitCount(negative)
+                        + 2 * (Long.bitCount(ma) + Long.bitCount(mb))
+                        - 4 * (Long.bitCount(ma & negative) + Long.bitCount(mb & negative))
+                        + 4 * Long.bitCount(both) - 8 * Long.bitCount(both & negative);
+            }
+            return sum * 0.25f;
+        }
+        if (bits != 4) throw new IllegalArgumentException("Symmetric SIMD supports 1, 2, and 4 bits");
+        var bytes = ByteVector.SPECIES_PREFERRED;
+        var shorts = jdk.incubator.vector.ShortVector.SPECIES_PREFERRED;
+        int count = dimensions / 2;
+        long sum = 0;
+        for (int offset = 0; offset < count; offset += bytes.length()) {
+            int active = Math.min(bytes.length(), count - offset);
+            var mask = bytes.indexInRange(0, active);
+            var a = ByteVector.fromArray(bytes, aCodes, offset, mask);
+            var b = ByteVector.fromArray(bytes, bCodes, offset, mask);
+            var total = jdk.incubator.vector.ShortVector.zero(shorts);
+            for (int shift = 0; shift < 8; shift += 4) {
+                var ax = a.lanewise(VectorOperators.LSHR, shift);
+                var bx = b.lanewise(VectorOperators.LSHR, shift);
+                var am = ax.and((byte) 7).mul((byte) 2).add((byte) 1);
+                var bm = bx.and((byte) 7).mul((byte) 2).add((byte) 1);
+                am = am.blend(am.neg(), ax.and((byte) 8).compare(VectorOperators.EQ, (byte) 0));
+                bm = bm.blend(bm.neg(), bx.and((byte) 8).compare(VectorOperators.EQ, (byte) 0));
+                for (int part = 0; part < 2; part++) {
+                    var av = (jdk.incubator.vector.ShortVector) am.convertShape(VectorOperators.B2S, shorts, part);
+                    var bv = (jdk.incubator.vector.ShortVector) bm.convertShape(VectorOperators.B2S, shorts, part);
+                    total = total.add(av.mul(bv));
+                }
+            }
+            // Widen before reduction: no short-sum overflow, including wider future species.
+            for (int part = 0; part < 2; part++) {
+                sum += ((IntVector) total.convertShape(VectorOperators.S2I, IntVector.SPECIES_PREFERRED, part))
+                        .reduceLanes(VectorOperators.ADD);
+            }
+            sum -= 2L * (bytes.length() - active); // zero padding decodes to -1 in each nibble
+        }
+        if ((dimensions & 1) != 0) {
+            int a = aCodes[count] & 15, b = bCodes[count] & 15;
+            int av = (2 * (a & 7) + 1) * ((a & 8) == 0 ? -1 : 1);
+            int bv = (2 * (b & 7) + 1) * ((b & 8) == 0 ? -1 : 1);
+            sum += av * bv;
+        }
+        return sum * 0.25f;
+    }
+
+    @Override
     public boolean supportsAshProjectionScoring() { return PanamaASHKernels.supported(); }
 
     @Override

@@ -42,6 +42,13 @@ final class ASHLutKernel {
         }
     }
 
+    ASHLutKernel(boolean simd) {
+        if (simd && !backend.supportsAshLutScoring()) {
+            throw new IllegalStateException("ASH SIMD LUT scoring is unavailable");
+        }
+        this.simd = simd;
+    }
+
     void score(byte[] codes, int offset, int groups, int stride, int lane, int count,
                float[] lut, float[] out, int outOffset) {
         if (simd) backend.ashLutScore(codes, offset, groups, stride, lane, count, lut, out, outOffset);
