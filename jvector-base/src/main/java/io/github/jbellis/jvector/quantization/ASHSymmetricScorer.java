@@ -74,6 +74,29 @@ public final class ASHSymmetricScorer {
         return other -> ASHScorer.toSimilarity(dotProduct(node, other));
     }
 
+    /**
+     * Prepare an external query already encoded with this scorer's compressor.
+     * Query encoding and landmark-offset recovery happen before pairwise scoring.
+     * The caller must retain the immutable query payload while using the function.
+     */
+    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(AsymmetricHashing.QuantizedVector query) {
+        if (query.landmark != 0) {
+            throw new IllegalArgumentException("Symmetric ASH query requires landmark zero");
+        }
+        float queryOffset = query.offset;
+        if (AsymmetricHashing.usesFastScanProjectionCode(bits)) {
+            queryOffset += query.scale * AsymmetricHashing.dotProjectionCode(
+                    vectors.getCompressor().landmarkProj[0], query.extraBits, dimensions, bits);
+        }
+        final float centeredQueryOffset = queryOffset;
+        return node -> {
+            var target = vectors.get(node);
+            float dot = (query.scale * target.scale) * codeDot(query, target, dimensions, bits)
+                    + (centeredQueryOffset + offset(node)) + muNormSquared;
+            return ASHScorer.toSimilarity(dot);
+        };
+    }
+
     static float codeDot(AsymmetricHashing.QuantizedVector a,
                          AsymmetricHashing.QuantizedVector b, int d, int bits) {
         if (bits == 1) {

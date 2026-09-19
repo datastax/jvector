@@ -187,6 +187,162 @@ public class DistancesASH {
         }
     }
 
+    /** Independent component decoder for validation; never used in timed scoring. */
+    private static double symmetricComponent(AsymmetricHashing.QuantizedVector v, int j, int bits) {
+        if (bits == 1) return ((v.binaryVector[j / 64] >>> (j % 64)) & 1L) == 0 ? -1 : 1;
+        if (bits != 2 && bits != 4) {
+            int code = 0;
+            for (int k = 0; k < bits - 1; k++) {
+                int pos = j * (bits - 1) + k;
+                code |= ((v.extraBits[pos / 8] >>> (pos % 8)) & 1) << k;
+            }
+            code |= ((v.binaryVector[j / 64] >>> (j % 64)) & 1L) << (bits - 1);
+            return code - ((1 << (bits - 1)) - 0.5);
+        }
+        int field = (v.extraBits[j * bits / 8] >>> (j * bits % 8)) & ((1 << bits) - 1);
+        double magnitude = (field & ((1 << (bits - 1)) - 1)) + 0.5;
+        return (field & (1 << (bits - 1))) == 0 ? -magnitude : magnitude;
+    }
+
+    private static double decodedSymmetric(AsymmetricHashing ash,
+                                           AsymmetricHashing.QuantizedVector a,
+                                           AsymmetricHashing.QuantizedVector b) {
+        double dot = 0, ma = 0, mb = 0;
+        for (int j = 0; j < ash.quantizedDim; j++) {
+            double x = symmetricComponent(a, j, ash.bitsPerDimension);
+            double y = symmetricComponent(b, j, ash.bitsPerDimension);
+            dot += x * y;
+            ma += x * ash.landmarkProj[0][j];
+            mb += y * ash.landmarkProj[0][j];
+        }
+        double oa = a.offset, ob = b.offset;
+        if (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) {
+            oa += a.scale * ma;
+            ob += b.scale * mb;
+        }
+        double muNorm = 0;
+        for (int j = 0; j < ash.landmarks[0].length(); j++) {
+            double x = ash.landmarks[0].get(j);
+            muNorm += x * x;
+        }
+        return Math.max(0, (1 + (double) a.scale * b.scale * dot + oa + ob + muNorm) / 2);
+    }
+
+    /** Prepared scoring comparison: all query encoding/projection is outside every timer. */
+    private static void benchmarkSymmetric(ASHVectors vectors, List<VectorFloat<?>> queries,
+                                            List<List<Integer>> groundTruth, int[] newToOld,
+                                            int recallK, boolean recall, ForkJoinPool executor) {
+        var ash = vectors.getCompressor();
+        if (ash.landmarkCount != 1) throw new IllegalArgumentException("Symmetric scoring requires C=1");
+        int passes = Integer.getInteger("jvector.bench.scoringPasses", 5);
+        int timingQueries = Math.min(queries.size(), Integer.getInteger("jvector.bench.scoringQueries", 128));
+        int warmupQueries = Math.min(timingQueries, Integer.getInteger("jvector.bench.scoringWarmupQueries", 32));
+        if (passes < 1 || timingQueries < 1 || warmupQueries < 0) {
+            throw new IllegalArgumentException("Invalid symmetric scoring pass/query counts");
+        }
+        long prepareStart = System.nanoTime();
+        var encodedQueries = new AsymmetricHashing.QuantizedVector[queries.size()];
+        for (int q = 0; q < queries.size(); q++) encodedQueries[q] = ash.encode(queries.get(q));
+        double encodeSeconds = (System.nanoTime() - prepareStart) / 1e9;
+        prepareStart = System.nanoTime();
+        var symmetric = new io.github.jbellis.jvector.quantization.ASHSymmetricScorer(vectors);
+        ScoreFunction[][] prepared = new ScoreFunction[2][queries.size()];
+        for (int q = 0; q < queries.size(); q++) {
+            prepared[0][q] = symmetric.scoreFunctionFor(encodedQueries[q]);
+            prepared[1][q] = vectors.scoreFunctionFor(queries.get(q), VectorSimilarityFunction.DOT_PRODUCT);
+        }
+        System.out.printf(java.util.Locale.ROOT,
+                "SYMMETRIC_PREPARATION query_encoding_s=%.6f scorer_setup_s=%.6f queries=%d (excluded from timing)%n",
+                encodeSeconds, (System.nanoTime() - prepareStart) / 1e9, queries.size());
+
+        double maxError = 0;
+        for (int q = 0; q < Math.min(4, queries.size()); q++) {
+            int samples = Math.min(512, vectors.count());
+            for (int sample = 0; sample < samples; sample++) {
+                int node = samples == 1 ? 0 : (int) ((long) sample * (vectors.count() - 1) / (samples - 1));
+                double expected = decodedSymmetric(ash, encodedQueries[q], vectors.get(node));
+                float actual = prepared[0][q].similarityTo(node);
+                double error = Math.abs(actual - expected);
+                if (!Float.isFinite(actual) || !Double.isFinite(expected)
+                        || error > 5e-5 * Math.max(1, Math.abs(expected))) {
+                    throw new AssertionError("Symmetric decoder mismatch q=" + q + " node=" + node
+                            + " expected=" + expected + " actual=" + actual);
+                }
+                maxError = Math.max(maxError, error);
+            }
+        }
+        System.out.printf(java.util.Locale.ROOT, "SYMMETRIC_VALIDATION max_abs_error=%.9g (independent decoded oracle)%n", maxError);
+        String symmetricName = ash.bitsPerDimension == 1 ? "symmetric-popcount"
+                : ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4 ? "symmetric-packed" : "symmetric-generic";
+        String[] names = {symmetricName, "asymmetric-" + singleMode + "-prepared"};
+        if (recall) {
+            if (recallK < 1 || recallK > vectors.count() || groundTruth.size() < queries.size()) {
+                throw new IllegalArgumentException("Invalid recall size or missing query ground truth");
+            }
+            double[] totals = new double[2];
+            for (int q = 0; q < queries.size(); q++) {
+                int[] gt = groundTruth.get(q).stream().mapToInt(Integer::intValue).toArray();
+                if (gt.length < recallK) throw new IllegalArgumentException("Ground truth row too short");
+                for (int mode = 0; mode < 2; mode++) {
+                    var heap = new java.util.PriorityQueue<long[]>((a, b) -> Float.compare(
+                            Float.intBitsToFloat((int) a[0]), Float.intBitsToFloat((int) b[0])));
+                    for (int node = 0; node < vectors.count(); node++) {
+                        offerTop(heap, recallK, prepared[mode][q].similarityTo(node), node);
+                    }
+                    addRecall(rankedOrdinals(heap), gt, newToOld, recallK, new int[]{recallK}, totals, mode);
+                }
+            }
+            for (int mode = 0; mode < 2; mode++) {
+                System.out.printf(java.util.Locale.ROOT, "PREPARED_RECALL mode=%s queries=%d %d-recall@%d=%.6f%n",
+                        names[mode], queries.size(), recallK, recallK, totals[mode] / queries.size());
+            }
+        }
+        for (int mode = 0; mode < 2; mode++) {
+            scanPrepared(prepared[mode], warmupQueries, vectors.count(), executor);
+        }
+        long[][] times = new long[2][passes];
+        for (int pass = 0; pass < passes; pass++) {
+            for (int order = 0; order < 2; order++) {
+                int mode = (pass + order) & 1;
+                long start = System.nanoTime();
+                double checksum = scanPrepared(prepared[mode], timingQueries, vectors.count(), executor);
+                times[mode][pass] = System.nanoTime() - start;
+                System.out.printf(java.util.Locale.ROOT, "PREPARED_PASS mode=%s pass=%d seconds=%.6f checksum=%.6f%n",
+                        names[mode], pass + 1, times[mode][pass] / 1e9, checksum);
+            }
+        }
+        long pairs = (long) timingQueries * vectors.count();
+        for (int mode = 0; mode < 2; mode++) {
+            java.util.Arrays.sort(times[mode]);
+            double median = times[mode][passes / 2];
+            System.out.printf(java.util.Locale.ROOT,
+                    "PREPARED_THROUGHPUT mode=%s threads=%d queries=%d passes=%d median_Mdot_s=%.6f median_ns_pair=%.3f min_s=%.6f max_s=%.6f%n",
+                    names[mode], executor.getParallelism(), timingQueries, passes,
+                    pairs * 1000.0 / median, median / pairs,
+                    times[mode][0] / 1e9, times[mode][passes - 1] / 1e9);
+        }
+    }
+
+    private static double scanPrepared(ScoreFunction[] scorers, int queries, int count, ForkJoinPool executor) {
+        if (queries == 0) return 0;
+        int workers = Math.min(executor.getParallelism(), queries);
+        List<ForkJoinTask<Double>> tasks = new ArrayList<>();
+        for (int worker = 0; worker < workers; worker++) {
+            final int first = worker;
+            tasks.add(executor.submit(() -> {
+                double sum = 0;
+                for (int q = first; q < queries; q += workers) {
+                    var scorer = scorers[q];
+                    for (int node = 0; node < count; node++) sum += scorer.similarityTo(node);
+                }
+                return sum;
+            }));
+        }
+        double sum = 0;
+        for (var task : tasks) sum += task.join();
+        return sum;
+    }
+
     public static void testASHEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
@@ -261,6 +417,9 @@ public class DistancesASH {
         //   but are NOT normalized inside the encoder.
         // - No other normalization steps are applied.
 
+        if (vectors.isEmpty() || queries.isEmpty()) {
+            throw new IllegalArgumentException("Base and query vectors must be nonempty");
+        }
         int dimension = vectors.get(0).length();
 
         final int bitsPerDimension =
@@ -269,11 +428,11 @@ public class DistancesASH {
         final int quantizedDimensions =
                 Integer.getInteger("jvector.ash.quantizedDimensions", dimension / 2);
 
-        if (bitsPerDimension != 1
-                && bitsPerDimension != 2
-                && bitsPerDimension != 4) {
+        if (bitsPerDimension < 1 || bitsPerDimension > 9
+                || (!Boolean.getBoolean("jvector.bench.symmetric-scoring")
+                    && bitsPerDimension != 1 && bitsPerDimension != 2 && bitsPerDimension != 4)) {
             throw new IllegalArgumentException(
-                    "bitsPerDimension must be 1, 2, or 4: " + bitsPerDimension);
+                    "bitsPerDimension must be 1, 2, or 4 (symmetric comparison also supports widths 3 through 9): " + bitsPerDimension);
         }
 
         if (quantizedDimensions <= 0 || quantizedDimensions > dimension) {
@@ -292,6 +451,9 @@ public class DistancesASH {
                         + ", payloadBits=" + payloadBits
                         + ", encodedBits=" + encodedBits);
 
+        if (Boolean.getBoolean("jvector.bench.symmetric-scoring") && landmarkCount != 1) {
+            throw new IllegalArgumentException("Symmetric scoring requires landmarkCount=1");
+        }
         final List<VectorFloat<?>> finalQueries = queries;
         final List<VectorFloat<?>> finalVectors = vectors;
 
@@ -435,6 +597,18 @@ public class DistancesASH {
         int chunkSize = Math.max(1, (queries.size() + parallelism - 1) / parallelism);
 
         System.out.println("\tScoring parallelism = " + parallelism);
+
+        if (Boolean.getBoolean("jvector.bench.symmetric-scoring")) {
+            // A separate comparison mode uses identical scan loops and prepared scorers.
+            // Encoding, projection, validation, recall, and warmup are all excluded.
+            try {
+                benchmarkSymmetric(ashVectorsFinal, finalQueries, groundTruth, newToOldFinal,
+                        RECALL_K, RUN_RECALL_CHECK, simdExecutor);
+            } finally {
+                simdExecutor.shutdown();
+            }
+            return;
+        }
 
         // ==================================================================
         // [1] Accuracy run (NOT timed)
