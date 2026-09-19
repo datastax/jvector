@@ -125,6 +125,8 @@ public class TestASHSymmetricScorer {
                             .scoreFunctionFor(decodedX, VectorSimilarityFunction.DOT_PRODUCT).similarityTo(b);
                     assertEquals(decodedAsymmetric + sourceCorrection, scorer.dotProduct(i,j), 2e-5);
                     assertEquals(scorer.dotProduct(i,j), scorer.dotProduct(j,i), 0f);
+                    assertEquals(scorer.scoreFunctionFor(i).similarityTo(j),
+                            scorer.scoreFunctionFor(encoded.get(i)).similarityTo(j), 0f);
                     assertEquals(ASHScorer.toSimilarity(scorer.dotProduct(i,j)),
                             bsp.searchProviderFor(i).scoreFunction().similarityTo(j), 0f);
                     assertEquals(bsp.searchProviderFor(i).scoreFunction().similarityTo(j),
