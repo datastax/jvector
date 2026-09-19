@@ -451,19 +451,22 @@ public class Grid {
         PQVectors pq = null;
         ASHVectors ashVectors = null;
 
+        long providerStart = System.nanoTime();
         final BuildScoreProvider bsp;
         if (buildCv instanceof PQVectors) {
             pq = (PQVectors) buildCv;
             bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         } else if (buildCv instanceof ASHVectors) {
             ashVectors = (ASHVectors) buildCv;
-            bsp = BuildScoreProvider.ashBuildScoreProvider(ds.getSimilarityFunction(), ashVectors);
+            bsp = io.github.jbellis.jvector.example.diagnostics.ASHBuildScoreExperiment.create(ds.getSimilarityFunction(), ashVectors, floatVectors);
         } else if (buildCv instanceof BQVectors) {
             bsp = BuildScoreProvider.bqBuildScoreProvider((BQVectors) buildCv);
         } else {
             throw new IllegalArgumentException("Unsupported build compressor output type: " + buildCv.getClass().getName());
         }
 
+        System.out.printf("Build score provider setup: %.6f seconds%n", (System.nanoTime()-providerStart)/1e9);
+        final boolean allSymmetric = ashVectors != null && "symmetric-all".equals(System.getProperty("jvector.bench.ashConstruction"));
         final PQVectors pqFinal = pq;
         final ASHVectors ashVectorsFinal = ashVectors;
 
@@ -523,7 +526,8 @@ public class Grid {
         if (ds.useDatasetPrefetching()) {
             VectorAccess.forEach(floatVectors, PhysicalCoreExecutor.pool(), (node, vector) -> {
                 if (!deferFeatures) writeInlineStates(writers, inputSuppliers, node, vector);
-                builder.addGraphNode(node, vector);
+                if (allSymmetric) builder.addGraphNode(node, bsp.searchProviderFor(node));
+                else builder.addGraphNode(node, vector);
             });
         } else {
             var vv = floatVectors.threadLocalSupplier();
@@ -531,11 +535,14 @@ public class Grid {
                 IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
                     var vector = vv.get().getVector(node);
                     if (!deferFeatures) writeInlineStates(writers, inputSuppliers, node, vector);
-                    builder.addGraphNode(node, vector);
+                    if (allSymmetric) builder.addGraphNode(node, bsp.searchProviderFor(node));
+                else builder.addGraphNode(node, vector);
                 });
             }).join();
         }
+        long insertionEnd = System.nanoTime();
         builder.cleanup();
+        long cleanupEnd = System.nanoTime();
 
         // With deferred features, supply every feature so the parallel writer emits complete records.
         writers.entrySet().stream().parallel().forEach(entry -> {
@@ -564,6 +571,9 @@ public class Grid {
 
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
+        System.out.printf("Graph phases: insertion=%.6f cleanup=%.6f flush=%.6f seconds%n",
+                (insertionEnd-startTime)/1e9, (cleanupEnd-insertionEnd)/1e9,
+                (System.nanoTime()-cleanupEnd)/1e9);
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
         indexBuildTimes.put(ds.getName(), totalTime);
 
