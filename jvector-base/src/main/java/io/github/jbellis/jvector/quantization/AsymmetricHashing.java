@@ -80,7 +80,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Index-wide immutable state
     // ---------------------------------------------------------------------
 
-    /** Number of landmarks (clusters), C <= 64. */
+    /** Number of landmarks (clusters), C <= 256. */
     public final int landmarkCount;
 
     /** Landmark centroids μ_0... μ_{C−1}. */
@@ -218,9 +218,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalArgumentException("landmarkNormSq length mismatch");
         }
 
-        if (landmarkCount < 1 || landmarkCount > 64) {
+        if (landmarkCount < 1 || landmarkCount > 256) {
             throw new IllegalArgumentException(
-                    "landmarkCount must be in [1,64], got " + landmarkCount);
+                    "landmarkCount must be in [1,256], got " + landmarkCount);
         }
 
         for (VectorFloat<?> mu : landmarks) {
@@ -269,9 +269,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                                int bitsPerDimension) throws IOException {
         validateBitsPerDimension(bitsPerDimension);
 
-        if (landmarkCount < 1 || landmarkCount > 64) {
+        if (landmarkCount < 1 || landmarkCount > 256) {
             throw new IllegalArgumentException(
-                    "landmarkCount must be in [1,64], got " + landmarkCount);
+                    "landmarkCount must be in [1,256], got " + landmarkCount);
         }
 
         var ravvCopy = ravv.threadLocalSupplier().get();
@@ -539,7 +539,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         // Multi-landmark support
         int landmarkCount = in.readInt();
-        if (landmarkCount < 1 || landmarkCount > 64) {
+        if (landmarkCount < 1 || landmarkCount > 256) {
             throw new IOException("Invalid landmarkCount=" + landmarkCount);
         }
 
@@ -634,7 +634,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         // Landmark-specific mean (C=1 → landmarks[0] == dataset mean)
-        final VectorFloat<?> mu = landmarks[landmark];
+        final VectorFloat<?> mu = landmarks[landmark & 0xFF];
 
         return QuantizedVector.quantizeTo(
                 vector,

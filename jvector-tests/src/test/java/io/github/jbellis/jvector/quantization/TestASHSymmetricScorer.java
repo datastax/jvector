@@ -67,8 +67,38 @@ public class TestASHSymmetricScorer {
                 float actual = ASHSymmetricScorer.codeDot(a, b, d, bits);
                 assertEquals("bits=" + bits + " d=" + d, (float) expected, actual, 0f);
                 assertEquals(actual, ASHSymmetricScorer.codeDot(b, a, d, bits), 0f);
+                if ((bits == 1 || bits == 2 || bits == 4) && backend.supportsAshSymmetricScoring()) {
+                    assertEquals("symmetric SIMD bits=" + bits + " d=" + d, actual,
+                            backend.ashSymmetricDot(a.binaryVector, a.extraBits, b.binaryVector, b.extraBits, d, bits), 0f);
+                }
                 if ((bits == 2 || bits == 4) && backend.supportsAshProjectionScoring()) {
                     assertEquals(actual, backend.ashProjectionDot(unpacked, b.extraBits, d, bits), 0f);
+                }
+            }
+        }
+    }
+
+    @Test public void integerBlockLutPreservesTailsAndAvoidsShortOverflow() {
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        Random random = new Random(77531);
+        for (int groups : new int[]{1,2,31,63,64,65,127,257,4097}) {
+            int stride = 37;
+            byte[] codes = new byte[((groups+1)/2)*stride];
+            random.nextBytes(codes);
+            short[] lut = new short[groups*32];
+            for (int g = 0; g < groups; g++) for (int code = 0; code < 16; code++) {
+                short value = groups == 4097 ? (short)225 : (short)(random.nextInt(451)-225);
+                for (int copy = 0; copy < 2; copy++) lut[g*32+copy*16+code] = value;
+            }
+            for (int count : new int[]{1,7,16,17,32,34}) {
+                float[] out = new float[count+2];
+                java.util.Arrays.fill(out, Float.NaN);
+                backend.ashSymmetricLutScore(codes, groups, stride, 3, count, lut, out, 1);
+                assertTrue(Float.isNaN(out[0])); assertTrue(Float.isNaN(out[count+1]));
+                for (int i = 0; i < count; i++) {
+                    long expected = 0;
+                    for (int g = 0; g < groups; g++) expected += lut[g*32+((codes[(g/2)*stride+3+i] >>> (4*(g%2))) & 15)];
+                    assertEquals("groups="+groups+" count="+count, expected*.25f,out[i+1],0f);
                 }
             }
         }
@@ -132,6 +162,16 @@ public class TestASHSymmetricScorer {
                     assertEquals(bsp.searchProviderFor(i).scoreFunction().similarityTo(j),
                             bsp.diversityScoreFunctionFor(i).similarityTo(j), 0f);
                 }
+                for (var kernel : ASHSymmetricScorer.Kernel.values()) {
+                    if (kernel == ASHSymmetricScorer.Kernel.SIMD &&
+                            (!(bits == 1 || bits == 2 || bits == 4) ||
+                             !VectorizationProvider.getInstance().getVectorUtilSupport().supportsAshSymmetricScoring())) continue;
+                    var block = scorer.blockScorerFor(encoded.get(i), 8, kernel);
+                    float[] scores = new float[19];
+                    block.scoreRange(3, scores.length, scores);
+                    for (int j = 0; j < scores.length; j++) assertEquals("C1 block bits="+bits+" kernel="+kernel,
+                            ASHScorer.toSimilarity(scorer.dotProduct(i,j+3)), scores[j], 5e-5f);
+                }
                 assertEquals("Self score should reconstruct the input norm, up to FP16 headers",
                         VectorUtil.dotProduct(input[i],input[i]), scorer.dotProduct(i,i), 0.002);
             }
@@ -156,11 +196,13 @@ public class TestASHSymmetricScorer {
         }
     }
 
-    @Test public void rejectsMultipleLandmarks() throws Exception {
+    @Test public void graphProviderStillRejectsMultipleLandmarks() throws Exception {
         var values = MockVectorValues.fromValues(inputs(25,40));
         var ash = AsymmetricHashing.initialize(values,AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS+31*2,2,2);
-        assertThrows(IllegalArgumentException.class, () -> new ASHSymmetricScorer(ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool())));
+        var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
+        new ASHSymmetricScorer(encoded);
+        assertThrows(IllegalArgumentException.class, () -> BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded));
     }
 
     @Test public void constructionWorksWithPackedCodesAndNegativeSimilarities() throws Exception {
@@ -185,4 +227,68 @@ public class TestASHSymmetricScorer {
             }
         }
     }
+    @Test public void multipleLandmarksMatchCalibratedReconstructionAndExistingKernels() throws Exception {
+        var input = inputs(300,40);
+        var values = MockVectorValues.fromValues(input);
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        for (int centers : new int[]{2,64,256}) {
+            for (int bits : new int[]{1,2,4}) {
+                var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                        AsymmetricHashing.HEADER_BITS + 31*bits, centers, bits);
+                var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
+                var scalar = new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SCALAR);
+                var vector = backend.supportsAshSymmetricScoring()
+                        ? new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SIMD) : scalar;
+                for (int i = 0; i < input.length; i++) {
+                    int j = (i*31+7) % input.length;
+                    var a = encoded.get(i); var b = encoded.get(j);
+                    int ca = a.landmark & 255, cb = b.landmark & 255;
+                    double expected = 0, pa = 0, pb = 0;
+                    for (int k = 0; k < 40; k++) {
+                        double x = 0, y = 0;
+                        for (int l = 0; l < 31; l++) {
+                            x += ash.stiefelTransform.AFloat[l][k] * component(a,l,bits);
+                            y += ash.stiefelTransform.AFloat[l][k] * component(b,l,bits);
+                        }
+                        pa += x * ash.landmarks[ca].get(k);
+                        pb += y * ash.landmarks[cb].get(k);
+                        expected += (ash.landmarks[ca].get(k) + a.scale*x)
+                                * (ash.landmarks[cb].get(k) + b.scale*y);
+                    }
+                    double correctionA = a.offset, correctionB = b.offset;
+                    if (bits != 2 && bits != 4) {
+                        correctionA -= a.scale*pa; correctionB -= b.scale*pb;
+                    }
+                    expected += correctionA + correctionB;
+                    assertEquals(expected, scalar.dotProduct(i,j), 2e-5);
+                    assertEquals(scalar.dotProduct(i,j), scalar.dotProduct(j,i), 0f);
+                    float similarity = ASHScorer.toSimilarity((float) expected);
+                    assertEquals(similarity, scalar.scoreFunctionFor(a).similarityTo(j), 2e-5f);
+                    assertEquals(similarity, vector.scoreFunctionFor(a).similarityTo(j), 2e-5f);
+                }
+                if (centers == 256) {
+                    try (var out = io.github.jbellis.jvector.disk.ByteBufferIndexWriter.create(1024*1024,false)) {
+                        encoded.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+                        var loaded = ASHVectors.load(new io.github.jbellis.jvector.disk.ByteBufferReader(out.getWrittenData()));
+                        assertEquals(256, loaded.getCompressor().landmarkCount);
+                        for (int i = 0; i < encoded.count(); i++) {
+                            assertEquals(encoded.get(i).landmark & 255, loaded.get(i).landmark & 255);
+                        }
+                        assertEquals(scalar.dotProduct(7,11), new ASHSymmetricScorer(loaded,ASHSymmetricScorer.Kernel.SCALAR).dotProduct(7,11), 2e-6f);
+                        assertEquals(encoded.scoreFunctionFor(input[3],VectorSimilarityFunction.DOT_PRODUCT).similarityTo(7),
+                                loaded.scoreFunctionFor(input[3],VectorSimilarityFunction.DOT_PRODUCT).similarityTo(7), 2e-6f);
+                    }
+                }
+                for (int blockSize : new int[]{8,16,32}) {
+                    var query = encoded.get(7);
+                    var block = vector.blockScorerFor(query, blockSize, backend.supportsAshSymmetricScoring()
+                            ? ASHSymmetricScorer.Kernel.SIMD : ASHSymmetricScorer.Kernel.SCALAR);
+                    float[] scores = new float[41];
+                    block.scoreRange(3,41,scores);
+                    for (int k = 0; k < 41; k++) assertEquals(scalar.scoreFunctionFor(query).similarityTo(k+3), scores[k], 0.005f);
+                }
+            }
+        }
+    }
+
 }
