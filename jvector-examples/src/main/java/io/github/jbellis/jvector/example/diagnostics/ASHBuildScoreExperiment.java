@@ -34,6 +34,23 @@ public final class ASHBuildScoreExperiment {
         if (mode.equals("symmetric") || mode.equals("symmetric-all")) {
             return BuildScoreProvider.ashBuildScoreProvider(vsf,encoded);
         }
+        if (mode.equals("symmetric-scalar")) {
+            if (vsf != VectorSimilarityFunction.DOT_PRODUCT || encoded.getCompressor().landmarkCount != 1)
+                throw new IllegalArgumentException("ASH construction requires DOT_PRODUCT and C=1");
+            var symmetric = new io.github.jbellis.jvector.quantization.ASHSymmetricScorer(encoded,
+                    io.github.jbellis.jvector.quantization.ASHSymmetricScorer.Kernel.SCALAR);
+            return new BuildScoreProvider() {
+                public boolean isExact() { return false; }
+                public VectorFloat<?> approximateCentroid() { return encoded.getCompressor().landmarks[0].copy(); }
+                public SearchScoreProvider searchProviderFor(VectorFloat<?> x) {
+                    return new DefaultSearchScoreProvider(encoded.precomputedScoreFunctionFor(x,vsf),null,true);
+                }
+                public SearchScoreProvider searchProviderFor(int node) {
+                    return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node),null,true);
+                }
+                public SearchScoreProvider diversityProviderFor(int node) { return searchProviderFor(node); }
+            };
+        }
         if (!mode.equals("asymmetric") && !mode.equals("asymmetric-cached")) throw new IllegalArgumentException("Unknown ASH construction mode: " + mode);
         var views=raw.threadLocalSupplier();
         final SearchScoreProvider[] cached;

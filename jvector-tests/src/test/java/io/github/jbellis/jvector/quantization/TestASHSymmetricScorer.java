@@ -232,12 +232,13 @@ public class TestASHSymmetricScorer {
         var values = MockVectorValues.fromValues(input);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         for (int centers : new int[]{2,64,256}) {
-            for (int bits : new int[]{1,2,4}) {
+            for (int bits = 1; bits <= 9; bits++) {
                 var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 31*bits, centers, bits);
                 var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
                 var scalar = new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SCALAR);
-                var vector = backend.supportsAshSymmetricScoring()
+                boolean useSimd = (bits == 1 || bits == 2 || bits == 4) && backend.supportsAshSymmetricScoring();
+                var vector = useSimd
                         ? new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SIMD) : scalar;
                 for (int i = 0; i < input.length; i++) {
                     int j = (i*31+7) % input.length;
@@ -281,7 +282,7 @@ public class TestASHSymmetricScorer {
                 }
                 for (int blockSize : new int[]{8,16,32}) {
                     var query = encoded.get(7);
-                    var block = vector.blockScorerFor(query, blockSize, backend.supportsAshSymmetricScoring()
+                    var block = vector.blockScorerFor(query, blockSize, useSimd
                             ? ASHSymmetricScorer.Kernel.SIMD : ASHSymmetricScorer.Kernel.SCALAR);
                     float[] scores = new float[41];
                     block.scoreRange(3,41,scores);
