@@ -1,0 +1,9 @@
+name,threads,overquery,qps,qps_cv,recall,visited,log
+ada002-1M-b4-pq-r2,1,1.0,2213.5294641529763,2.656232061739049,0.78124,741.0503,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/ada002-1M-b4-pq-r2/quality-1.log
+ada002-1M-b4-pq-r2,1,2.0,1697.0094228980922,0.5827720462316611,0.94098,1071.2316,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/ada002-1M-b4-pq-r2/quality-1.log
+cap-1M-b2-ash-r2,1,1.0,2671.8321513333003,6.581649160723063,0.79039,751.5542,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cap-1M-b2-ash-r2/quality-1.log
+cap-1M-b2-ash-r2,1,2.0,2181.25379117744,1.411287086771372,0.94304,1096.9158,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cap-1M-b2-ash-r2/quality-1.log
+cap-1M-b4-pq-r2,1,1.0,2463.1515004291546,5.7424423017788095,0.77117,721.4095,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cap-1M-b4-pq-r2/quality-1.log
+cap-1M-b4-pq-r2,1,2.0,1936.7856067073103,0.9009159641326212,0.93402,1029.0857,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cap-1M-b4-pq-r2/quality-1.log
+cohere-english-v3-1M-b4-ash-r1,1,1.0,3659.88651139761,3.3352298962798885,0.79959,829.839,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cohere-english-v3-1M-b4-ash-r1/quality-1.log
+cohere-english-v3-1M-b4-ash-r1,1,2.0,2652.860877518716,0.8181655322064287,0.91214,1232.4703,/mnt/raid10/jvector-bench/ted_willke/figure9-graph/cohere-english-v3-1M-b4-ash-r1/quality-1.log
