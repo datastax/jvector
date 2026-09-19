@@ -446,17 +446,20 @@ public class Grid {
         PQVectors pq = null;
         ASHVectors ashVectors = null;
 
+        long providerStart = System.nanoTime();
         final BuildScoreProvider bsp;
         if (buildCv instanceof PQVectors) {
             pq = (PQVectors) buildCv;
             bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
         } else if (buildCv instanceof ASHVectors) {
             ashVectors = (ASHVectors) buildCv;
-            bsp = BuildScoreProvider.ashBuildScoreProvider(ds.getSimilarityFunction(), ashVectors);
+            bsp = io.github.jbellis.jvector.example.diagnostics.ASHBuildScoreExperiment.create(ds.getSimilarityFunction(), ashVectors, floatVectors);
         } else {
             throw new IllegalArgumentException("Unsupported build compressor output type: " + buildCv.getClass().getName());
         }
 
+        System.out.printf("Build score provider setup: %.6f seconds%n", (System.nanoTime()-providerStart)/1e9);
+        final boolean allSymmetric = ashVectors != null && "symmetric-all".equals(System.getProperty("jvector.bench.ashConstruction"));
         final PQVectors pqFinal = pq;
         final ASHVectors ashVectorsFinal = ashVectors;
 
@@ -522,10 +525,13 @@ public class Grid {
                         throw new UncheckedIOException(e);
                     }
                 });
-                builder.addGraphNode(node, vv.get().getVector(node));
+                if (allSymmetric) builder.addGraphNode(node, bsp.searchProviderFor(node));
+                else builder.addGraphNode(node, vv.get().getVector(node));
             });
         }).join();
+        long insertionEnd = System.nanoTime();
         builder.cleanup();
+        long cleanupEnd = System.nanoTime();
 
         // write the edge lists and close the writers
         // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
@@ -560,6 +566,9 @@ public class Grid {
 
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
+        System.out.printf("Graph phases: insertion=%.6f cleanup=%.6f flush=%.6f seconds%n",
+                (insertionEnd-startTime)/1e9, (cleanupEnd-insertionEnd)/1e9,
+                (System.nanoTime()-cleanupEnd)/1e9);
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
         indexBuildTimes.put(ds.getName(), totalTime);
 
