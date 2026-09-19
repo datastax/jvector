@@ -157,6 +157,8 @@ public class TestASHSymmetricScorer {
                     assertEquals(scorer.dotProduct(i,j), scorer.dotProduct(j,i), 0f);
                     assertEquals(scorer.scoreFunctionFor(i).similarityTo(j),
                             scorer.scoreFunctionFor(encoded.get(i)).similarityTo(j), 0f);
+                    assertEquals(scorer.scoreFunctionFor(i).similarityTo(j),
+                            encoded.diversityFunctionFor(i,VectorSimilarityFunction.DOT_PRODUCT).similarityTo(j), 0f);
                     assertEquals(ASHScorer.toSimilarity(scorer.dotProduct(i,j)),
                             bsp.searchProviderFor(i).scoreFunction().similarityTo(j), 0f);
                     assertEquals(bsp.searchProviderFor(i).scoreFunction().similarityTo(j),
@@ -266,8 +268,11 @@ public class TestASHSymmetricScorer {
                     float similarity = ASHScorer.toSimilarity((float) expected);
                     assertEquals(similarity, scalar.scoreFunctionFor(a).similarityTo(j), 2e-5f);
                     assertEquals(similarity, vector.scoreFunctionFor(a).similarityTo(j), 2e-5f);
+                    assertEquals(similarity, encoded.diversityFunctionFor(i,VectorSimilarityFunction.DOT_PRODUCT).similarityTo(j), 2e-5f);
                 }
                 if (centers == 256) {
+                    assertTrue("Exercise unsigned landmark IDs", java.util.stream.IntStream.range(0,encoded.count())
+                            .anyMatch(node -> (encoded.get(node).landmark & 255) >= 128));
                     try (var out = io.github.jbellis.jvector.disk.ByteBufferIndexWriter.create(1024*1024,false)) {
                         encoded.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
                         var loaded = ASHVectors.load(new io.github.jbellis.jvector.disk.ByteBufferReader(out.getWrittenData()));
