@@ -119,6 +119,16 @@ public final class ASHScorer {
         return genericMultibitDotProductScoreFunction(qp);
     }
 
+    /** Prepared encoded-query state; uses the same arithmetic as the raw-query scorer. */
+    ASHScoreFunction scoreFunctionFor(QueryPrecompute qp, boolean simd) {
+        if (ash.bitsPerDimension == 1) return oneBitDotProductScoreFunction(qp);
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
+            return fastScanProjectionDotProductScoreFunction(qp, simd);
+        }
+        if (simd) throw new UnsupportedOperationException("SIMD ASH requires bits 1, 2, or 4");
+        return genericMultibitDotProductScoreFunction(qp);
+    }
+
     private ASHScoreFunction oneBitDotProductScoreFunction(QueryPrecompute qp) {
         final int d = qp.d;
         final int C = qp.C;

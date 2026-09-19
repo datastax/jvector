@@ -49,6 +49,27 @@ public interface VectorUtilSupport {
   /** Whether ASH nibble lookup and accumulation are implemented with SIMD. */
   default boolean supportsAshLutScoring() { return false; }
 
+  /** Exact integer lookup for encoded C=1 query pairs. LUT stride is 32 (two repeated 16-entry tables). */
+    default void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                      short[] lut, float[] out, int outOffset) {
+        for (int i = 0; i < count; i++) {
+            long sum = 0;
+            for (int g = 0; g < groups; g++) {
+                int nibble = (codes[(g / 2) * stride + lane + i] >>> (4 * (g % 2))) & 15;
+                sum += lut[g * 32 + nibble];
+            }
+            out[outOffset + i] = sum * .25f;
+        }
+    }
+
+  /** Packed-to-packed integer dot products for symmetric ASH. */
+  default boolean supportsAshSymmetricScoring() { return false; }
+
+  default float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                int dimensions, int bits) {
+    throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
+  }
+
   /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
   default boolean supportsAshProjectionScoring() { return false; }
 
