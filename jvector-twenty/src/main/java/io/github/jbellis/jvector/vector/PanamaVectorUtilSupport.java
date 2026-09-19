@@ -37,6 +37,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // Byte loads need only one byte per float lane; conversion part zero widens those lanes.
     private static final VectorSpecies<Byte> ASH_BYTES = ASH_FLOATS.length() <= 8
             ? ByteVector.SPECIES_64 : ByteVector.SPECIES_128;
+    private static final VectorSpecies<Long> ASH_SYM_LONGS = LongVector.SPECIES_PREFERRED;
+    private static final VectorSpecies<Byte> ASH_SYM_WORD_BYTES = VectorSpecies.of(byte.class, ASH_SYM_LONGS.vectorShape());
+    private static final VectorSpecies<Byte> ASH_SYM_BYTES = ByteVector.SPECIES_PREFERRED;
+    private static final VectorSpecies<Short> ASH_SYM_SHORTS = VectorSpecies.of(short.class, ASH_SYM_BYTES.vectorShape());
+    private static final VectorSpecies<Integer> ASH_SYM_INTS = VectorSpecies.of(int.class, ASH_SYM_BYTES.vectorShape());
+    private static final VectorSpecies<Float> ASH_SYM_FLOATS = VectorSpecies.of(float.class, ASH_SYM_BYTES.vectorShape());
+    private static final VectorSpecies<Byte> ASH_SYM_BLOCK_BYTES = VectorSpecies.of(byte.class,
+            jdk.incubator.vector.VectorShape.forBitSize(ASH_SYM_SHORTS.vectorBitSize() / 2));
     private static final int[] ASH_TWO_BIT_QUERY_INDICES = ashQueryIndices(4);
     private static final int[] ASH_FOUR_BIT_QUERY_INDICES = ashQueryIndices(2);
     private static final int[][] ASH_TWO_BIT_TAIL_INDICES = ashTailQueryIndices(4);
@@ -61,14 +69,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
                                       short[] lut, float[] out, int outOffset) {
-        var shorts = jdk.incubator.vector.ShortVector.SPECIES_PREFERRED;
+        var shorts = ASH_SYM_SHORTS;
         if (shorts.length() < 16 || shorts.length() > 32) {
             VectorUtilSupport.super.ashSymmetricLutScore(codes, groups, stride, lane, count, lut, out, outOffset);
             return;
         }
-        var bytes = VectorSpecies.of(byte.class, jdk.incubator.vector.VectorShape.forBitSize(shorts.vectorBitSize() / 2));
-        var ints = IntVector.SPECIES_PREFERRED;
-        var floats = FloatVector.SPECIES_PREFERRED;
+        var bytes = ASH_SYM_BLOCK_BYTES;
+        var ints = ASH_SYM_INTS;
+        var floats = ASH_SYM_FLOATS;
         for (int i = 0; i < count; i += shorts.length()) {
             int active = Math.min(shorts.length(), count - i);
             var mask = bytes.indexInRange(0, active);
@@ -105,8 +113,18 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
                                   int dimensions, int bits) {
-        var longs = LongVector.SPECIES_PREFERRED;
-        if (bits == 1) {
+        // Keep the Vector API compilation units small and species compile-time constant.
+        // A shared, large dispatch body can leave boxed vectors in graph-pruning callers.
+        return switch (bits) {
+            case 1 -> ashSymmetricBinary(aBits, bBits, dimensions);
+            case 2 -> ashSymmetricTwoBit(aCodes, bCodes, dimensions);
+            case 4 -> ashSymmetricFourBit(aCodes, bCodes, dimensions);
+            default -> throw new IllegalArgumentException("Symmetric SIMD supports 1, 2, and 4 bits");
+        };
+    }
+
+    private static float ashSymmetricBinary(long[] aBits, long[] bBits, int dimensions) {
+        var longs = ASH_SYM_LONGS;
             long mismatches = 0;
             int words = dimensions >>> 6;
             for (int w = 0; w < words; w += longs.length()) {
@@ -119,15 +137,17 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             int tail = dimensions & 63;
             if (tail != 0) mismatches += Long.bitCount((aBits[words] ^ bBits[words]) & ((1L << tail) - 1));
             return dimensions - 2f * mismatches;
-        }
-        if (bits == 2) {
+    }
+
+    private static float ashSymmetricTwoBit(byte[] aCodes, byte[] bCodes, int dimensions) {
+        var longs = ASH_SYM_LONGS;
             // The doubled signed code is sign * (1 + 2*magnitudeBit).
             // Weighted popcounts evaluate its product without unpacking components.
             final long slots = 0x5555555555555555L;
             int words = dimensions / 32;
             long sum = (long) words * 32;
             for (int word = 0; word < words; word += longs.length()) {
-                var byteSpecies = VectorSpecies.of(byte.class, longs.vectorShape());
+                var byteSpecies = ASH_SYM_WORD_BYTES;
                 var byteMask = byteSpecies.indexInRange(word * 8, words * 8);
                 var a = ByteVector.fromArray(byteSpecies, aCodes, word * 8, byteMask).reinterpretAsLongs();
                 var b = ByteVector.fromArray(byteSpecies, bCodes, word * 8, byteMask).reinterpretAsLongs();
@@ -160,10 +180,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                         + 4 * Long.bitCount(both) - 8 * Long.bitCount(both & negative);
             }
             return sum * 0.25f;
-        }
-        if (bits != 4) throw new IllegalArgumentException("Symmetric SIMD supports 1, 2, and 4 bits");
-        var bytes = ByteVector.SPECIES_PREFERRED;
-        var shorts = jdk.incubator.vector.ShortVector.SPECIES_PREFERRED;
+    }
+
+    private static float ashSymmetricFourBit(byte[] aCodes, byte[] bCodes, int dimensions) {
+        var bytes = ASH_SYM_BYTES;
+        var shorts = ASH_SYM_SHORTS;
         int count = dimensions / 2;
         long sum = 0;
         for (int offset = 0; offset < count; offset += bytes.length()) {
@@ -187,7 +208,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             }
             // Widen before reduction: no short-sum overflow, including wider future species.
             for (int part = 0; part < 2; part++) {
-                sum += ((IntVector) total.convertShape(VectorOperators.S2I, IntVector.SPECIES_PREFERRED, part))
+                sum += ((IntVector) total.convertShape(VectorOperators.S2I, ASH_SYM_INTS, part))
                         .reduceLanes(VectorOperators.ADD);
             }
             sum -= 2L * (bytes.length() - active); // zero padding decodes to -1 in each nibble
