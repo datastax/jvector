@@ -135,6 +135,42 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
+        int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
+        if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+        System.out.printf("QUERY_CONCURRENCY threads=%s%n", threads == 0 ? "common-pool" : threads);
+        if (threads > 1) {
+            var pool = new java.util.concurrent.ForkJoinPool(threads);
+            try {
+                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns)).join();
+            } finally {
+                pool.shutdown();
+            }
+        }
+        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+    }
+
+    private static IntStream queryStream(int count) {
+        IntStream stream = IntStream.range(0, count);
+        return Integer.getInteger("jvector.bench.queryThreads", 0) == 1 ? stream : stream.parallel();
+    }
+
+    private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
+                                                boolean usePruning, int queryRuns) {
+        if (Boolean.getBoolean("jvector.bench.verifyConcurrentResults")) {
+            int count = cs.getDataSet().getQueryVectors().size();
+            SearchResult[] serial = new SearchResult[count];
+            for (int i = 0; i < count; i++)
+                serial[i] = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+            queryStream(count).forEach(i -> {
+                SearchResult actual = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+                if (!Arrays.equals(serial[i].getNodes(), actual.getNodes())
+                        || serial[i].getVisitedCount() != actual.getVisitedCount())
+                    throw new IllegalStateException("Concurrent query mismatch at " + i);
+            });
+            System.out.printf("CONCURRENCY_VALIDATION queries=%d topK=%d rerankK=%d status=PASS%n",
+                    count, topK, rerankK);
+        }
+
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
             throw new RuntimeException("At least one metric must be displayed");
         }
@@ -149,8 +185,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 String warmupPhase = "Warmup-" + warmupRun;
 
                 warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
-                    IntStream.range(0, totalQueries)
-                            .parallel()
+                    queryStream(totalQueries)
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
 
@@ -215,8 +250,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
                     long completedQueries = 0;
                     do {
-                        IntStream.range(0, totalQueries)
-                                .parallel()
+                        queryStream(totalQueries)
                                 .forEach(i -> {
                                     long queryStart = System.nanoTime();
 
