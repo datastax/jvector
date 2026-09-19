@@ -188,6 +188,10 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 }
             }
 
+            double minSampleSeconds = Double.parseDouble(System.getProperty("jvector.bench.throughputMinSeconds", "1.0"));
+            if (!Double.isFinite(minSampleSeconds) || minSampleSeconds < 0)
+                throw new IllegalArgumentException("throughputMinSeconds must be finite and nonnegative");
+            long minSampleNanos = (long)(minSampleSeconds * 1e9);
             double[] qpsSamples = new double[numTestRuns];
             for (int testRun = 0; testRun < numTestRuns; testRun++) {
                 String testPhase = "Test-" + testRun;
@@ -209,22 +213,30 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     LongAdder visitedAdder = new LongAdder();
                     long startTime = System.nanoTime();
 
-                    IntStream.range(0, totalQueries)
-                            .parallel()
-                            .forEach(i -> {
-                                long queryStart = System.nanoTime();
+                    long completedQueries = 0;
+                    do {
+                        IntStream.range(0, totalQueries)
+                                .parallel()
+                                .forEach(i -> {
+                                    long queryStart = System.nanoTime();
 
-                                SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, i);
-                                // "Use" the result to prevent optimization
-                                visitedAdder.add(sr.getVisitedCount());
+                                    SearchResult sr = QueryExecutor.executeQuery(
+                                            cs, topK, rerankK, usePruning, i);
+                                    // "Use" the result to prevent optimization
+                                    visitedAdder.add(sr.getVisitedCount());
 
-                                long queryEnd = System.nanoTime();
-                                recorder.recordTime(queryEnd - queryStart);
-                            });
+                                    long queryEnd = System.nanoTime();
+                                    recorder.recordTime(queryEnd - queryStart);
+                                });
 
+                        completedQueries += totalQueries;
+                    } while (System.nanoTime() - startTime < minSampleNanos);
+                    SINK += visitedAdder.sum();
                     double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-                    return totalQueries / elapsedSec;
+                    System.out.printf(java.util.Locale.ROOT,
+                            "THROUGHPUT_SAMPLE phase=%s queries=%d seconds=%.6f%n",
+                            testPhase, completedQueries, elapsedSec);
+                    return completedQueries / elapsedSec;
                 });
 
                 diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
