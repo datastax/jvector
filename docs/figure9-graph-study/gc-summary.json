@@ -1,0 +1,30 @@
+[
+  {
+    "case": "cohere-english-v3-1M-b2-pq-r2",
+    "pauses": 183,
+    "pause_s": 2.4758060000000004,
+    "max_pause_ms": 75.863,
+    "reclaimed_GiB": 1423.6875
+  },
+  {
+    "case": "cohere-english-v3-1M-b2-ash-r2",
+    "pauses": 48,
+    "pause_s": 1.017786,
+    "max_pause_ms": 80.523,
+    "reclaimed_GiB": 109.443359375
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-pq-r2",
+    "pauses": 60,
+    "pause_s": 0.9321240000000003,
+    "max_pause_ms": 72.282,
+    "reclaimed_GiB": 166.974609375
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-ash-r2",
+    "pauses": 51,
+    "pause_s": 1.042585,
+    "max_pause_ms": 92.298,
+    "reclaimed_GiB": 146.6640625
+  }
+]
