@@ -72,7 +72,8 @@ jobs:
       cancel-in-progress: false
     strategy:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
-    runs-on: ${{ matrix.isa }}
+    # A runner must have every label in this list; "jvector-runner-large" is a custom label on that runner
+    runs-on: [self-hosted, "${{ matrix.isa }}", jvector-runner-large]
     steps:
       - name: verify-avx512
         run: |
