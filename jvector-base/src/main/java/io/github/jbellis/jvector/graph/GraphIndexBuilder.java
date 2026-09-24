@@ -681,6 +681,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     }
                     newBuilder.graph.connectNode(lvl, i, newNeighbors);
                 }
+
+                // connectNode alone leaves the node's completion time at its CompletionTracker
+                // default (Integer.MAX_VALUE), which makes ConcurrentGraphIndexView.getNeighborsIterator
+                // hide it from every subsequent concurrent view taken on newBuilder.graph. Mark it complete now,
+                // so any view afterward sees the whole copied graph again.
+                newBuilder.graph.markComplete(new NodeAtLevel(maxLayer, i));
             });
         }).join();
 
