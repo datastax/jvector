@@ -79,6 +79,27 @@ public interface RandomAccessVectorValues {
     }
 
     /**
+     * Returns a view of the ordinal range {@code [fromOrdinal, toOrdinal)} of this RAVV, re-based so that
+     * ordinal {@code i} of the view reads ordinal {@code fromOrdinal + i} of this RAVV.
+     * <p>
+     * The view does not copy vectors: it shares the underlying storage and inherits the sharing semantics
+     * of {@link #isValueShared()}. Its size is fixed at {@code toOrdinal - fromOrdinal} when this method is
+     * called, even if this RAVV later grows. Passing {@code 0} and {@link #size()} yields a view equivalent
+     * to this RAVV.
+     * <p>
+     * The default implementation returns a {@link RangeRandomAccessVectorValues}; implementations with a cheaper
+     * native ranged read may override this.
+     *
+     * @param fromOrdinal the first ordinal of the range, inclusive; must be &ge; 0
+     * @param toOrdinal the last ordinal of the range, exclusive; must be &ge; {@code fromOrdinal} and &le; {@link #size()}
+     * @return a RAVV of size {@code toOrdinal - fromOrdinal} over the requested range
+     * @throws IndexOutOfBoundsException if the range is not within {@code [0, size()]}
+     */
+    default RandomAccessVectorValues range(int fromOrdinal, int toOrdinal) {
+        return new RangeRandomAccessVectorValues(this, fromOrdinal, toOrdinal);
+    }
+
+    /**
      * @return true iff the vector returned by `getVector` is shared.  A shared vector will
      * only be valid until the next call to getVector overwrites it.
      */
